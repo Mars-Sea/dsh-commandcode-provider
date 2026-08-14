@@ -34,14 +34,19 @@ cmd login        # macOS/Linux; native Windows: cmdc login
 ### From GitHub (recommended)
 
 ```sh
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<sha>
+# Pin a release tag (recommended — readable and immutable)
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.1
+# Or pin any exact commit by its SHA
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>
 ```
+
+The `#<ref>` suffix pins the source to one exact revision (pnpm git-dependency syntax: a tag, branch, or commit SHA). Without it the install tracks the default branch, so a later push can silently change what you get — pin a tag or commit and audit the code you run.
 
 A git install fetches **sources**, so the package's `prepare` script builds `lib/` after install. pnpm ≥10 blocks that script by default — run the `add`, then copy the **exact package key pnpm prints** into `~/.dsh/profiles/web/pnpm-workspace.yaml`:
 
 ```yaml
 allowBuilds:
-  'dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<sha>': true
+  'dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>': true
 ```
 
 and re-run the `add`. Only allow packages whose source you trust (and pin a commit).

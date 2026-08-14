@@ -34,14 +34,19 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 ### 从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<sha>
+# 推荐：锁定发布 tag（可读、不可变）
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.1
+# 或按完整 commit SHA 锁定任意提交
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>
 ```
+
+`#<ref>` 后缀用于将源码锁定到**某一个精确版本**（pnpm 的 git 依赖语法：可以是 tag、分支或 commit SHA）。不加 `#` 则跟随默认分支，后续的 push 会悄悄改变你装到的内容——请固定 tag 或 commit，并审计你要运行的代码。
 
 git 安装会拉取**源码**，因此包的 `prepare` 脚本会在安装后构建 `lib/`。pnpm ≥10 默认会阻止该脚本——先运行 `add`，然后把 pnpm 打印的**确切包 key** 复制到 `~/.dsh/profiles/web/pnpm-workspace.yaml`：
 
 ```yaml
 allowBuilds:
-  'dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<sha>': true
+  'dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>': true
 ```
 
 然后重新运行 `add`。只允许信任其源码的包（并固定 commit）。
