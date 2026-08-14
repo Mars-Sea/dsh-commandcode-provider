@@ -15,7 +15,7 @@
 - **插件包**：可通过 `dsh plugin add` 安装到任意 dsh 配置（npm 包，带 `dsh.bundle` 层）。
 - **`commandcode` provider 路由**：注册在 `llm` 服务上，可在模型选择器中选择，并带 **实时模型目录**（从 `GET {apiBase}/provider/v1/models` 拉取，缓存于 `~/.commandcode/models-cache.json`）。
 - **Models 页面卡片**（"Command Code"）带 API key 输入框——凭据通过 dsh 凭据服务存储，与 DeepSeek 卡片一致。
-- **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（Web Models 页面写入，默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 Command Code CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。故意**不**扫描 pi/OMP 的认证文件。
+- **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（Web Models 页面写入，默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 Command Code CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
 - **推理强度（reasoning-effort）支持**：针对 Command Code 目录中标为推理模型的模型（如 `claude-opus-5`、`gpt-5.5`、`deepseek/deepseek-v4-pro` 等），通过 `KNOWN_EFFORTS` 实现，与 pi 插件对 `command-code@1.15.1` 的快照一致。
 
 ## 获取 API key

@@ -301,6 +301,62 @@ test('stream() surfaces in-band error events as PROVIDER_STREAM_ERROR', async ()
   )
 })
 
+test('stream() wraps a network-level fetch failure as TRANSPORT', async () => {
+  const cause = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect UNKNOWN'), { code: 'UNKNOWN' }) })
+  const adapter = makeAdapter({
+    fetchImpl: (async () => { throw cause }) as unknown as typeof fetch,
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string; cause?: unknown }
+      return e.code === 'TRANSPORT'
+        && /alpha\/generate failed/.test(e.message ?? '')
+        && e.cause === cause
+    },
+  )
+})
+
+test('stream() propagates a caller abort without relabeling it', async () => {
+  const controller = new AbortController()
+  const abortError = new DOMException('The operation was aborted', 'AbortError')
+  const adapter = makeAdapter({
+    fetchImpl: (async () => {
+      controller.abort(abortError)
+      throw abortError
+    }) as unknown as typeof fetch,
+  })
+  await assert.rejects(
+    collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'm',
+      messages: [userMessage('hi')],
+      signal: controller.signal,
+    })),
+    (err: unknown) => err === abortError,
+  )
+})
+
+test('stream() wraps a mid-stream read failure as TRANSPORT', async () => {
+  const cause = new Error('socket hang up')
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"par'))
+      controller.error(cause)
+    },
+  })
+  const adapter = makeAdapter({
+    fetchImpl: (async () => new Response(body, { status: 200 })) as unknown as typeof fetch,
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; cause?: unknown }
+      return e.code === 'TRANSPORT' && e.cause === cause
+    },
+  )
+})
+
 test('stream() throws EMPTY_RESPONSE when the stream ends without content', async () => {
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"finish","finishReason":"stop"}\n\n') })
   // The finish event IS content (sawContent=false only when nothing emitted) —

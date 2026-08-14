@@ -385,7 +385,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       await writeModelsCache(modelsCachePath, this.catalog).catch(() => undefined)
     } catch (error) {
       if (signal?.aborted) throw error
-      // Fall back to the last successful catalog on disk.
+      // A catalog refresh failure is a degradation, not a request failure:
+      // fall back to the last successful catalog on disk (or the in-memory
+      // one from an earlier successful load). The adapter still serves any
+      // model the user names; only the advisory selector loses entries.
       this.catalog = await readModelsCache(modelsCachePath).catch(() => this.catalog)
     }
     return this.catalog
@@ -507,21 +510,37 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       threadId: randomUUID(),
     }
 
-    const response = await this.fetchImpl(`${connection.apiBase}/alpha/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        'x-command-code-version': COMMAND_CODE_CLI_VERSION,
-        'x-cli-environment': 'production',
-        'x-project-slug': projectSlugFromPath(connection.workingDir),
-        'x-taste-learning': 'true',
-        'x-co-flag': 'false',
-        ...attributionHeaders(),
-      },
-      body: JSON.stringify(body),
-      ...(options.signal ? { signal: options.signal } : {}),
-    })
+    let response: Response
+    try {
+      response = await this.fetchImpl(`${connection.apiBase}/alpha/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          'x-command-code-version': COMMAND_CODE_CLI_VERSION,
+          'x-cli-environment': 'production',
+          'x-project-slug': projectSlugFromPath(connection.workingDir),
+          'x-taste-learning': 'true',
+          'x-co-flag': 'false',
+          ...attributionHeaders(),
+        },
+        body: JSON.stringify(body),
+        ...(options.signal ? { signal: options.signal } : {}),
+      })
+    } catch (error: unknown) {
+      // Caller cancellation must propagate as-is, not be relabeled.
+      if (options.signal?.aborted) throw error
+      // fetch wraps every transport failure (DNS, refused connection, TLS,
+      // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
+      // detail lives on `cause`. Wrapping with the endpoint and chaining the
+      // cause lets `errorChain` render the full diagnosis at every reporting
+      // boundary, and gives the retry policy a stable `TRANSPORT` code.
+      throw new LlmError(
+        `Command Code API request to ${connection.apiBase}/alpha/generate failed`,
+        'TRANSPORT',
+        { cause: error },
+      )
+    }
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '')
@@ -679,7 +698,21 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     try {
       let finished = false
       for (;;) {
-        const { done, value } = await reader.read()
+        let read: ReadableStreamReadResult<Uint8Array>
+        try {
+          read = await reader.read()
+        } catch (error: unknown) {
+          // A mid-stream transport failure (connection reset, TLS teardown)
+          // surfaces here. Caller cancellation propagates as-is; anything
+          // else is a transport failure with a stable code.
+          if (options.signal?.aborted) throw error
+          throw new LlmError(
+            `Command Code API stream from ${connection.apiBase} failed while reading`,
+            'TRANSPORT',
+            { cause: error },
+          )
+        }
+        const { done, value } = read
         if (done) {
           if (buffer.trim()) for (const chunk of handleEvent(parseStreamEventLine(buffer))) yield chunk
           break
