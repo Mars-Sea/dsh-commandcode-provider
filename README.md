@@ -1,5 +1,9 @@
 # dsh-commandcode-provider
 
+[![CI](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![npm](https://img.shields.io/badge/npm-@mars--sea%2Fdsh--commandcode--provider-blue.svg)](https://www.npmjs.com/package/@mars-sea/dsh-commandcode-provider)
+
 Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) LLM provider plugin for **Command Code**, ported from [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider) (MIT). It registers a `commandcode` model provider whose requests are translated to Command Code's Provider API (`POST /alpha/generate`, reverse-engineered by the pi plugin, `command-code@1.15.1`).
 
 > This is a community integration. You need your own Command Code account and API key or subscription, and Command Code's terms apply. This project is not affiliated with Command Code, Inc.
@@ -42,10 +46,10 @@ and re-run the `add`. Only allow packages whose source you trust (and pin a comm
 
 ### From npm
 
-> ⚠️ The bare name `dsh-commandcode-provider` is already taken on the npm registry by an unrelated package. If you want to publish this to npm, rename it first (e.g. `@<you>/dsh-commandcode-provider`), then:
+Published as **`@mars-sea/dsh-commandcode-provider`** (the bare name `dsh-commandcode-provider` is taken on the npm registry by an unrelated package):
 
 ```sh
-dsh plugin --profile web add @<you>/dsh-commandcode-provider
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
 ```
 
 ### From a local checkout
