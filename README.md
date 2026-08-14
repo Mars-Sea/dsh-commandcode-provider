@@ -122,6 +122,31 @@ The composition-entry config (`cordis.patch.yml` / your profile `cordis.patch.ym
 - Only tool calls with a paired tool result are replayed into the conversation.
 - The model catalog endpoint is public; requests to `/alpha/generate` require the key above.
 
+## Permissions & privacy
+
+This plugin operates entirely within your dsh profile and your Command Code account. What it touches:
+
+- **Local files**
+  - Reads `~/.commandcode/auth.json` (the official CLI login) **only** as a last-resort key fallback.
+  - Reads/writes `~/.commandcode/models-cache.json` (model catalog cache).
+  - Reads your API key from the dsh credential store (`$DSH_HOME/.credentials.yaml`) via the standard credential seam — the key is never logged or sent anywhere but the Command Code API.
+- **Network**
+  - `GET {apiBase}/provider/v1/models` — public model catalog (no key required).
+  - `POST {apiBase}/alpha/generate` — the model requests themselves, authenticated with your key.
+  - The request body includes the `workingDir` (project path) you configure (defaults to the process cwd), sent as Command Code's `config.workingDir`.
+- **No telemetry**: no analytics, no tracking, no third-party endpoints. The only outbound hosts are the Command Code API (`api.commandcode.ai` by default, configurable via `apiBase`).
+
+## Disabling / uninstalling
+
+- **Disable** the provider without removing it: edit your profile's `cordis.patch.yml` and comment out (or remove) the `llm-commandcode` row, or set `disabled: true` on it, then restart the web app.
+- **Uninstall** completely:
+
+  ```sh
+  dsh plugin --profile web remove dsh-commandcode-provider
+  ```
+
+  This removes the bundle dependency and its layer. Your API key in the dsh credential store and `~/.commandcode/auth.json` are left untouched (you can remove them manually if you want to revoke access).
+
 ## Development
 
 ```sh

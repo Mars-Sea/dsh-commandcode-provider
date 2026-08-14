@@ -122,6 +122,31 @@ llm-commandcode:
 - 只有带配对工具结果的工具调用会被重放到对话中。
 - 模型目录端点是公开的；对 `/alpha/generate` 的请求需要上述 key。
 
+## 权限与隐私
+
+本插件完全在你的 dsh profile 和你的 Command Code 账号内运行。它触及的内容：
+
+- **本地文件**
+  - 仅在**最后兜底**时读取 `~/.commandcode/auth.json`（官方 CLI 登录文件）。
+  - 读写 `~/.commandcode/models-cache.json`（模型目录缓存）。
+  - 通过标准凭据 seam 从 dsh 凭据库（`$DSH_HOME/.credentials.yaml`）读取 API key——key 永不记录日志，也只会发送给 Command Code API。
+- **网络**
+  - `GET {apiBase}/provider/v1/models` —— 公开模型目录（无需 key）。
+  - `POST {apiBase}/alpha/generate` —— 模型请求本身，使用你的 key 认证。
+  - 请求体包含你配置的 `workingDir`（项目路径，默认进程 cwd），作为 Command Code 的 `config.workingDir` 发送。
+- **无遥测**：无分析、无追踪、无第三方端点。唯一的对外主机是 Command Code API（默认 `api.commandcode.ai`，可通过 `apiBase` 配置）。
+
+## 关闭 / 卸载
+
+- **禁用**（不删除）：编辑你 profile 的 `cordis.patch.yml`，注释掉（或移除）`llm-commandcode` 行，或对其设置 `disabled: true`，然后重启 web 应用。
+- **完全卸载**：
+
+  ```sh
+  dsh plugin --profile web remove dsh-commandcode-provider
+  ```
+
+  这会移除 bundle 依赖及其配置层。你在 dsh 凭据库和 `~/.commandcode/auth.json` 中的 API key 不会被改动（如需撤销访问权限，可手动删除）。
+
 ## 开发
 
 ```sh
