@@ -24,7 +24,8 @@
   "scripts": {
     "build": "tsdown",
     "prepare": "tsdown",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts"
   },
   "dsh": {
     "bundle": {
@@ -74,6 +75,7 @@
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^22.0.0",
     "tsdown": "^0.22.2",
+    "tsx": "^4.23.12",
     "typescript": "^6.0.3"
   }
 }

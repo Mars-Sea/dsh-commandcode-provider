@@ -30,6 +30,8 @@ import {
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
+  resolveRetryPolicy,
+  type ResolvedRetryPolicy,
   type ContentBlock,
   type FinishReason,
   type GenerateOptions,
@@ -343,20 +345,36 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
   options: () => C
   /** Resolve a usable API key for the given connection facts, or throw `MISSING_CREDENTIAL`. */
   resolveApiKey: (connection: C) => Promise<string>
+  /** HTTP transport override (tests); defaults to the global `fetch`. */
+  fetchImpl?: typeof fetch
 }
 
 export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private catalog: CommandCodeModel[] = []
+  private readonly fetchImpl: typeof fetch
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
     super()
+    this.fetchImpl = deps.fetchImpl ?? fetch
+  }
+
+  /**
+   * Command Code is a metered subscription API: 429 (rate limit) and 5xx
+   * (transient server errors) are worth retrying at the agent-step boundary,
+   * which is where dsh-llm-retry executes the policy returned here. The
+   * default policy already retries `RATE_LIMIT` and `SERVER`; declaring it
+   * explicitly documents the intent and gives the plugin entry a stable hook
+   * to override (e.g. a stricter cap for a metered plan).
+   */
+  override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
+    return resolveRetryPolicy(undefined, 'llm-commandcode: retryPolicy')
   }
 
   /** Refresh the catalog (live fetch, cache fallback) and return it. */
   private async loadCatalog(signal?: AbortSignal): Promise<CommandCodeModel[]> {
     const { apiBase, modelsCachePath } = this.deps.options()
     try {
-      const response = await fetch(`${apiBase}/provider/v1/models`, {
+      const response = await this.fetchImpl(`${apiBase}/provider/v1/models`, {
         headers: { accept: 'application/json', ...attributionHeaders() },
         signal: signal ?? AbortSignal.timeout(MODELS_TIMEOUT_MS),
       })
@@ -489,7 +507,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       threadId: randomUUID(),
     }
 
-    const response = await fetch(`${connection.apiBase}/alpha/generate`, {
+    const response = await this.fetchImpl(`${connection.apiBase}/alpha/generate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -507,8 +525,31 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '')
+      // Command Code folds several business rejections into 403 (plan limits,
+      // CLI version, model access). Prefer the machine-readable `error.code`
+      // when present; the status alone cannot distinguish them.
+      let providerCode: string | undefined
+      try {
+        const parsed: unknown = JSON.parse(errText)
+        if (isRecord(parsed) && isRecord(parsed.error)) {
+          providerCode = stringValue(parsed.error.code)
+        }
+      } catch {
+        // Plain-text bodies: rely on the status mapping below.
+      }
+      const detail = providerCode ?? `HTTP ${response.status}`
+      if (response.status === 401) {
+        // An invalid or missing credential is a config problem, not a
+        // transport failure: retrying it identically cannot succeed.
+        throw new LlmError(
+          `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
+          + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file',
+          'INVALID_CREDENTIAL',
+          { status: 401 },
+        )
+      }
       throw new LlmError(
-        `Command Code API error ${response.status}: ${errText.slice(0, 500)}`,
+        `Command Code API error ${response.status}${detail === `HTTP ${response.status}` ? '' : ` (${detail})`}: ${errText.slice(0, 500)}`,
         response.status === 429 ? 'RATE_LIMIT' : 'PROVIDER_HTTP_ERROR',
         { status: response.status },
       )
