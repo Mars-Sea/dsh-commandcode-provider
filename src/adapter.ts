@@ -5,7 +5,7 @@
  * community-maintained integration; you need your own Command Code account
  * and API key or subscription, and Command Code's terms apply.
  *
- * Wire protocol (reverse-engineered by the pi plugin, command-code@1.15.1):
+ * Wire protocol (reverse-engineered by the pi plugin, command-code@1.24.0):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
  *          system, max_tokens, temperature, stream, reasoning_effort? }, threadId }
@@ -43,9 +43,10 @@ import {
 } from '@deepseek-ai/dsh-llm'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from pi plugin, command-code@1.15.1 catalog).
-// The Provider API does not expose reasoning metadata; models omitted here
-// let Command Code choose their reasoning depth, matching the official CLI.
+// Static capability snapshot (from the official command-code@1.24.0 bundled
+// model catalog, dist/cli.mjs). The Provider API does not expose reasoning
+// metadata; models omitted here let Command Code choose their reasoning
+// depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
@@ -58,6 +59,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'claude-sonnet-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'deepseek/deepseek-v4-flash': ['high', 'max'],
   'deepseek/deepseek-v4-pro': ['high', 'max'],
+  'google/gemini-3.1-flash-lite': ['low', 'medium', 'high'],
+  'google/gemini-3.5-flash': ['low', 'medium', 'high'],
+  'google/gemini-3.5-flash-lite': ['low', 'medium', 'high'],
+  'google/gemini-3.6-flash': ['low', 'medium', 'high'],
+  'google/gemini-3.7-flash': ['low', 'medium', 'high'],
   'gpt-5.3-codex': ['low', 'medium', 'high', 'xhigh'],
   'gpt-5.4': ['low', 'medium', 'high', 'xhigh'],
   'gpt-5.4-mini': ['low', 'medium', 'high'],
@@ -65,16 +71,13 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
-  'google/gemini-3.1-flash-lite': ['low', 'medium', 'high'],
-  'google/gemini-3.5-flash': ['low', 'medium', 'high'],
-  'google/gemini-3.5-flash-lite': ['low', 'medium', 'high'],
-  'google/gemini-3.6-flash': ['low', 'medium', 'high'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
+  'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
   'zai-org/GLM-5.2': ['high', 'max'],
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.15.1'
+export const COMMAND_CODE_CLI_VERSION = '1.24.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
