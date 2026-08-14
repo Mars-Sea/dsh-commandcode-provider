@@ -52,6 +52,7 @@ npm pack --dry-run      # verify publish contents (must include lib/, cordis.pat
 3. `npm run typecheck && npm test && npm run build`.
 4. Commit, then `npm publish` (requires the maintainer's 2FA OTP; the maintainer runs it, not the agent).
 5. Tag and push: `git tag v<version> && git push && git push --tags`.
+6. **Create a GitHub Release** for the tag (`gh release create v<version> --title "v<version>" --notes "<notes from CHANGELOG>"`). Releases — not tags or pushes — are what star followers see in their activity feed and get notified about; skipping this step makes the release invisible to users who starred the repo.
 
 ## Rules
 
