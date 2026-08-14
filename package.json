@@ -10,12 +10,14 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -28,6 +30,20 @@
       "patch": "./cordis.patch.yml"
     }
   },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/<your-org>/dsh-commandcode-provider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/<your-org>/dsh-commandcode-provider/issues"
+  },
+  "homepage": "https://github.com/<your-org>/dsh-commandcode-provider#readme",
   "keywords": [
     "deepseek-harness",
     "dsh",

@@ -12,21 +12,55 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **API key resolution** in this order: `config.apiKey` → credential reference `apiKeyEnv` (the web Models page writes it, default `COMMANDCODE_API_KEY`) → the launching environment → the official Command Code CLI auth file (`~/.commandcode/auth.json`, written by `command-code login`). pi/OMP auth files are deliberately **not** scanned.
 - **Reasoning-effort support** for the models Command Code's catalog marks as such (e.g. `claude-opus-5`, `gpt-5.5`, `deepseek/deepseek-v4-pro`, …) via `KNOWN_EFFORTS`, matching the pi plugin's snapshot of `command-code@1.15.1`.
 
-## Install
+## Getting an API key
 
-From the directory containing this package (or with a path to it / a git URL / a published tarball):
+Command Code API keys never expire. The easiest path is the official CLI (Node.js 22+):
 
 ```sh
-# 1. Build first (local path installs link the checkout as-is; `prepare` runs
-#    automatically for git/tarball installs).
-npm install
-npm run build
+npm i -g command-code@latest
+cmd login        # macOS/Linux; native Windows: cmdc login
+```
 
-# 2. Install into your profile (the `web` profile is what `dsh web` boots).
+`cmd login` opens a browser to authenticate; on success the key is written to `~/.commandcode/auth.json` — this plugin picks it up automatically (last-resort fallback). Alternatively create an API key in the browser ([Command Code Studio](https://commandcode.ai/studio/auth/cli)) and paste it into the Models page card, or `export COMMANDCODE_API_KEY="user_..."`.
+
+## Install
+
+### From GitHub (recommended)
+
+```sh
+dsh plugin --profile web add github:<you>/dsh-commandcode-provider#<sha>
+```
+
+A git install fetches **sources**, so the package's `prepare` script builds `lib/` after install. pnpm ≥10 blocks that script by default — run the `add`, then copy the **exact package key pnpm prints** into `~/.dsh/profiles/web/pnpm-workspace.yaml`:
+
+```yaml
+allowBuilds:
+  'dsh-commandcode-provider@github:<you>/dsh-commandcode-provider#<sha>': true
+```
+
+and re-run the `add`. Only allow packages whose source you trust (and pin a commit).
+
+### From npm
+
+> ⚠️ The bare name `dsh-commandcode-provider` is already taken on the npm registry by an unrelated package. If you want to publish this to npm, rename it first (e.g. `@<you>/dsh-commandcode-provider`), then:
+
+```sh
+dsh plugin --profile web add @<you>/dsh-commandcode-provider
+```
+
+### From a local checkout
+
+```sh
+npm install
+npm run build                          # git-installed/tarball installs do this via `prepare` automatically
 dsh plugin --profile web add /path/to/dsh-commandcode-provider
 ```
 
-That links the package into the profile, appends `dsh-commandcode-provider` to the profile's `dsh.profile.bundles`, and activates the `cordis.patch.yml` layer, which inserts:
+A local path install links the checkout as-is, so after changing `src/` re-run `npm run build` and restart the app.
+
+### What the install does
+
+`dsh plugin add` links the package into the profile, appends `dsh-commandcode-provider` to the profile's `dsh.profile.bundles`, and activates the `cordis.patch.yml` layer, which inserts:
 
 ```yaml
 - insert:
@@ -43,22 +77,13 @@ dsh --profile web --dump-config          # shows a "# == dsh-commandcode-provide
 dsh web                                  # or restart your running instance
 ```
 
-### From a git host
+## Verify it works
 
-`dsh plugin --profile web add github:you/dsh-commandcode-provider#<sha>` fetches **sources**, so the package's `prepare` script builds `lib/` after install. pnpm ≥10 blocks that script by default; allow it once in `~/.dsh/profiles/web/pnpm-workspace.yaml`:
-
-```yaml
-allowBuilds:
-  dsh-commandcode-provider: true
-```
-
-then re-run the `add`. Only allow packages whose source you trust (and pin a commit).
+After restart, in the web UI: **Settings → Models** shows a **Command Code** card; the model picker lists the live catalog under **commandcode** (54 models at the time of writing). Send a message with a model your plan includes — the default `deepseek/deepseek-v4-flash` works on entry-level plans; open-weight models (DeepSeek/Qwen/Kimi/MiniMax) generally do, while frontier models (Claude/GPT/Gemini/Grok) may require Pro/Max plans or on-demand usage (see FAQ).
 
 ## Configure
 
-Open **Settings → Models**: the Command Code card takes your API key (stored in `$DSH_HOME/.credentials.yaml`). The model picker then lists the live Command Code catalog under **commandcode**.
-
-Advanced knobs live in the `llm-commandcode` section of `$DSH_HOME/settings.yaml` (overrides the bundle defaults per request, no restart needed):
+The Command Code card takes your API key (stored in `$DSH_HOME/.credentials.yaml`; the model catalog is browsable without one). Advanced knobs live in the `llm-commandcode` section of `$DSH_HOME/settings.yaml` (overrides the bundle defaults per request, no restart needed):
 
 ```yaml
 llm-commandcode:
@@ -69,6 +94,14 @@ llm-commandcode:
 ```
 
 The composition-entry config (`cordis.patch.yml` / your profile `cordis.patch.yml`) accepts the same keys; a literal `apiKey` there takes precedence over the credential reference.
+
+## Troubleshooting
+
+- **`MODEL_NOT_IN_PLAN` (403)** — the selected model is not in your Command Code plan. Pick an open-weight model (e.g. `deepseek/deepseek-v4-flash`) or upgrade. The error names the model and links the official docs.
+- **`MISSING_CREDENTIAL`** — no key anywhere. Store one via the Models page card, export `COMMANDCODE_API_KEY`, set `config.apiKey`, or run `command-code login`. The route stays registered and the catalog stays browsable without a key.
+- **The Models page card shows "not configured" but requests work** — the key came from `~/.commandcode/auth.json` (the `cmd login` fallback), not the dsh credential store. Paste it into the card once to make the card show as configured; both coexist fine.
+- **A reasoning model returns no visible text on short requests** — reasoning models (e.g. `deepseek/deepseek-v4-*`) consume output tokens on reasoning first; a small `maxTokens` can be exhausted before any visible text. This is normal.
+- **`allowBuilds` errors on `dsh plugin add` from git** — copy the exact package key pnpm printed (with the commit hash) into `pnpm-workspace.yaml` and re-run (see [Install](#from-github-recommended)).
 
 ## Notes & limitations
 
