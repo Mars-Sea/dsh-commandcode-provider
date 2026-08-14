@@ -1,0 +1,8 @@
+# dsh-commandcode-provider bundle layer.
+# One plugin row: registers the `commandcode` provider route and its
+# Models-page card. All fields are optional — schema defaults apply.
+- insert:
+    - id: llm-commandcode
+      name: dsh-commandcode-provider
+      config:
+        apiKeyEnv: COMMANDCODE_API_KEY
