@@ -5,6 +5,7 @@
 [![CI](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm](https://img.shields.io/badge/npm-@mars--sea%2Fdsh--commandcode--provider-blue.svg)](https://www.npmjs.com/package/@mars-sea/dsh-commandcode-provider)
+[![linux.do](https://linux.do/uploads/default/original/2X/8/8e6e2c0e0f8e0e0e0e0e0e0e0e0e0e0e0e0e0e0e.svg)](https://linux.do)
 
 非官方 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的 LLM provider 插件，用于 **Command Code**，移植自 [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider)（MIT 协议）。它注册了一个 `commandcode` 模型 provider，将请求转换为 Command Code 的 Provider API（`POST /alpha/generate`，由 pi 插件逆向工程，对应 `command-code@1.15.1`）。
 
