@@ -92,6 +92,18 @@ dsh web                                  # or restart your running instance
 
 After restart, in the web UI: **Settings → Models** shows a **Command Code** card; the model picker lists the live catalog under **commandcode** (54 models at the time of writing). Send a message with a model your plan includes — the default `deepseek/deepseek-v4-flash` works on entry-level plans; open-weight models (DeepSeek/Qwen/Kimi/MiniMax) generally do, while frontier models (Claude/GPT/Gemini/Grok) may require Pro/Max plans or on-demand usage (see FAQ).
 
+## Slash command
+
+The plugin registers `/commandcode` (requires the dsh `commands` service, present in the standard web profile). Three read-only subcommands:
+
+```text
+/commandcode status          credential + catalog + config summary
+/commandcode models [query]  list or search the model catalog
+/commandcode check <model>   is this model usable on your current plan?
+```
+
+`check` sends one 4-token probe request, so it tells you *authoritatively* whether a model is in your plan (vs. guessing from pricing pages). Command Code exposes no account/usage API, so `status` answers from the catalog, local credential state, and configuration — there is no usage-quota endpoint to show.
+
 ## Configure
 
 The Command Code card takes your API key (stored in `$DSH_HOME/.credentials.yaml`; the model catalog is browsable without one). Advanced knobs live in the `llm-commandcode` section of `$DSH_HOME/settings.yaml` (overrides the bundle defaults per request, no restart needed):

@@ -92,6 +92,18 @@ dsh web                                  # 或重启你正在运行的实例
 
 重启后，在 Web UI 中：**设置 → Models** 会显示 **Command Code** 卡片；模型选择器会在 **commandcode** 下列出实时目录（撰写本文时有 54 个模型）。发送一条消息，选择你套餐中包含的模型——默认的 `deepseek/deepseek-v4-flash` 适用于入门级套餐；开放权重模型（DeepSeek/Qwen/Kimi/MiniMax）通常都可用，而前沿模型（Claude/GPT/Gemini/Grok）可能需要 Pro/Max 套餐或按需计费（见 FAQ）。
 
+## 斜杠命令
+
+插件注册了 `/commandcode`（需要 dsh 的 `commands` 服务，标准 web profile 自带）。三个只读子命令：
+
+```text
+/commandcode status          key 状态 + 模型目录 + 配置摘要
+/commandcode models [query]  列出或搜索模型目录
+/commandcode check <model>   该模型在当前套餐是否可用？
+```
+
+`check` 会发送一个 4-token 的探测请求，因此它能**权威地**告诉你某个模型是否在你的套餐内（而不是靠定价页面猜）。Command Code 没有公开的账户/用量 API，所以 `status` 从目录、本地 key 状态和配置回答——没有用量配额端点可显示。
+
 ## 配置
 
 Command Code 卡片接收你的 API key（存储在 `$DSH_HOME/.credentials.yaml`；没有 key 也可以浏览模型目录）。高级选项位于 `$DSH_HOME/settings.yaml` 的 `llm-commandcode` 一节（按请求覆盖 bundle 默认值，无需重启）：

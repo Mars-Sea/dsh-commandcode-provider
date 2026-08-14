@@ -16,8 +16,11 @@ An unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-har
 src/adapter.ts        CommandCodeAdapter (LlmAdapter) — wire protocol, message
                       conversion, SSE/JSONL stream parsing, catalog + cache.
 src/index.ts          Plugin entry: Config schema, credential resolution,
-                      settings namespace, route + directory registration.
-tests/adapter.test.ts Core unit tests (node:test + tsx).
+                      settings namespace, route + directory registration,
+                      /commandcode command wiring.
+src/commands.ts       The /commandcode slash command (status | models | check).
+tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
+tests/commands.test.ts Command handler unit tests (stubbed adapter, no network).
 cordis.patch.yml      Bundle patch layer (inserts the llm-commandcode row).
 tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts).
 ```
