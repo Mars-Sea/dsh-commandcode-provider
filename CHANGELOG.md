@@ -4,17 +4,6 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.3] - 2026-08-14
-
-### Added
-
-- `/commandcode` slash command (requires the dsh `commands` service; degrades silently when absent) with three read-only subcommands:
-  - `status` — credential state, catalog size, and config summary.
-  - `models [query]` — list or search the live model catalog, annotating reasoning models.
-  - `check <model>` — authoritative plan check via one 4-token probe request (reports `usable` / `not in your plan (MODEL_NOT_IN_PLAN)` / `credential rejected`).
-- `@deepseek-ai/dsh-commands` added to peerDependencies (type-only for the command definitions; the service is optional at runtime).
-- Command handler unit tests (`tests/commands.test.ts`, 11 cases, stubbed adapter — no network).
-
 ## [0.1.2] - 2026-08-14
 
 ### Fixed

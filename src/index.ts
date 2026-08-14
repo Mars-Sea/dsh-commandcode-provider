@@ -31,7 +31,6 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
 import type { CommandCodeConnectionOptions } from './adapter.ts'
-import { applyCommands } from './commands.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -44,8 +43,6 @@ export {
   resolveAuthFileApiKey,
 } from './adapter.ts'
 export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions } from './adapter.ts'
-export { applyCommands, commandDefinition } from './commands.ts'
-export type { CommandCodeCommandDeps } from './commands.ts'
 
 export const name = 'llm-commandcode'
 export const inject = ['llm']
@@ -156,24 +153,6 @@ export function apply(ctx: Context, config: Config): void {
   ])
   // The live route: this is what makes models requestable under `commandcode`.
   ctx.llm.registerAdapter([PROVIDER], adapter)
-
-  // The /commandcode slash command (status | models | check) rides the
-  // optional `commands` service: register it when present, and degrade
-  // silently when a profile does not mount dsh-commands.
-  const commandCtx = ctx as Context & { commands?: { register(d: unknown): unknown } }
-  if (commandCtx.commands !== undefined) {
-    applyCommands(ctx, {
-      adapter,
-      options,
-      resolveApiKey: async (connection) => {
-        try {
-          return await resolveApiKey(connection)
-        } catch {
-          return undefined
-        }
-      },
-    })
-  }
 
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => {
