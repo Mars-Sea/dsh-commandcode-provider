@@ -38,12 +38,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<your-org>/dsh-commandcode-provider.git"
+    "url": "git+https://github.com/Mars-Sea/dsh-commandcode-provider.git"
   },
   "bugs": {
-    "url": "https://github.com/<your-org>/dsh-commandcode-provider/issues"
+    "url": "https://github.com/Mars-Sea/dsh-commandcode-provider/issues"
   },
-  "homepage": "https://github.com/<your-org>/dsh-commandcode-provider#readme",
+  "homepage": "https://github.com/Mars-Sea/dsh-commandcode-provider#readme",
   "keywords": [
     "deepseek-harness",
     "dsh",

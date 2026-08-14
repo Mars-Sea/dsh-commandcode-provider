@@ -28,14 +28,14 @@ cmd login        # macOS/Linux; native Windows: cmdc login
 ### From GitHub (recommended)
 
 ```sh
-dsh plugin --profile web add github:<you>/dsh-commandcode-provider#<sha>
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<sha>
 ```
 
 A git install fetches **sources**, so the package's `prepare` script builds `lib/` after install. pnpm ≥10 blocks that script by default — run the `add`, then copy the **exact package key pnpm prints** into `~/.dsh/profiles/web/pnpm-workspace.yaml`:
 
 ```yaml
 allowBuilds:
-  'dsh-commandcode-provider@github:<you>/dsh-commandcode-provider#<sha>': true
+  'dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<sha>': true
 ```
 
 and re-run the `add`. Only allow packages whose source you trust (and pin a commit).
