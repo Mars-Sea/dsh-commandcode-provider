@@ -31,11 +31,19 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 
 ## 安装
 
-### 从 GitHub 安装（推荐）
+### 从 npm 安装（推荐）
+
+插件发布在 npm 上，包名 **`@mars-sea/dsh-commandcode-provider`**（npm 上裸名 `dsh-commandcode-provider` 已被无关包占用）：
+
+```sh
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
+```
+
+### 从 GitHub 安装
 
 ```sh
 # 推荐：锁定发布 tag（可读、不可变）
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.6
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
 # 或按完整 commit SHA 锁定任意提交
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>
 ```
@@ -50,14 +58,6 @@ allowBuilds:
 ```
 
 然后重新运行 `add`。只允许信任其源码的包（并固定 commit）。
-
-### 从 npm 安装
-
-发布为 **`@mars-sea/dsh-commandcode-provider`**（npm 上裸名 `dsh-commandcode-provider` 已被无关包占用）：
-
-```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
-```
 
 ### 从本地检出安装
 
@@ -89,6 +89,32 @@ patch 行里的 `name` 必须是**带引号的完整包名**：loader 会把它�
 dsh --profile web --dump-config          # 会显示 "# == @mars-sea/dsh-commandcode-provider" 层
 dsh web                                  # 或重启你正在运行的实例
 ```
+
+## 更新
+
+bundle 的 patch 层在每次启动时都从**已安装的包**读取，所以更新包本身就会带入修复后的 patch 行——**不需要**手工改 `cordis.patch.yml`（除非你把它的内容复制到了自己 profile 的层里）。
+
+按安装方式选择更新命令：
+
+```sh
+# 从 npm 安装（推荐）：总是升到最新发布版本
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider
+
+# 从 GitHub 按 tag 安装：指向新 tag
+# （无需先卸载——pnpm 会就地替换固定的版本，下次启动时 bundle 层会从新安装的包重新读取）
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
+
+# 从本地检出安装：拉取新代码、重新构建、重启
+git -C /path/to/dsh-commandcode-provider pull
+npm run build --prefix /path/to/dsh-commandcode-provider
+dsh web
+```
+
+然后重启 Web 应用（`dsh web`，或重启服务）。用 `dsh --profile web --dump-config` 验证运行的版本——层里应显示 `name: '@mars-sea/dsh-commandcode-provider'`。
+
+> **从 ≤0.1.6 升级**（或手改坏的 profile）：安装包自带的 patch 层现在已经带着修正后的带引号 `name`。如果你之前**手工复制**过旧的 patch 行到你 profile 自己的 `cordis.patch.yml`，那份拷贝会覆盖 bundle 层——请手动改成 `name: "@mars-sea/dsh-commandcode-provider"`（见[故障排查](#故障排查)），或删掉它让 bundle 层生效。
+
+> **想卸载而不是升级**（例如正卡在 0.1.7 之前坏掉的 tag，想干净重来）：`dsh plugin --profile web remove @mars-sea/dsh-commandcode-provider`（用 **scoped 名**——pnpm 按真实包名记录依赖，裸名 `dsh-commandcode-provider` 对不上）。这会移除依赖及其配置层；你在 dsh 凭据库和 `~/.commandcode/auth.json` 里的 API key 不受影响。然后用上面的 npm 或 GitHub 命令安装当前版本。
 
 ## 验证是否生效
 
@@ -154,7 +180,7 @@ llm-commandcode:
 - **`MISSING_CREDENTIAL`** ——任何地方都没有 key。通过 Models 页面卡片存储一个、`export COMMANDCODE_API_KEY`、设置 `config.apiKey`，或运行 `command-code login`。没有 key 时路由保持注册、目录保持可浏览。
 - **Models 页面卡片显示"未配置"但请求可用** ——key 来自 `~/.commandcode/auth.json`（`cmd login` 兜底），而不是 dsh 凭据存储。把它粘贴到卡片一次即可让卡片显示为已配置；两者可以共存。
 - **推理模型在短请求下不返回可见文本** ——推理模型（如 `deepseek/deepseek-v4-*`）会先消耗输出 token 进行推理；`maxTokens` 较小时可能在出现可见文本前就用完。这属于正常现象。
-- **git 安装时 `dsh plugin add` 报 `allowBuilds` 错误** ——把 pnpm 打印的确切包 key（含 commit hash）复制到 `pnpm-workspace.yaml` 并重新运行（见[从 GitHub 安装（推荐）](#从-github-安装推荐)）。
+- **git 安装时 `dsh plugin add` 报 `allowBuilds` 错误** ——把 pnpm 打印的确切包 key（含 commit hash）复制到 `pnpm-workspace.yaml` 并重新运行（见[从 GitHub 安装](#从-github-安装)）。
 
 ## 注意事项与限制
 

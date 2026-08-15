@@ -31,11 +31,19 @@ cmd login        # macOS/Linux; native Windows: cmdc login
 
 ## Install
 
-### From GitHub (recommended)
+### From npm (recommended)
+
+The plugin is published to the npm registry as **`@mars-sea/dsh-commandcode-provider`** (the bare name `dsh-commandcode-provider` is taken by an unrelated package):
+
+```sh
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
+```
+
+### From GitHub
 
 ```sh
 # Pin a release tag (recommended — readable and immutable)
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.6
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
 # Or pin any exact commit by its SHA
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>
 ```
@@ -50,14 +58,6 @@ allowBuilds:
 ```
 
 and re-run the `add`. Only allow packages whose source you trust (and pin a commit).
-
-### From npm
-
-Published as **`@mars-sea/dsh-commandcode-provider`** (the bare name `dsh-commandcode-provider` is taken on the npm registry by an unrelated package):
-
-```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
-```
 
 ### From a local checkout
 
@@ -89,6 +89,33 @@ Verify the composed layer, then (re)start the web app:
 dsh --profile web --dump-config          # shows a "# == @mars-sea/dsh-commandcode-provider" layer
 dsh web                                  # or restart your running instance
 ```
+
+## Updating
+
+The bundle's patch layer is read from the **installed package** at every boot, so updating the package brings in the fixed patch row automatically — you do not need to hand-edit `cordis.patch.yml` unless you copied its contents into your own profile layer.
+
+Update according to how you installed it:
+
+```sh
+# From npm (recommended): always the latest published release
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider
+
+# From GitHub pinned to a tag: point at the new tag
+# (no need to uninstall first — pnpm swaps the pinned revision in place,
+# and the bundle layer is re-read from the installed package on next boot)
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
+
+# From a local checkout: pull the new code, rebuild, restart
+git -C /path/to/dsh-commandcode-provider pull
+npm run build --prefix /path/to/dsh-commandcode-provider
+dsh web
+```
+
+Then restart the web app (`dsh web`, or restart the service). Verify the running version with `dsh --profile web --dump-config` — the layer should show `name: '@mars-sea/dsh-commandcode-provider'`.
+
+> **Upgrading from ≤0.1.6** (or a broken hand-edited profile): the installed package's patch layer now carries the corrected, quoted `name`. If you previously *copied* the old patch row into your profile's own `cordis.patch.yml`, that copy still wins over the bundle layer — fix it manually to `name: "@mars-sea/dsh-commandcode-provider"` (see [Troubleshooting](#troubleshooting)) or remove it and let the bundle layer apply.
+
+> **To uninstall instead of upgrading** (e.g. you are on a broken pre-0.1.7 tag and want to start clean): `dsh plugin --profile web remove @mars-sea/dsh-commandcode-provider` (the scoped name — pnpm records the dependency under its real package name, so the bare `dsh-commandcode-provider` form does not match). This removes the dependency and its layer; your API key in the dsh credential store and `~/.commandcode/auth.json` are left untouched. Then install the current version with the npm or GitHub command above.
 
 ## Verify it works
 
@@ -154,7 +181,7 @@ The composition-entry config (`cordis.patch.yml` / your profile `cordis.patch.ym
 - **`MISSING_CREDENTIAL`** — no key anywhere. Store one via the Models page card, export `COMMANDCODE_API_KEY`, set `config.apiKey`, or run `command-code login`. The route stays registered and the catalog stays browsable without a key.
 - **The Models page card shows "not configured" but requests work** — the key came from `~/.commandcode/auth.json` (the `cmd login` fallback), not the dsh credential store. Paste it into the card once to make the card show as configured; both coexist fine.
 - **A reasoning model returns no visible text on short requests** — reasoning models (e.g. `deepseek/deepseek-v4-*`) consume output tokens on reasoning first; a small `maxTokens` can be exhausted before any visible text. This is normal.
-- **`allowBuilds` errors on `dsh plugin add` from git** — copy the exact package key pnpm printed (with the commit hash) into `pnpm-workspace.yaml` and re-run (see [Install](#from-github-recommended)).
+- **`allowBuilds` errors on `dsh plugin add` from git** — copy the exact package key pnpm printed (with the commit hash) into `pnpm-workspace.yaml` and re-run (see [Install](#from-github)).
 
 ## Notes & limitations
 

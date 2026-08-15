@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `CommandCodeConnectionOptions` gains `requestTimeoutMs` and `streamIdleTimeoutMs`; both are optional in the `Config` schema and default to 60s/120s. New `DEFAULT_REQUEST_TIMEOUT_MS` / `DEFAULT_STREAM_IDLE_TIMEOUT_MS` exports.
 - Both READMEs document the new knobs and the transport-failure troubleshooting entry (notably: Node's fetch ignores `HTTP_PROXY`/`HTTPS_PROXY`, so proxy-dependent networks fail here while the browser works).
+- Both READMEs gain an **Updating** section: since the bundle patch layer is read from the installed package at boot, updating the package fixes the patch row automatically; the section covers npm/git/local update commands and the ≤0.1.6 hand-copied-patch caveat.
+- Both READMEs restructure the install docs: **npm is now the recommended install path** (one command, always the latest published release), GitHub moves below it, and the uninstall command is documented (use the scoped name `@mars-sea/dsh-commandcode-provider`, since pnpm records dependencies under the real package name).
 
 ## [0.1.7] - 2026-08-15
 
