@@ -114,6 +114,14 @@ dsh web
 
 Then restart the web app (`dsh web`, or restart the service). Verify the running version with `dsh --profile web --dump-config` — the layer should show `name: '@mars-sea/dsh-commandcode-provider'`.
 
+> **`update` says "Already up to date" but the version did not move (pnpm ≥ 11)?** pnpm 11's `minimumReleaseAge` supply-chain policy can refuse to update to a freshly published version and report "Already up to date" even though a newer release exists. Pin the exact version instead:
+>
+> ```sh
+> dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.1.9
+> ```
+>
+> `add` with an explicit version installs it (and moves your spec to `^0.1.9`). If you trust your registry you can also disable the gate with `pnpm config set minimumReleaseAge 0 --location project` inside the profile directory (or delete the `minimumReleaseAgeExclude` entry pnpm wrote into `pnpm-workspace.yaml`).
+
 > **Upgrading from ≤0.1.6** (or a broken hand-edited profile): the installed package's patch layer now carries the corrected, quoted `name`. If you previously *copied* the old patch row into your profile's own `cordis.patch.yml`, that copy still wins over the bundle layer — fix it manually to `name: "@mars-sea/dsh-commandcode-provider"` (see [Troubleshooting](#troubleshooting)) or remove it and let the bundle layer apply.
 
 > **To uninstall instead of upgrading** (e.g. you are on a broken pre-0.1.7 tag and want to start clean): `dsh plugin --profile web remove @mars-sea/dsh-commandcode-provider` (the scoped name — pnpm records the dependency under its real package name, so the bare `dsh-commandcode-provider` form does not match). This removes the dependency and its layer; your API key in the dsh credential store and `~/.commandcode/auth.json` are left untouched. Then install the current version with the npm or GitHub command above.

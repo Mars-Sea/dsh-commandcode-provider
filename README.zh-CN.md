@@ -113,6 +113,14 @@ dsh web
 
 然后重启 Web 应用（`dsh web`，或重启服务）。用 `dsh --profile web --dump-config` 验证运行的版本——层里应显示 `name: '@mars-sea/dsh-commandcode-provider'`。
 
+> **`update` 提示 "Already up to date" 但版本没变（pnpm ≥ 11）？** pnpm 11 的 `minimumReleaseAge` 供应链安全策略可能拒绝更新到刚发布的新版本，并报 "Already up to date"，即使已经有更新的发布。请改用**显式版本**安装：
+>
+> ```sh
+> dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.1.9
+> ```
+>
+> `add` 加显式版本会真正装上新版本（并把你的 spec 升为 `^0.1.9`）。如果你信任所用 registry，也可以在 profile 目录里执行 `pnpm config set minimumReleaseAge 0 --location project` 关掉该门禁（或删除 pnpm 写进 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 条目）。
+
 > **从 ≤0.1.6 升级**（或手改坏的 profile）：安装包自带的 patch 层现在已经带着修正后的带引号 `name`。如果你之前**手工复制**过旧的 patch 行到你 profile 自己的 `cordis.patch.yml`，那份拷贝会覆盖 bundle 层——请手动改成 `name: "@mars-sea/dsh-commandcode-provider"`（见[故障排查](#故障排查)），或删掉它让 bundle 层生效。
 
 > **想卸载而不是升级**（例如正卡在 0.1.7 之前坏掉的 tag，想干净重来）：`dsh plugin --profile web remove @mars-sea/dsh-commandcode-provider`（用 **scoped 名**——pnpm 按真实包名记录依赖，裸名 `dsh-commandcode-provider` 对不上）。这会移除依赖及其配置层；你在 dsh 凭据库和 `~/.commandcode/auth.json` 里的 API key 不受影响。然后用上面的 npm 或 GitHub 命令安装当前版本。
