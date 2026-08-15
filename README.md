@@ -46,7 +46,7 @@ A git install fetches **sources**, so the package's `prepare` script builds `lib
 
 ```yaml
 allowBuilds:
-  'dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>': true
+  '@mars-sea/dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>': true
 ```
 
 and re-run the `add`. Only allow packages whose source you trust (and pin a commit).
@@ -71,20 +71,22 @@ A local path install links the checkout as-is, so after changing `src/` re-run `
 
 ### What the install does
 
-`dsh plugin add` links the package into the profile, appends `dsh-commandcode-provider` to the profile's `dsh.profile.bundles`, and activates the `cordis.patch.yml` layer, which inserts:
+`dsh plugin add` links the package into the profile (pnpm records dependencies and links `node_modules` by the **true package name**, i.e. `@mars-sea/dsh-commandcode-provider`), appends that same name to the profile's `dsh.profile.bundles`, and activates the `cordis.patch.yml` layer, which inserts:
 
 ```yaml
 - insert:
     - id: llm-commandcode
-      name: dsh-commandcode-provider
+      name: "@mars-sea/dsh-commandcode-provider"
       config:
         apiKeyEnv: COMMANDCODE_API_KEY
 ```
 
+The `name` in the patch row must be the **full package specifier, quoted**: the loader imports it as a module and resolves it from the profile's `node_modules`, where pnpm only ever links the scoped name. A bare `dsh-commandcode-provider` fails with `ERR_MODULE_NOT_FOUND` and crashes the app on boot, and an unquoted `@mars-sea/...` fails YAML parsing (see [Troubleshooting](#troubleshooting)).
+
 Verify the composed layer, then (re)start the web app:
 
 ```sh
-dsh --profile web --dump-config          # shows a "# == dsh-commandcode-provider" layer
+dsh --profile web --dump-config          # shows a "# == @mars-sea/dsh-commandcode-provider" layer
 dsh web                                  # or restart your running instance
 ```
 
@@ -133,12 +135,21 @@ llm-commandcode:
   apiBase: https://api.commandcode.ai
   workingDir: /path/to/project     # reported to the API (project slug, config block)
   modelsCachePath: ~/.commandcode/models-cache.json
+  requestTimeoutMs: 60000          # max wait for the first response byte (default 60s)
+  streamIdleTimeoutMs: 120000      # stream stall before treated as a dead connection (default 120s)
 ```
 
 The composition-entry config (`cordis.patch.yml` / your profile `cordis.patch.yml`) accepts the same keys; a literal `apiKey` there takes precedence over the credential reference.
 
 ## Troubleshooting
 
+- **`Command Code API request to .../alpha/generate failed` and the turn keeps retrying (`重试延迟` / "Retry delay")** — this is a **transport-layer failure**: `fetch()` never received an HTTP response (not a 401/403/429, which would say "API error"). Since dsh's retry policy retries `TRANSPORT` twice with backoff, you'll see retry rows in the UI before the turn finally fails. Since 0.1.8 the failure reason shows the **real root cause** (e.g. `fetch failed: connect ECONNREFUSED`, `ENOTFOUND`, `CERT_HAS_EXPIRED`, `The operation was aborted due to timeout`). Common causes:
+  - **A proxy is required in your network.** Node's `fetch` (undici) does **not** read `HTTP_PROXY`/`HTTPS_PROXY` environment variables, so a browser/curl that goes through a system proxy works while dsh fails. Run dsh with the proxy configured for undici (e.g. `NODE_OPTIONS=--import undici` with a dispatcher, or a network-level route), or whitelist `api.commandcode.ai`.
+  - **The connection is being reset/throttled mid-request** (firewall, GFW-style interference, unstable Wi-Fi). The error message will name it (`socket hang up`, `ECONNRESET`, `UND_ERR_SOCKET`).
+  - **TLS interception** (corporate MITM) — `CERT_HAS_EXPIRED`/`DEPTH_ZERO_SELF_SIGNED_CERT` in the chain.
+  - A transient blip that a retry recovers from; if it persists every turn, it's environmental, not the API (the models endpoint and generate endpoint respond normally from healthy networks).
+- **A long generation stops mid-stream** — since 0.1.8 the adapter aborts a request that gets no response within `requestTimeoutMs` (60s default) and a stream that stalls past `streamIdleTimeoutMs` (120s default) instead of hanging forever. Both failures surface as `TIMEOUT` with the stall duration; tune the knobs in the `llm-commandcode` settings if your network is slow but stable.
+- **The web app crashes on boot with `ERR_MODULE_NOT_FOUND: Cannot find package 'dsh-commandcode-provider'`** — the patch row's `name` is the bare package name, but the loader imports it as a module from the profile's `node_modules`, where pnpm only links the scoped name `@mars-sea/dsh-commandcode-provider`. Pre-0.1.7 bundles shipped this wrong row, and the bug also bites when an old `cordis.patch.yml` example (or a cached profile layer) is copied by hand. Fix the row in your profile's `cordis.patch.yml` (or re-add the plugin) so it reads `name: "@mars-sea/dsh-commandcode-provider"` — note the **quotes**: an unquoted `@`-prefixed scalar fails YAML parsing (0.1.7 shipped that regression; 0.1.8 quotes it) — then restart.
 - **`MODEL_NOT_IN_PLAN` (403)** — the selected model is not in your Command Code plan. Pick an open-weight model (e.g. `deepseek/deepseek-v4-flash`) or upgrade. The error names the model and links the official docs.
 - **`MISSING_CREDENTIAL`** — no key anywhere. Store one via the Models page card, export `COMMANDCODE_API_KEY`, set `config.apiKey`, or run `command-code login`. The route stays registered and the catalog stays browsable without a key.
 - **The Models page card shows "not configured" but requests work** — the key came from `~/.commandcode/auth.json` (the `cmd login` fallback), not the dsh credential store. Paste it into the card once to make the card show as configured; both coexist fine.
@@ -173,7 +184,7 @@ This plugin operates entirely within your dsh profile and your Command Code acco
 - **Uninstall** completely:
 
   ```sh
-  dsh plugin --profile web remove dsh-commandcode-provider
+  dsh plugin --profile web remove @mars-sea/dsh-commandcode-provider
   ```
 
   This removes the bundle dependency and its layer. Your API key in the dsh credential store and `~/.commandcode/auth.json` are left untouched (you can remove them manually if you want to revoke access).

@@ -46,7 +46,7 @@ git 安装会拉取**源码**，因此包的 `prepare` 脚本会在安装后构�
 
 ```yaml
 allowBuilds:
-  'dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>': true
+  '@mars-sea/dsh-commandcode-provider@github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>': true
 ```
 
 然后重新运行 `add`。只允许信任其源码的包（并固定 commit）。
@@ -71,20 +71,22 @@ dsh plugin --profile web add /path/to/dsh-commandcode-provider
 
 ### 安装做了什么
 
-`dsh plugin add` 会将包链接到配置目录，把 `dsh-commandcode-provider` 追加到配置的 `dsh.profile.bundles`，并激活 `cordis.patch.yml` 层，其中插入：
+`dsh plugin add` 会将包链接到配置目录（pnpm 按**真实包名**记录依赖并链接 `node_modules`，即 `@mars-sea/dsh-commandcode-provider`），把同名包名追加到配置的 `dsh.profile.bundles`，并激活 `cordis.patch.yml` 层，其中插入：
 
 ```yaml
 - insert:
     - id: llm-commandcode
-      name: dsh-commandcode-provider
+      name: "@mars-sea/dsh-commandcode-provider"
       config:
         apiKeyEnv: COMMANDCODE_API_KEY
 ```
 
+patch 行里的 `name` 必须是**带引号的完整包名**：loader 会把它当作模块从 profile 的 `node_modules` 导入，而 pnpm 只会链接带 scope 的名字。写成裸名 `dsh-commandcode-provider` 会报 `ERR_MODULE_NOT_FOUND` 并在启动时崩溃；不引号的 `@mars-sea/...` 也会导致 YAML 解析失败（见[故障排查](#故障排查)）。
+
 验证合成后的层，然后（重新）启动 Web 应用：
 
 ```sh
-dsh --profile web --dump-config          # 会显示 "# == dsh-commandcode-provider" 层
+dsh --profile web --dump-config          # 会显示 "# == @mars-sea/dsh-commandcode-provider" 层
 dsh web                                  # 或重启你正在运行的实例
 ```
 
@@ -133,12 +135,21 @@ llm-commandcode:
   apiBase: https://api.commandcode.ai
   workingDir: /path/to/project     # 上报给 API（项目 slug、配置块）
   modelsCachePath: ~/.commandcode/models-cache.json
+  requestTimeoutMs: 60000          # 等待首个响应字节的最长时间（默认 60s）
+  streamIdleTimeoutMs: 120000      # 流停顿超过该时长即视为死连接（默认 120s）
 ```
 
 组合入口配置（`cordis.patch.yml` / 你 profile 的 `cordis.patch.yml`）接受相同的键；那里的字面量 `apiKey` 优先于凭据引用。
 
 ## 故障排查
 
+- **`Command Code API request to .../alpha/generate failed`，且每次会话都在重试（看到"重试延迟"）** ——这是**传输层失败**：`fetch()` 根本没拿到 HTTP 响应（不是 401/403/429，那些会显示 "API error"）。dsh 的重试策略会重试 `TRANSPORT` 两次（指数退避），所以 UI 里会先出现重试行，最终才失败。0.1.8 起失败原因会显示**真实根因**（例如 `fetch failed: connect ECONNREFUSED`、`ENOTFOUND`、`CERT_HAS_EXPIRED`、`The operation was aborted due to timeout`）。常见原因：
+  - **你的网络需要代理**。Node 的 `fetch`（undici）**不读取** `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，所以浏览器/curl 走系统代理能通，而 dsh 进程直连失败。需要给 dsh 配置 undici 代理（例如 `NODE_OPTIONS=--import undici` + dispatcher，或网络层路由），或把 `api.commandcode.ai` 加入白名单。
+  - **连接被中途重置/限速**（防火墙、GFW 类干扰、Wi-Fi 不稳）。错误消息会点名（`socket hang up`、`ECONNRESET`、`UND_ERR_SOCKET`）。
+  - **TLS 被中间人替换**（企业 MITM）——错误链里出现 `CERT_HAS_EXPIRED`/`DEPTH_ZERO_SELF_SIGNED_CERT`。
+  - 也可能是瞬时抖动，重试能恢复；如果每轮都失败，那是环境问题而非 API 问题（健康网络下 models 端点和 generate 端点都能正常响应）。
+- **长回答生成到一半中断** ——0.1.8 起，adapter 会在 `requestTimeoutMs`（默认 60s）内拿不到响应时中止请求，并在流停顿超过 `streamIdleTimeoutMs`（默认 120s）时判定为死连接，不再无限挂起。这两种失败都以 `TIMEOUT` 呈现并附带停顿时长；如果你的网络慢但稳定，可以在 `llm-commandcode` 设置里调大这两个值。
+- **Web 应用启动即崩溃，报 `ERR_MODULE_NOT_FOUND: Cannot find package 'dsh-commandcode-provider'`** ——patch 行的 `name` 写成了裸包名，但 loader 会把它当作模块从 profile 的 `node_modules` 导入，而 pnpm 只会链接带 scope 的名字 `@mars-sea/dsh-commandcode-provider`。0.1.7 之前的 bundle 自带的就是这行错误配置；手工复制旧的 `cordis.patch.yml` 示例（或缓存层）也会踩中。修复方法：把你 profile 的 `cordis.patch.yml` 中该行改成 `name: "@mars-sea/dsh-commandcode-provider"` ——注意**必须加引号**：不引号的 `@` 开头标量会导致 YAML 解析失败（0.1.7 就带了这处回归，0.1.8 已加引号）——然后重启。
 - **`MODEL_NOT_IN_PLAN` (403)** ——所选模型不在你的 Command Code 套餐内。选择一个开放权重模型（如 `deepseek/deepseek-v4-flash`）或升级套餐。错误信息会指明模型并附官方文档链接。
 - **`MISSING_CREDENTIAL`** ——任何地方都没有 key。通过 Models 页面卡片存储一个、`export COMMANDCODE_API_KEY`、设置 `config.apiKey`，或运行 `command-code login`。没有 key 时路由保持注册、目录保持可浏览。
 - **Models 页面卡片显示"未配置"但请求可用** ——key 来自 `~/.commandcode/auth.json`（`cmd login` 兜底），而不是 dsh 凭据存储。把它粘贴到卡片一次即可让卡片显示为已配置；两者可以共存。
@@ -173,7 +184,7 @@ llm-commandcode:
 - **完全卸载**：
 
   ```sh
-  dsh plugin --profile web remove dsh-commandcode-provider
+  dsh plugin --profile web remove @mars-sea/dsh-commandcode-provider
   ```
 
   这会移除 bundle 依赖及其配置层。你在 dsh 凭据库和 `~/.commandcode/auth.json` 中的 API key 不会被改动（如需撤销访问权限，可手动删除）。

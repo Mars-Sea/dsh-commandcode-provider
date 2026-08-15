@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-08-15
+
+### Fixed
+
+- **The 0.1.7 scoped-name fix crashed on boot with a YAML parse error.** 0.1.7 rewrote the patch row's `name` to `@mars-sea/dsh-commandcode-provider` but left it unquoted; a YAML scalar starting with `@` is an indicator and fails to parse (`YAMLException: bad indentation of a mapping entry`), so `dsh --dump-config` and every boot died. The value is now quoted: `name: "@mars-sea/dsh-commandcode-provider"` (verified against dsh's own js-yaml and a real profile boot).
+- **Transport failures now surface the real root cause.** The `TRANSPORT` error from a failed `fetch` (DNS, refused/reset connection, TLS, proxy, timeout) previously reported only the generic wrapper — `Command Code API request to .../alpha/generate failed` — while the actionable detail sat unused on `error.cause`. The web UI renders only the error message (not the cause chain), so users hit a wall of retry rows ("重试延迟"/"Retry delay") with no way to diagnose. The message now appends `errorChain(cause)`, so the failure reason names e.g. `connect ECONNREFUSED`, `ENOTFOUND`, `CERT_HAS_EXPIRED`, or the timeout abort.
+- **A stalled connection no longer hangs the turn.** `requestTimeoutMs` (default 60s) bounds the wait for the first response byte via `AbortSignal.timeout`, and `streamIdleTimeoutMs` (default 120s) treats a stream with no events as a dead connection — both fail as `TIMEOUT` with the duration instead of hanging until the OS socket timeout (which can be minutes). Configurable per profile in the `llm-commandcode` settings section.
+
+### Changed
+
+- `CommandCodeConnectionOptions` gains `requestTimeoutMs` and `streamIdleTimeoutMs`; both are optional in the `Config` schema and default to 60s/120s. New `DEFAULT_REQUEST_TIMEOUT_MS` / `DEFAULT_STREAM_IDLE_TIMEOUT_MS` exports.
+- Both READMEs document the new knobs and the transport-failure troubleshooting entry (notably: Node's fetch ignores `HTTP_PROXY`/`HTTPS_PROXY`, so proxy-dependent networks fail here while the browser works).
+
+## [0.1.7] - 2026-08-15
+
+### Fixed
+
+- **Boot-crashing patch row for every install path** (`cordis.patch.yml`): the layer's `name` was the bare `dsh-commandcode-provider`, but the loader imports it as a module from the profile's `node_modules`, where pnpm only links the true scoped name `@mars-sea/dsh-commandcode-provider`. Any install (npm, GitHub, local path — all of which link the scoped name) failed at load with `ERR_MODULE_NOT_FOUND` and took the web app into a `Restart=on-failure` crash loop. The row now reads `name: @mars-sea/dsh-commandcode-provider`. Existing profiles that copied the old row (or an old README example) into their own `cordis.patch.yml` must update it the same way (see the Troubleshooting entry).
+
+### Changed
+
+- Both READMEs document the scoped `name` requirement, show the corrected `--dump-config` layer heading (`# == @mars-sea/dsh-commandcode-provider`), and use the scoped name in the `allowBuilds` example and the `remove` command.
+
 ## [0.1.6] - 2026-08-15
 
 ### Added

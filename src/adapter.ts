@@ -30,6 +30,7 @@ import {
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
+  errorChain,
   resolveRetryPolicy,
   type ResolvedRetryPolicy,
   type ContentBlock,
@@ -83,6 +84,10 @@ export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
 export const MODELS_TIMEOUT_MS = 10_000
+/** Head-of-request timeout: how long to wait for the first response byte. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+/** Stream idle timeout: a generation that stalls this long is a dead connection. */
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000
 const MODEL_CACHE_VERSION = 1
 
 // ---------------------------------------------------------------------------
@@ -341,6 +346,10 @@ export interface CommandCodeConnectionOptions {
   workingDir: string
   /** Model catalog cache path. */
   modelsCachePath: string
+  /** Milliseconds to wait for the generate response's first byte (default 60s). */
+  requestTimeoutMs: number
+  /** Milliseconds a stream may stall before it is treated as a dead connection (default 120s). */
+  streamIdleTimeoutMs: number
 }
 
 /** Everything the adapter needs beyond the request itself. */
@@ -661,18 +670,32 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           ...attributionHeaders(),
         },
         body: JSON.stringify(body),
-        ...(options.signal ? { signal: options.signal } : {}),
-      })
-    } catch (error: unknown) {
+        // The generation can legitimately run long, but the connection phase
+        // must not hang forever: bound the wait for the first response byte.
+        signal: options.signal
+          ? AbortSignal.any([options.signal, AbortSignal.timeout(connection.requestTimeoutMs)])
+          : AbortSignal.timeout(connection.requestTimeoutMs),
+      })    } catch (error: unknown) {
       // Caller cancellation must propagate as-is, not be relabeled.
       if (options.signal?.aborted) throw error
+      // The timeout signal above aborts with a TimeoutError. Because the
+      // caller's own signal was already ruled out, any TimeoutError here came
+      // from our request deadline — classify it precisely.
+      if (error instanceof DOMException && error.name === 'TimeoutError') {
+        throw new LlmError(
+          `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`
+          + `: ${errorChain(error)}`,
+          'TIMEOUT',
+          { cause: error },
+        )
+      }
       // fetch wraps every transport failure (DNS, refused connection, TLS,
       // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
-      // detail lives on `cause`. Wrapping with the endpoint and chaining the
-      // cause lets `errorChain` render the full diagnosis at every reporting
-      // boundary, and gives the retry policy a stable `TRANSPORT` code.
+      // detail lives on `cause`. Include the full chain so the failure reason
+      // shown in the web UI (which renders only the message, not `cause`)
+      // names the real root cause instead of a generic wrapper.
       throw new LlmError(
-        `Command Code API request to ${connection.apiBase}/alpha/generate failed`,
+        `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`,
         'TRANSPORT',
         { cause: error },
       )
@@ -717,6 +740,26 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+
+    // Stream idle watchdog: a generation that stalls this long has a dead
+    // connection (the API keeps the socket open between reasoning/text
+    // bursts). reader.cancel() unblocks a pending read(), which the loop then
+    // turns into a TIMEOUT failure instead of hanging forever.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined
+    let idleFired = false
+    const armIdle = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        idleFired = true
+        void reader.cancel().catch(() => undefined)
+      }, connection.streamIdleTimeoutMs)
+    }
+    const clearIdle = () => {
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer)
+        idleTimer = undefined
+      }
+    }
 
     // Block assembly state: at most one text block and one reasoning block
     // are open at a time (same assumption as the pi plugin).
@@ -835,21 +878,33 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       let finished = false
       for (;;) {
         let read: ReadableStreamReadResult<Uint8Array>
+        armIdle()
         try {
           read = await reader.read()
         } catch (error: unknown) {
           // A mid-stream transport failure (connection reset, TLS teardown)
-          // surfaces here. Caller cancellation propagates as-is; anything
-          // else is a transport failure with a stable code.
+          // surfaces here. Caller cancellation propagates as-is.
           if (options.signal?.aborted) throw error
           throw new LlmError(
-            `Command Code API stream from ${connection.apiBase} failed while reading`,
+            `Command Code API stream from ${connection.apiBase} failed while reading: ${errorChain(error)}`,
             'TRANSPORT',
             { cause: error },
           )
+        } finally {
+          clearIdle()
         }
         const { done, value } = read
         if (done) {
+          // The idle watchdog cancels the reader to unblock a stalled read;
+          // cancel() resolves a pending read() as done, so a done here after
+          // the watchdog fired is a timeout, not a normal stream end.
+          if (idleFired) {
+            throw new LlmError(
+              `Command Code API stream from ${connection.apiBase} was idle for ${connection.streamIdleTimeoutMs}ms`
+              + ' (no events) and was treated as a dead connection',
+              'TIMEOUT',
+            )
+          }
           if (buffer.trim()) for (const chunk of handleEvent(parseStreamEventLine(buffer))) yield chunk
           break
         }
@@ -876,6 +931,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         yield { type: 'finish', reason: { kind: 'stop' } }
       }
     } finally {
+      clearIdle()
       await reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }

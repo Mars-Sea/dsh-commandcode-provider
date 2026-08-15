@@ -49,6 +49,8 @@ function makeAdapter(overrides: Partial<CommandCodeAdapterDeps> = {}): CommandCo
       apiBase: 'https://api.commandcode.ai',
       workingDir: '/tmp/project',
       modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 60_000,
+      streamIdleTimeoutMs: 120_000,
     }),
     resolveApiKey: async () => 'user_test_key',
     ...overrides,
@@ -301,8 +303,8 @@ test('stream() surfaces in-band error events as PROVIDER_STREAM_ERROR', async ()
   )
 })
 
-test('stream() wraps a network-level fetch failure as TRANSPORT', async () => {
-  const cause = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect UNKNOWN'), { code: 'UNKNOWN' }) })
+test('stream() wraps a network-level fetch failure as TRANSPORT with the cause chain', async () => {
+  const cause = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), { code: 'ECONNREFUSED' }) })
   const adapter = makeAdapter({
     fetchImpl: (async () => { throw cause }) as unknown as typeof fetch,
   })
@@ -311,7 +313,7 @@ test('stream() wraps a network-level fetch failure as TRANSPORT', async () => {
     (err: unknown) => {
       const e = err as { code?: string; message?: string; cause?: unknown }
       return e.code === 'TRANSPORT'
-        && /alpha\/generate failed/.test(e.message ?? '')
+        && /alpha\/generate failed: fetch failed: connect ECONNREFUSED 127\.0\.0\.1:443/.test(e.message ?? '')
         && e.cause === cause
     },
   )
@@ -337,7 +339,7 @@ test('stream() propagates a caller abort without relabeling it', async () => {
   )
 })
 
-test('stream() wraps a mid-stream read failure as TRANSPORT', async () => {
+test('stream() wraps a mid-stream read failure as TRANSPORT with the cause chain', async () => {
   const cause = new Error('socket hang up')
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -351,8 +353,68 @@ test('stream() wraps a mid-stream read failure as TRANSPORT', async () => {
   await assert.rejects(
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
     (err: unknown) => {
-      const e = err as { code?: string; cause?: unknown }
-      return e.code === 'TRANSPORT' && e.cause === cause
+      const e = err as { code?: string; message?: string; cause?: unknown }
+      return e.code === 'TRANSPORT'
+        && /failed while reading: socket hang up/.test(e.message ?? '')
+        && e.cause === cause
+    },
+  )
+})
+
+test('stream() aborts the generate request when the connection phase exceeds requestTimeoutMs', async () => {
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 20,
+      streamIdleTimeoutMs: 10_000,
+    }),
+    // Simulate undici: hang until the composed request signal aborts, then
+    // throw the same TimeoutError a real fetch would.
+    fetchImpl: (async (_url: unknown, init?: { signal?: AbortSignal }) => {
+      const signal = init?.signal
+      const t0 = Date.now()
+      while (!signal?.aborted) {
+        if (Date.now() - t0 > 5_000) throw new Error('stub: signal never aborted')
+        await new Promise((r) => setTimeout(r, 2))
+      }
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    }) as unknown as typeof fetch,
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string }
+      return e.code === 'TIMEOUT'
+        && /did not respond within 20ms/.test(e.message ?? '')
+    },
+  )
+})
+
+test('stream() fails with TIMEOUT when the stream stalls past streamIdleTimeoutMs', async () => {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // One text delta, then silence: the idle watchdog must cancel the
+      // pending read and surface a TIMEOUT instead of hanging forever.
+      controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"hello"}\n\n'))
+    },
+  })
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 60_000,
+      streamIdleTimeoutMs: 20,
+    }),
+    fetchImpl: (async () => new Response(body, { status: 200 })) as unknown as typeof fetch,
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string }
+      return e.code === 'TIMEOUT' && /idle for 20ms/.test(e.message ?? '')
     },
   )
 })

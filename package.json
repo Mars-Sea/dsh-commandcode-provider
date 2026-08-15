@@ -1,6 +1,6 @@
 {
   "name": "@mars-sea/dsh-commandcode-provider",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "description": "Unofficial DeepSeek Harness LLM provider plugin for Command Code, ported from pi-commandcode-provider (MIT). Registers the 'commandcode' provider route with a Models-page card and live model catalog.",
   "type": "module",
   "main": "./lib/index.js",
@@ -65,6 +65,7 @@
     "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-timeout": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "devDependencies": {
@@ -74,6 +75,7 @@
     "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-timeout": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^22.0.0",
     "tsdown": "^0.22.2",

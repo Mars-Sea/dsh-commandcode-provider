@@ -12,10 +12,16 @@
  *
  * ```yaml
  * - id: llm-commandcode
- *   name: dsh-commandcode-provider
+ *   name: "@mars-sea/dsh-commandcode-provider"
  *   config:
  *     apiKeyEnv: COMMANDCODE_API_KEY
  * ```
+ *
+ * The `name` is the full package specifier as installed in the profile's
+ * node_modules: the loader imports it as a module, and pnpm links packages by
+ * their true (scoped) name — a bare `dsh-commandcode-provider` fails to
+ * resolve (ERR_MODULE_NOT_FOUND) and crashes the app on boot. The value must
+ * be quoted in YAML: an unquoted scalar starting with `@` fails to parse.
  *
  * @module dsh-commandcode-provider
  */
@@ -25,11 +31,13 @@ import { join } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
+import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { CommandCodeConnectionOptions } from './adapter.ts'
 import { applyCommands } from './commands.ts'
 
@@ -38,6 +46,8 @@ export {
   DEFAULT_API_BASE,
   DEFAULT_GENERATE_MAX_TOKENS,
   DEFAULT_MAX_OUTPUT_TOKENS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   CommandCodeAdapter,
   KNOWN_EFFORTS,
   projectSlugFromPath,
@@ -76,6 +86,10 @@ export interface Config {
   workingDir?: string
   /** Model catalog cache path; defaults to `~/.commandcode/models-cache.json`. */
   modelsCachePath?: string
+  /** Milliseconds to wait for the generate response's first byte; defaults to 60s. */
+  requestTimeoutMs?: number
+  /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 120s. */
+  streamIdleTimeoutMs?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -84,6 +98,8 @@ export const Config: z<Config> = z.object({
   apiBase: z.string(),
   workingDir: z.string(),
   modelsCachePath: z.string(),
+  requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
+  streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
 })
 
 /** One resolution's complete request facts: connection plus credential reference. */
@@ -103,6 +119,8 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     apiBase: config.apiBase ?? DEFAULT_API_BASE,
     workingDir: config.workingDir ?? process.cwd(),
     modelsCachePath: config.modelsCachePath ?? DEFAULT_MODELS_CACHE_PATH,
+    requestTimeoutMs: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   }
 }
 
