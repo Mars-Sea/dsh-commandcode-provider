@@ -141,12 +141,13 @@ test('command renders a full usage report', async () => {
   const def = commandDefinition({ adapter })
   const result = await invoke(def, 'status')
   assert.equal(result.kind, 'success')
-  assert.match(result.text, /Mars-Sea/)
-  assert.match(result.text, /935 completed/)
-  assert.match(result.text, /100% success/)
+  assert.match(result.text, /mars-sea/)
+  assert.match(result.text, /935 次/)
+  assert.match(result.text, /成功率 100%/)
   assert.match(result.text, /\$1\.3187/)
-  assert.match(result.text, /\$8\.6800 monthly/)
-  assert.match(result.text, /5h window/)
+  assert.match(result.text, /\$8\.68/)
+  assert.match(result.text, /5 小时/)
+  assert.match(result.text, /█/) // bar chart glyph present
 })
 
 test('command reports endpoint failures instead of crashing', async () => {

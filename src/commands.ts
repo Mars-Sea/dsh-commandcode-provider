@@ -28,9 +28,18 @@ function money(value: number): string {
   return `$${value.toFixed(4)}`
 }
 
+/** Format a dollar amount compactly (2 decimals). */
+function moneyShort(value: number): string {
+  return `$${value.toFixed(2)}`
+}
+
 /** Format a token count with thousands separators. */
-function tokens(value: number): string {
-  return value.toLocaleString('en-US')
+/** Format a large token count compactly (1.9亿 style). */
+function tokensCompact(value: number): string {
+  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`
+  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`
+  return String(value)
 }
 
 /** Format a millis timestamp as a local date. */
@@ -39,36 +48,62 @@ function resetLabel(ms: number): string {
   return new Date(ms).toLocaleString()
 }
 
-/** Render the usage report as text. */
+/**
+ * A 10-cell horizontal bar: `██████████` for 100%, `███░░░░░░░` for ~33%.
+ * Handles caps of 0 (no limit) and out-of-range values.
+ */
+function bar(used: number, cap: number): string {
+  if (cap <= 0) return '—'
+  const ratio = Math.max(0, Math.min(1, used / cap))
+  const filled = Math.round(ratio * 10)
+  return '█'.repeat(filled) + '░'.repeat(10 - filled)
+}
+
+/** Render the usage report as a structured, aligned, bar-chart text view. */
 function renderReport(report: CommandCodeUsageReport): string {
-  const lines: string[] = ['Command Code usage']
-  if (report.account) {
-    const a = report.account
-    lines.push(`  account: ${a.name}${a.userName ? ` (@${a.userName})` : ''}`)
-  }
+  const lines: string[] = []
+  const account = report.account ? ` (${report.account.userName || report.account.name})` : ''
+
+  lines.push(`📊 Command Code 用量${account}`, '')
+
   if (report.usage) {
     const u = report.usage
     lines.push(
-      `  requests: ${u.completedCount} completed / ${u.failedCount} failed (${u.successRate}% success)`,
-      `  cost: ${money(u.totalCost)} (${money(u.totalCredits)} credits, ${u.periodBasis})`,
-      `  tokens: ${tokens(u.totalTokensIn)} in / ${tokens(u.totalTokensOut)} out`,
+      '── 请求 ──────────────────────────────',
+      `  💬 请求    ${u.completedCount} 次 / 失败 ${u.failedCount}  成功率 ${u.successRate}%`,
+      `  💰 花费    ${money(u.totalCost)}  (${moneyShort(u.totalCredits)} credits)`,
+      `  🔤 Token   ${tokensCompact(u.totalTokensIn)} 入 / ${tokensCompact(u.totalTokensOut)} 出`,
+      '',
     )
   }
+
   if (report.credits) {
     const c = report.credits
+    const monthlyPct = c.monthlyCredits > 0
+      ? `${((c.monthlyCredits / (c.monthlyCredits + c.purchasedCredits)) * 100).toFixed(0)}%`
+      : '—'
     lines.push(
-      `  credits: ${money(c.monthlyCredits)} monthly / ${money(c.purchasedCredits)} purchased / ${money(c.freeCredits)} free`,
-      `  5h window: ${money(c.fiveHour.used)} / ${money(c.fiveHour.cap)}${c.fiveHour.exceeded ? ' (exceeded!)' : ''} — resets ${resetLabel(c.fiveHour.resetAt)}`,
-      `  weekly: ${money(c.weekly.used)} / ${money(c.weekly.cap)}${c.weekly.exceeded ? ' (exceeded!)' : ''} — resets ${resetLabel(c.weekly.resetAt)}`,
+      '── 信用 ──────────────────────────────',
+      `  💳 月额度  ${moneyShort(c.monthlyCredits)}   (已购 ${moneyShort(c.purchasedCredits)} / 赠送 ${moneyShort(c.freeCredits)})`,
+      `     └ ${bar(c.monthlyCredits, c.monthlyCredits + c.purchasedCredits)}  ${monthlyPct}`,
+      '',
+      '── 窗口用量 ──────────────────────────',
+      `  ⏱ 5 小时  ${moneyShort(c.fiveHour.used)} / ${moneyShort(c.fiveHour.cap)}${c.fiveHour.exceeded ? '  ⚠️ 超限!' : ''}`,
+      `     └ ${bar(c.fiveHour.used, c.fiveHour.cap)}  重置 ${resetLabel(c.fiveHour.resetAt)}`,
+      `  📅 每周    ${moneyShort(c.weekly.used)} / ${moneyShort(c.weekly.cap)}${c.weekly.exceeded ? '  ⚠️ 超限!' : ''}`,
+      `     └ ${bar(c.weekly.used, c.weekly.cap)}  重置 ${resetLabel(c.weekly.resetAt)}`,
+      '',
     )
   }
+
   if (report.failures.length > 0) {
-    lines.push('', `  (some endpoints failed: ${report.failures.join('; ')})`)
+    lines.push(`⚠️  部分端点失败: ${report.failures.join('; ')}`, '')
   }
   if (!report.account && !report.usage && !report.credits) {
-    lines.push('  (no data — check your API key)')
+    lines.push('(no data — check your API key)', '')
   }
-  return lines.join('\n')
+
+  return lines.join('\n').trimEnd()
 }
 
 /** The one registered `/commandcode` command. */
