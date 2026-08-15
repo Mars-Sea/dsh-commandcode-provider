@@ -100,17 +100,25 @@ The plugin registers a `/commandcode` slash command (requires the dsh `commands`
 /commandcode        (or /commandcode status)
 ```
 
-Example output:
+Example output (structured text with Unicode bar charts):
 
 ```text
-Command Code usage
-  account: Mars-Sea (@mars-sea)
-  requests: 956 completed / 0 failed (100% success)
-  cost: $1.3444 ($1.3444 credits, billing-period)
-  tokens: 190,841,837 in / 798,044 out
-  credits: $8.6349 monthly / $0.0000 purchased / $0.0000 free
-  5h window: $0.0781 / $3.0000 — resets 8/15/2026, 2:39:36 PM
-  weekly: $1.3651 / $6.0000 — resets 8/21/2026, 7:10:57 PM
+📊 Command Code 用量 (mars-sea)
+
+── 请求 ──────────────────────────────
+  💬 请求    992 次 / 失败 0  成功率 100%
+  💰 花费    $1.4446  ($1.44 credits)
+  🔤 Token   205.3M 入 / 808.8K 出
+
+── 信用 ──────────────────────────────
+  💳 月额度  $8.54   (已购 $0.00 / 赠送 $0.00)
+     └ ██████████  100%
+
+── 窗口用量 ──────────────────────────
+  ⏱ 5 小时  $0.18 / $3.00
+     └ █░░░░░░░░░  重置 8/15/2026, 2:39:36 PM
+  📅 每周    $1.46 / $6.00
+     └ ██░░░░░░░░  重置 8/21/2026, 7:10:57 PM
 ```
 
 Each endpoint degrades independently: a temporary failure of one (e.g. the credits endpoint) leaves the rest visible and notes the failure inline.
