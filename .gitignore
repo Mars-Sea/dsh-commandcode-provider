@@ -3,3 +3,6 @@ lib/
 *.tgz
 .DS_Store
 .agents/
+
+# Maintainer-local release guide: never commit, never publish.
+RELEASES.local.md
