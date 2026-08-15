@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-08-15
+
+### Added
+
+- **Security Scans workflow** (`.github/workflows/security.yml`): `npm audit` (fails on ≥ high severity), CodeQL analysis (`javascript-typescript`, action v4), and a gitleaks secrets scan (official `gitleaks/gitleaks-action@v3`, full history via `fetch-depth: 0`).
+- **Chinese README** (`README.zh-CN.md`): full translation of the English README with a language switcher in both directions; shipped in the npm package (`files` list).
+
+### Changed
+
+- CI actions upgraded ahead of the Node 20 runner deprecation: `actions/checkout` → v6 (Node 24 runtime); `github/codeql-action` → v4 (v3 deprecated Dec 2026).
+- Install examples in both READMEs now pin the `v0.1.6` release tag.
+
 ## [0.1.5] - 2026-08-15
 
 ### Added
