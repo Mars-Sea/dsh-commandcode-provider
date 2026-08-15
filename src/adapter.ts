@@ -54,7 +54,9 @@ import {
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
+  'MiniMaxAI/MiniMax-M2.5': ['low', 'medium', 'xhigh'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-haiku-4-5-20251001': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-7': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-8': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-5': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -74,9 +76,17 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'meta/muse-spark-1.2-contributor': ['low', 'medium', 'high'],
+  'moonshotai/Kimi-K2.5': ['low', 'high', 'max'],
+  'moonshotai/Kimi-K2.6': ['low', 'high', 'max'],
+  'moonshotai/Kimi-K2.7-Code-Highspeed': ['low', 'high', 'max'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
+  'tencent/Hy3': ['low', 'medium', 'high'],
+  'tencent/hy3-paid': ['low', 'medium', 'high'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
+  'xiaomi/mimo-v2.5': ['low', 'medium', 'xhigh'],
+  'xiaomi/mimo-v2.5-pro': ['low', 'medium', 'xhigh'],
   'zai-org/GLM-5.2': ['high', 'max'],
   'zai-org/GLM-5.3': ['low', 'high', 'max'],
 }
@@ -137,6 +147,190 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'xiaomi/mimo-v2.5',
 ])
 
+/**
+ * Models whose official registry entry lists the `Reasoning` capability but
+ * for which the official CLI defines no selectable `reasoning_effort` levels
+ * (they are absent from the CLI's model-table efforts; see the authoritative
+ * `ZA` table in command-code@1.26.0). The model still thinks — Command Code
+ * drives its reasoning depth automatically — so the picker labels them
+ * "Supports thinking (auto)" instead of the misleading "Text only", while
+ * `KNOWN_EFFORTS` (which mirrors the CLI's effort map exactly) stays the sole
+ * source for selectable effort levels.
+ *
+ * Source: https://commandcode.ai/docs/reference/cli/models (Reasoning flag) and
+ * the command-code@1.26.0 bundled model table. Keep in sync via the
+ * dsh-commandcode-upstream skill.
+ */
+export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
+  'MiniMaxAI/MiniMax-M3',
+  'Qwen/Qwen3.6-Max-Preview',
+  'Qwen/Qwen3.6-Plus',
+  'Qwen/Qwen3.7-Flash',
+  'Qwen/Qwen3.7-Max',
+  'Qwen/Qwen3.7-Plus',
+  'moonshotai/Kimi-K3',
+  'moonshotai/Kimi-K2.7-Code',
+  'stepfun/Step-3.5-Flash',
+  'stepfun/Step-3.7-Flash',
+  'zai-org/GLM-5',
+  'zai-org/GLM-5.1',
+  'zai-org/GLM-5.2-Fast',
+  'nvidia/nemotron-3-ultra-550b-a55b',
+  'thinkingmachines/inkling',
+  'thinkingmachines/inkling-small',
+  'poolside/laguna-s-2.1-free',
+  'meta/muse-spark-1.1',
+  'meta/muse-spark-1.2',
+])
+
+/**
+ * The minimum subscription plan a model is included in, per the official plan
+ * pages (`/docs/plans/go`, `/docs/plans/goat`, `/docs/plans/pro`, `/docs/plans/max`
+ * and `/docs/resources/pricing-limits`). Each plan's model list is a superset of
+ * the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max. Models absent from every
+ * plan list (Claude Opus/Fable, Fugu Ultra) are Provider-tier.
+ *
+ * The Provider API exposes no plan metadata, so this snapshot is the source of
+ * truth for the picker's plan annotation — it answers "which plan do I need to
+ * actually use this model?" at a glance. Plan labels use the official tier
+ * names (`Go`, `GOAT`, `Pro`, `Provider`), with `Max` implying Provider.
+ *
+ * Keep in sync with the official plan pages when they change (see the
+ * dsh-commandcode-upstream skill).
+ */
+export const KNOWN_PLANS: Readonly<Record<string, string>> = {
+  // --- Go (33) ---
+  'MiniMaxAI/MiniMax-M2.5': 'go',
+  'MiniMaxAI/MiniMax-M2.7': 'go',
+  'MiniMaxAI/MiniMax-M3': 'go',
+  'Qwen/Qwen3.6-Max-Preview': 'go',
+  'Qwen/Qwen3.6-Plus': 'go',
+  'Qwen/Qwen3.7-Flash': 'go',
+  'Qwen/Qwen3.7-Max': 'go',
+  'Qwen/Qwen3.7-Plus': 'go',
+  'Qwen/Qwen3.8-Max': 'go',
+  'deepseek/deepseek-v4-flash': 'go',
+  'deepseek/deepseek-v4-pro': 'go',
+  'gpt-5.6-luna': 'go',
+  'meta/muse-spark-1.2-contributor': 'go',
+  'moonshotai/Kimi-K2.5': 'go',
+  'moonshotai/Kimi-K2.6': 'go',
+  'moonshotai/Kimi-K2.7-Code': 'go',
+  'moonshotai/Kimi-K2.7-Code-Highspeed': 'go',
+  'moonshotai/Kimi-K3': 'go',
+  'nvidia/nemotron-3-ultra-550b-a55b': 'go',
+  'poolside/laguna-s-2.1-free': 'go',
+  'stepfun/Step-3.5-Flash': 'go',
+  'stepfun/Step-3.7-Flash': 'go',
+  'tencent/hy3-paid': 'go',
+  'thinkingmachines/inkling': 'go',
+  'thinkingmachines/inkling-small': 'go',
+  'xai/grok-4.5': 'go',
+  'xiaomi/mimo-v2.5': 'go',
+  'xiaomi/mimo-v2.5-pro': 'go',
+  'zai-org/GLM-5': 'go',
+  'zai-org/GLM-5.1': 'go',
+  'zai-org/GLM-5.2': 'go',
+  'zai-org/GLM-5.2-Fast': 'go',
+  'zai-org/GLM-5.3': 'go',
+  // --- GOAT (3 more) ---
+  'google/gemini-3.7-flash': 'goat',
+  'meta/muse-spark-1.2': 'goat',
+  'xai/grok-4.6': 'goat',
+  // --- Pro (14 more) ---
+  'claude-haiku-4-5-20251001': 'pro',
+  'claude-sonnet-4-6': 'pro',
+  'claude-sonnet-5': 'pro',
+  'google/gemini-3.1-flash-lite': 'pro',
+  'google/gemini-3.5-flash': 'pro',
+  'google/gemini-3.5-flash-lite': 'pro',
+  'google/gemini-3.6-flash': 'pro',
+  'gpt-5.3-codex': 'pro',
+  'gpt-5.4': 'pro',
+  'gpt-5.4-mini': 'pro',
+  'gpt-5.5': 'pro',
+  'gpt-5.6-sol': 'pro',
+  'gpt-5.6-terra': 'pro',
+  'meta/muse-spark-1.1': 'pro',
+  // --- Provider / Max (5) ---
+  'claude-fable-5': 'provider',
+  'claude-opus-4-7': 'provider',
+  'claude-opus-4-8': 'provider',
+  'claude-opus-5': 'provider',
+  'sakana/fugu-ultra': 'provider',
+}
+
+/** Official display labels for each plan tier. */
+export const PLAN_LABELS: Readonly<Record<string, string>> = {
+  go: 'Go',
+  goat: 'GOAT',
+  pro: 'Pro',
+  provider: 'Provider',
+  max: 'Max',
+}
+
+/**
+ * Plan-tier sort weights, low to high. Models outside the snapshot (unknown
+ * plans) sort after every known tier, keeping known models predictable.
+ */
+export const PLAN_ORDER: Readonly<Record<string, number>> = {
+  go: 0,
+  goat: 1,
+  pro: 2,
+  provider: 3,
+  max: 4,
+}
+
+/**
+ * Comparator for the model picker: sort by plan tier (lowest first), then by
+ * model name, then by id as a tiebreak. Models with no known plan sort last.
+ */
+export function compareByPlan(
+  a: { id: string; name: string },
+  b: { id: string; name: string },
+): number {
+  const pa = PLAN_ORDER[KNOWN_PLANS[a.id] ?? ''] ?? Number.MAX_SAFE_INTEGER
+  const pb = PLAN_ORDER[KNOWN_PLANS[b.id] ?? ''] ?? Number.MAX_SAFE_INTEGER
+  if (pa !== pb) return pa - pb
+  const nameDiff = a.name.localeCompare(b.name)
+  if (nameDiff !== 0) return nameDiff
+  return a.id.localeCompare(b.id)
+}
+
+/**
+ * Active pricing deals per the official pricing page
+ * (`/docs/resources/pricing-limits#deals`). Each entry records the model's
+ * promotional label and — critically — when it expires, so the picker never
+ * shows a stale discount after the plugin's snapshot has gone out of date.
+ *
+ * - `expiresAt` is an ISO timestamp. When it is in the past (checked at
+ *   render time against `Date.now()`), the deal label is hidden until the
+ *   snapshot is refreshed from the official page. `undefined` means
+ *   "no expiry" (permanent).
+ * - `free` marks models whose requests cost no credits (Laguna S 2.1), shown
+ *   as a `FREE` badge; it degrades to a plain discount once the deal lapses.
+ *
+ * Keep in sync with the official pricing page when deals change (see the
+ * dsh-commandcode-upstream skill).
+ */
+export interface KnownDeal {
+  /** Promotional label, e.g. "50% off" or "2× usage". */
+  label: string
+  /** Deal end date (ISO). `undefined` = permanent / no expiry. */
+  expiresAt?: string
+  /** Model is free (requests cost no credits). */
+  free?: boolean
+}
+
+export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
+  'deepseek/deepseek-v4-pro': { label: '75% off' },
+  'google/gemini-3.7-flash': { label: '50% off', expiresAt: '2026-12-31T23:59:59Z' },
+  'MiniMaxAI/MiniMax-M3': { label: '50% off' },
+  'xiaomi/mimo-v2.5-pro': { label: '99% off' },
+  'xiaomi/mimo-v2.5': { label: '98% off' },
+  'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
+}
+
 export const COMMAND_CODE_CLI_VERSION = '1.26.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
@@ -154,6 +348,70 @@ const MODEL_CACHE_VERSION = 1
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Official display label for a model's minimum plan, or undefined for models
+ * outside the snapshot (e.g. future catalog additions).
+ */
+export function planLabel(modelId: string): string | undefined {
+  const plan = KNOWN_PLANS[modelId]
+  return plan === undefined ? undefined : PLAN_LABELS[plan]
+}
+
+/**
+ * The active deal label for a model, or undefined when the model has no deal
+ * or the deal has expired. Expiry is judged against `now` (defaults to
+ * `Date.now()`), so a snapshot that has gone stale stops showing its discount
+ * the moment the official end date passes — the user never believes a lapsed
+ * deal is still live. Permanent deals (no `expiresAt`) never lapse.
+ */
+export function dealLabel(modelId: string, now: number = Date.now()): string | undefined {
+  const deal = KNOWN_DEALS[modelId]
+  if (deal === undefined) return undefined
+  if (deal.expiresAt !== undefined && now >= Date.parse(deal.expiresAt)) return undefined
+  return deal.label
+}
+
+/**
+ * Compact human-readable context window, e.g. `1_000_000 -> "1M"`,
+ * `256_000 -> "256K"`, `262_144 -> "256K"` (floor to the nearest K).
+ * Returns undefined for unknown/absent sizes.
+ */
+export function formatContext(contextWindow: number | undefined): string | undefined {
+  if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return undefined
+  }
+  if (contextWindow >= 1_000_000) {
+    const m = contextWindow / 1_000_000
+    // Round to one decimal only when it adds information: 1_048_576 -> "1M",
+    // 1_050_000 -> "1.1M".
+    const rounded = Math.round(m * 10) / 10
+    return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}M`
+  }
+  return `${Math.floor(contextWindow / 1_000)}K`
+}
+
+/**
+ * Compact one-line summary for the model picker: plan tier, then any active
+ * deal (discount or FREE), then `Image` for Vision-capable models, then the
+ * context window. Text-only models simply omit the Image marker — "Text only"
+ * adds nothing the picker needs to show.
+ */
+export function capabilityDescription(
+  modelId: string,
+  contextWindow?: number,
+  now: number = Date.now(),
+): string {
+  const parts: string[] = []
+  const plan = planLabel(modelId)
+  if (plan !== undefined) parts.push(plan)
+  const deal = dealLabel(modelId, now)
+  if (deal !== undefined) parts.push(deal)
+  if (KNOWN_IMAGE_MODELS.has(modelId)) parts.push('Image')
+  const ctx = formatContext(contextWindow)
+  if (ctx !== undefined) parts.push(ctx)
+  return parts.join(' · ')
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -544,19 +802,23 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const catalog = await this.loadCatalog()
-    return catalog.map((model) => {
-      const vision = KNOWN_IMAGE_MODELS.has(model.id)
-      return {
-        provider,
-        id: model.id,
-        name: `${model.name} (CC)`,
-        // The picker renders `description` under the model name; make the
-        // image capability visible up front so a switch in an image-bearing
-        // session does not have to be rejected by the host's image gate.
-        description: vision ? 'Supports image input' : 'Text only',
-        inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
-      }
-    })
+    return catalog
+      .map((model) => {
+        const vision = KNOWN_IMAGE_MODELS.has(model.id)
+        return {
+          provider,
+          id: model.id,
+          name: `${model.name} (CC)`,
+          // The picker renders `description` under the model name: plan tier,
+          // active deal, Image marker for Vision models, and context window.
+          description: capabilityDescription(model.id, model.contextWindow),
+          inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
+        }
+      })
+      // The picker renders rows in the order returned: sort by plan tier
+      // (Go first, … Provider last) so the models a Go-plan user can actually
+      // use lead the list, then alphabetically within each tier.
+      .sort(compareByPlan)
   }
 
   override async resolveModel(
@@ -574,7 +836,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       provider,
       id: model,
       name: entry ? `${entry.name} (CC)` : model,
-      description: vision ? 'Supports image input' : 'Text only',
+      description: capabilityDescription(model, entry?.contextWindow),
       inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
       ...(entry
         ? {

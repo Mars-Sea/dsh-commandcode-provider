@@ -8,6 +8,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
 
 import {
   CommandCodeAdapter,
@@ -15,6 +18,14 @@ import {
   resolveAuthFileApiKey,
   KNOWN_EFFORTS,
   KNOWN_IMAGE_MODELS,
+  KNOWN_THINKING_MODELS,
+  KNOWN_PLANS,
+  KNOWN_DEALS,
+  planLabel,
+  dealLabel,
+  formatContext,
+  capabilityDescription,
+  compareByPlan,
   COMMAND_CODE_CLI_VERSION,
   DEFAULT_API_BASE,
 } from '../src/adapter.ts'
@@ -280,34 +291,96 @@ test('stream() sends images in the official Command Code wire format', async () 
 // Image capability advertisement
 // ---------------------------------------------------------------------------
 
-test('resolveModel() advertises image input only for Vision-capable models', async () => {
-  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify({ object: 'list', data: [] })) })
-  const vision = await adapter.resolveModel('commandcode', 'claude-sonnet-5')
-  assert.deepEqual(vision.inputModalities, ['text', 'image'])
-  assert.equal(vision.description, 'Supports image input')
-  const textOnly = await adapter.resolveModel('commandcode', 'deepseek/deepseek-v4-flash')
-  assert.deepEqual(textOnly.inputModalities, ['text'])
-  assert.equal(textOnly.description, 'Text only')
-  const unknown = await adapter.resolveModel('commandcode', 'some-future-model')
-  assert.deepEqual(unknown.inputModalities, ['text'])
-  assert.equal(unknown.description, 'Text only')
+test('resolveModel() advertises plan tier, deal, Image, and context', async () => {
+  // A dedicated cache path keeps this test free of any on-disk catalog cache.
+  const cachePath = join(tmpdir(), `cc-test-${process.pid}-${Date.now()}.json`)
+  try {
+    const adapter = makeAdapter({
+      fetchImpl: fetchReturning(200, JSON.stringify({ object: 'list', data: [] })),
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai',
+        workingDir: '/tmp/project',
+        modelsCachePath: cachePath,
+        requestTimeoutMs: 60_000,
+        streamIdleTimeoutMs: 120_000,
+      }),
+    })
+    // Without a catalog entry the context window is unknown; the description
+    // still carries plan, deal, and Image markers.
+    const vision = await adapter.resolveModel('commandcode', 'claude-sonnet-5')
+    assert.deepEqual(vision.inputModalities, ['text', 'image'])
+    assert.equal(vision.description, 'Pro · Image')
+    const textOnly = await adapter.resolveModel('commandcode', 'deepseek/deepseek-v4-flash')
+    assert.deepEqual(textOnly.inputModalities, ['text'])
+    assert.equal(textOnly.description, 'Go') // text-only: no Image marker
+    // A model with a permanent deal shows its discount.
+    const deal = await adapter.resolveModel('commandcode', 'MiniMaxAI/MiniMax-M3')
+    assert.equal(deal.description, 'Go · 50% off · Image')
+    // A provider-tier model with a context window shows all four parts.
+    const provider = await adapter.resolveModel('commandcode', 'claude-opus-5')
+    assert.equal(provider.description, 'Provider · Image')
+    // Unknown models fall back to the bare plan-less summary (empty here).
+    const unknown = await adapter.resolveModel('commandcode', 'some-future-model')
+    assert.deepEqual(unknown.inputModalities, ['text'])
+    assert.equal(unknown.description, '')
+  } finally {
+    rmSync(cachePath, { force: true })
+  }
 })
 
-test('listModels() marks Vision-capable catalog models as image-capable', async () => {
+test('listModels() annotates catalog models with plan, deal, Image, context', async () => {
   const catalog = {
     object: 'list',
     data: [
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', context_length: 1_000_000 },
+      { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
       { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', context_length: 1_000_000 },
+      { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1', context_length: 256_000 },
     ],
   }
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify(catalog)) })
   const models = await adapter.listModels('commandcode')
   const byId = new Map(models.map((m) => [m.id, m]))
   assert.deepEqual(byId.get('claude-sonnet-5')!.inputModalities, ['text', 'image'])
-  assert.equal(byId.get('claude-sonnet-5')!.description, 'Supports image input')
+  assert.equal(byId.get('claude-sonnet-5')!.description, 'Pro · Image · 1M')
+  assert.equal(byId.get('deepseek/deepseek-v4-pro')!.description, 'Go · 75% off · 1M')
   assert.deepEqual(byId.get('deepseek/deepseek-v4-flash')!.inputModalities, ['text'])
-  assert.equal(byId.get('deepseek/deepseek-v4-flash')!.description, 'Text only')
+  assert.equal(byId.get('deepseek/deepseek-v4-flash')!.description, 'Go · 1M')
+  assert.equal(byId.get('poolside/laguna-s-2.1-free')!.description, 'Go · FREE · 256K')
+  // The picker shows rows in returned order: Go models lead, then Pro,
+  // alphabetically within a tier (input order was deliberately shuffled).
+  assert.deepEqual(
+    models.map((m) => m.id),
+    [
+      'deepseek/deepseek-v4-flash',
+      'deepseek/deepseek-v4-pro',
+      'poolside/laguna-s-2.1-free',
+      'claude-sonnet-5',
+    ],
+  )
+})
+
+test('compareByPlan() sorts by plan tier then name, unknown plans last', () => {
+  // Go beats Pro regardless of name.
+  assert.ok(compareByPlan(
+    { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
+  ) < 0)
+  // Within a tier, alphabetical by name.
+  assert.ok(compareByPlan(
+    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro (CC)' },
+    { id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3 (CC)' },
+  ) < 0)
+  // Unknown plan sorts after every known tier.
+  assert.ok(compareByPlan(
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
+    { id: 'some-future-model', name: 'Some Future (CC)' },
+  ) < 0)
+  // Equal ids are stable.
+  assert.equal(compareByPlan(
+    { id: 'xai/grok-4.5', name: 'Grok 4.5 (CC)' },
+    { id: 'xai/grok-4.5', name: 'Grok 4.5 (CC)' },
+  ), 0)
 })
 
 // ---------------------------------------------------------------------------
@@ -617,6 +690,26 @@ test('projectSlugFromPath lowercases and slugifies', () => {
 test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
+  // Synced from the official command-code@1.26.0 model table: models that
+  // shipped with effort levels must be present, and absent ones must stay out.
+  assert.ok(KNOWN_EFFORTS['moonshotai/Kimi-K2.5'])
+  assert.ok(KNOWN_EFFORTS['xiaomi/mimo-v2.5'])
+  assert.ok(KNOWN_EFFORTS['claude-haiku-4-5-20251001'])
+  assert.ok(KNOWN_EFFORTS['MiniMaxAI/MiniMax-M2.5'])
+  assert.ok(KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'])
+  assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3']) // no official effort levels
+  assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K3'])
+})
+
+test('known thinking snapshot covers reasoning models without effort levels', () => {
+  assert.ok(KNOWN_THINKING_MODELS.has('MiniMaxAI/MiniMax-M3'))
+  assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
+  assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
+  assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
+  // Models with selectable efforts are not "auto" — they carry their own UI.
+  assert.ok(!KNOWN_THINKING_MODELS.has('claude-opus-5'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4-flash'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.5'))
 })
 
 test('known image models snapshot has stable anchor entries', () => {
@@ -626,6 +719,85 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
+})
+
+test('known plan snapshot tiers models by the official plan pages', () => {
+  // Go: the entry plan covers open models + a few premium ones.
+  assert.equal(KNOWN_PLANS['MiniMaxAI/MiniMax-M3'], 'go')
+  assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash'], 'go')
+  assert.equal(KNOWN_PLANS['Qwen/Qwen3.7-Max'], 'go')
+  assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
+  // GOAT adds a handful of closed/premium models.
+  assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
+  assert.equal(KNOWN_PLANS['xai/grok-4.6'], 'goat')
+  assert.equal(KNOWN_PLANS['meta/muse-spark-1.2'], 'goat')
+  // Pro adds Claude Sonnet/Haiku, GPT-5.x, Gemini 3.5/3.1.
+  assert.equal(KNOWN_PLANS['claude-sonnet-5'], 'pro')
+  assert.equal(KNOWN_PLANS['gpt-5.4'], 'pro')
+  assert.equal(KNOWN_PLANS['google/gemini-3.5-flash'], 'pro')
+  // Provider/Max: Claude Opus/Fable and Fugu Ultra are not on lower plans.
+  assert.equal(KNOWN_PLANS['claude-opus-5'], 'provider')
+  assert.equal(KNOWN_PLANS['claude-fable-5'], 'provider')
+  assert.equal(KNOWN_PLANS['sakana/fugu-ultra'], 'provider')
+  // Labels match the official tier names.
+  assert.equal(planLabel('MiniMaxAI/MiniMax-M3'), 'Go')
+  assert.equal(planLabel('claude-sonnet-5'), 'Pro')
+  assert.equal(planLabel('claude-opus-5'), 'Provider')
+  assert.equal(planLabel('some-future-model'), undefined)
+})
+
+test('known deals snapshot has anchors and expiry-aware labels', () => {
+  // Permanent deals never lapse.
+  assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'].label, '75% off')
+  assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'].expiresAt, undefined)
+  // Free model is marked free.
+  assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free'].free, true)
+  // The only time-limited deal: Gemini 3.7 Flash 50% off through 2026-12-31.
+  assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].label, '50% off')
+  assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].expiresAt, '2026-12-31T23:59:59Z')
+})
+
+test('dealLabel() hides a deal after its expiry date', () => {
+  // Before expiry: shown.
+  assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2026-12-31T12:00:00Z')), '50% off')
+  // At/after expiry: hidden (the snapshot has gone stale).
+  assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2027-01-01T00:00:00Z')), undefined)
+  // Permanent deals are unaffected by any time.
+  assert.equal(dealLabel('MiniMaxAI/MiniMax-M3', Date.parse('2030-01-01T00:00:00Z')), '50% off')
+  assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2030-01-01T00:00:00Z')), '75% off')
+  // Free label survives until capacity ends (treated as permanent here).
+  assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  // No deal -> undefined.
+  assert.equal(dealLabel('claude-sonnet-5'), undefined)
+})
+
+test('formatContext() renders compact human sizes', () => {
+  assert.equal(formatContext(1_000_000), '1M')
+  assert.equal(formatContext(1_050_000), '1.1M')
+  // 1048576 (Gemini) rounds to a clean 1M, not 1.0M.
+  assert.equal(formatContext(1_048_576), '1M')
+  assert.equal(formatContext(256_000), '256K')
+  // Tencent Hy3's actual 262144 tokens display as 262K (matches the pricing page).
+  assert.equal(formatContext(262_144), '262K')
+  assert.equal(formatContext(200_000), '200K')
+  assert.equal(formatContext(undefined), undefined)
+  assert.equal(formatContext(0), undefined)
+})
+
+test('capabilityDescription() composes plan, deal, Image, context', () => {
+  // Free model without Vision: no Image marker.
+  assert.equal(capabilityDescription('poolside/laguna-s-2.1-free', 256_000), 'Go · FREE · 256K')
+  // Discounted Image model with context.
+  assert.equal(capabilityDescription('MiniMaxAI/MiniMax-M3', 1_000_000), 'Go · 50% off · Image · 1M')
+  // Text-only model: no Image marker.
+  assert.equal(capabilityDescription('deepseek/deepseek-v4-flash', 1_000_000), 'Go · 1M')
+  // Expired deal vanishes from the composition.
+  assert.equal(
+    capabilityDescription('google/gemini-3.7-flash', 1_000_000, Date.parse('2027-01-01T00:00:00Z')),
+    'GOAT · Image · 1M',
+  )
+  // No plan knowledge -> bare parts only.
+  assert.equal(capabilityDescription('some-future-model', undefined), '')
 })
 
 test('CLI version and API base constants are stable', () => {

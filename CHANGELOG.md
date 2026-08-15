@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`KNOWN_EFFORTS` was missing ten models that the official command-code@1.26.0 model table defines reasoning-effort levels for** (`claude-haiku-4-5-20251001`, `moonshotai/Kimi-K2.5`, `moonshotai/Kimi-K2.6`, `moonshotai/Kimi-K2.7-Code-Highspeed`, `MiniMaxAI/MiniMax-M2.5`, `xiaomi/mimo-v2.5`, `xiaomi/mimo-v2.5-pro`, `tencent/hy3-paid`, `tencent/Hy3`, `meta/muse-spark-1.2-contributor`). These models previously showed no reasoning-effort selector in the harness even though the official CLI exposes one; they now do. The snapshot was re-verified against the CLI's authoritative `ZA` model table (dist/cli.mjs) rather than the docs page alone.
+
+### Added
+
+- **`KNOWN_THINKING_MODELS`** — models the official registry marks `Reasoning` but for which the CLI defines no selectable effort levels (e.g. `MiniMaxAI/MiniMax-M3`, `moonshotai/Kimi-K3`, `Qwen/Qwen3.7-Max`, `thinkingmachines/inkling`). The model picker now labels these "Supports thinking (auto)" instead of the misleading "Text only", so a reasoning-capable model is no longer mistaken for a text-only one. Selectable efforts remain exclusively driven by `KNOWN_EFFORTS`, matching the official CLI (which omits `reasoning_effort` for these models too).
+- **Plan-tier annotation in the model picker** (`KNOWN_PLANS` in `src/adapter.ts`, synced from the [official plan pages](https://commandcode.ai/docs/plans/go)) — every catalog model is tagged with the minimum plan that includes it, per the official plan model lists: **Go** (33 models), **GOAT** (+3), **Pro** (+14), and **Provider/Max** (+5, the Claude Opus/Fable and Fugu Ultra tier). The picker's `description` leads with the plan label — e.g. `Go · 50% off · Image · 1M`, `Pro · Image · 1M` — so "which plan do I need to actually use this model?" is answerable at a glance instead of only after a 403 `MODEL_NOT_IN_PLAN` on the first request. New `KNOWN_PLANS`, `PLAN_LABELS`, `planLabel()`, and `capabilityDescription()` exports.
+- **Deal and free-model annotations** (`KNOWN_DEALS` in `src/adapter.ts`, synced from the [official pricing page](https://commandcode.ai/docs/resources/pricing-limits#deals)) — the picker now shows active discounts (`75% off`, `50% off`, `98% off`, `99% off`) and the `FREE` badge (Laguna S 2.1) next to the plan tier. **Expiry-aware**: each deal records its official end date; `dealLabel()` hides a deal the moment `Date.now()` passes that date, so an un-updated plugin never shows a lapsed discount as if it were still live (only Gemini 3.7 Flash's 50% off is time-limited — through December 31, 2026; the rest are permanent).
+- **Compact Image + context-window markers** — the picker now shows `Image` for Vision-capable models (the verbose *"Supports image input"* is gone) and the context window in human form (`1M`, `256K`, `262K`) via `formatContext()`. Text-only models show no capability marker at all — plan tier (and deal, if any) plus context is enough.
+- **`capabilityDescription()` is now compact**: `Go · 50% off · Image · 1M`, `Provider · 1M`, `Go · FREE · 256K` — plan tier first, then active deal, then `Image`, then context. Text-only models simply omit the Image marker.
+- **The model picker sorts by plan tier, then name** (`compareByPlan()` in `src/adapter.ts`) — Go models lead the list, then GOAT, Pro, and Provider/Max last, alphabetically within each tier (new `PLAN_ORDER` weights + `compareByPlan()` exports). A Go-plan user sees the models they can actually use at the top instead of hunting through a flat alphabetical catalog; unknown/untracked models sort last.
+
 ## [0.1.9] - 2026-08-15
 
 ### Added

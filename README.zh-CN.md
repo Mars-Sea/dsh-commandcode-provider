@@ -16,7 +16,10 @@
 - **`commandcode` provider 路由**：注册在 `llm` 服务上，可在模型选择器中选择，并带 **实时模型目录**（从 `GET {apiBase}/provider/v1/models` 拉取，缓存于 `~/.commandcode/models-cache.json`）。
 - **Models 页面卡片**（"Command Code"）带 API key 输入框——凭据通过 dsh 凭据服务存储，与 DeepSeek 卡片一致。
 - **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（Web Models 页面写入，默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 Command Code CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
-- **推理强度（reasoning-effort）支持**：针对 Command Code 目录中标为推理模型的模型（如 `claude-opus-5`、`gpt-5.5`、`deepseek/deepseek-v4-pro` 等），通过 `KNOWN_EFFORTS` 实现，与官方 command-code@1.26.0 内置目录一致。
+- **推理强度（reasoning-effort）支持**：针对 Command Code 目录中标为推理模型的模型（如 `claude-opus-5`、`gpt-5.5`、`deepseek/deepseek-v4-pro`、`moonshotai/Kimi-K2.5` 等），通过 `KNOWN_EFFORTS` 实现，与官方 command-code@1.26.0 内置模型表一致。没有可选推理档位但仍支持思考的模型（如 `MiniMaxAI/MiniMax-M3`、`moonshotai/Kimi-K3`）同样会思考——由 Command Code 自动控制推理深度，与官方 CLI 行为完全一致。
+- **模型选择器标注套餐档位**：每个 Command Code 模型都标注了包含它的最低套餐（`KNOWN_PLANS`，与[官方套餐页](https://commandcode.ai/docs/plans/go)同步）——**Go**（33 个）、**GOAT**（+3）、**Pro**（+14）、**Provider/Max**（+5：Claude Opus/Fable、Fugu Ultra）。选择器的 `description` 以套餐标签开头，例如 *"Go · 50% off · Image · 1M"*、*"Pro · Image · 1M"*，切换前即可知道该模型需要什么套餐——不再等到第一次请求才收到 403 `MODEL_NOT_IN_PLAN`。**列表本身也按套餐排序**（`compareByPlan()`）：Go 模型在最前，随后 GOAT、Pro、Provider/Max，档内按字母序——你当前套餐能用的模型总是排在列表最前面。
+- **折扣与免费标注**：活动折扣（`75% off`、`50% off`、`98% off`、`99% off`）与 `FREE` 徽章（Laguna S 2.1）会显示在套餐旁（`KNOWN_DEALS`，与[官方定价页](https://commandcode.ai/docs/resources/pricing-limits#deals)同步）。**到期感知**：每个折扣记录官方结束日期，一旦过期立即隐藏——插件未更新时也不会把已失效的折扣当成仍在生效（只有 Gemini 3.7 Flash 的 50% off 限时，至 2026 年 12 月 31 日；其余为永久）。
+- **Image 与上下文标注**：支持视觉的模型显示 `Image`，并显示人类可读的上下文长度（`1M`、`256K`、`262K`）；纯文本模型两者都不显示——套餐 + 上下文已足够。
 - **支持视觉模型的图片输入**：官方注册表中带 Vision 能力的模型（如 `claude-sonnet-5`、`gpt-5.4`、`google/gemini-3.5-flash` 等）可接收附加图片——通过 dsh 附件服务解析字节，并以官方 Command Code wire 格式发送。纯文本模型（如 `deepseek/deepseek-v4-flash`、`zai-org/GLM-5.3`）会明确拒绝图片而非静默丢弃。
 
 ## 获取 API key
@@ -193,8 +196,8 @@ llm-commandcode:
 
 ## 注意事项与限制
 
-- **图片输入按模型能力限制**：只有官方 Command Code 注册表标记为 Vision 的模型接受图片（见 `src/adapter.ts` 中的 `KNOWN_IMAGE_MODELS` 快照，与[官方模型注册表](https://commandcode.ai/docs/reference/cli/models)同步）。模型选择器会为每个 Command Code 模型标注 *"Supports image input"* / *"Text only"*，切换前即可看出能力。向纯文本模型发送图片会抛出 `UNSUPPORTED_CONTENT`。官方 CLI 对纯文本模型会回退到客户端 *VISION* 副调用转文字；本适配器**不**复现该交互功能——请改用支持 Vision 的模型。图片输入还需要 dsh 的**附件服务**（`ctx.attachments`）；缺失时携带图片的请求会抛出 `UNSUPPORTED_CONTENT`。
-- **在含图片的会话里切换到纯文本模型会被 dsh 自身拒绝**——这是 harness 层的守卫（`dsh-host-apiproxy` 的 `selectModel` 处理器）：当会话历史或待处理输入已包含图片、而目标模型未声明 `image` 输入时，会返回 `model-unavailable`。该拒绝是刻意设计，无法从插件侧放宽（适配器提供的模型行正是让守卫生效的输入——纯文本模型如实上报 `inputModalities: ['text']`）。本 bundle **能**做的是让提示更友好：它的客户端插件会包装 `session.selectModel`，把这条拒绝改写为「当前会话已包含图片，而模型 `<model>` 不支持图片输入；请选择支持图片的模型，或先移除会话中的图片。」（错误码与 details 原样透传，按 `error.code` 分支的调用方不受影响）。要继续使用图片，请选择选择器中标注 *"Supports image input"* 的模型，或先清空会话中的图片；也可安装图片路由 bundle（如 `@deepseek-ai/dsh-llm-image-routing`）把图片轮透明路由到视觉回退模型。
+- **图片输入按模型能力限制**：只有官方 Command Code 注册表标记为 Vision 的模型接受图片（见 `src/adapter.ts` 中的 `KNOWN_IMAGE_MODELS` 快照，与[官方模型注册表](https://commandcode.ai/docs/reference/cli/models)同步）。模型选择器会给支持视觉的模型标注 *`Image`*（如 *"Go · 50% off · Image · 1M"*），纯文本模型不带该标记，切换前即可看出能力。向纯文本模型发送图片会抛出 `UNSUPPORTED_CONTENT`。官方 CLI 对纯文本模型会回退到客户端 *VISION* 副调用转文字；本适配器**不**复现该交互功能——请改用支持 Vision 的模型。图片输入还需要 dsh 的**附件服务**（`ctx.attachments`）；缺失时携带图片的请求会抛出 `UNSUPPORTED_CONTENT`。
+- **在含图片的会话里切换到纯文本模型会被 dsh 自身拒绝**——这是 harness 层的守卫（`dsh-host-apiproxy` 的 `selectModel` 处理器）：当会话历史或待处理输入已包含图片、而目标模型未声明 `image` 输入时，会返回 `model-unavailable`。该拒绝是刻意设计，无法从插件侧放宽（适配器提供的模型行正是让守卫生效的输入——纯文本模型如实上报 `inputModalities: ['text']`）。本 bundle **能**做的是让提示更友好：它的客户端插件会包装 `session.selectModel`，把这条拒绝改写为「当前会话已包含图片，而模型 `<model>` 不支持图片输入；请选择支持图片的模型，或先移除会话中的图片。」（错误码与 details 原样透传，按 `error.code` 分支的调用方不受影响）。要继续使用图片，请选择选择器中带 *`Image`* 标记的模型，或先清空会话中的图片；也可安装图片路由 bundle（如 `@deepseek-ai/dsh-llm-image-routing`）把图片轮透明路由到视觉回退模型。
 - **不支持 `stop` 序列**：线上格式没有 stop 字段；携带它的请求会抛出 `UNSUPPORTED_OPTION`。
 - 推理块**不会**重放到后续轮次（与官方 CLI 一致：先前的私有推理不得泄漏）。
 - 只有带配对工具结果的工具调用会被重放到对话中。
