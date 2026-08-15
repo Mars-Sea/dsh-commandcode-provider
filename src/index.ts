@@ -31,6 +31,7 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
 import type { CommandCodeConnectionOptions } from './adapter.ts'
+import { applyCommands } from './commands.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -42,7 +43,9 @@ export {
   projectSlugFromPath,
   resolveAuthFileApiKey,
 } from './adapter.ts'
-export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions } from './adapter.ts'
+export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
+export { applyCommands, commandDefinition } from './commands.ts'
+export type { CommandCodeCommandDeps } from './commands.ts'
 
 export const name = 'llm-commandcode'
 export const inject = ['llm']
@@ -153,6 +156,13 @@ export function apply(ctx: Context, config: Config): void {
   ])
   // The live route: this is what makes models requestable under `commandcode`.
   ctx.llm.registerAdapter([PROVIDER], adapter)
+
+  // The /commandcode usage command rides the optional `commands` service: a
+  // child fiber injects it, so it registers whenever the profile mounts
+  // dsh-commands and the fiber simply never activates when it does not.
+  ctx.inject(['commands'], (commandCtx) => {
+    applyCommands(commandCtx, { adapter })
+  })
 
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => {

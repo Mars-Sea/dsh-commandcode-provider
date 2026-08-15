@@ -17,7 +17,10 @@ src/adapter.ts        CommandCodeAdapter (LlmAdapter) — wire protocol, message
                       conversion, SSE/JSONL stream parsing, catalog + cache.
 src/index.ts          Plugin entry: Config schema, credential resolution,
                       settings namespace, route + directory registration,
+                      /commandcode command wiring.
+src/commands.ts       The /commandcode usage dashboard command.
 tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
+tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 cordis.patch.yml      Bundle patch layer (inserts the llm-commandcode row).
 tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts).
 ```

@@ -353,6 +353,46 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
   fetchImpl?: typeof fetch
 }
 
+/** Account identity from `/alpha/whoami`. */
+export interface CommandCodeAccount {
+  id: string
+  name: string
+  userName: string
+}
+
+/** Usage summary from `/alpha/usage/summary`. */
+export interface CommandCodeUsage {
+  totalCount: number
+  totalCost: number
+  successRate: number
+  completedCount: number
+  failedCount: number
+  totalTokensIn: number
+  totalTokensOut: number
+  totalCredits: number
+  periodBasis: string
+}
+
+/** Credit/limit state from `/alpha/billing/credits`. */
+export interface CommandCodeCredits {
+  monthlyCredits: number
+  purchasedCredits: number
+  freeCredits: number
+  /** Five-hour rolling window limits. */
+  fiveHour: { used: number; cap: number; exceeded: boolean; resetAt: number }
+  /** Weekly window limits. */
+  weekly: { used: number; cap: number; exceeded: boolean; resetAt: number }
+}
+
+/** Everything the usage endpoints report, fetched together. */
+export interface CommandCodeUsageReport {
+  account?: CommandCodeAccount
+  usage?: CommandCodeUsage
+  credits?: CommandCodeCredits
+  /** Endpoint failures degrade the report instead of failing it. */
+  failures: string[]
+}
+
 export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private catalog: CommandCodeModel[] = []
   private readonly fetchImpl: typeof fetch
@@ -442,6 +482,98 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           }
         : {}),
     }
+  }
+
+  /**
+   * Fetch account, usage, and credit state from the Command Code account
+   * endpoints (`/alpha/whoami`, `/alpha/usage/summary`, `/alpha/billing/credits`).
+   * Each endpoint degrades independently: a failed one lands in `failures`
+   * while the rest still report, so a transient outage never blanks the whole
+   * view. Requires a usable API key (throws `MISSING_CREDENTIAL` otherwise).
+   */
+  async getUsage(): Promise<CommandCodeUsageReport> {
+    const connection = this.deps.options()
+    const apiKey = await this.deps.resolveApiKey(connection)
+    const base = connection.apiBase
+    const headers = {
+      Authorization: `Bearer ${apiKey}`,
+      'x-command-code-version': COMMAND_CODE_CLI_VERSION,
+      'x-cli-environment': 'production',
+      ...attributionHeaders(),
+    }
+    const failures: string[] = []
+
+    const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
+      try {
+        const response = await this.fetchImpl(`${base}${path}`, { headers })
+        if (!response.ok) {
+          failures.push(`${path}: HTTP ${response.status}`)
+          return undefined
+        }
+        const parsed: unknown = await response.json()
+        return isRecord(parsed) ? parsed : undefined
+      } catch (error: unknown) {
+        failures.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
+        return undefined
+      }
+    }
+
+    const report: CommandCodeUsageReport = { failures }
+
+    // whoami -> account identity.
+    const whoami = await getJson('/alpha/whoami')
+    const whoamiData = whoami && isRecord(whoami.user) ? whoami.user : undefined
+    if (whoamiData) {
+      report.account = {
+        id: stringValue(whoamiData.id) ?? '',
+        name: stringValue(whoamiData.name) ?? '',
+        userName: stringValue(whoamiData.userName) ?? '',
+      }
+    }
+
+    // usage/summary -> totals.
+    const usage = await getJson('/alpha/usage/summary')
+    if (usage) {
+      report.usage = {
+        totalCount: numberValue(usage.totalCount) ?? 0,
+        totalCost: numberValue(usage.totalCost) ?? 0,
+        successRate: numberValue(usage.successRate) ?? 0,
+        completedCount: numberValue(usage.completedCount) ?? 0,
+        failedCount: numberValue(usage.failedCount) ?? 0,
+        totalTokensIn: numberValue(usage.totalTokensIn) ?? 0,
+        totalTokensOut: numberValue(usage.totalTokensOut) ?? 0,
+        totalCredits: numberValue(usage.totalCredits) ?? 0,
+        periodBasis: stringValue(usage.periodBasis) ?? 'billing-period',
+      }
+    }
+
+    // billing/credits -> credit + window limits.
+    const credits = await getJson('/alpha/billing/credits')
+    const creditsData = credits && isRecord(credits.credits) ? credits.credits : undefined
+    const windowLimits = credits && isRecord(credits.windowLimits) ? credits.windowLimits : undefined
+    const fiveHour = windowLimits && isRecord(windowLimits.fiveHour) ? windowLimits.fiveHour : undefined
+    const weekly = windowLimits && isRecord(windowLimits.weekly) ? windowLimits.weekly : undefined
+    if (creditsData || fiveHour || weekly) {
+      report.credits = {
+        monthlyCredits: numberValue(creditsData?.monthlyCredits) ?? 0,
+        purchasedCredits: numberValue(creditsData?.purchasedCredits) ?? 0,
+        freeCredits: numberValue(creditsData?.freeCredits) ?? 0,
+        fiveHour: {
+          used: numberValue(fiveHour?.used) ?? 0,
+          cap: numberValue(fiveHour?.cap) ?? 0,
+          exceeded: fiveHour?.exceeded === true,
+          resetAt: numberValue(fiveHour?.resetAt) ?? 0,
+        },
+        weekly: {
+          used: numberValue(weekly?.used) ?? 0,
+          cap: numberValue(weekly?.cap) ?? 0,
+          exceeded: weekly?.exceeded === true,
+          resetAt: numberValue(weekly?.resetAt) ?? 0,
+        },
+      }
+    }
+
+    return report
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {

@@ -92,6 +92,29 @@ dsh web                                  # 或重启你正在运行的实例
 
 重启后，在 Web UI 中：**设置 → Models** 会显示 **Command Code** 卡片；模型选择器会在 **commandcode** 下列出实时目录（撰写本文时有 54 个模型）。发送一条消息，选择你套餐中包含的模型——默认的 `deepseek/deepseek-v4-flash` 适用于入门级套餐；开放权重模型（DeepSeek/Qwen/Kimi/MiniMax）通常都可用，而前沿模型（Claude/GPT/Gemini/Grok）可能需要 Pro/Max 套餐或按需计费（见 FAQ）。
 
+## 用量面板
+
+插件注册了一个 `/commandcode` 斜杠命令（需要 dsh 的 `commands` 服务，标准 web profile 自带），直接从官方账户端点显示你的 Command Code 账户状态：
+
+```text
+/commandcode        （或 /commandcode status）
+```
+
+输出示例：
+
+```text
+Command Code usage
+  account: Mars-Sea (@mars-sea)
+  requests: 956 completed / 0 failed (100% success)
+  cost: $1.3444 ($1.3444 credits, billing-period)
+  tokens: 190,841,837 in / 798,044 out
+  credits: $8.6349 monthly / $0.0000 purchased / $0.0000 free
+  5h window: $0.0781 / $3.0000 — resets 8/15/2026, 2:39:36 PM
+  weekly: $1.3651 / $6.0000 — resets 8/21/2026, 7:10:57 PM
+```
+
+每个端点独立降级：某个端点临时失败（如 credits 端点）不会影响其他数据，并会在末尾内联提示失败。
+
 ## 配置
 
 Command Code 卡片接收你的 API key（存储在 `$DSH_HOME/.credentials.yaml`；没有 key 也可以浏览模型目录）。高级选项位于 `$DSH_HOME/settings.yaml` 的 `llm-commandcode` 一节（按请求覆盖 bundle 默认值，无需重启）：
