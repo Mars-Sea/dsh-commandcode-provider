@@ -104,7 +104,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider
 # From GitHub pinned to a tag: point at the new tag
 # (no need to uninstall first — pnpm swaps the pinned revision in place,
 # and the bundle layer is re-read from the installed package on next boot)
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.9
 
 # From a local checkout: pull the new code, rebuild, restart
 git -C /path/to/dsh-commandcode-provider pull

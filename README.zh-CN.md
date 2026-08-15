@@ -44,7 +44,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
 
 ```sh
 # 推荐：锁定发布 tag（可读、不可变）
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.9
 # 或按完整 commit SHA 锁定任意提交
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>
 ```
@@ -103,7 +103,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider
 
 # 从 GitHub 按 tag 安装：指向新 tag
 # （无需先卸载——pnpm 会就地替换固定的版本，下次启动时 bundle 层会从新安装的包重新读取）
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.9
 
 # 从本地检出安装：拉取新代码、重新构建、重启
 git -C /path/to/dsh-commandcode-provider pull
