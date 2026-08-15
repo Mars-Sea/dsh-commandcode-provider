@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-08-15
+
+### Added
+
+- **Image input for Vision-capable models.** Models the official Command Code registry lists with Vision (see `KNOWN_IMAGE_MODELS` in `src/adapter.ts`, synced from the [official model registry](https://commandcode.ai/docs/reference/cli/models)) now accept attached images: bytes resolve through the dsh attachment service (`ctx.attachments`) and are sent in the official CLI wire shape `{ type: 'image', source: { type: 'base64', media_type, data } }`. Text-only models (e.g. `deepseek/deepseek-v4-flash`) refuse images loudly (`UNSUPPORTED_CONTENT`) rather than silently dropping them; a request carrying images also requires the attachment service. The `CommandCodeAdapterDeps` seam gains an optional `resolveAttachments` resolver (used lazily, only when a request actually has images).
+- **The model picker now shows each Command Code model's image capability** (`listModels`/`resolveModel` return a `description`: *"Supports image input"* / *"Text only"*), so switching in an image-bearing session is informed instead of surprising.
+- **A client half for the bundle** (`dsh.client` + `exports["./client"]` → `lib/client.js`): it wraps the shared `session.selectModel` face and rewrites the harness's image-session `model-unavailable` rejection into a clear, actionable message — `当前会话已包含图片，而模型 <model> 不支持图片输入；请选择支持图片的模型，或先移除会话中的图片。` — while passing the error code and details through unchanged. The rejection itself is a deliberate `dsh-host-apiproxy` guard that cannot be relaxed from the plugin side; this makes it friendlier. Both READMEs document the behavior.
+
 ## [0.1.8] - 2026-08-15
 
 ### Fixed

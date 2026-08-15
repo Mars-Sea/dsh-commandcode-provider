@@ -50,10 +50,11 @@ export {
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   CommandCodeAdapter,
   KNOWN_EFFORTS,
+  KNOWN_IMAGE_MODELS,
   projectSlugFromPath,
   resolveAuthFileApiKey,
 } from './adapter.ts'
-export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
+export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
 export { applyCommands, commandDefinition } from './commands.ts'
 export type { CommandCodeCommandDeps } from './commands.ts'
 
@@ -166,7 +167,16 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  const adapter = new CommandCodeAdapter({ options, resolveApiKey })
+  const adapter = new CommandCodeAdapter({
+    options,
+    resolveApiKey,
+    // The durable attachment service carries image bytes referenced by
+    // ImageBlock; resolved lazily only when a request actually has images.
+    resolveAttachments: () => {
+      const attachments = ctx.get('attachments')
+      return attachments === undefined ? undefined : attachments
+    },
+  })
   // The Models page card: a configurable provider with a settings address.
   // settingsPath [] means the whole `llm-commandcode` section configures it.
   ctx.llm.registerConfigurableProviders([

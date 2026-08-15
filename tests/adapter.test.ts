@@ -14,11 +14,13 @@ import {
   projectSlugFromPath,
   resolveAuthFileApiKey,
   KNOWN_EFFORTS,
+  KNOWN_IMAGE_MODELS,
   COMMAND_CODE_CLI_VERSION,
   DEFAULT_API_BASE,
 } from '../src/adapter.ts'
 import type { CommandCodeAdapterDeps } from '../src/adapter.ts'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,6 +61,41 @@ function makeAdapter(overrides: Partial<CommandCodeAdapterDeps> = {}): CommandCo
 
 function userMessage(text: string): Message {
   return { role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }
+}
+
+/** A tiny valid-ish PNG byte blob for byte-round-trip assertions. */
+const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00])
+
+function imageRef(): ImageAttachmentRef {
+  return {
+    attachmentId: 'sha256:test-image',
+    mediaType: 'image/png',
+    bytes: pngBytes.length,
+    width: 1,
+    height: 1,
+  }
+}
+
+/** A minimal AttachmentStore stub resolving one image by reference. */
+function fakeAttachments(images: Record<string, Uint8Array>): AttachmentStore {
+  return {
+    imageLimits: {
+      maxImageBytes: 10 * 1024 * 1024,
+      maxImagesPerMessage: 4,
+      maxMessageImageBytes: 20 * 1024 * 1024,
+      maxImagePixels: 40_000_000,
+      mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+    },
+    async validateImage() {},
+    async saveImage(input) {
+      return { ...imageRef(), mediaType: input.mediaType, bytes: input.data.byteLength }
+    },
+    async readImage(ref) {
+      const data = images[ref.attachmentId]
+      if (!data) throw new Error(`no stored image for ${ref.attachmentId}`)
+      return { ref, data }
+    },
+  } as unknown as AttachmentStore
 }
 
 /** Collect all chunks from a stream. */
@@ -171,17 +208,106 @@ test('stream() rejects stop sequences (unsupported option)', async () => {
   )
 })
 
-test('stream() rejects image content', async () => {
+test('stream() refuses images for models without Vision capability', async () => {
   const adapter = makeAdapter()
   const withImage: Message = {
     role: 'user',
-    content: [{ type: 'image', attachment: 'att-1' } as never],
+    content: [{ type: 'image', attachment: imageRef() }],
+    source: { kind: 'user' },
+  }
+  // 'deepseek/deepseek-v4-flash' is a text-only model per the official registry.
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash', messages: [withImage] })),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string }
+      return e.code === 'UNSUPPORTED_CONTENT' && /does not support image input/.test(e.message ?? '')
+    },
+  )
+})
+
+test('stream() requires the durable attachment service for image input', async () => {
+  // claude-sonnet-5 has Vision, but no resolveAttachments is provided.
+  const adapter = makeAdapter()
+  const withImage: Message = {
+    role: 'user',
+    content: [{ type: 'image', attachment: imageRef() }],
     source: { kind: 'user' },
   }
   await assert.rejects(
-    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [withImage] })),
-    (err: unknown) => (err as { code?: string }).code === 'UNSUPPORTED_CONTENT',
+    collect(adapter.stream({ provider: 'commandcode', model: 'claude-sonnet-5', messages: [withImage] })),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string }
+      return e.code === 'UNSUPPORTED_CONTENT' && /attachment service/.test(e.message ?? '')
+    },
   )
+})
+
+test('stream() sends images in the official Command Code wire format', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const ref = imageRef()
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+  })
+  const withImage: Message = {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'what is in this image?' },
+      { type: 'image', attachment: ref },
+    ],
+    source: { kind: 'user' },
+  }
+  await collect(adapter.stream({ provider: 'commandcode', model: 'claude-sonnet-5', messages: [withImage] }))
+
+  const params = capturedBody!.params as Record<string, unknown>
+  const userMsg = (params.messages as Record<string, unknown>[]).find((m) => m.role === 'user')!
+  const parts = userMsg.content as Record<string, unknown>[]
+  assert.equal(parts.length, 2)
+  assert.deepEqual(parts[0], { type: 'text', text: 'what is in this image?' })
+  // Official CLI wire shape: { type:'image', source:{ type:'base64', media_type, data } }.
+  assert.deepEqual(parts[1], {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: Buffer.from(pngBytes).toString('base64') },
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Image capability advertisement
+// ---------------------------------------------------------------------------
+
+test('resolveModel() advertises image input only for Vision-capable models', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify({ object: 'list', data: [] })) })
+  const vision = await adapter.resolveModel('commandcode', 'claude-sonnet-5')
+  assert.deepEqual(vision.inputModalities, ['text', 'image'])
+  assert.equal(vision.description, 'Supports image input')
+  const textOnly = await adapter.resolveModel('commandcode', 'deepseek/deepseek-v4-flash')
+  assert.deepEqual(textOnly.inputModalities, ['text'])
+  assert.equal(textOnly.description, 'Text only')
+  const unknown = await adapter.resolveModel('commandcode', 'some-future-model')
+  assert.deepEqual(unknown.inputModalities, ['text'])
+  assert.equal(unknown.description, 'Text only')
+})
+
+test('listModels() marks Vision-capable catalog models as image-capable', async () => {
+  const catalog = {
+    object: 'list',
+    data: [
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', context_length: 1_000_000 },
+      { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', context_length: 1_000_000 },
+    ],
+  }
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify(catalog)) })
+  const models = await adapter.listModels('commandcode')
+  const byId = new Map(models.map((m) => [m.id, m]))
+  assert.deepEqual(byId.get('claude-sonnet-5')!.inputModalities, ['text', 'image'])
+  assert.equal(byId.get('claude-sonnet-5')!.description, 'Supports image input')
+  assert.deepEqual(byId.get('deepseek/deepseek-v4-flash')!.inputModalities, ['text'])
+  assert.equal(byId.get('deepseek/deepseek-v4-flash')!.description, 'Text only')
 })
 
 // ---------------------------------------------------------------------------
@@ -491,6 +617,15 @@ test('projectSlugFromPath lowercases and slugifies', () => {
 test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
+})
+
+test('known image models snapshot has stable anchor entries', () => {
+  // Anchors that must never drift: a flagship vision model and a text-only
+  // model (the latter is deliberately absent).
+  assert.ok(KNOWN_IMAGE_MODELS.has('claude-sonnet-5'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
 })
 
 test('CLI version and API base constants are stable', () => {

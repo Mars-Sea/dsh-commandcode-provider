@@ -24,6 +24,8 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+
 import {
   attributionHeaders,
   CallId,
@@ -78,6 +80,62 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'zai-org/GLM-5.2': ['high', 'max'],
   'zai-org/GLM-5.3': ['low', 'high', 'max'],
 }
+
+/**
+ * Models whose Capabilities include Vision, per the official Command Code
+ * model registry (`https://commandcode.ai/docs/reference/cli/models`, generated
+ * from the same registry as `cmd --list-models` / the `/model` picker).
+ *
+ * The Provider API does not expose modality metadata, so this snapshot is the
+ * source of truth for image-input gating. Command Code's own CLI falls back to
+ * a client-side VISION side-call for text-only models; this adapter does not
+ * reproduce that interactive feature, so images sent to a model outside this
+ * list are refused loudly (`UNSUPPORTED_CONTENT`) instead of being dropped or
+ * sent to a model that cannot read them.
+ *
+ * Keep in sync with the official registry when new models ship (see the
+ * dsh-commandcode-upstream skill).
+ */
+export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
+  'MiniMaxAI/MiniMax-M3',
+  'Qwen/Qwen3.6-Plus',
+  'Qwen/Qwen3.7-Flash',
+  'Qwen/Qwen3.7-Plus',
+  'Qwen/Qwen3.8-Max',
+  'claude-fable-5',
+  'claude-haiku-4-5-20251001',
+  'claude-opus-4-7',
+  'claude-opus-4-8',
+  'claude-opus-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-5',
+  'google/gemini-3.1-flash-lite',
+  'google/gemini-3.5-flash',
+  'google/gemini-3.5-flash-lite',
+  'google/gemini-3.6-flash',
+  'google/gemini-3.7-flash',
+  'gpt-5.3-codex',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.5',
+  'gpt-5.6-luna',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'meta/muse-spark-1.1',
+  'meta/muse-spark-1.2',
+  'meta/muse-spark-1.2-contributor',
+  'moonshotai/Kimi-K2.5',
+  'moonshotai/Kimi-K2.6',
+  'moonshotai/Kimi-K2.7-Code',
+  'moonshotai/Kimi-K2.7-Code-Highspeed',
+  'moonshotai/Kimi-K3',
+  'sakana/fugu-ultra',
+  'stepfun/Step-3.7-Flash',
+  'thinkingmachines/inkling',
+  'thinkingmachines/inkling-small',
+  'xai/grok-4.5',
+  'xiaomi/mimo-v2.5',
+])
 
 export const COMMAND_CODE_CLI_VERSION = '1.26.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
@@ -268,7 +326,31 @@ function hasImageContent(message: Message): boolean {
   return check(message.content)
 }
 
-function messagesToCC(messages: readonly Message[]): unknown[] {
+/**
+ * Convert one image reference to the Command Code wire format, as the official
+ * CLI does: `{ type: 'image', source: { type: 'base64', media_type, data } }`.
+ * Bytes come from the durable attachment service; the media type is the one
+ * verified at save time.
+ */
+async function imageToCommandCode(
+  ref: ImageAttachmentRef,
+  readImage: (ref: ImageAttachmentRef) => Promise<Uint8Array>,
+): Promise<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }> {
+  const data = await readImage(ref)
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: ref.mediaType,
+      data: Buffer.from(data).toString('base64'),
+    },
+  }
+}
+
+async function messagesToCC(
+  messages: readonly Message[],
+  readImage?: (ref: ImageAttachmentRef) => Promise<Uint8Array>,
+): Promise<unknown[]> {
   const out: unknown[] = []
   const paired = pairedToolCallIds(messages)
 
@@ -280,13 +362,16 @@ function messagesToCC(messages: readonly Message[]): unknown[] {
       for (const block of message.content) {
         if (block.type === 'text') parts.push({ type: 'text', text: block.text })
         if (block.type === 'image') {
-          // ImageBlock carries an attachment ref owned by the attachment
-          // service; resolving it to bytes requires that service. Fail loudly
-          // instead of silently dropping (adapter contract).
-          throw new LlmError(
-            'Image input is not wired to the attachment service in this adapter yet',
-            'UNSUPPORTED_CONTENT',
-          )
+          // The caller (stream) has already gated image input on model
+          // capability and attachment-service availability, so reaching this
+          // branch with no resolver is an internal contract violation.
+          if (!readImage) {
+            throw new LlmError(
+              'Image input requires the durable attachment service',
+              'UNSUPPORTED_CONTENT',
+            )
+          }
+          parts.push(await imageToCommandCode(block.attachment, readImage))
         }
       }
       out.push({ role: 'user', content: parts })
@@ -337,7 +422,6 @@ function messagesToCC(messages: readonly Message[]): unknown[] {
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
-
 /** Connection facts resolved fresh per request by the plugin entry. */
 export interface CommandCodeConnectionOptions {
   /** API base; the Provider API lives under it (`/alpha/generate`, `/provider/v1/models`). */
@@ -352,6 +436,13 @@ export interface CommandCodeConnectionOptions {
   streamIdleTimeoutMs: number
 }
 
+/**
+ * Resolve the durable attachment service, or undefined when the host does not
+ * provide one. Called lazily only when a request actually carries images, so a
+ * text-only request never depends on the attachment seam.
+ */
+export type ResolveAttachments = () => AttachmentStore | undefined
+
 /** Everything the adapter needs beyond the request itself. */
 export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
   /** Resolve the current connection facts (fresh per request, settings-aware). */
@@ -360,6 +451,8 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
   resolveApiKey: (connection: C) => Promise<string>
   /** HTTP transport override (tests); defaults to the global `fetch`. */
   fetchImpl?: typeof fetch
+  /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
+  resolveAttachments?: ResolveAttachments
 }
 
 /** Account identity from `/alpha/whoami`. */
@@ -405,10 +498,12 @@ export interface CommandCodeUsageReport {
 export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private catalog: CommandCodeModel[] = []
   private readonly fetchImpl: typeof fetch
+  private readonly resolveAttachments: ResolveAttachments | undefined
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
     super()
     this.fetchImpl = deps.fetchImpl ?? fetch
+    this.resolveAttachments = deps.resolveAttachments
   }
 
   /**
@@ -449,12 +544,19 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const catalog = await this.loadCatalog()
-    return catalog.map((model) => ({
-      provider,
-      id: model.id,
-      name: `${model.name} (CC)`,
-      inputModalities: ['text' as const],
-    }))
+    return catalog.map((model) => {
+      const vision = KNOWN_IMAGE_MODELS.has(model.id)
+      return {
+        provider,
+        id: model.id,
+        name: `${model.name} (CC)`,
+        // The picker renders `description` under the model name; make the
+        // image capability visible up front so a switch in an image-bearing
+        // session does not have to be rejected by the host's image gate.
+        description: vision ? 'Supports image input' : 'Text only',
+        inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
+      }
+    })
   }
 
   override async resolveModel(
@@ -467,11 +569,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       (await this.loadCatalog(signal)).find((m) => m.id === model)
 
     const efforts = KNOWN_EFFORTS[model]
+    const vision = KNOWN_IMAGE_MODELS.has(model)
     return {
       provider,
       id: model,
       name: entry ? `${entry.name} (CC)` : model,
-      inputModalities: ['text' as const],
+      description: vision ? 'Supports image input' : 'Text only',
+      inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
       ...(entry
         ? {
             context: { contextWindow: entry.contextWindow },
@@ -591,11 +695,34 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       // loudly instead of silently dropping a request field.
       throw new LlmError('Command Code adapter does not support stop sequences', 'UNSUPPORTED_OPTION')
     }
-    if (options.messages.some(hasImageContent)) {
-      throw new LlmError(
-        'Image input is not wired to the attachment service in this adapter yet',
-        'UNSUPPORTED_CONTENT',
-      )
+    const hasImages = options.messages.some(hasImageContent)
+    // Per-call image byte resolver, set only when this request carries images.
+    // Local, not an instance field: concurrent streams must never read each
+    // other's resolver.
+    let readImage: ((ref: ImageAttachmentRef) => Promise<Uint8Array>) | undefined
+    if (hasImages) {
+      // Model-capability gate: only models the official registry lists with
+      // Vision accept images natively. Command Code's own CLI falls back to a
+      // client-side VISION side-call for text-only models; this adapter does
+      // not reproduce that interactive feature, so it refuses loudly instead
+      // of sending bytes to a model that cannot read them.
+      if (!KNOWN_IMAGE_MODELS.has(options.model)) {
+        throw new LlmError(
+          `Command Code model "${options.model}" does not support image input;`
+          + ' switch to a Vision-capable model (see the model registry)',
+          'UNSUPPORTED_CONTENT',
+        )
+      }
+      // Attachment seam: images arrive as durable references; resolving them
+      // requires the host's attachment service.
+      const attachments = this.resolveAttachments?.()
+      if (attachments === undefined) {
+        throw new LlmError(
+          'Command Code image input requires the durable attachment service',
+          'UNSUPPORTED_CONTENT',
+        )
+      }
+      readImage = (ref) => attachments.readImage(ref).then((stored) => stored.data)
     }
 
     const connection = this.deps.options()
@@ -639,7 +766,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       skills: null,
       params: {
         model: options.model,
-        messages: messagesToCC(options.messages),
+        messages: await messagesToCC(options.messages, readImage),
         tools: (options.tools ?? []).map((tool) => ({
           type: 'function',
           name: tool.name,

@@ -17,6 +17,7 @@
 - **Models 页面卡片**（"Command Code"）带 API key 输入框——凭据通过 dsh 凭据服务存储，与 DeepSeek 卡片一致。
 - **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（Web Models 页面写入，默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 Command Code CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
 - **推理强度（reasoning-effort）支持**：针对 Command Code 目录中标为推理模型的模型（如 `claude-opus-5`、`gpt-5.5`、`deepseek/deepseek-v4-pro` 等），通过 `KNOWN_EFFORTS` 实现，与官方 command-code@1.26.0 内置目录一致。
+- **支持视觉模型的图片输入**：官方注册表中带 Vision 能力的模型（如 `claude-sonnet-5`、`gpt-5.4`、`google/gemini-3.5-flash` 等）可接收附加图片——通过 dsh 附件服务解析字节，并以官方 Command Code wire 格式发送。纯文本模型（如 `deepseek/deepseek-v4-flash`、`zai-org/GLM-5.3`）会明确拒绝图片而非静默丢弃。
 
 ## 获取 API key
 
@@ -184,7 +185,8 @@ llm-commandcode:
 
 ## 注意事项与限制
 
-- **目前仅支持文本**：图片输入会抛出 `UNSUPPORTED_CONTENT`（接入附件服务以解析图片字节是后续工作）。有意不声明 pi 插件的 `MODEL_INPUT_MODALITIES` 表。
+- **图片输入按模型能力限制**：只有官方 Command Code 注册表标记为 Vision 的模型接受图片（见 `src/adapter.ts` 中的 `KNOWN_IMAGE_MODELS` 快照，与[官方模型注册表](https://commandcode.ai/docs/reference/cli/models)同步）。模型选择器会为每个 Command Code 模型标注 *"Supports image input"* / *"Text only"*，切换前即可看出能力。向纯文本模型发送图片会抛出 `UNSUPPORTED_CONTENT`。官方 CLI 对纯文本模型会回退到客户端 *VISION* 副调用转文字；本适配器**不**复现该交互功能——请改用支持 Vision 的模型。图片输入还需要 dsh 的**附件服务**（`ctx.attachments`）；缺失时携带图片的请求会抛出 `UNSUPPORTED_CONTENT`。
+- **在含图片的会话里切换到纯文本模型会被 dsh 自身拒绝**——这是 harness 层的守卫（`dsh-host-apiproxy` 的 `selectModel` 处理器）：当会话历史或待处理输入已包含图片、而目标模型未声明 `image` 输入时，会返回 `model-unavailable`。该拒绝是刻意设计，无法从插件侧放宽（适配器提供的模型行正是让守卫生效的输入——纯文本模型如实上报 `inputModalities: ['text']`）。本 bundle **能**做的是让提示更友好：它的客户端插件会包装 `session.selectModel`，把这条拒绝改写为「当前会话已包含图片，而模型 `<model>` 不支持图片输入；请选择支持图片的模型，或先移除会话中的图片。」（错误码与 details 原样透传，按 `error.code` 分支的调用方不受影响）。要继续使用图片，请选择选择器中标注 *"Supports image input"* 的模型，或先清空会话中的图片；也可安装图片路由 bundle（如 `@deepseek-ai/dsh-llm-image-routing`）把图片轮透明路由到视觉回退模型。
 - **不支持 `stop` 序列**：线上格式没有 stop 字段；携带它的请求会抛出 `UNSUPPORTED_OPTION`。
 - 推理块**不会**重放到后续轮次（与官方 CLI 一致：先前的私有推理不得泄漏）。
 - 只有带配对工具结果的工具调用会被重放到对话中。
