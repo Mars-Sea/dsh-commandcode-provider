@@ -35,7 +35,7 @@ cmd login        # macOS/Linux; native Windows: cmdc login
 
 ```sh
 # Pin a release tag (recommended — readable and immutable)
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.3
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.4
 # Or pin any exact commit by its SHA
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>
 ```

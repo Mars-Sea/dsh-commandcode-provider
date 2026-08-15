@@ -35,7 +35,7 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 
 ```sh
 # 推荐：锁定发布 tag（可读、不可变）
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.3
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.4
 # 或按完整 commit SHA 锁定任意提交
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>
 ```
