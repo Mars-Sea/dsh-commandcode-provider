@@ -432,7 +432,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.24.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.26.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

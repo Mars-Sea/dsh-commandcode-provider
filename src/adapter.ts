@@ -5,7 +5,7 @@
  * community-maintained integration; you need your own Command Code account
  * and API key or subscription, and Command Code's terms apply.
  *
- * Wire protocol (reverse-engineered by the pi plugin, command-code@1.24.0):
+ * Wire protocol (reverse-engineered by the pi plugin, command-code@1.26.0):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
  *          system, max_tokens, temperature, stream, reasoning_effort? }, threadId }
@@ -43,7 +43,7 @@ import {
 } from '@deepseek-ai/dsh-llm'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.24.0 bundled
+// Static capability snapshot (from the official command-code@1.26.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
@@ -75,9 +75,10 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
   'zai-org/GLM-5.2': ['high', 'max'],
+  'zai-org/GLM-5.3': ['low', 'high', 'max'],
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.24.0'
+export const COMMAND_CODE_CLI_VERSION = '1.26.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
