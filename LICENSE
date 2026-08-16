@@ -1,12 +1,6 @@
 MIT License
 
-Copyright (c) 2026 dsh-commandcode-provider contributors
-
-This plugin is a port of pi-commandcode-provider (Copyright (c) 2025 patlux,
-MIT), which reverse-engineered the Command Code Provider API. Command Code is
-a product of Command Code, Inc.; this project is not affiliated with or
-endorsed by it, and your use of the Command Code service is governed by
-Command Code's own terms.
+Copyright (c) 2026 Mars-Sea
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

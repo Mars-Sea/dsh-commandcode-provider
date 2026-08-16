@@ -38,7 +38,8 @@
     "README.md",
     "README.zh-CN.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsdown",
