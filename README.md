@@ -16,7 +16,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - A **`commandcode` provider route** registered on the `llm` service, selectable in the model picker, with the **live model catalog** fetched from `GET {apiBase}/provider/v1/models` (cached at `~/.commandcode/models-cache.json`).
 - A **Models-page card** ("Command Code") with an API-key field — credentials are stored through the dsh credentials service, same as the DeepSeek card.
 - **API key resolution** in this order: `config.apiKey` → credential reference `apiKeyEnv` (the web Models page writes it, default `COMMANDCODE_API_KEY`) → the launching environment → the official Command Code CLI auth file (`~/.commandcode/auth.json`, written by `command-code login`).
-- **Reasoning-effort support** for the models Command Code's catalog marks as such (e.g. `claude-opus-5`, `gpt-5.5`, `deepseek/deepseek-v4-pro`, `moonshotai/Kimi-K2.5`, …) via `KNOWN_EFFORTS`, matching the official command-code@1.26.0 bundled model table. Reasoning models without selectable effort levels (e.g. `MiniMaxAI/MiniMax-M3`, `moonshotai/Kimi-K3`) still think — Command Code drives their reasoning depth automatically, exactly like the official CLI.
+- **Reasoning-effort support** for the models Command Code's catalog marks as such (e.g. `claude-opus-5`, `gpt-5.5`, `deepseek/deepseek-v4-pro`, `google/gemini-3.7-flash`, …) via `KNOWN_EFFORTS`, matching the official command-code@1.26.0 bundled model table. Reasoning models without selectable effort levels (e.g. `MiniMaxAI/MiniMax-M3`, `moonshotai/Kimi-K3`, `moonshotai/Kimi-K2.5`) still think — Command Code drives their reasoning depth automatically, exactly like the official CLI.
 - **Plan-tier annotation in the model picker**: every Command Code model is tagged with the minimum plan that includes it (`KNOWN_PLANS`, synced from the [official plan pages](https://commandcode.ai/docs/plans/go)) — **Go** (33 models), **GOAT** (+3), **Pro** (+14), or **Provider/Max** (+5: Claude Opus/Fable, Fugu Ultra). The picker's `description` leads with the plan label, e.g. *"Go · 50% off · Image · 1M"*, *"Pro · Image · 1M"*, so you know which plan a model needs before switching — no more 403 `MODEL_NOT_IN_PLAN` surprises. **The list itself is sorted by plan tier** (`compareByPlan()`): Go models first, then GOAT, Pro, Provider/Max, alphabetical within each tier — the models your plan can actually use lead the picker.
 - **Deal and free-model annotations**: active discounts (`75% off`, `50% off`, `98% off`, `99% off`) and the `FREE` badge (Laguna S 2.1) show next to the plan tier (`KNOWN_DEALS`, synced from the [official pricing page](https://commandcode.ai/docs/resources/pricing-limits#deals)). **Expiry-aware**: each deal records its official end date and is hidden the moment it passes — an un-updated plugin never shows a lapsed discount as if it were live (only Gemini 3.7 Flash's 50% off is time-limited, through December 31, 2026; the rest are permanent).
 - **Image + context markers**: the picker shows `Image` for Vision-capable models and the context window in human form (`1M`, `256K`, `262K`); text-only models show neither — plan tier plus context is enough.
@@ -47,7 +47,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
 
 ```sh
 # Pin a release tag (recommended — readable and immutable)
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.8
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.2.1
 # Or pin any exact commit by its SHA
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>
 ```
@@ -107,7 +107,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider
 # From GitHub pinned to a tag: point at the new tag
 # (no need to uninstall first — pnpm swaps the pinned revision in place,
 # and the bundle layer is re-read from the installed package on next boot)
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.9
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.2.1
 
 # From a local checkout: pull the new code, rebuild, restart
 git -C /path/to/dsh-commandcode-provider pull

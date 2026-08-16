@@ -691,12 +691,18 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
   // Synced from the official command-code@1.26.0 model table: models that
-  // shipped with effort levels must be present, and absent ones must stay out.
-  assert.ok(KNOWN_EFFORTS['moonshotai/Kimi-K2.5'])
-  assert.ok(KNOWN_EFFORTS['xiaomi/mimo-v2.5'])
-  assert.ok(KNOWN_EFFORTS['claude-haiku-4-5-20251001'])
-  assert.ok(KNOWN_EFFORTS['MiniMaxAI/MiniMax-M2.5'])
-  assert.ok(KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'])
+  // ship with effort levels must be present, and absent ones must stay out.
+  // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
+  // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
+  // carry NO reasoningEfforts in the CLI's ZA table — re-verified 2026-08-16.
+  assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K2.5'])
+  assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5'])
+  assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5-pro'])
+  assert.ok(!KNOWN_EFFORTS['claude-haiku-4-5-20251001'])
+  assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M2.5'])
+  assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'])
+  assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid'])
+  assert.ok(!KNOWN_EFFORTS['tencent/Hy3'])
   assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3']) // no official effort levels
   assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K3'])
 })
@@ -706,6 +712,16 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
+  // Re-verified against the command-code@1.26.0 ZA table (2026-08-16): these
+  // think automatically (reasoning:!0, no efforts) and belong in the set.
+  assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
+  assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
+  assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
+  // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (ZA reasoning:false, docs
+  // "Text input" only) — the 0.2.0 snapshot wrongly included them.
+  assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5.1'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5.2-Fast'))
   // Models with selectable efforts are not "auto" — they carry their own UI.
   assert.ok(!KNOWN_THINKING_MODELS.has('claude-opus-5'))
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4-flash'))
@@ -747,12 +763,13 @@ test('known plan snapshot tiers models by the official plan pages', () => {
 })
 
 test('known deals snapshot has anchors and expiry-aware labels', () => {
-  // Permanent deals never lapse.
+  // DeepSeek V4 Pro 75% off is time-limited: the official pricing page retires
+  // it on 2026-08-16 16:00 UTC when DeepSeek moves to peak/off-peak pricing.
   assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'].label, '75% off')
-  assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'].expiresAt, undefined)
+  assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'].expiresAt, '2026-08-16T15:59:59.999Z')
   // Free model is marked free.
   assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free'].free, true)
-  // The only time-limited deal: Gemini 3.7 Flash 50% off through 2026-12-31.
+  // Gemini 3.7 Flash 50% off through 2026-12-31.
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].label, '50% off')
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].expiresAt, '2026-12-31T23:59:59Z')
 })
@@ -764,7 +781,9 @@ test('dealLabel() hides a deal after its expiry date', () => {
   assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2027-01-01T00:00:00Z')), undefined)
   // Permanent deals are unaffected by any time.
   assert.equal(dealLabel('MiniMaxAI/MiniMax-M3', Date.parse('2030-01-01T00:00:00Z')), '50% off')
-  assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2030-01-01T00:00:00Z')), '75% off')
+  // DeepSeek V4 Pro: shown before 2026-08-16 16:00 UTC, hidden after.
+  assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-16T00:00:00Z')), '75% off')
+  assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-16T20:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
   // No deal -> undefined.

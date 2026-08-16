@@ -53,10 +53,16 @@ import {
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
+  // Re-verified against the authoritative command-code@1.26.0 bundled model
+  // table (dist/cli.mjs, the 'ZA' object): exactly these models carry
+  // 'reasoningEfforts'. Models marked 'reasoning:!0' without 'reasoningEfforts'
+  // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
+  // think automatically and are absent here - the CLI omits 'reasoning_effort'
+  // for them, so the picker must not offer a selector. Do NOT add entries from
+  // the OAuth provider tables (anthropic/openai) - only the Provider-API 'ZA'
+  // table is authoritative for this plugin's route.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
-  'MiniMaxAI/MiniMax-M2.5': ['low', 'medium', 'xhigh'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
-  'claude-haiku-4-5-20251001': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-7': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-8': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-5': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -76,17 +82,9 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
-  'meta/muse-spark-1.2-contributor': ['low', 'medium', 'high'],
-  'moonshotai/Kimi-K2.5': ['low', 'high', 'max'],
-  'moonshotai/Kimi-K2.6': ['low', 'high', 'max'],
-  'moonshotai/Kimi-K2.7-Code-Highspeed': ['low', 'high', 'max'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
-  'tencent/Hy3': ['low', 'medium', 'high'],
-  'tencent/hy3-paid': ['low', 'medium', 'high'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
-  'xiaomi/mimo-v2.5': ['low', 'medium', 'xhigh'],
-  'xiaomi/mimo-v2.5-pro': ['low', 'medium', 'xhigh'],
   'zai-org/GLM-5.2': ['high', 'max'],
   'zai-org/GLM-5.3': ['low', 'high', 'max'],
 }
@@ -148,18 +146,17 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models whose official registry entry lists the `Reasoning` capability but
- * for which the official CLI defines no selectable `reasoning_effort` levels
- * (they are absent from the CLI's model-table efforts; see the authoritative
- * `ZA` table in command-code@1.26.0). The model still thinks — Command Code
- * drives its reasoning depth automatically — so the picker labels them
- * "Supports thinking (auto)" instead of the misleading "Text only", while
- * `KNOWN_EFFORTS` (which mirrors the CLI's effort map exactly) stays the sole
- * source for selectable effort levels.
+ * Models the official CLI's model table (`ZA` in command-code@1.26.0) marks
+ * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
+ * think automatically, with Command Code driving the depth. This is the
+ * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
+ * mirrors the CLI's effort map exactly) stays the sole source for selectable
+ * effort levels, and this snapshot is not surfaced in the picker's compact
+ * description — it exists for programmatic consumers.
  *
- * Source: https://commandcode.ai/docs/reference/cli/models (Reasoning flag) and
- * the command-code@1.26.0 bundled model table. Keep in sync via the
- * dsh-commandcode-upstream skill.
+ * Source: the command-code@1.26.0 bundled model table (dist/cli.mjs, the `ZA`
+ * object), cross-checked with https://commandcode.ai/docs/reference/cli/models.
+ * Keep in sync via the dsh-commandcode-upstream skill.
  */
 export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'MiniMaxAI/MiniMax-M3',
@@ -170,17 +167,17 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.7-Plus',
   'moonshotai/Kimi-K3',
   'moonshotai/Kimi-K2.7-Code',
+  'moonshotai/Kimi-K2.7-Code-Highspeed',
   'stepfun/Step-3.5-Flash',
   'stepfun/Step-3.7-Flash',
-  'zai-org/GLM-5',
-  'zai-org/GLM-5.1',
-  'zai-org/GLM-5.2-Fast',
+  'tencent/hy3-paid',
   'nvidia/nemotron-3-ultra-550b-a55b',
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
   'poolside/laguna-s-2.1-free',
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
+  'meta/muse-spark-1.2-contributor',
 ])
 
 /**
@@ -323,7 +320,12 @@ export interface KnownDeal {
 }
 
 export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
-  'deepseek/deepseek-v4-pro': { label: '75% off' },
+  // Official pricing page (pricing-limits#deals): DeepSeek V4 Pro's 75%-off
+  // deal is measured against the old $1.74 list rate and retires when DeepSeek
+  // moves to peak/off-peak pricing on 2026-08-16 16:00 UTC - the 'expiresAt'
+  // below is that exact official end timestamp, so an un-updated plugin stops
+  // showing the discount the moment it lapses.
+  'deepseek/deepseek-v4-pro': { label: '75% off', expiresAt: '2026-08-16T15:59:59.999Z' },
   'google/gemini-3.7-flash': { label: '50% off', expiresAt: '2026-12-31T23:59:59Z' },
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },

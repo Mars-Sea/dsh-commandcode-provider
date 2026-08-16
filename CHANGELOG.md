@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-16
+
+### Fixed
+
+- **`KNOWN_EFFORTS` advertised reasoning-effort levels for ten models that carry none in the official command-code@1.26.0 model table.** The 0.2.0 snapshot added `claude-haiku-4-5-20251001`, `moonshotai/Kimi-K2.5`, `moonshotai/Kimi-K2.6`, `moonshotai/Kimi-K2.7-Code-Highspeed`, `MiniMaxAI/MiniMax-M2.5`, `xiaomi/mimo-v2.5`, `xiaomi/mimo-v2.5-pro`, `tencent/Hy3`, `tencent/hy3-paid`, and `meta/muse-spark-1.2-contributor` with effort arrays, but the CLI's authoritative `ZA` table (dist/cli.mjs) defines **no `reasoningEfforts`** for any of them — the picker was offering a selector the Provider API won't honor, and the adapter would send `reasoning_effort` for models that don't support it. The snapshot is now exactly the 26 models the `ZA` table marks with efforts (re-verified 2026-08-16 against command-code@1.26.0).
+- **`KNOWN_THINKING_MODELS` included three non-reasoning models and missed three reasoning ones.** `zai-org/GLM-5`, `zai-org/GLM-5.1`, and `zai-org/GLM-5.2-Fast` are `reasoning:false` in the `ZA` table and "Text input"-only in the official registry — they were wrongly labeled as thinking automatically. Conversely `moonshotai/Kimi-K2.7-Code-Highspeed`, `tencent/hy3-paid`, and `meta/muse-spark-1.2-contributor` are `reasoning:!0` without effort levels and now belong. (The set is a data snapshot only — it is not surfaced in the picker's compact description.)
+- **DeepSeek V4 Pro's 75%-off deal is time-limited, not permanent.** The official pricing page retires it on **2026-08-16 16:00 UTC** when DeepSeek replaces the flat rate with peak/off-peak pricing. `KNOWN_DEALS['deepseek/deepseek-v4-pro']` now carries `expiresAt: '2026-08-16T15:59:59.999Z'`, so the picker stops showing the discount the moment it lapses — even in an un-updated plugin.
+
 ## [0.2.0] - 2026-08-16
 
 ### Fixed

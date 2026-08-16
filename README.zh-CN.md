@@ -16,7 +16,7 @@
 - **`commandcode` provider 路由**：注册在 `llm` 服务上，可在模型选择器中选择，并带 **实时模型目录**（从 `GET {apiBase}/provider/v1/models` 拉取，缓存于 `~/.commandcode/models-cache.json`）。
 - **Models 页面卡片**（"Command Code"）带 API key 输入框——凭据通过 dsh 凭据服务存储，与 DeepSeek 卡片一致。
 - **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（Web Models 页面写入，默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 Command Code CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
-- **推理强度（reasoning-effort）支持**：针对 Command Code 目录中标为推理模型的模型（如 `claude-opus-5`、`gpt-5.5`、`deepseek/deepseek-v4-pro`、`moonshotai/Kimi-K2.5` 等），通过 `KNOWN_EFFORTS` 实现，与官方 command-code@1.26.0 内置模型表一致。没有可选推理档位但仍支持思考的模型（如 `MiniMaxAI/MiniMax-M3`、`moonshotai/Kimi-K3`）同样会思考——由 Command Code 自动控制推理深度，与官方 CLI 行为完全一致。
+- **推理强度（reasoning-effort）支持**：针对 Command Code 目录中标为推理模型的模型（如 `claude-opus-5`、`gpt-5.5`、`deepseek/deepseek-v4-pro`、`google/gemini-3.7-flash` 等），通过 `KNOWN_EFFORTS` 实现，与官方 command-code@1.26.0 内置模型表一致。没有可选推理档位但仍支持思考的模型（如 `MiniMaxAI/MiniMax-M3`、`moonshotai/Kimi-K3`、`moonshotai/Kimi-K2.5`）同样会思考——由 Command Code 自动控制推理深度，与官方 CLI 行为完全一致。
 - **模型选择器标注套餐档位**：每个 Command Code 模型都标注了包含它的最低套餐（`KNOWN_PLANS`，与[官方套餐页](https://commandcode.ai/docs/plans/go)同步）——**Go**（33 个）、**GOAT**（+3）、**Pro**（+14）、**Provider/Max**（+5：Claude Opus/Fable、Fugu Ultra）。选择器的 `description` 以套餐标签开头，例如 *"Go · 50% off · Image · 1M"*、*"Pro · Image · 1M"*，切换前即可知道该模型需要什么套餐——不再等到第一次请求才收到 403 `MODEL_NOT_IN_PLAN`。**列表本身也按套餐排序**（`compareByPlan()`）：Go 模型在最前，随后 GOAT、Pro、Provider/Max，档内按字母序——你当前套餐能用的模型总是排在列表最前面。
 - **折扣与免费标注**：活动折扣（`75% off`、`50% off`、`98% off`、`99% off`）与 `FREE` 徽章（Laguna S 2.1）会显示在套餐旁（`KNOWN_DEALS`，与[官方定价页](https://commandcode.ai/docs/resources/pricing-limits#deals)同步）。**到期感知**：每个折扣记录官方结束日期，一旦过期立即隐藏——插件未更新时也不会把已失效的折扣当成仍在生效（只有 Gemini 3.7 Flash 的 50% off 限时，至 2026 年 12 月 31 日；其余为永久）。
 - **Image 与上下文标注**：支持视觉的模型显示 `Image`，并显示人类可读的上下文长度（`1M`、`256K`、`262K`）；纯文本模型两者都不显示——套餐 + 上下文已足够。
@@ -47,7 +47,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
 
 ```sh
 # 推荐：锁定发布 tag（可读、不可变）
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.9
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.2.1
 # 或按完整 commit SHA 锁定任意提交
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<完整-commit-sha>
 ```
@@ -106,7 +106,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider
 
 # 从 GitHub 按 tag 安装：指向新 tag
 # （无需先卸载——pnpm 会就地替换固定的版本，下次启动时 bundle 层会从新安装的包重新读取）
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.1.9
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.2.1
 
 # 从本地检出安装：拉取新代码、重新构建、重启
 git -C /path/to/dsh-commandcode-provider pull
