@@ -1131,6 +1131,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           { cause: error },
         )
       }
+      // fetch wraps every transport failure (DNS, refused connection, TLS,
+      // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
+      // detail lives on `cause`. Include the full chain so the failure reason
+      // shown in the web UI (which renders only the message, not `cause`)
+      // names the real root cause instead of a generic wrapper.
       throw new LlmError(
         `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`,
         'TRANSPORT',
@@ -1143,6 +1148,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         options.signal.removeEventListener('abort', onCallerAbort)
       }
       const errText = await response.text().catch(() => '')
+      // Command Code folds several business rejections into 403 (plan limits,
+      // CLI version, model access). Prefer the machine-readable `error.code`
+      // when present; the status alone cannot distinguish them.
       let providerCode: string | undefined
       try {
         const parsed: unknown = JSON.parse(errText)
@@ -1150,9 +1158,12 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           providerCode = stringValue(parsed.error.code)
         }
       } catch {
+        // Plain-text bodies: rely on the status mapping below.
       }
       const detail = providerCode ?? `HTTP ${response.status}`
       if (response.status === 401) {
+        // An invalid or missing credential is a config problem, not a
+        // transport failure: retrying it identically cannot succeed.
         throw new LlmError(
           `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
           + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file',
