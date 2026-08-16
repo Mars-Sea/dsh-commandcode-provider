@@ -14,7 +14,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { withFriendlyImageError, isImageSessionRejection } from '../src/client/index.ts'
+import { withFriendlyImageError, isImageSessionRejection } from '../src/client/sessions.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers

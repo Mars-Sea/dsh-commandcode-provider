@@ -14,8 +14,9 @@
 
 - **插件包**：可通过 `dsh plugin add` 安装到任意 dsh 配置（npm 包，带 `dsh.bundle` 层）。
 - **`commandcode` provider 路由**：注册在 `llm` 服务上，可在模型选择器中选择，并带 **实时模型目录**（从 `GET {apiBase}/provider/v1/models` 拉取，缓存于 `~/.commandcode/models-cache.json`）。
-- **Models 页面卡片**（"Command Code"）带 API key 输入框——凭据通过 dsh 凭据服务存储，与 DeepSeek 卡片一致。
-- **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（Web Models 页面写入，默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 Command Code CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
+- **专属"Command Code"设置页**（设置 → **Command Code**，与通用/模型/插件同级导航项），带 **API key 输入框** 以及连接参数（API 地址、工作目录、请求/流超时）。密钥通过 dsh 凭据服务存储（与 Models 页同一套机制）；连接参数写入 `llm-commandcode` 设置段，改动对下一次请求即刻生效，无需重启。
+- **Models 页面卡片**（"Command Code"）：反映该 provider 的存在（Models 页对未知适配器家族的通用卡片会禁用其编辑，因此请在专属设置页配置密钥）。
+- **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（Command Code 设置页写入，默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 Command Code CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
 - **推理强度（reasoning-effort）支持**：针对 Command Code 目录中标为推理模型的模型（如 `claude-opus-5`、`gpt-5.5`、`deepseek/deepseek-v4-pro`、`google/gemini-3.7-flash` 等），通过 `KNOWN_EFFORTS` 实现，与官方 command-code@1.26.0 内置模型表一致。没有可选推理档位但仍支持思考的模型（如 `MiniMaxAI/MiniMax-M3`、`moonshotai/Kimi-K3`、`moonshotai/Kimi-K2.5`）同样会思考——由 Command Code 自动控制推理深度，与官方 CLI 行为完全一致。
 - **模型选择器标注套餐档位**：每个 Command Code 模型都标注了包含它的最低套餐（`KNOWN_PLANS`，与[官方套餐页](https://commandcode.ai/docs/plans/go)同步）——**Go**（33 个）、**GOAT**（+3）、**Pro**（+14）、**Provider/Max**（+5：Claude Opus/Fable、Fugu Ultra）。选择器的 `description` 以套餐标签开头，例如 *"Go · 50% off · Image · 1M"*、*"Pro · Image · 1M"*，切换前即可知道该模型需要什么套餐——不再等到第一次请求才收到 403 `MODEL_NOT_IN_PLAN`。**列表本身也按套餐排序**（`compareByPlan()`）：Go 模型在最前，随后 GOAT、Pro、Provider/Max，档内按字母序——你当前套餐能用的模型总是排在列表最前面。
 - **折扣与免费标注**：活动折扣（`75% off`、`50% off`、`98% off`、`99% off`）与 `FREE` 徽章（Laguna S 2.1）会显示在套餐旁（`KNOWN_DEALS`，与[官方定价页](https://commandcode.ai/docs/resources/pricing-limits#deals)同步）。**到期感知**：每个折扣记录官方结束日期，一旦过期立即隐藏——插件未更新时也不会把已失效的折扣当成仍在生效（只有 Gemini 3.7 Flash 的 50% off 限时，至 2026 年 12 月 31 日；其余为永久）。
@@ -31,7 +32,7 @@ npm i -g command-code@latest
 cmd login        # macOS/Linux；Windows 原生版：cmdc login
 ```
 
-`cmd login` 会打开浏览器进行认证；成功后 key 写入 `~/.commandcode/auth.json`——本插件会自动读取（最后兜底）。也可以直接在浏览器创建 API key（[Command Code Studio](https://commandcode.ai/studio/auth/cli)）并粘贴到 Models 页面的卡片中，或者 `export COMMANDCODE_API_KEY="user_..."`。
+`cmd login` 会打开浏览器进行认证；成功后 key 写入 `~/.commandcode/auth.json`——本插件会自动读取（最后兜底）。也可以直接在浏览器创建 API key（[Command Code Studio](https://commandcode.ai/studio/auth/cli)）并粘贴到 **设置 → Command Code** 专属页面的 API key 输入框，或者 `export COMMANDCODE_API_KEY="user_..."`。
 
 ## 安装
 
@@ -130,7 +131,7 @@ dsh web
 
 ## 验证是否生效
 
-重启后，在 Web UI 中：**设置 → Models** 会显示 **Command Code** 卡片；模型选择器会在 **commandcode** 下列出实时目录（撰写本文时有 54 个模型）。发送一条消息，选择你套餐中包含的模型——默认的 `deepseek/deepseek-v4-flash` 适用于入门级套餐；开放权重模型（DeepSeek/Qwen/Kimi/MiniMax）通常都可用，而前沿模型（Claude/GPT/Gemini/Grok）可能需要 Pro/Max 套餐或按需计费（见 FAQ）。
+重启后，在 Web UI 中：**设置 → Command Code** 显示专属页面——在那里填入 API key 并点击**保存**（徽章变为"已配置"即表示 Host 已存储）。**设置 → Models** 会显示 **Command Code** 卡片；模型选择器会在 **commandcode** 下列出实时目录（撰写本文时有 54 个模型）。发送一条消息，选择你套餐中包含的模型——默认的 `deepseek/deepseek-v4-flash` 适用于入门级套餐；开放权重模型（DeepSeek/Qwen/Kimi/MiniMax）通常都可用，而前沿模型（Claude/GPT/Gemini/Grok）可能需要 Pro/Max 套餐或按需计费（见 FAQ）。
 
 ## 用量面板
 
@@ -165,7 +166,9 @@ dsh web
 
 ## 配置
 
-Command Code 卡片接收你的 API key（存储在 `$DSH_HOME/.credentials.yaml`；没有 key 也可以浏览模型目录）。高级选项位于 `$DSH_HOME/settings.yaml` 的 `llm-commandcode` 一节（按请求覆盖 bundle 默认值，无需重启）：
+**设置 → Command Code** 是主要配置入口：**API key** 输入框（通过凭据服务存储在 `$DSH_HOME/.credentials.yaml`，只写不回显，并显示是否已配置），以及 **API 地址**、**工作目录**、**请求/流超时**字段——全部写入 `llm-commandcode` 设置段，对下一次请求即刻生效。没有 key 也可以浏览模型目录。**工作目录可选**：留空即可——占位符会显示它实际使用的进程工作目录（默认就是 dsh 进程的 cwd，除非你想固定某个路径，否则无需配置）。
+
+同一组选项也位于 `$DSH_HOME/settings.yaml` 的 `llm-commandcode` 一节（按请求覆盖 bundle 默认值，无需重启）：
 
 ```yaml
 llm-commandcode:

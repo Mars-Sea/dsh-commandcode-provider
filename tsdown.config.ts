@@ -42,7 +42,16 @@ const client = defineConfig({
   sourcemap: true,
   dts: false,
   clean: false,
-  external: ['@deepseek-ai/cordis'],
+  // Only platform/seed modules and host-shipped client bundles are resolvable
+  // from the loader's module table at runtime; anything else must stay
+  // external (a cross-plugin value import would be a build error upstream).
+  external: [
+    '@deepseek-ai/cordis',
+    'react',
+    'react/jsx-runtime',
+    '@deepseek-ai/dsh-client-runtime/client',
+    '@deepseek-ai/dsh-client-ui-primitives',
+  ],
   outputOptions: {
     entryFileNames: 'client.js',
     banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify('@mars-sea/dsh-commandcode-provider')}, factory: (require) => {`,

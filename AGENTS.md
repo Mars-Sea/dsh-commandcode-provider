@@ -19,14 +19,36 @@ src/index.ts          Plugin entry: Config schema, credential resolution,
                       settings namespace, route + directory registration,
                       /commandcode command wiring.
 src/commands.ts       The /commandcode usage dashboard command.
+src/client/index.ts   Browser client entry: registers the "Command Code"
+                      settings page (settings.section, id `commandcode`) and
+                      installs the friendly image-gate error wrapper.
+src/client/settings.ts  Settings-page controller (scope + credentials + staged
+                      form; React-free so node tests can drive it).
+src/client/section.tsx  The settings page React component.
+src/client/sessions.ts  selectModel friendly-error wrapper (React-free).
+src/client/locales.ts   zh/en copy + LocaleNamespaceMap augmentation.
 tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
+tests/client.test.ts  sessions-wrapper tests.
+tests/settings.test.ts settings-page controller tests.
 cordis.patch.yml      Bundle patch layer (inserts the llm-commandcode row).
-tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts).
+tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 ```
 
 ## Key facts an agent must know
 
+- **Client bundle**: the package's `dsh.client` declaration (`platform: web`,
+  `inject: [...]`) makes the host serve `lib/client.js` as a client module.
+  The bundle may only `require` platform/seed modules (`react`,
+  `react/jsx-runtime`, `@deepseek-ai/cordis`, `@deepseek-ai/dsh-client-ui-slots`,
+  `@deepseek-ai/dsh-client-web-react`, `@deepseek-ai/dsh-client-ui-primitives`,
+  `@deepseek-ai/dsh-client-schema-form`, `@deepseek-ai/dsh-client-ui-attachment`)
+  and host-shipped client bundles resolvable from the loader's module table
+  (e.g. `@deepseek-ai/dsh-client-runtime/client`). The settings page binds the
+  `llm-commandcode` namespace through `ctx.settingsScope` and writes the API
+  key through `connection.api.credentials` under the `COMMANDCODE_API_KEY`
+  reference — never through the settings section, so the key literal cannot
+  leak into a settings document. `tests/settings.test.ts` pins this contract.
 - **Wire protocol** (reverse-engineered, command-code@1.26.0):
   - `POST {apiBase}/alpha/generate` — body `{ config, memory, taste, skills, params: { model, messages, tools, system, max_tokens, temperature, stream, reasoning_effort? }, threadId }`.
   - Image parts use the official CLI wire shape: `{ type: 'image', source: { type: 'base64', media_type, data } }` (NOT pi's `data:` data-URI form).

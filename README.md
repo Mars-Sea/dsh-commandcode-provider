@@ -14,8 +14,9 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 
 - A **plugin bundle** installable into any dsh profile with `dsh plugin add` (npm package with a `dsh.bundle` layer).
 - A **`commandcode` provider route** registered on the `llm` service, selectable in the model picker, with the **live model catalog** fetched from `GET {apiBase}/provider/v1/models` (cached at `~/.commandcode/models-cache.json`).
-- A **Models-page card** ("Command Code") with an API-key field — credentials are stored through the dsh credentials service, same as the DeepSeek card.
-- **API key resolution** in this order: `config.apiKey` → credential reference `apiKeyEnv` (the web Models page writes it, default `COMMANDCODE_API_KEY`) → the launching environment → the official Command Code CLI auth file (`~/.commandcode/auth.json`, written by `command-code login`).
+- A **dedicated "Command Code" settings page** (Settings → **Command Code**, a top-level nav entry at the same level as General / Models / Plugins) with an **API-key field** plus the connection knobs (API base, working directory, request/stream timeouts). The key is stored through the dsh credentials service — the same seam the Models page uses — and connection fields land in the `llm-commandcode` settings section, so a change reaches the very next request with no restart.
+- A **Models-page card** ("Command Code") that reflects the provider's presence (the Models page's generic card disables its editor for unknown adapter families, so configure the key on the dedicated page above).
+- **API key resolution** in this order: `config.apiKey` → credential reference `apiKeyEnv` (the Command Code settings page writes it, default `COMMANDCODE_API_KEY`) → the launching environment → the official Command Code CLI auth file (`~/.commandcode/auth.json`, written by `command-code login`).
 - **Reasoning-effort support** for the models Command Code's catalog marks as such (e.g. `claude-opus-5`, `gpt-5.5`, `deepseek/deepseek-v4-pro`, `google/gemini-3.7-flash`, …) via `KNOWN_EFFORTS`, matching the official command-code@1.26.0 bundled model table. Reasoning models without selectable effort levels (e.g. `MiniMaxAI/MiniMax-M3`, `moonshotai/Kimi-K3`, `moonshotai/Kimi-K2.5`) still think — Command Code drives their reasoning depth automatically, exactly like the official CLI.
 - **Plan-tier annotation in the model picker**: every Command Code model is tagged with the minimum plan that includes it (`KNOWN_PLANS`, synced from the [official plan pages](https://commandcode.ai/docs/plans/go)) — **Go** (33 models), **GOAT** (+3), **Pro** (+14), or **Provider/Max** (+5: Claude Opus/Fable, Fugu Ultra). The picker's `description` leads with the plan label, e.g. *"Go · 50% off · Image · 1M"*, *"Pro · Image · 1M"*, so you know which plan a model needs before switching — no more 403 `MODEL_NOT_IN_PLAN` surprises. **The list itself is sorted by plan tier** (`compareByPlan()`): Go models first, then GOAT, Pro, Provider/Max, alphabetical within each tier — the models your plan can actually use lead the picker.
 - **Deal and free-model annotations**: active discounts (`75% off`, `50% off`, `98% off`, `99% off`) and the `FREE` badge (Laguna S 2.1) show next to the plan tier (`KNOWN_DEALS`, synced from the [official pricing page](https://commandcode.ai/docs/resources/pricing-limits#deals)). **Expiry-aware**: each deal records its official end date and is hidden the moment it passes — an un-updated plugin never shows a lapsed discount as if it were live (only Gemini 3.7 Flash's 50% off is time-limited, through December 31, 2026; the rest are permanent).
@@ -31,7 +32,7 @@ npm i -g command-code@latest
 cmd login        # macOS/Linux; native Windows: cmdc login
 ```
 
-`cmd login` opens a browser to authenticate; on success the key is written to `~/.commandcode/auth.json` — this plugin picks it up automatically (last-resort fallback). Alternatively create an API key in the browser ([Command Code Studio](https://commandcode.ai/studio/auth/cli)) and paste it into the Models page card, or `export COMMANDCODE_API_KEY="user_..."`.
+`cmd login` opens a browser to authenticate; on success the key is written to `~/.commandcode/auth.json` — this plugin picks it up automatically (last-resort fallback). Alternatively create an API key in the browser ([Command Code Studio](https://commandcode.ai/studio/auth/cli)) and paste it into **Settings → Command Code** (the dedicated page's API-key field), or `export COMMANDCODE_API_KEY="user_..."`.
 
 ## Install
 
@@ -131,7 +132,7 @@ Then restart the web app (`dsh web`, or restart the service). Verify the running
 
 ## Verify it works
 
-After restart, in the web UI: **Settings → Models** shows a **Command Code** card; the model picker lists the live catalog under **commandcode** (54 models at the time of writing). Send a message with a model your plan includes — the default `deepseek/deepseek-v4-flash` works on entry-level plans; open-weight models (DeepSeek/Qwen/Kimi/MiniMax) generally do, while frontier models (Claude/GPT/Gemini/Grok) may require Pro/Max plans or on-demand usage (see FAQ).
+After restart, in the web UI: **Settings → Command Code** shows the dedicated page — enter your API key there and click **Save** (the badge flips to 已配置/Configured once the Host holds it). **Settings → Models** shows a **Command Code** card; the model picker lists the live catalog under **commandcode** (54 models at the time of writing). Send a message with a model your plan includes — the default `deepseek/deepseek-v4-flash` works on entry-level plans; open-weight models (DeepSeek/Qwen/Kimi/MiniMax) generally do, while frontier models (Claude/GPT/Gemini/Grok) may require Pro/Max plans or on-demand usage (see FAQ).
 
 ## Usage dashboard
 
@@ -166,7 +167,9 @@ Each endpoint degrades independently: a temporary failure of one (e.g. the credi
 
 ## Configure
 
-The Command Code card takes your API key (stored in `$DSH_HOME/.credentials.yaml`; the model catalog is browsable without one). Advanced knobs live in the `llm-commandcode` section of `$DSH_HOME/settings.yaml` (overrides the bundle defaults per request, no restart needed):
+**Settings → Command Code** is the primary surface: an **API-key** field (stored in `$DSH_HOME/.credentials.yaml` via the credentials service; the field is write-only and reports whether a key is configured), plus **API base URL**, **working directory**, and the **request/stream timeout** fields — all written to the `llm-commandcode` section and applied to the next request. The model catalog is browsable without a key. The **working directory** is optional: leave it blank and the field's placeholder shows the process cwd it resolves to (it defaults to the dsh process's working directory, so there is nothing to configure unless you want to pin a specific path).
+
+The same knobs live in the `llm-commandcode` section of `$DSH_HOME/settings.yaml` (overrides the bundle defaults per request, no restart needed):
 
 ```yaml
 llm-commandcode:

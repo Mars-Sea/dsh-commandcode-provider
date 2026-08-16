@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-16
+
+### Added
+
+- **A dedicated "Command Code" settings page** (Settings → **Command Code**, a top-level nav entry at the same level as General / Models / Plugins) where you can configure the provider **entirely from the web UI**: an **API-key field** (write-only, stored through the dsh credentials service under the `COMMANDCODE_API_KEY` reference the plugin resolves, with a configured/unconfigured badge) plus the **API base URL**, **working directory**, and **request/stream timeouts** (written to the `llm-commandcode` settings namespace, effective on the next request — no restart). The browser half registers a `settings.section` entry (`id: commandcode`) from the bundle's client plugin; the controller is covered by new unit tests in `tests/settings.test.ts`.
+- **The working-directory field is now genuinely optional in the settings page**: the page reads the Host process cwd (`host.describe().cwd`) and shows it as the field's placeholder, so a blank field visibly resolves to the process working directory — nothing to configure unless you want to pin a specific path. The page hints this in both languages.
+
+### Fixed
+
+- **The API key could not actually be configured from the Models page for this provider.** The Models page renders an unknown-adapter-family card for `commandcode` and disables its editor (submit is blocked when `layout === 'unknown'`), so the card's key field could not save. The new dedicated settings page is the working surface for the key (and the connection knobs); the Models card remains as a status/reflection of the provider.
+
 ## [0.2.1] - 2026-08-16
 
 ### Fixed
