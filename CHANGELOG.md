@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`streamIdleTimeoutMs` default raised from 120s to 300s.** The stream idle watchdog used to kill a generation that produced no events for 120s, but frontier reasoning models (xhigh/max effort) can legitimately stay silent for minutes while thinking — the official CLI sets no idle cap at all. An aggressive cap turned long thinking into a spurious `TIMEOUT`, which dsh-llm-retry then retried, surfacing to users as "stuck, then reconnecting". The new 300s default keeps the dead-connection protection (a truly stalled socket still fails instead of hanging) without cutting off legitimate long thinking. Tune `streamIdleTimeoutMs` in the `llm-commandcode` settings section or on the settings page for your workload.
 
+### Fixed
+
+- **In-band stream `error` events are now classified like the official CLI, so transient server-side drops get retried instead of failing the turn.** The adapter previously threw every stream `error` event as `PROVIDER_STREAM_ERROR`, which is outside the harness default retryable set — a server blip that the official CLI recovers from (e.g. "Upstream stream ended before terminal chunk") failed the whole turn. Now the adapter mirrors command-code's `readStreamErrorEvent`/`isStreamErrorRetryable`: an error that is explicitly non-retryable, carries a terminal marker (`premium_credits_exhausted`, `model_not_in_plan`, `insufficient credits`), or reports a non-retryable HTTP status stays `PROVIDER_STREAM_ERROR`; everything else is thrown as `SERVER`, which the default retry policy retries.
+
 ## [0.2.2] - 2026-08-16
 
 ### Added

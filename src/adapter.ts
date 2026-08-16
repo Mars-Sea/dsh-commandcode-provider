@@ -424,6 +424,26 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/**
+ * Terminal stream-error markers from the official CLI (`Xw` in command-code's
+ * cli.mjs): these always mean "retrying cannot succeed", so the adapter must
+ * not classify them as transient server errors.
+ */
+const TERMINAL_STREAM_ERROR_MARKERS = [
+  'premium_credits_exhausted',
+  'model_not_in_plan',
+  'insufficient credits',
+]
+
+function hasTerminalStreamMarker(message: string): boolean {
+  const lower = message.toLowerCase()
+  return TERMINAL_STREAM_ERROR_MARKERS.some((marker) => lower.includes(marker))
+}
+
 function recordOrEmpty(value: unknown): Record<string, unknown> {
   if (isRecord(value)) return value
   if (typeof value === 'string') {
@@ -1260,10 +1280,37 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           break
         }
         case 'error': {
+          // Mirror the official CLI's stream-error classification
+          // (readStreamErrorEvent + isStreamErrorRetryable in command-code's
+          // cli.mjs): a stream error that is explicitly non-retryable, carries
+          // a terminal marker (quota/plan/credits), or reports a non-retryable
+          // HTTP status is a hard failure; anything else is a transient
+          // mid-stream drop that the harness's default retry policy should
+          // retry (SERVER is in the default retryable set, PROVIDER_STREAM_ERROR
+          // is not). Without this, a server-side blip that the official CLI
+          // silently recovers from fails the whole turn.
+          const err = isRecord(event.error) ? event.error : undefined
           const detail = isRecord(event.error)
             ? (stringValue(event.error.message) ?? JSON.stringify(event.error))
             : (stringValue(event.error) ?? stringValue(event.message) ?? 'Stream error')
-          throw new LlmError(`Command Code stream error: ${detail}`, 'PROVIDER_STREAM_ERROR')
+          const statusCode = err ? numberValue(err.statusCode) : undefined
+          const isRetryable = err ? booleanValue(err.isRetryable) : undefined
+          const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
+          const terminal = hasTerminalStreamMarker(detail)
+          const retryable = isRetryable === true
+            || (statusCode !== undefined ? retryableStatus : (isRetryable !== false && !terminal))
+          if (!retryable) {
+            throw new LlmError(
+              `Command Code stream error: ${detail}`,
+              'PROVIDER_STREAM_ERROR',
+              statusCode !== undefined ? { status: statusCode } : undefined,
+            )
+          }
+          throw new LlmError(
+            `Command Code stream error: ${detail}`,
+            'SERVER',
+            statusCode !== undefined ? { status: statusCode } : undefined,
+          )
         }
       }
       return chunks

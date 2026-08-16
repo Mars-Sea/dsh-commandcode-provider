@@ -496,11 +496,46 @@ test('stream() keeps PROVIDER_HTTP_ERROR for other 4xx/5xx and includes provider
   )
 })
 
-test('stream() surfaces in-band error events as PROVIDER_STREAM_ERROR', async () => {
+test('stream() classifies a plain in-band error event as retryable SERVER', async () => {
+  // No isRetryable, no statusCode, no terminal marker: the official CLI's
+  // isStreamErrorRetryable() treats this as transient — so must we (SERVER is
+  // in the harness default retryable set, PROVIDER_STREAM_ERROR is not).
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"error","error":{"message":"boom"}}\n\n') })
   await assert.rejects(
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'SERVER',
+  )
+})
+
+test('stream() classifies an explicitly non-retryable error event as PROVIDER_STREAM_ERROR', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"error","error":{"message":"boom","isRetryable":false}}\n\n') })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
     (err: unknown) => (err as { code?: string }).code === 'PROVIDER_STREAM_ERROR',
+  )
+})
+
+test('stream() classifies a terminal-marker error event as PROVIDER_STREAM_ERROR', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"error","error":{"message":"model_not_in_plan: x"}}\n\n') })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'PROVIDER_STREAM_ERROR',
+  )
+})
+
+test('stream() classifies a non-retryable HTTP status error event as PROVIDER_STREAM_ERROR', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"error","error":{"message":"boom","statusCode":400}}\n\n') })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'PROVIDER_STREAM_ERROR',
+  )
+})
+
+test('stream() classifies a retryable HTTP status error event as SERVER', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"error","error":{"message":"boom","statusCode":503}}\n\n') })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'SERVER',
   )
 })
 
