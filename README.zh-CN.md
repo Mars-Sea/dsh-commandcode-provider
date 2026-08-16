@@ -151,7 +151,7 @@ llm-commandcode:
   workingDir: /path/to/project     # 上报给 API（项目 slug、配置块）
   modelsCachePath: ~/.commandcode/models-cache.json
   requestTimeoutMs: 60000          # 等待首个响应字节的最长时间（默认 60s）
-  streamIdleTimeoutMs: 120000      # 流停顿超过该时长即视为死连接（默认 120s）
+  streamIdleTimeoutMs: 300000      # 流停顿超过该时长即视为死连接（默认 300s——刻意放宽，避免切断长思考模型）
 ```
 
 组合入口配置（`cordis.patch.yml`）接受相同的键；那里的字面量 `apiKey` 优先于凭据引用。
@@ -159,7 +159,8 @@ llm-commandcode:
 ## 故障排查
 
 - **`Command Code API request to .../alpha/generate failed`，且不停重试** ——这是**传输层失败**：`fetch()` 根本没拿到 HTTP 响应（401/403/429 会显示 "API error"）。0.1.8 起错误消息会点名**真实根因**（`ECONNREFUSED`、`ENOTFOUND`、`CERT_HAS_EXPIRED`、`socket hang up` 等）。常见原因：**需要代理**（Node 的 `fetch`/undici 不读取 `HTTP_PROXY`/`HTTPS_PROXY`——配置 dispatcher 或把 `api.commandcode.ai` 加入白名单）、**连接被中途重置/限速**（防火墙、GFW 类干扰、Wi-Fi 不稳）、**TLS 被中间人替换**（企业 MITM），或只是重试能恢复的瞬时抖动。
-- **长回答生成到一半中断** ——0.1.8 起，adapter 会在 `requestTimeoutMs`（60s）内拿不到首字节时中止，并在流停顿超过 `streamIdleTimeoutMs`（120s）时判为死连接。两者都以 `TIMEOUT` 呈现并附带停顿时长；网络慢但稳定可调大这两个值。
+- **长回答生成到一半中断** ——0.1.8 起，adapter 会在 `requestTimeoutMs`（60s）内拿不到首字节时中止，并在流停顿超过 `streamIdleTimeoutMs`（默认 300s）时判为死连接。两者都以 `TIMEOUT` 呈现并附带停顿时长；网络慢但稳定可调大这两个值。
+- **推理模型思考较久时"反复重连"** ——流空闲看门狗原默认 120s，比前沿推理模型（xhigh/max effort）的静默思考期还短——它们可以数分钟不吐 token，而官方 CLI 根本不设空闲上限。0.2.3 起默认改为 **300s**；若极长思考仍触发误判，在 `llm-commandcode` 配置段或设置页调大 `streamIdleTimeoutMs`。
 - **启动崩溃：`ERR_MODULE_NOT_FOUND: Cannot find package 'dsh-commandcode-provider'`** ——patch 行的 `name` 是裸名，但 pnpm 只链接带 scope 的名字。改成 `name: "@mars-sea/dsh-commandcode-provider"`——注意**必须加引号**（不引号的 `@` 开头标量会导致 YAML 解析失败）——然后重启。
 - **`MODEL_NOT_IN_PLAN` (403)** ——所选模型不在你的套餐内。选一个开放权重模型或升级套餐；错误会指明模型并附官方文档链接。
 - **`MISSING_CREDENTIAL`** ——任何地方都没有 key。在设置页存一个、`export COMMANDCODE_API_KEY`、设置 `config.apiKey`，或运行 `command-code login`。没有 key 时路由与目录仍可浏览。

@@ -60,7 +60,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   requestTimeoutMs: '请求超时（毫秒）',
   requestTimeoutMsHint: '等待响应首个字节的超时；默认 60000。',
   streamIdleTimeoutMs: '流空闲超时（毫秒）',
-  streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 120000。',
+  streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300000（长思考模型可静默数分钟，默认值刻意放宽）。',
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
@@ -94,7 +94,8 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   requestTimeoutMs: 'Request timeout (ms)',
   requestTimeoutMsHint: 'Time to wait for the first response byte; default 60000.',
   streamIdleTimeoutMs: 'Stream idle timeout (ms)',
-  streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 120000.',
+  streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 300000'
+    + ' (deliberately generous — long-thinking models can stay silent for minutes).',
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',

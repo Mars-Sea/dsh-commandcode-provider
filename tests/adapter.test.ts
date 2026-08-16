@@ -28,6 +28,8 @@ import {
   compareByPlan,
   COMMAND_CODE_CLI_VERSION,
   DEFAULT_API_BASE,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
 } from '../src/adapter.ts'
 import type { CommandCodeAdapterDeps } from '../src/adapter.ts'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -62,8 +64,8 @@ function makeAdapter(overrides: Partial<CommandCodeAdapterDeps> = {}): CommandCo
       apiBase: 'https://api.commandcode.ai',
       workingDir: '/tmp/project',
       modelsCachePath: '/tmp/cc-models-cache.json',
-      requestTimeoutMs: 60_000,
-      streamIdleTimeoutMs: 120_000,
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     }),
     resolveApiKey: async () => 'user_test_key',
     ...overrides,
@@ -301,8 +303,8 @@ test('resolveModel() advertises plan tier, deal, Image, and context', async () =
         apiBase: 'https://api.commandcode.ai',
         workingDir: '/tmp/project',
         modelsCachePath: cachePath,
-        requestTimeoutMs: 60_000,
-        streamIdleTimeoutMs: 120_000,
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
       }),
     })
     // Without a catalog entry the context window is unknown; the description

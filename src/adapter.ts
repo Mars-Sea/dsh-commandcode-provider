@@ -341,7 +341,7 @@ export const MODELS_TIMEOUT_MS = 10_000
 /** Head-of-request timeout: how long to wait for the first response byte. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 /** Stream idle timeout: a generation that stalls this long is a dead connection. */
-export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 const MODEL_CACHE_VERSION = 1
 
 // ---------------------------------------------------------------------------
@@ -692,7 +692,7 @@ export interface CommandCodeConnectionOptions {
   modelsCachePath: string
   /** Milliseconds to wait for the generate response's first byte (default 60s). */
   requestTimeoutMs: number
-  /** Milliseconds a stream may stall before it is treated as a dead connection (default 120s). */
+  /** Milliseconds a stream may stall before it is treated as a dead connection (default 300s). */
   streamIdleTimeoutMs: number
 }
 
@@ -1134,7 +1134,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     // Stream idle watchdog: a generation that stalls this long has a dead
     // connection (the API keeps the socket open between reasoning/text
-    // bursts). reader.cancel() unblocks a pending read(), which the loop then
+    // bursts). The default (300s) is deliberately generous: frontier
+    // reasoning models (xhigh/max effort) can legitimately stay silent for
+    // minutes while thinking, and the official CLI sets no idle cap at all —
+    // an aggressive cap turns long thinking into spurious TIMEOUTs and
+    // retries. reader.cancel() unblocks a pending read(), which the loop then
     // turns into a TIMEOUT failure instead of hanging forever.
     let idleTimer: ReturnType<typeof setTimeout> | undefined
     let idleFired = false

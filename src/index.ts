@@ -99,7 +99,7 @@ export interface Config {
   modelsCachePath?: string
   /** Milliseconds to wait for the generate response's first byte; defaults to 60s. */
   requestTimeoutMs?: number
-  /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 120s. */
+  /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 300s. */
   streamIdleTimeoutMs?: number
 }
 

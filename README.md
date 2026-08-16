@@ -151,7 +151,7 @@ llm-commandcode:
   workingDir: /path/to/project     # reported to the API (project slug, config block)
   modelsCachePath: ~/.commandcode/models-cache.json
   requestTimeoutMs: 60000          # max wait for the first response byte (default 60s)
-  streamIdleTimeoutMs: 120000      # stream stall before treated as dead (default 120s)
+  streamIdleTimeoutMs: 300000      # stream stall before treated as dead (default 300s — generous, so long-thinking models are not cut off)
 ```
 
 The composition-entry config (`cordis.patch.yml`) accepts the same keys; a literal `apiKey` there takes precedence over the credential reference.
@@ -159,7 +159,8 @@ The composition-entry config (`cordis.patch.yml`) accepts the same keys; a liter
 ## Troubleshooting
 
 - **`Command Code API request to .../alpha/generate failed` with retries** — a **transport-layer failure**: `fetch()` never got an HTTP response (a 401/403/429 would say "API error"). Since 0.1.8 the message names the real root cause (`ECONNREFUSED`, `ENOTFOUND`, `CERT_HAS_EXPIRED`, `socket hang up`, …). Common causes: **a required proxy** (Node's `fetch`/undici ignores `HTTP_PROXY`/`HTTPS_PROXY` — configure a dispatcher or whitelist `api.commandcode.ai`), **connection reset/throttled** (firewall, GFW-style interference, unstable Wi-Fi), **TLS interception** (corporate MITM), or a transient blip retry recovers from.
-- **A long generation stops mid-stream** — since 0.1.8 the adapter aborts after `requestTimeoutMs` (60s) with no first byte, and treats a stream stalling past `streamIdleTimeoutMs` (120s) as dead. Both surface as `TIMEOUT` with the stall duration; tune the knobs for slow-but-stable networks.
+- **A long generation stops mid-stream** — since 0.1.8 the adapter aborts after `requestTimeoutMs` (60s) with no first byte, and treats a stream stalling past `streamIdleTimeoutMs` (300s by default) as dead. Both surface as `TIMEOUT` with the stall duration; tune the knobs for slow-but-stable networks.
+- **"Reconnects" when a reasoning model thinks for a long time** — the stream idle watchdog used to default to 120s, which is shorter than a frontier reasoning model's silent thinking phase (xhigh/max effort can stay quiet for minutes, and the official CLI sets no idle cap at all). Since 0.2.3 the default is **300s**; if you still hit spurious timeouts on very long thinking, raise `streamIdleTimeoutMs` in the `llm-commandcode` section or on the settings page.
 - **Boot crash: `ERR_MODULE_NOT_FOUND: Cannot find package 'dsh-commandcode-provider'`** — the patch row's `name` is the bare name, but pnpm only links the scoped name. Fix the row to `name: "@mars-sea/dsh-commandcode-provider"` — note the **quotes** (an unquoted `@`-prefixed scalar fails YAML parsing) — then restart.
 - **`MODEL_NOT_IN_PLAN` (403)** — the model isn't in your plan. Pick an open-weight model or upgrade; the error names the model and links the docs.
 - **`MISSING_CREDENTIAL`** — no key anywhere. Store one via the settings page, `export COMMANDCODE_API_KEY`, set `config.apiKey`, or run `command-code login`. The route and catalog stay browsable without a key.
