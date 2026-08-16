@@ -628,6 +628,35 @@ test('stream() aborts the generate request when the connection phase exceeds req
   )
 })
 
+test('stream() does not abort a healthy body when elapsed time exceeds requestTimeoutMs', async () => {
+  // Regression: AbortSignal.timeout(requestTimeoutMs) used to be passed into
+  // fetch(), so a generation longer than the connection budget was killed mid-
+  // stream as "failed while reading: aborted due to timeout".
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"hi"}\n\n'))
+      await new Promise((r) => setTimeout(r, 60))
+      controller.enqueue(new TextEncoder().encode('data: {"type":"finish","finishReason":"stop"}\n\n'))
+      controller.close()
+    },
+  })
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 20,
+      streamIdleTimeoutMs: 10_000,
+    }),
+    fetchImpl: (async () => new Response(body, { status: 200 })) as unknown as typeof fetch,
+  })
+  const chunks = await collect(
+    adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }),
+  )
+  assert.ok(chunks.some((c) => c.type === 'text-delta'))
+  assert.ok(chunks.some((c) => c.type === 'finish'))
+})
+
 test('stream() fails with TIMEOUT when the stream stalls past streamIdleTimeoutMs', async () => {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {

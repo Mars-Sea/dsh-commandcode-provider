@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`requestTimeoutMs` no longer aborts a healthy generate body mid-stream.** `AbortSignal.timeout(requestTimeoutMs)` was passed straight into `fetch()`, so Fetch cancelled the SSE body after the connection budget even when events were still flowing — long reasoning/generation then failed as `TRANSPORT` (`failed while reading: aborted due to timeout`) and triggered harness retries. The adapter now clears the connect deadline once response headers arrive; after that only the caller `AbortSignal` and `streamIdleTimeoutMs` may abort the stream.
+
 ## [0.2.3] - 2026-08-16
 
 ### Changed

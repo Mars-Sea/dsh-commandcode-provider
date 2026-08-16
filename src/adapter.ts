@@ -710,7 +710,11 @@ export interface CommandCodeConnectionOptions {
   workingDir: string
   /** Model catalog cache path. */
   modelsCachePath: string
-  /** Milliseconds to wait for the generate response's first byte (default 60s). */
+  /**
+   * Milliseconds to wait for generate response headers / first byte (default 60s).
+   * Must not bound the subsequent body stream — long generations are gated by
+   * {@link streamIdleTimeoutMs} and the caller AbortSignal instead.
+   */
   requestTimeoutMs: number
   /** Milliseconds a stream may stall before it is treated as a dead connection (default 300s). */
   streamIdleTimeoutMs: number
@@ -1066,6 +1070,33 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       threadId: randomUUID(),
     }
 
+    // requestTimeoutMs must only bound the wait for response headers.
+    // Passing AbortSignal.timeout() straight into fetch() also aborts a healthy
+    // body after that duration, which cuts long reasoning/generation mid-stream
+    // and surfaces as "failed while reading: aborted due to timeout". After
+    // headers arrive, only the caller signal and streamIdleTimeoutMs may abort.
+    const connectAbort = new AbortController()
+    let connectTimedOut = false
+    const connectTimer = setTimeout(() => {
+      connectTimedOut = true
+      connectAbort.abort(
+        new DOMException(
+          `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`,
+          'TimeoutError',
+        ),
+      )
+    }, connection.requestTimeoutMs)
+    const onCallerAbort = () => {
+      connectAbort.abort(options.signal?.reason)
+    }
+    if (options.signal) {
+      if (options.signal.aborted) {
+        onCallerAbort()
+      } else {
+        options.signal.addEventListener('abort', onCallerAbort, { once: true })
+      }
+    }
+
     let response: Response
     try {
       response = await this.fetchImpl(`${connection.apiBase}/alpha/generate`, {
@@ -1081,18 +1112,18 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           ...attributionHeaders(),
         },
         body: JSON.stringify(body),
-        // The generation can legitimately run long, but the connection phase
-        // must not hang forever: bound the wait for the first response byte.
-        signal: options.signal
-          ? AbortSignal.any([options.signal, AbortSignal.timeout(connection.requestTimeoutMs)])
-          : AbortSignal.timeout(connection.requestTimeoutMs),
-      })    } catch (error: unknown) {
-      // Caller cancellation must propagate as-is, not be relabeled.
-      if (options.signal?.aborted) throw error
-      // The timeout signal above aborts with a TimeoutError. Because the
-      // caller's own signal was already ruled out, any TimeoutError here came
-      // from our request deadline — classify it precisely.
-      if (error instanceof DOMException && error.name === 'TimeoutError') {
+        signal: connectAbort.signal,
+      })
+      clearTimeout(connectTimer)
+    } catch (error: unknown) {
+      clearTimeout(connectTimer)
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onCallerAbort)
+      }
+      if (options.signal?.aborted) {
+        throw error
+      }
+      if (connectTimedOut || (error instanceof DOMException && error.name === 'TimeoutError')) {
         throw new LlmError(
           `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`
           + `: ${errorChain(error)}`,
@@ -1100,11 +1131,6 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           { cause: error },
         )
       }
-      // fetch wraps every transport failure (DNS, refused connection, TLS,
-      // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
-      // detail lives on `cause`. Include the full chain so the failure reason
-      // shown in the web UI (which renders only the message, not `cause`)
-      // names the real root cause instead of a generic wrapper.
       throw new LlmError(
         `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`,
         'TRANSPORT',
@@ -1113,10 +1139,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
 
     if (!response.ok) {
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onCallerAbort)
+      }
       const errText = await response.text().catch(() => '')
-      // Command Code folds several business rejections into 403 (plan limits,
-      // CLI version, model access). Prefer the machine-readable `error.code`
-      // when present; the status alone cannot distinguish them.
       let providerCode: string | undefined
       try {
         const parsed: unknown = JSON.parse(errText)
@@ -1124,12 +1150,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           providerCode = stringValue(parsed.error.code)
         }
       } catch {
-        // Plain-text bodies: rely on the status mapping below.
       }
       const detail = providerCode ?? `HTTP ${response.status}`
       if (response.status === 401) {
-        // An invalid or missing credential is a config problem, not a
-        // transport failure: retrying it identically cannot succeed.
         throw new LlmError(
           `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
           + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file',
@@ -1144,6 +1167,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       )
     }
     if (!response.body) {
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onCallerAbort)
+      }
       throw new LlmError('Command Code API returned no response body', 'PROVIDER_PROTOCOL_ERROR')
     }
 
@@ -1374,6 +1400,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       }
     } finally {
       clearIdle()
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onCallerAbort)
+      }
       await reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
