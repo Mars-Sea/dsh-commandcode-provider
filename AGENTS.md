@@ -17,20 +17,31 @@ src/adapter.ts        CommandCodeAdapter (LlmAdapter) — wire protocol, message
                       conversion, SSE/JSONL stream parsing, catalog + cache.
 src/index.ts          Plugin entry: Config schema, credential resolution,
                       settings namespace, route + directory registration,
-                      /commandcode command wiring.
+                      /commandcode command wiring, usage-Remote wiring.
 src/commands.ts       The /commandcode usage dashboard command.
+src/usage-wire.ts     Shared `commandcode/report` Remote contract: hand-rolled
+                      strict result schema + the one descriptor object both
+                      halves register (dependency-free; the client inlines it).
+src/usage-remote.ts   Host half of the usage Remote: `commandcodeUsage`
+                      service + `typert` registry contribution (optional inject).
 src/client/index.ts   Browser client entry: registers the "Command Code"
                       settings page (settings.section, id `commandcode`) and
                       installs the friendly image-gate error wrapper.
 src/client/settings.ts  Settings-page controller (scope + credentials + staged
                       form; React-free so node tests can drive it).
-src/client/section.tsx  The settings page React component.
+src/client/usage.ts   Account-card controller (Remote fetch lifecycle +
+                      formatting; React-free) + the TypertRemoteMap merge
+                      declaration for `commandcode/report`.
+src/client/section.tsx  The settings page React component (settings form +
+                      account-usage card).
 src/client/sessions.ts  selectModel friendly-error wrapper (React-free).
 src/client/locales.ts   zh/en copy + LocaleNamespaceMap augmentation.
 tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/client.test.ts  sessions-wrapper tests.
 tests/settings.test.ts settings-page controller tests.
+tests/usage-wire.test.ts usage-Remote schema + descriptor tests.
+tests/usage-client.test.ts account-card controller tests.
 cordis.patch.yml      Bundle patch layer (inserts the llm-commandcode row).
 tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 ```
@@ -59,15 +70,28 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 - **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings. Reasoning blocks are intentionally NOT replayed into later turns (matches the CLI; private reasoning must not leak). Only tool calls with a paired tool result are replayed.
 - **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 → `RATE_LIMIT`; other HTTP → `PROVIDER_HTTP_ERROR` (403 body's `error.code`, e.g. `MODEL_NOT_IN_PLAN`, is parsed into the message). Unsupported options (`stop`) and image input throw `UNSUPPORTED_OPTION` / `UNSUPPORTED_CONTENT` rather than silently dropping.
 - **Adapter is cordis-free** by design: `src/adapter.ts` takes a per-request `options()` thunk + `resolveApiKey()` from the plugin entry, so settings changes reach the next request without re-registration. It also accepts an injectable `fetchImpl` for tests.
+- **Usage Remote (`commandcode/report`)**: the settings page's account card
+  fetches the usage report Host-side through the Typert Gateway — the browser
+  never holds the API key. Host: `src/usage-remote.ts` registers a
+  `commandcodeUsage` service + strict descriptor on the `typert` registry.
+  Client: `src/client/index.ts` mounts the shared contribution
+  (`src/usage-wire.ts`) on `ctx.remote`, then resolves the `remote.commandcode`
+  namespace via a **dynamic `ctx.inject(['remote.commandcode'], ...)`** — cordis
+  only serves a fiber the services it declares in `inject` (a bare
+  `ctx.remote.commandcode` access throws `cannot get property ... without
+  inject`), and a static inject would deadlock because the namespace service
+  exists only after our own mount. Keep that pattern when touching the mount.
 - **Static capability snapshots** (all in `src/adapter.ts`, all synced from official sources — see the `dsh-commandcode-upstream` skill for the exact extraction procedures):
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the CLI bundle's `ZA` model table (`command-code/dist/cli.mjs`), **not** the docs page (whose `Reasoning` flag means "thinks", not "has effort levels").
   - `KNOWN_IMAGE_MODELS` — Vision-capable models, synced from [commandcode.ai/docs/reference/cli/models](https://commandcode.ai/docs/reference/cli/models); note catalog IDs can differ from doc IDs (e.g. `claude-haiku-4-5-20251001` vs doc's `claude-haiku-4-5`).
   - `KNOWN_THINKING_MODELS` — models with `reasoning:!0` but no effort levels in the `ZA` table (they think automatically). Not displayed in the picker.
   - `KNOWN_PLANS` — catalog ID → minimum plan tier (`go`/`goat`/`pro`/`provider`), synced from the plan pages ([go](https://commandcode.ai/docs/plans/go) ⊂ [goat](https://commandcode.ai/docs/plans/goat) ⊂ [pro](https://commandcode.ai/docs/plans/pro) ⊂ provider/max). Strict superset chain; every catalog ID covered exactly once (33/36/50/55 as of 2026-08).
+  - `KNOWN_SUBSCRIPTION_PLANS` — subscription `planId` prefix → `{ name, monthlyCredits, tierWeight }` for the account's own plan (from `/alpha/billing/subscriptions`), synced from the CLI bundle's plan maps (`Nn`/`$n`; `tierWeight` is plugin-added for the picker filter). `subscriptionPlanInfo()` mirrors the CLI's `getPlanInfo` longest-prefix matching. Distinct from `KNOWN_PLANS` (model → minimum tier).
   - `KNOWN_DEALS` — catalog ID → `{ label, expiresAt?, free? }` from the pricing page's `#deals`. **Expiry-aware**: `dealLabel()` hides a deal once `Date.now()` passes its `expiresAt`, so an un-updated plugin never shows a lapsed discount.
   - `KNOWN_PEAK_PRICING` — catalog IDs with hourly (peak/off-peak) pricing, synced from the pricing page's model rows. Peak windows live in `PEAK_HOUR_RANGES` (UTC, end-exclusive); `peakPricingLabel()` maps the **current** UTC hour to `Peak`/`Half`.
   - The picker `description` is composed by `capabilityDescription()`: plan tier · active deal · peak/off-peak state (`Peak`/`Half`, hourly-priced models only) · `Image` (Vision only) · context (`formatContext()`: `1M`/`256K`/`262K`). Text-only models show no capability marker. Do not reintroduce "Text only" or "Supports image input".
   - The picker list is **sorted by plan tier then name** (`compareByPlan()` in `src/adapter.ts`, weights in `PLAN_ORDER`): Go → GOAT → Pro → Provider/Max, alphabetical within each tier, unknown plans last. Keep this order when changing `listModels()`.
+  - The picker also **hides models above the account's subscription tier** (`modelVisibleInPlan()`, on by default via `filterModelsByPlan`): the billing facts mirror the CLI's `createBilling` flow — whoami → orgId, then `/alpha/billing/subscriptions` (planId, honored only for `active`/`trialing`/`past_due` statuses) and `/alpha/billing/credits` (on-demand balances; its `credits.planId` is the fallback when subscriptions fails) — cached for `BILLING_ACCESS_TTL_MS`. The filter **fails open** everywhere (endpoint failure, unknown plan, unknown model) and is **bypassed by any positive on-demand balance** (`purchasedCredits + freeCredits > 0`) — mirroring the CLI's `evaluateModelAccess`. The catalog itself is never filtered; `resolveModel` still serves every model and the server remains the final gate.
 - **Retry**: `providerRetryPolicy()` returns the dsh default policy (retries `RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`/`EMPTY_RESPONSE`), executed by dsh-llm-retry at agent-step boundaries.
 
 ## Commands

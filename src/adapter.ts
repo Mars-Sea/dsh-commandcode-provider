@@ -295,6 +295,77 @@ export function compareByPlan(
 }
 
 /**
+ * Subscription plan table, synced from the official CLI bundle's plan maps
+ * (`Nn`/`$n` in command-code@1.26.0 `dist/cli.mjs`): subscription `planId`
+ * prefix → display name and the plan's monthly credit total. This is the
+ * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
+ * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
+ *
+ * `tierWeight` is plugin-added (not from the CLI maps): the plan's rank on
+ * the {@link PLAN_ORDER} scale, used by the picker's plan filter
+ * ({@link modelVisibleInPlan}) to hide models above the account's tier.
+ */
+export const KNOWN_SUBSCRIPTION_PLANS: Readonly<Record<string, { name: string; monthlyCredits: number; tierWeight: number }>> = {
+  'individual-go': { name: 'Go', monthlyCredits: 10, tierWeight: 0 },
+  'individual-goat': { name: 'GOAT', monthlyCredits: 70, tierWeight: 1 },
+  'individual-pro': { name: 'Pro', monthlyCredits: 30, tierWeight: 2 },
+  'individual-pro-v1': { name: 'Pro', monthlyCredits: 80, tierWeight: 2 },
+  'individual-provider': { name: 'Provider', monthlyCredits: 15, tierWeight: 3 },
+  'individual-max': { name: 'Max', monthlyCredits: 150, tierWeight: 4 },
+  'individual-ultra': { name: 'Ultra', monthlyCredits: 300, tierWeight: 4 },
+  'teams-pro': { name: 'Teams Pro', monthlyCredits: 40, tierWeight: 2 },
+}
+
+/** Plan-id prefixes, longest first — the CLI's prefix-match order. */
+const SUBSCRIPTION_PLAN_PREFIXES = Object.keys(KNOWN_SUBSCRIPTION_PLANS).sort((a, b) => b.length - a.length)
+
+/**
+ * Resolve a subscription `planId` (e.g. `individual-pro-v1`) to its display
+ * name and monthly credit total, mirroring the CLI's `getPlanInfo`:
+ * normalize (lowercase, `_` → `-`), then longest-prefix match so
+ * `individual-pro-v1` wins over `individual-pro`. Unknown ids return
+ * `undefined`.
+ */
+export function subscriptionPlanInfo(planId: string): { name: string; monthlyCredits: number; tierWeight: number } | undefined {
+  const normalized = planId.toLowerCase().replace(/_/g, '-')
+  const prefix = SUBSCRIPTION_PLAN_PREFIXES.find((candidate) => normalized.startsWith(candidate))
+  return prefix === undefined ? undefined : KNOWN_SUBSCRIPTION_PLANS[prefix]
+}
+
+/**
+ * The billing facts the picker's plan filter needs, fetched by mirroring the
+ * CLI's `createBilling` flow (whoami → orgId, then `/alpha/billing/subscriptions`
+ * for the plan id and `/alpha/billing/credits` for the on-demand balances).
+ */
+export interface CommandCodeBillingAccess {
+  /** Account plan tier weight on the {@link PLAN_ORDER} scale; undefined when the plan is unknown. */
+  tierWeight: number | undefined
+  /**
+   * Purchased + free on-demand credit balance. The official access model
+   * (`evaluateModelAccess` in the CLI) allows every model when the account
+   * holds any on-demand credits — the plan gate only applies at zero balance.
+   */
+  onDemandCredits: number
+}
+
+/**
+ * Whether the picker lists `modelId` for an account with the given billing
+ * access. Fails open at every uncertainty: no billing data, an unknown plan,
+ * or a model outside {@link KNOWN_PLANS} all keep the model visible — the
+ * server remains the final gate (`403 MODEL_NOT_IN_PLAN`).
+ */
+export function modelVisibleInPlan(modelId: string, access: CommandCodeBillingAccess | undefined): boolean {
+  if (access === undefined) return true
+  if (access.onDemandCredits > 0) return true
+  if (access.tierWeight === undefined) return true
+  const tier = KNOWN_PLANS[modelId]
+  if (tier === undefined) return true
+  const weight = PLAN_ORDER[tier]
+  if (weight === undefined) return true
+  return weight <= access.tierWeight
+}
+
+/**
  * Active pricing deals per the official pricing page
  * (`/docs/resources/pricing-limits#deals`). Each entry records the model's
  * promotional label and — critically — when it expires, so the picker never
@@ -389,6 +460,14 @@ export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
 export const MODELS_TIMEOUT_MS = 10_000
+/** How long the picker's plan-filter billing facts stay cached before refetching. */
+export const BILLING_ACCESS_TTL_MS = 5 * 60_000
+
+/**
+ * Subscription statuses the CLI treats as live (`Mr` in command-code's
+ * cli.mjs): the plan gate applies only under one of these.
+ */
+const ACTIVE_SUBSCRIPTION_STATUSES: ReadonlySet<string> = new Set(['active', 'trialing', 'past_due'])
 /** Head-of-request timeout: how long to wait for the first response byte. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 /** Stream idle timeout: a generation that stalls this long is a dead connection. */
@@ -480,6 +559,16 @@ function numberValue(value: unknown): number | undefined {
 
 function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
+}
+
+/** Parse a billing-period timestamp (ISO string or millis) into millis; 0 when absent/invalid. */
+function periodEndValue(value: unknown): number {
+  const asNumber = numberValue(value)
+  if (asNumber !== undefined) return asNumber
+  const asString = stringValue(value)
+  if (asString === undefined) return 0
+  const parsed = Date.parse(asString)
+  return Number.isNaN(parsed) ? 0 : parsed
 }
 
 /**
@@ -778,6 +867,13 @@ export interface CommandCodeConnectionOptions {
   requestTimeoutMs: number
   /** Milliseconds a stream may stall before it is treated as a dead connection (default 300s). */
   streamIdleTimeoutMs: number
+  /**
+   * Whether the picker hides models above the account's subscription tier
+   * (default true). The filter fails open: unknown plan, billing-endpoint
+   * failure, a positive on-demand credit balance, or an unmapped model all
+   * keep the full catalog visible. Set false to always list every model.
+   */
+  filterModelsByPlan?: boolean
 }
 
 /**
@@ -830,11 +926,26 @@ export interface CommandCodeCredits {
   weekly: { used: number; cap: number; exceeded: boolean; resetAt: number }
 }
 
+/** Subscription plan state from `/alpha/billing/subscriptions`. */
+export interface CommandCodePlan {
+  /** Raw subscription plan id (e.g. `individual-pro`); empty when unreported. */
+  planId: string
+  /** Display name (e.g. `Pro`); falls back to the raw id for unknown plans. */
+  name: string
+  /** Raw subscription status (`active`, `trialing`, `past_due`, …); empty when unreported. */
+  status: string
+  /** The plan's monthly credit total per {@link KNOWN_SUBSCRIPTION_PLANS}; null for unknown plans. */
+  monthlyCredits: number | null
+  /** Billing period end in millis; 0 when the endpoint did not report one. */
+  currentPeriodEnd: number
+}
+
 /** Everything the usage endpoints report, fetched together. */
 export interface CommandCodeUsageReport {
   account?: CommandCodeAccount
   usage?: CommandCodeUsage
   credits?: CommandCodeCredits
+  plan?: CommandCodePlan
   /** Endpoint failures degrade the report instead of failing it. */
   failures: string[]
 }
@@ -843,6 +954,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   private catalog: CommandCodeModel[] = []
   private readonly fetchImpl: typeof fetch
   private readonly resolveAttachments: ResolveAttachments | undefined
+  private billingAccess: { value: CommandCodeBillingAccess | undefined; at: number } | undefined
+  private billingAccessInflight: Promise<CommandCodeBillingAccess | undefined> | undefined
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
     super()
@@ -888,7 +1001,16 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const catalog = await this.loadCatalog()
+    // Plan filter: hide models above the account's subscription tier. Fails
+    // open — a billing-fetch problem, an unknown plan, or a positive
+    // on-demand balance all keep the full catalog visible, and the server
+    // remains the final gate (403 MODEL_NOT_IN_PLAN). The catalog itself is
+    // never filtered: resolveModel still serves every model.
+    const access = this.deps.options().filterModelsByPlan === false
+      ? undefined
+      : await this.loadBillingAccess()
     return catalog
+      .filter((model) => modelVisibleInPlan(model.id, access))
       .map((model) => {
         const vision = KNOWN_IMAGE_MODELS.has(model.id)
         return {
@@ -945,28 +1067,111 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
   }
 
+  /** The headers every authenticated account endpoint shares. */
+  private async accountHeaders(): Promise<Record<string, string>> {
+    const connection = this.deps.options()
+    const apiKey = await this.deps.resolveApiKey(connection)
+    return {
+      Authorization: `Bearer ${apiKey}`,
+      'x-command-code-version': COMMAND_CODE_CLI_VERSION,
+      'x-cli-environment': 'production',
+      ...attributionHeaders(),
+    }
+  }
+
   /**
-   * Fetch account, usage, and credit state from the Command Code account
-   * endpoints (`/alpha/whoami`, `/alpha/usage/summary`, `/alpha/billing/credits`).
+   * The billing facts behind the picker's plan filter, cached for
+   * {@link BILLING_ACCESS_TTL_MS} and shared across concurrent callers.
+   * `undefined` means "unknown — show everything" (fail-open).
+   */
+  private async loadBillingAccess(): Promise<CommandCodeBillingAccess | undefined> {
+    const cached = this.billingAccess
+    if (cached !== undefined && Date.now() - cached.at < BILLING_ACCESS_TTL_MS) return cached.value
+    this.billingAccessInflight ??= this.fetchBillingAccess()
+      .then((value) => {
+        this.billingAccess = { value, at: Date.now() }
+        return value
+      })
+      .finally(() => {
+        this.billingAccessInflight = undefined
+      })
+    return this.billingAccessInflight
+  }
+
+  /**
+   * The billing facts behind the picker's plan filter, mirroring the CLI's
+   * `createBilling` flow: whoami yields the org id, then the subscriptions
+   * and credits endpoints answer in parallel. The plan id is honored only
+   * when the subscription reports an active-ish status (the CLI's rule); when
+   * the subscriptions endpoint fails entirely, `credits.planId` is the
+   * fallback (the CLI stamps plan identity from it too). Any failure resolves
+   * to `undefined` (fail-open) rather than breaking the picker.
+   */
+  private async fetchBillingAccess(): Promise<CommandCodeBillingAccess | undefined> {
+    try {
+      const connection = this.deps.options()
+      const headers = await this.accountHeaders()
+      const base = connection.apiBase
+      const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
+        const response = await this.fetchImpl(`${base}${path}`, {
+          headers,
+          // A hung billing connection must not stall the picker forever.
+          signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+        })
+        if (!response.ok) return undefined
+        const parsed: unknown = await response.json()
+        return isRecord(parsed) ? parsed : undefined
+      }
+      const whoami = await getJson('/alpha/whoami')
+      const orgData = whoami && isRecord(whoami.org) ? whoami.org : undefined
+      const orgId = orgData === undefined ? undefined : stringValue(orgData.id)
+      const [subscription, credits] = await Promise.all([
+        getJson(orgId === undefined
+          ? '/alpha/billing/subscriptions'
+          : `/alpha/billing/subscriptions?orgId=${encodeURIComponent(orgId)}`),
+        getJson('/alpha/billing/credits'),
+      ])
+      const subData = subscription && isRecord(subscription.data) ? subscription.data : undefined
+      const creditsData = credits && isRecord(credits.credits) ? credits.credits : undefined
+      if (subData === undefined && creditsData === undefined) return undefined
+      let planId: string | undefined
+      if (subData !== undefined) {
+        const status = stringValue(subData.status)
+        if (status !== undefined && ACTIVE_SUBSCRIPTION_STATUSES.has(status)) planId = stringValue(subData.planId)
+      } else {
+        planId = stringValue(creditsData?.planId)
+      }
+      return {
+        tierWeight: planId === undefined ? undefined : subscriptionPlanInfo(planId)?.tierWeight,
+        onDemandCredits: (numberValue(creditsData?.purchasedCredits) ?? 0) + (numberValue(creditsData?.freeCredits) ?? 0),
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Fetch account, usage, credit, and subscription state from the Command
+   * Code account endpoints (`/alpha/whoami`, `/alpha/usage/summary`,
+   * `/alpha/billing/credits`, `/alpha/billing/subscriptions`).
    * Each endpoint degrades independently: a failed one lands in `failures`
    * while the rest still report, so a transient outage never blanks the whole
    * view. Requires a usable API key (throws `MISSING_CREDENTIAL` otherwise).
    */
   async getUsage(): Promise<CommandCodeUsageReport> {
     const connection = this.deps.options()
-    const apiKey = await this.deps.resolveApiKey(connection)
     const base = connection.apiBase
-    const headers = {
-      Authorization: `Bearer ${apiKey}`,
-      'x-command-code-version': COMMAND_CODE_CLI_VERSION,
-      'x-cli-environment': 'production',
-      ...attributionHeaders(),
-    }
+    const headers = await this.accountHeaders()
     const failures: string[] = []
 
     const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
       try {
-        const response = await this.fetchImpl(`${base}${path}`, { headers })
+        const response = await this.fetchImpl(`${base}${path}`, {
+          headers,
+          // A hung account endpoint degrades into `failures` instead of
+          // stalling the usage card / command forever.
+          signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+        })
         if (!response.ok) {
           failures.push(`${path}: HTTP ${response.status}`)
           return undefined
@@ -981,7 +1186,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     const report: CommandCodeUsageReport = { failures }
 
-    // whoami -> account identity.
+    // whoami -> account identity (+ org id for the billing endpoints).
     const whoami = await getJson('/alpha/whoami')
     const whoamiData = whoami && isRecord(whoami.user) ? whoami.user : undefined
     if (whoamiData) {
@@ -991,6 +1196,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         userName: stringValue(whoamiData.userName) ?? '',
       }
     }
+    const orgData = whoami && isRecord(whoami.org) ? whoami.org : undefined
+    const orgId = orgData === undefined ? undefined : stringValue(orgData.id)
 
     // usage/summary -> totals.
     const usage = await getJson('/alpha/usage/summary')
@@ -1031,6 +1238,26 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           exceeded: weekly?.exceeded === true,
           resetAt: numberValue(weekly?.resetAt) ?? 0,
         },
+      }
+    }
+
+    // billing/subscriptions -> plan identity + billing period. The credits
+    // response may also carry a planId; it is the fallback when the
+    // subscriptions endpoint fails. Mirrors the CLI: orgId rides as a query
+    // param when whoami reported one.
+    const subscription = await getJson(orgId === undefined
+      ? '/alpha/billing/subscriptions'
+      : `/alpha/billing/subscriptions?orgId=${encodeURIComponent(orgId)}`)
+    const subData = subscription && isRecord(subscription.data) ? subscription.data : undefined
+    const planId = stringValue(subData?.planId) ?? stringValue(creditsData?.planId)
+    if (subData !== undefined || planId !== undefined) {
+      const info = planId === undefined ? undefined : subscriptionPlanInfo(planId)
+      report.plan = {
+        planId: planId ?? '',
+        name: info?.name ?? planId ?? '',
+        status: stringValue(subData?.status) ?? '',
+        monthlyCredits: info?.monthlyCredits ?? null,
+        currentPeriodEnd: periodEndValue(subData?.currentPeriodEnd),
       }
     }
 

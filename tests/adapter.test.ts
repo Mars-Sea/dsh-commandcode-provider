@@ -372,6 +372,163 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   )
 })
 
+// ---------------------------------------------------------------------------
+// Plan filter (listModels hides models above the account's subscription tier)
+// ---------------------------------------------------------------------------
+
+/** A fetch stub that routes by URL path and counts calls. */
+function fetchRouting(paths: Record<string, { status: number; body: unknown }>): {
+  fetchImpl: typeof fetch
+  calls: Map<string, number>
+} {
+  const calls = new Map<string, number>()
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : String(input)
+    const path = new URL(url).pathname
+    calls.set(path, (calls.get(path) ?? 0) + 1)
+    const canned = paths[path]
+    if (!canned) return new Response('not found', { status: 404 })
+    return new Response(JSON.stringify(canned.body), {
+      status: canned.status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  return { fetchImpl, calls }
+}
+
+/** Catalog fixture spanning the Go / Pro / Provider tiers plus an unknown model. */
+const PLAN_FILTER_CATALOG = {
+  object: 'list',
+  data: [
+    { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', context_length: 1_000_000 },
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', context_length: 1_000_000 },
+    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
+    { id: 'some-future-model', name: 'Some Future', context_length: 128_000 },
+  ],
+}
+
+/** A `/alpha/billing/credits` body carrying the given plan and balances. */
+function billingBody(planId: string | undefined, purchasedCredits: number, freeCredits: number) {
+  return { credits: { monthlyCredits: 5, purchasedCredits, freeCredits, ...(planId === undefined ? {} : { planId }) } }
+}
+
+/** The whoami/subscriptions pair for a subscription in the given state. */
+function subscriptionStubs(planId: string, status: string) {
+  return {
+    '/alpha/whoami': { status: 200, body: { success: true, user: { id: 'u1' }, org: { id: 'org1' } } },
+    '/alpha/billing/subscriptions': { status: 200, body: { success: true, data: { planId, status } } },
+  }
+}
+
+test('listModels() hides models above the account plan tier', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    ...subscriptionStubs('individual-go', 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.deepEqual(ids.sort(), ['deepseek/deepseek-v4-pro', 'some-future-model'])
+})
+
+test('listModels() fails open when the subscription is not active', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    ...subscriptionStubs('individual-go', 'canceled'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
+})
+
+test('listModels() falls back to credits.planId when subscriptions fails', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    '/alpha/whoami': { status: 200, body: { success: true, user: { id: 'u1' }, org: { id: 'org1' } } },
+    '/alpha/billing/subscriptions': { status: 500, body: {} },
+    '/alpha/billing/credits': { status: 200, body: billingBody('individual-go', 0, 0) },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.deepEqual(ids.sort(), ['deepseek/deepseek-v4-pro', 'some-future-model'])
+})
+
+test('listModels() keeps every model when the account holds on-demand credits', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    ...subscriptionStubs('individual-go', 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 5, 0) },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
+})
+
+test('listModels() fails open when the billing endpoint fails', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    '/alpha/billing/credits': { status: 500, body: {} },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
+})
+
+test('listModels() skips the plan filter (and its fetch) when filterModelsByPlan is false', async () => {
+  const { fetchImpl, calls } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    '/alpha/billing/credits': { status: 200, body: billingBody('individual-go', 0, 0) },
+  })
+  const adapter = makeAdapter({
+    fetchImpl,
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      filterModelsByPlan: false,
+    }),
+  })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
+  assert.equal(calls.get('/alpha/billing/credits') ?? 0, 0)
+})
+
+test('listModels() caches the billing access across picker loads', async () => {
+  const { fetchImpl, calls } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    ...subscriptionStubs('individual-pro', 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  await adapter.listModels('commandcode')
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.equal(calls.get('/alpha/whoami'), 1)
+  assert.equal(calls.get('/alpha/billing/subscriptions'), 1)
+  assert.equal(calls.get('/alpha/billing/credits'), 1)
+  // Pro account: Provider-tier model hidden, Go/Pro/unknown visible.
+  assert.deepEqual(ids.sort(), ['claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model'])
+})
+
+test('modelVisibleInPlan() fails open on every uncertainty', async () => {
+  const { modelVisibleInPlan } = await import('../src/adapter.ts')
+  // No billing data at all -> visible.
+  assert.equal(modelVisibleInPlan('claude-opus-4-8', undefined), true)
+  // Positive on-demand balance -> visible regardless of tier.
+  assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: 0, onDemandCredits: 1 }), true)
+  // Unknown account tier -> visible.
+  assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: undefined, onDemandCredits: 0 }), true)
+  // Unknown model -> visible.
+  assert.equal(modelVisibleInPlan('some-future-model', { tierWeight: 0, onDemandCredits: 0 }), true)
+  // Tier comparison itself.
+  assert.equal(modelVisibleInPlan('deepseek/deepseek-v4-pro', { tierWeight: 0, onDemandCredits: 0 }), true)
+  assert.equal(modelVisibleInPlan('claude-sonnet-5', { tierWeight: 0, onDemandCredits: 0 }), false)
+  assert.equal(modelVisibleInPlan('claude-sonnet-5', { tierWeight: 2, onDemandCredits: 0 }), true)
+  assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: 4, onDemandCredits: 0 }), true)
+})
+
 test('compareByPlan() sorts by plan tier then name, unknown plans last', () => {
   // Go beats Pro regardless of name.
   assert.ok(compareByPlan(

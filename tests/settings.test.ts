@@ -290,6 +290,43 @@ test('resetField() stages a clear back to the inherited value', async () => {
 })
 
 // ---------------------------------------------------------------------------
+// Boolean field (filterModelsByPlan toggle)
+// ---------------------------------------------------------------------------
+
+test('save() writes a boolean toggle as a real boolean', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().filterModelsByPlan.text, '')
+  controller.edit('filterModelsByPlan', 'false')
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.equal(scope.state.value.filterModelsByPlan, false)
+  assert.equal(controller.state().filterModelsByPlan.text, 'false')
+})
+
+test('resetField() on a boolean toggle clears it back to the inherited default', async () => {
+  const scope = makeScope({
+    value: { filterModelsByPlan: false },
+    user: { filterModelsByPlan: false },
+  })
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().filterModelsByPlan.text, 'false')
+  controller.resetField('filterModelsByPlan')
+  await controller.save()
+  assert.equal(scope.state.user?.filterModelsByPlan, undefined)
+  assert.equal(controller.state().filterModelsByPlan.text, '')
+})
+
+test('an unrecognized boolean draft blocks save', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  controller.edit('filterModelsByPlan', 'yes')
+  assert.equal(controller.state().invalid, true)
+  await controller.save()
+  assert.equal(scope.state.value.filterModelsByPlan, undefined)
+})
+
+// ---------------------------------------------------------------------------
 // Failure handling
 // ---------------------------------------------------------------------------
 

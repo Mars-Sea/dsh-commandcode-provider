@@ -87,6 +87,11 @@ export interface SettingsPageState {
   requestTimeoutMs: StagedField
   /** streamIdleTimeoutMs draft. */
   streamIdleTimeoutMs: StagedField
+  /**
+   * filterModelsByPlan draft, staged as `'true'`/`'false'`/`''` (unset). The
+   * component renders it as a toggle; `''` means "inherit the default" (on).
+   */
+  filterModelsByPlan: StagedField
   /** Whether any staged edit differs from the stored section. */
   dirty: boolean
   /** Whether a staged numeric field fails to parse (save blocked). */
@@ -98,7 +103,7 @@ export interface SettingsPageState {
 }
 
 /** Parsed outcome of one field's draft. */
-type Parsed = { kind: 'set'; value: string | number } | { kind: 'clear' } | { kind: 'invalid' }
+type Parsed = { kind: 'set'; value: string | number | boolean } | { kind: 'clear' } | { kind: 'invalid' }
 
 /** One field's staged draft (internal; the public face adds derived flags). */
 interface Staged {
@@ -139,12 +144,32 @@ function numberField(field: string): FieldSpec {
   }
 }
 
+/**
+ * A boolean field, staged as the strings `'true'`/`'false'` (an empty draft
+ * clears it). The component renders a toggle and only ever stages these two
+ * strings; anything else blocks save.
+ */
+function booleanField(field: string): FieldSpec {
+  return {
+    field,
+    format: (value) => (typeof value === 'boolean' ? String(value) : ''),
+    parse: (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return { kind: 'clear' }
+      if (trimmed === 'true') return { kind: 'set', value: true }
+      if (trimmed === 'false') return { kind: 'set', value: false }
+      return { kind: 'invalid' }
+    },
+  }
+}
+
 /** The fields this page edits inside the `llm-commandcode` namespace. */
 const SECTION_FIELDS: FieldSpec[] = [
   textField('apiBase'),
   textField('workingDir'),
   numberField('requestTimeoutMs'),
   numberField('streamIdleTimeoutMs'),
+  booleanField('filterModelsByPlan'),
 ]
 
 /**
@@ -248,6 +273,7 @@ export class CommandCodeSettingsController {
       defaultWorkingDir: this.defaultWorkingDir,
       requestTimeoutMs: this.field('requestTimeoutMs'),
       streamIdleTimeoutMs: this.field('streamIdleTimeoutMs'),
+      filterModelsByPlan: this.field('filterModelsByPlan'),
       dirty: plan.length > 0,
       invalid: plan.some((item) => item.run === undefined),
       saving: this.saving,
@@ -391,7 +417,7 @@ export class CommandCodeSettingsController {
     return !this.stored(field)
   }
 
-  private async store(field: string, value: string | number): Promise<boolean> {
+  private async store(field: string, value: string | number | boolean): Promise<boolean> {
     await this.scope.set(field, value)
     return this.userLayer()?.[field] === value
   }

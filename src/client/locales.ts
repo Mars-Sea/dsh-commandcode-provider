@@ -31,6 +31,8 @@ export type SettingsCommandCodeKey =
   | 'requestTimeoutMsHint'
   | 'streamIdleTimeoutMs'
   | 'streamIdleTimeoutMsHint'
+  | 'filterModelsByPlan'
+  | 'filterModelsByPlanHint'
   | 'overridden'
   | 'reset'
   | 'invalidNumber'
@@ -41,6 +43,29 @@ export type SettingsCommandCodeKey =
   | 'saveFailed'
   | 'discard'
   | 'cancel'
+  | 'usageTitle'
+  | 'usageRefresh'
+  | 'usageRefreshing'
+  | 'usageLoading'
+  | 'usageNoKey'
+  | 'usageError'
+  | 'usageRequests'
+  | 'usageFailed'
+  | 'usageSuccessRate'
+  | 'usageCost'
+  | 'usageTokens'
+  | 'usageTokensIn'
+  | 'usageTokensOut'
+  | 'usageMonthly'
+  | 'usagePurchased'
+  | 'usageFree'
+  | 'usageFiveHour'
+  | 'usageWeekly'
+  | 'usageExceeded'
+  | 'usageReset'
+  | 'usagePartial'
+  | 'usageUpdated'
+  | 'usagePeriodEnd'
 
 export const zh: Record<SettingsCommandCodeKey, string> = {
   nav: 'Command Code',
@@ -61,6 +86,8 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   requestTimeoutMsHint: '等待响应首个字节的超时；默认 60000。',
   streamIdleTimeoutMs: '流空闲超时（毫秒）',
   streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300000（长思考模型可静默数分钟，默认值刻意放宽）。',
+  filterModelsByPlan: '隐藏套餐外模型',
+  filterModelsByPlanHint: '开启后，模型选择器只列出当前套餐可用的模型；账户持有按需余额时会显示全部。',
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
@@ -71,6 +98,29 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   saveFailed: '保存失败，请重试。',
   discard: '放弃',
   cancel: '取消',
+  usageTitle: '账户用量',
+  usageRefresh: '刷新',
+  usageRefreshing: '刷新中…',
+  usageLoading: '正在获取账户用量…',
+  usageNoKey: '配置 API 密钥后，这里会显示账户的用量与额度状态。',
+  usageError: '用量获取失败',
+  usageRequests: '请求',
+  usageFailed: '失败',
+  usageSuccessRate: '成功率',
+  usageCost: '花费',
+  usageTokens: 'Token',
+  usageTokensIn: '入',
+  usageTokensOut: '出',
+  usageMonthly: '月额度',
+  usagePurchased: '已购',
+  usageFree: '赠送',
+  usageFiveHour: '5 小时窗口',
+  usageWeekly: '每周窗口',
+  usageExceeded: '已超限',
+  usageReset: '重置于',
+  usagePartial: '部分端点数据不可用',
+  usageUpdated: '更新于',
+  usagePeriodEnd: '账期截止',
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
@@ -96,6 +146,9 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   streamIdleTimeoutMs: 'Stream idle timeout (ms)',
   streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 300000'
     + ' (deliberately generous — long-thinking models can stay silent for minutes).',
+  filterModelsByPlan: 'Hide out-of-plan models',
+  filterModelsByPlanHint: 'When on, the model picker lists only models your subscription'
+    + ' includes; any on-demand credit balance shows the full catalog.',
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',
@@ -106,4 +159,27 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   saveFailed: 'Save failed, please retry.',
   discard: 'Discard',
   cancel: 'Cancel',
+  usageTitle: 'Account usage',
+  usageRefresh: 'Refresh',
+  usageRefreshing: 'Refreshing…',
+  usageLoading: 'Fetching account usage…',
+  usageNoKey: 'Configure an API key to see this account’s usage and credit state here.',
+  usageError: 'Could not fetch usage',
+  usageRequests: 'Requests',
+  usageFailed: 'failed',
+  usageSuccessRate: 'Success rate',
+  usageCost: 'Spend',
+  usageTokens: 'Tokens',
+  usageTokensIn: 'in',
+  usageTokensOut: 'out',
+  usageMonthly: 'Monthly',
+  usagePurchased: 'Purchased',
+  usageFree: 'Free',
+  usageFiveHour: '5-hour window',
+  usageWeekly: 'Weekly window',
+  usageExceeded: 'Exceeded',
+  usageReset: 'Resets',
+  usagePartial: 'Some endpoint data unavailable',
+  usageUpdated: 'Updated',
+  usagePeriodEnd: 'Period ends',
 }

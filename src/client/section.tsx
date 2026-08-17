@@ -13,19 +13,25 @@
  * (see src/client/index.ts) and class-prefixed `cc-` to stay local.
  */
 
+import { useEffect } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
+import type { CommandCodeCredits } from '../adapter.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
 import type { SettingsPageState, StagedField } from './settings.ts'
+import type { UsagePageState } from './usage.ts'
+import { formatMoney, formatMoneyExact, formatResetAt, formatTokensCompact, windowRatio } from './usage.ts'
 
 /** Props composed by the slot registration: locale seat + injected face. */
 export interface CommandCodeSettingsProps {
   t: Translate<SettingsCommandCodeKey>
   useCommandCodeSettings<T>(selector: (state: SettingsPageState) => T): T
+  useCommandCodeUsage<T>(selector: (state: UsagePageState) => T): T
   edit(field: string, text: string): void
   resetField(field: string): void
   save(): void
   discard(): void
+  refreshUsage(): void
 }
 
 /** One labelled field row in the page body. */
@@ -78,6 +84,58 @@ function Field({
   )
 }
 
+/**
+ * One boolean field row rendered as a toggle. The staged text is `'true'` /
+ * `'false'` / `''` (unset → `defaultChecked`); toggling stages the string the
+ * boolean field spec parses back into a real boolean on save.
+ */
+function ToggleField({
+  id,
+  label,
+  hint,
+  state,
+  disabled,
+  defaultChecked,
+  onEdit,
+  onReset,
+  t,
+}: {
+  id: string
+  label: string
+  hint: string
+  state: StagedField
+  disabled: boolean
+  defaultChecked: boolean
+  onEdit(text: string): void
+  onReset(): void
+  t: Translate<SettingsCommandCodeKey>
+}) {
+  const checked = state.text === '' ? defaultChecked : state.text === 'true'
+  return (
+    <div className="cc-field">
+      <div className="cc-fieldHead">
+        <label className="cc-label" htmlFor={id}>{label}</label>
+        <span className="cc-badges">
+          {state.overridden ? <span className="cc-badge">{t('overridden')}</span> : null}
+          <button type="button" className="cc-reset" disabled={disabled} onClick={onReset}>{t('reset')}</button>
+        </span>
+      </div>
+      <label className="cc-toggleRow">
+        <input
+          id={id}
+          className="cc-toggle"
+          type="checkbox"
+          role="switch"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onEdit(event.target.checked ? 'true' : 'false')}
+        />
+        <span className="cc-hint">{hint}</span>
+      </label>
+    </div>
+  )
+}
+
 /** The API-key control: write-only, reports configured state, never echoes the key. */
 function SecretKeyField({
   label,
@@ -122,10 +180,148 @@ function SecretKeyField({
   )
 }
 
+/** One stat tile in the account card's summary grid. */
+function UsageStat({ label, value, sub }: { label: string; value: string; sub?: string | undefined }) {
+  return (
+    <div className="cc-usageStat">
+      <span className="cc-usageStatLabel">{label}</span>
+      <span className="cc-usageStatValue">{value}</span>
+      {sub !== undefined && sub !== '' ? <span className="cc-usageStatSub">{sub}</span> : null}
+    </div>
+  )
+}
+
+/** One window-limit row: label, used/cap, a fill bar, and the reset time. */
+function UsageWindow({
+  label,
+  limit: { used, cap, exceeded, resetAt },
+  t,
+}: {
+  label: string
+  limit: CommandCodeCredits['fiveHour']
+  t: Translate<SettingsCommandCodeKey>
+}) {
+  const ratio = windowRatio(used, cap)
+  const reset = formatResetAt(resetAt)
+  return (
+    <div className="cc-usageWindow">
+      <div className="cc-usageWindowHead">
+        <span className="cc-usageWindowLabel">{label}</span>
+        {exceeded ? <span className="cc-usageExceeded">{t('usageExceeded')}</span> : null}
+        <span className="cc-usageWindowValue">{cap > 0 ? `${formatMoney(used)} / ${formatMoney(cap)}` : formatMoney(used)}</span>
+      </div>
+      <div className="cc-usageBar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)}>
+        <div className={exceeded ? 'cc-usageBarFill cc-usageBarFillWarn' : 'cc-usageBarFill'} style={{ width: `${ratio * 100}%` }} />
+      </div>
+      {reset !== '' ? <p className="cc-usageWindowReset">{t('usageReset')} {reset}</p> : null}
+    </div>
+  )
+}
+
+/**
+ * The account-usage card: the `/commandcode` dashboard's facts (account,
+ * totals, credits, window limits) rendered as a native settings card. Data
+ * arrives through the `commandcode/report` Remote; the API key never leaves
+ * the Host.
+ */
+function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
+  t: Translate<SettingsCommandCodeKey>
+  usage: UsagePageState
+  apiKeyConfigured: boolean
+  onRefresh(): void
+}) {
+  // First paint with a configured key fetches automatically; later fetches
+  // are explicit (refresh button) or follow a landed save.
+  useEffect(() => {
+    if (apiKeyConfigured && usage.status === 'idle') onRefresh()
+  }, [apiKeyConfigured, usage.status, onRefresh])
+
+  const loading = usage.status === 'loading'
+  const report = usage.report
+  const account = report?.account
+  const accountName = account === undefined ? '' : account.userName || account.name
+  const credits = report?.credits
+  const plan = report?.plan
+  const planName = plan?.name ?? ''
+  const planStatus = plan !== undefined && plan.status !== '' && plan.status !== 'active' ? plan.status : ''
+
+  return (
+    <div className="cc-usageCard" aria-label={t('usageTitle')}>
+      <div className="cc-usageHead">
+        <h3 className="cc-usageTitle">{t('usageTitle')}</h3>
+        {accountName !== '' ? <span className="cc-usageAccount">{accountName}</span> : null}
+        {planName !== '' ? <span className="cc-usagePlan">{planName}</span> : null}
+        {planStatus !== '' ? <span className="cc-usagePlanStatus">{planStatus}</span> : null}
+        <button type="button" className="cc-usageRefresh" disabled={loading || !apiKeyConfigured} onClick={onRefresh}>
+          {loading ? t('usageRefreshing') : t('usageRefresh')}
+        </button>
+      </div>
+
+      {!apiKeyConfigured ? <p className="cc-usageHint">{t('usageNoKey')}</p> : null}
+      {apiKeyConfigured && report === undefined && loading ? <p className="cc-usageHint">{t('usageLoading')}</p> : null}
+      {usage.status === 'error' ? (
+        <p className="cc-usageError" role="status">
+          <span>{t('usageError')}{usage.error !== undefined && usage.error !== '' ? ` — ${usage.error}` : ''}</span>
+        </p>
+      ) : null}
+
+      {report?.usage !== undefined ? (
+        <div className="cc-usageStats">
+          <UsageStat
+            label={t('usageRequests')}
+            value={String(report.usage.completedCount)}
+            sub={`${t('usageFailed')} ${report.usage.failedCount}`}
+          />
+          <UsageStat label={t('usageSuccessRate')} value={`${report.usage.successRate}%`} />
+          <UsageStat
+            label={t('usageCost')}
+            value={formatMoneyExact(report.usage.totalCost)}
+            sub={`${formatMoney(report.usage.totalCredits)} credits`}
+          />
+          <UsageStat
+            label={t('usageTokens')}
+            value={formatTokensCompact(report.usage.totalTokensIn + report.usage.totalTokensOut)}
+            sub={`${formatTokensCompact(report.usage.totalTokensIn)} ${t('usageTokensIn')} / ${formatTokensCompact(report.usage.totalTokensOut)} ${t('usageTokensOut')}`}
+          />
+        </div>
+      ) : null}
+
+      {credits !== undefined ? (
+        <div className="cc-usageStats">
+          <UsageStat label={t('usageMonthly')} value={formatMoney(credits.monthlyCredits)} />
+          <UsageStat label={t('usagePurchased')} value={formatMoney(credits.purchasedCredits)} />
+          <UsageStat label={t('usageFree')} value={formatMoney(credits.freeCredits)} />
+        </div>
+      ) : null}
+
+      {credits !== undefined ? (
+        <div className="cc-usageWindows">
+          <UsageWindow label={t('usageFiveHour')} limit={credits.fiveHour} t={t} />
+          <UsageWindow label={t('usageWeekly')} limit={credits.weekly} t={t} />
+        </div>
+      ) : null}
+
+      {report !== undefined ? (
+        <div className="cc-usageMeta">
+          {plan !== undefined && plan.currentPeriodEnd > 0 ? (
+            <p className="cc-usageUpdated">{t('usagePeriodEnd')} {new Date(plan.currentPeriodEnd).toLocaleDateString()}</p>
+          ) : null}
+          {usage.fetchedAt !== undefined ? (
+            <p className="cc-usageUpdated">{t('usageUpdated')} {new Date(usage.fetchedAt).toLocaleTimeString()}</p>
+          ) : null}
+          <span className="cc-usageMetaSpacer" />
+          {report.failures.length > 0 ? <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /** The settings page body: connection facts for the Command Code provider. */
 export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const { t } = props
   const state = props.useCommandCodeSettings((snapshot) => snapshot)
+  const usage = props.useCommandCodeUsage((snapshot) => snapshot)
   const disabled = !state.writable
   const keyLocked = !state.apiKeyWritable
   return (
@@ -133,6 +329,12 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
       <h2 className="cc-title">{t('title')}</h2>
       <p className="cc-intro">{t('intro')}</p>
       {!state.writable ? <p className="cc-readOnly" role="status">{t('readOnly')}</p> : null}
+      <UsageCard
+        t={t}
+        usage={usage}
+        apiKeyConfigured={state.apiKeyConfigured}
+        onRefresh={props.refreshUsage}
+      />
       <div className="cc-card">
         <SecretKeyField
           label={t('apiKey')}
@@ -185,6 +387,17 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           numeric
           onEdit={(text) => props.edit('streamIdleTimeoutMs', text)}
           onReset={() => props.resetField('streamIdleTimeoutMs')}
+          t={t}
+        />
+        <ToggleField
+          id="cc-filter-models-by-plan"
+          label={t('filterModelsByPlan')}
+          hint={t('filterModelsByPlanHint')}
+          state={state.filterModelsByPlan}
+          disabled={disabled}
+          defaultChecked
+          onEdit={(text) => props.edit('filterModelsByPlan', text)}
+          onReset={() => props.resetField('filterModelsByPlan')}
           t={t}
         />
       </div>

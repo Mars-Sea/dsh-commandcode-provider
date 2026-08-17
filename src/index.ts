@@ -40,6 +40,7 @@ import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './a
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { CommandCodeConnectionOptions } from './adapter.ts'
 import { applyCommands } from './commands.ts'
+import { applyUsageRemote } from './usage-remote.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -53,23 +54,30 @@ export {
   KNOWN_IMAGE_MODELS,
   KNOWN_THINKING_MODELS,
   KNOWN_PLANS,
+  KNOWN_SUBSCRIPTION_PLANS,
   KNOWN_DEALS,
   KNOWN_PEAK_PRICING,
   PLAN_LABELS,
   PLAN_ORDER,
+  BILLING_ACCESS_TTL_MS,
   capabilityDescription,
   compareByPlan,
   dealLabel,
   formatContext,
+  modelVisibleInPlan,
   peakPricingLabel,
   peakPricingState,
   planLabel,
   projectSlugFromPath,
   resolveAuthFileApiKey,
+  subscriptionPlanInfo,
 } from './adapter.ts'
-export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
+export type { CommandCodeAdapterDeps, CommandCodeBillingAccess, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
 export { applyCommands, commandDefinition } from './commands.ts'
 export type { CommandCodeCommandDeps } from './commands.ts'
+export { applyUsageRemote, CommandCodeUsageService } from './usage-remote.ts'
+export type { CommandCodeUsageDeps } from './usage-remote.ts'
+export { USAGE_REPORT_ENDPOINT, usageReportSchema } from './usage-wire.ts'
 
 export const name = 'llm-commandcode'
 export const inject = ['llm']
@@ -104,6 +112,13 @@ export interface Config {
   requestTimeoutMs?: number
   /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 300s. */
   streamIdleTimeoutMs?: number
+  /**
+   * Whether the model picker hides models above the account's subscription
+   * tier; defaults to true. The filter fails open (unknown plan, billing
+   * endpoint failure, or a positive on-demand credit balance all keep the
+   * full catalog visible). Set false to always list every model.
+   */
+  filterModelsByPlan?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -114,6 +129,7 @@ export const Config: z<Config> = z.object({
   modelsCachePath: z.string(),
   requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
+  filterModelsByPlan: z.boolean(),
 })
 
 /** One resolution's complete request facts: connection plus credential reference. */
@@ -135,6 +151,7 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     modelsCachePath: config.modelsCachePath ?? DEFAULT_MODELS_CACHE_PATH,
     requestTimeoutMs: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    filterModelsByPlan: config.filterModelsByPlan ?? true,
   }
 }
 
@@ -204,6 +221,11 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['commands'], (commandCtx) => {
     applyCommands(commandCtx, { adapter })
   })
+
+  // The settings page's account card: getUsage exposed to the browser through
+  // the Typert Gateway (`commandcode/report`). Rides the optional `typert`
+  // registry service, so profiles without the web stack never activate it.
+  applyUsageRemote(ctx, { adapter })
 
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => {

@@ -66,6 +66,13 @@ function renderReport(report: CommandCodeUsageReport): string {
 
   lines.push(`📊 Command Code 用量${account}`, '')
 
+  if (report.plan && report.plan.name !== '') {
+    const p = report.plan
+    const status = p.status !== '' && p.status !== 'active' ? ` (${p.status})` : ''
+    const period = p.currentPeriodEnd > 0 ? ` · 账期截止 ${new Date(p.currentPeriodEnd).toLocaleDateString()}` : ''
+    lines.push(`  📦 套餐    ${p.name}${status}${period}`, '')
+  }
+
   if (report.usage) {
     const u = report.usage
     lines.push(
