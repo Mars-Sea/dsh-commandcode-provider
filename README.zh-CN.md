@@ -17,7 +17,7 @@
 ## 功能一览
 
 - **插件包**：可通过 `dsh plugin add` 安装到任意 dsh 配置，并提供 **`commandcode` provider 路由**，带实时模型目录（`GET {apiBase}/provider/v1/models`，缓存于 `~/.commandcode/models-cache.json`）。
-- **专属"Command Code"设置页**（设置 → **Command Code**），带 **API key 输入框** 与连接参数（API 地址、工作目录、请求/流超时）。密钥通过 dsh 凭据服务存储；连接参数写入 `llm-commandcode` 设置段，对下一次请求即刻生效，无需重启。
+- **专属"Command Code"设置页**（设置 → **Command Code**），带 **API key 输入框**、连接参数（API 地址、工作目录、请求/流超时）、**实时「账户用量」卡片**（统计、额度、窗口进度条、订阅套餐徽章）以及**「隐藏套餐外模型」开关**。密钥通过 dsh 凭据服务存储；连接参数写入 `llm-commandcode` 设置段，对下一次请求即刻生效，无需重启。
 - **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
 - **模型选择器标注**：每个模型显示包含它的**最低套餐**（`KNOWN_PLANS`）、**活动折扣**或 `FREE` 徽章（`KNOWN_DEALS`，到期自动隐藏已失效折扣）、峰谷定价模型的**当前时段状态**（`Peak`/`Half`，按当前 UTC 小时动态判断）、Vision 模型的 **`Image`** 标记，以及**上下文长度**（`1M` / `256K` / `262K`）——例如 *"Go · 50% off · Image · 1M"*、*"Go · Half · 1M"*。列表**按套餐排序**（Go → GOAT → Pro → Provider/Max），你当前套餐能用的模型总是排在最前。
 - **按套餐过滤选择器**：选择器会**直接隐藏超出你订阅套餐的模型**（根据账户账单状态实时判断）。全程失败开放——账单接口不可用、套餐未知，或账户持有按需余额（官方 CLI 视为解锁全部模型）时都显示完整目录——服务端仍是最终闸门。在设置页关闭「隐藏套餐外模型」开关（或在 `llm-commandcode` 设置段中设 `filterModelsByPlan: false`）可始终列出全部模型。
@@ -142,6 +142,10 @@ dsh web
 ## 配置
 
 **设置 → Command Code** 是主要配置入口：**API key** 输入框（通过凭据服务存储在 `$DSH_HOME/.credentials.yaml`，只写不回显，并显示是否已配置），以及 **API 地址**、**工作目录**、**请求/流超时**字段，全部写入 `llm-commandcode` 设置段。没有 key 也可以浏览模型目录。**工作目录可选**——留空即可，占位符会显示它实际使用的进程 cwd。
+
+配置好 key 后，页面顶部会显示实时**「账户用量」卡片**——与 `/commandcode` 相同的账户、花费、额度与窗口限制信息，外加订阅套餐徽章和账期截止——数据在宿主端获取（key 不会离开宿主），并以原生 UI 渲染：
+
+<img src="assets/screenshots/settings-page.png" alt="Command Code 设置页面（含账户用量卡片）" width="640">
 
 同一组选项也位于 `$DSH_HOME/settings.yaml`（按请求覆盖，无需重启）：
 

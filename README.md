@@ -17,7 +17,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 ## What you get
 
 - **Plugin bundle** installable into any dsh profile with `dsh plugin add`, plus a **`commandcode` provider route** with a live catalog (`GET {apiBase}/provider/v1/models`, cached at `~/.commandcode/models-cache.json`).
-- **Dedicated "Command Code" settings page** (Settings → **Command Code**) with an **API-key field** and connection knobs (API base, working directory, request/stream timeouts). The key is stored through the dsh credentials service; connection fields land in the `llm-commandcode` section and apply to the very next request, no restart.
+- **Dedicated "Command Code" settings page** (Settings → **Command Code**) with an **API-key field**, connection knobs (API base, working directory, request/stream timeouts), a **live "Account usage" card** (stats, credits, window-limit bars, subscription plan badge) and a **Hide out-of-plan models** toggle. The key is stored through the dsh credentials service; connection fields land in the `llm-commandcode` section and apply to the very next request, no restart.
 - **API key resolution order**: `config.apiKey` → credential ref `apiKeyEnv` (default `COMMANDCODE_API_KEY`) → launch environment → the official CLI auth file (`~/.commandcode/auth.json`, from `command-code login`).
 - **Model-picker annotations**: every model shows the **minimum plan** that includes it (`KNOWN_PLANS`), an **active deal** or `FREE` badge (`KNOWN_DEALS`, expiry-aware so lapsed discounts hide themselves), the **current peak/off-peak state** (`Peak`/`Half`) for time-of-day-priced models, an **`Image`** marker for Vision models, and the **context window** (`1M` / `256K` / `262K`) — e.g. *"Go · 50% off · Image · 1M"*, *"Go · Half · 1M"*. The list is **sorted by plan tier** (Go → GOAT → Pro → Provider/Max), so the models your plan can use lead the picker.
 - **Plan-aware picker filtering**: the picker **hides models above your subscription tier** outright (resolved live from your account's billing state). It fails open — an unreachable billing endpoint, an unknown plan, or a positive on-demand credit balance (which the official CLI treats as unlocking every model) all keep the full catalog visible — and the server stays the final gate. Set **Hide out-of-plan models** off on the settings page (or `filterModelsByPlan: false` in the `llm-commandcode` settings section) to always list every model.
@@ -142,6 +142,10 @@ Each endpoint degrades independently — a temporary failure of one leaves the r
 ## Configure
 
 **Settings → Command Code** is the primary surface: an **API-key** field (stored in `$DSH_HOME/.credentials.yaml` via the credentials service; write-only, reports whether a key is set), plus **API base URL**, **working directory**, and **request/stream timeout** fields, all written to the `llm-commandcode` section. The catalog is browsable without a key. The **working directory** is optional — leave it blank and the placeholder shows the process cwd it resolves to.
+
+Once a key is configured, the page header shows a live **Account usage** card — the same account, spend, credit, and window-limit facts as `/commandcode`, plus your subscription plan badge and billing period end — fetched Host-side (the key never leaves it) and rendered natively:
+
+<img src="assets/screenshots/settings-page.png" alt="Command Code settings page with the account usage card" width="640">
 
 The same knobs live in `$DSH_HOME/settings.yaml` (per-request overrides, no restart):
 
