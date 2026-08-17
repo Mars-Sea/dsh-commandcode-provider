@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-17
+
+### Added
+
+- **The model picker now shows DeepSeek's time-of-day pricing state as a compact `Peak`/`Half` marker.** Since 2026-08-16 16:00 UTC, DeepSeek V4 Pro and V4 Flash cost full price during peak hours (01:00–04:00 and 06:00–10:00 UTC, 7h/day) and half price off-peak (the other 17h/day) — the official pricing page retired the old 75%-off deal in favor of this hourly pricing. `capabilityDescription()` now reads the current UTC hour and appends `Peak` (full price) or `Half` (off-peak, half price) for models in the new `KNOWN_PEAK_PRICING` snapshot, e.g. `Go · Half · 1M` at 17:00 UTC. The English noun markers match the picker's existing style (`Go`, `Image`, `FREE`), and since they appear only on time-of-day priced models they double as a "priced by the hour" signal. New `peakPricingState()`/`peakPricingLabel()` helpers are exported and covered by boundary-hour unit tests. The lapsed 75%-off entry was removed from `KNOWN_DEALS` (expired deals are dropped once the official page retires them).
 
 ### Fixed
 
