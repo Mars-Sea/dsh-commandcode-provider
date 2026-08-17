@@ -462,7 +462,13 @@ export function projectSlugFromPath(pathName: string): string {
     .toLowerCase()
     .replace(/^[a-z]:/i, '')
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    // Trim leading/trailing separators. This must stay linear: the classic
+    // `/^-+|-+$/` form is ambiguous — on `a<200k dashes>b` the unanchored
+    // `-+$` retries every start position, giving O(n^2) matching (CodeQL
+    // js/polynomial-redos). The negative lookbehind `(?<!-)` restricts `-+$`
+    // to the first dash of the trailing run, so only one start position is
+    // tried. Verified empirically: ~14.5s -> ~0ms on a 200k-dash input.
+    .replace(/^-+|(?<!-)-+$/g, '')
   return slug || 'project'
 }
 

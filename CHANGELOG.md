@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`projectSlugFromPath` no longer exhibits quadratic matching on adversarial paths (CodeQL `js/polynomial-redos`, alert #1).** The old trim step `/^-+|-+$/g` was ambiguous: on input like `a<200k dashes>b` the unanchored `-+$` alternation retried every start position, taking ~14.5s where a linear trim takes ~0ms. The trailing trim now uses the negative lookbehind `(?<!-)-+$` (the fix CodeQL documents), so only one start position is ever tried. The `x-project-slug` header is derived from the user-configurable working directory, so this was reachable from user input. A regression test pins the linear behavior.
+
 ## [0.2.4] - 2026-08-16
 
 ### Fixed

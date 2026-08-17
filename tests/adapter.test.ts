@@ -345,7 +345,10 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   const byId = new Map(models.map((m) => [m.id, m]))
   assert.deepEqual(byId.get('claude-sonnet-5')!.inputModalities, ['text', 'image'])
   assert.equal(byId.get('claude-sonnet-5')!.description, 'Pro · Image · 1M')
-  assert.equal(byId.get('deepseek/deepseek-v4-pro')!.description, 'Go · 75% off · 1M')
+  // DeepSeek V4 Pro's 75% off deal lapsed 2026-08-16 16:00 UTC (see
+  // KNOWN_DEALS.expiresAt), so dealLabel() no longer shows it — the picker
+  // reflects the deal-free description.
+  assert.equal(byId.get('deepseek/deepseek-v4-pro')!.description, 'Go · 1M')
   assert.deepEqual(byId.get('deepseek/deepseek-v4-flash')!.inputModalities, ['text'])
   assert.equal(byId.get('deepseek/deepseek-v4-flash')!.description, 'Go · 1M')
   assert.equal(byId.get('poolside/laguna-s-2.1-free')!.description, 'Go · FREE · 256K')
@@ -751,6 +754,28 @@ test('projectSlugFromPath lowercases and slugifies', () => {
   // The Windows drive letter is stripped.
   assert.equal(projectSlugFromPath(String.raw`C:\Users\Me\Proj`), 'users-me-proj')
   assert.equal(projectSlugFromPath('///'), 'project')
+})
+
+test('projectSlugFromPath trims surrounding separators from both ends', () => {
+  assert.equal(projectSlugFromPath('--foo--'), 'foo')
+  assert.equal(projectSlugFromPath('---'), 'project')
+  assert.equal(projectSlugFromPath('-a-'), 'a')
+  assert.equal(projectSlugFromPath('a-'), 'a')
+  assert.equal(projectSlugFromPath('-a'), 'a')
+  assert.equal(projectSlugFromPath('a'), 'a')
+  assert.equal(projectSlugFromPath('foo---bar---'), 'foo-bar')
+})
+
+test('projectSlugFromPath is not vulnerable to ReDoS on long separator runs', () => {
+  // Regression for CodeQL js/polynomial-redos (alert #1): the old
+  // `/^-+|-+$/` alternation made the unanchored `-+$` retry every start
+  // position on `a<dashes>b`, i.e. O(n^2) — ~14.5s for 200k dashes. The
+  // lookbehind trim is linear; 100k dashes must finish in well under a
+  // second (a quadratic implementation takes ~3.5s here).
+  const longDashPath = `a${'-'.repeat(100_000)}b`
+  const start = Date.now()
+  assert.equal(projectSlugFromPath(longDashPath), 'a-b')
+  assert.ok(Date.now() - start < 1_000, 'slugification of 100k dashes must stay linear')
 })
 
 test('known efforts snapshot covers the models the catalog advertises', () => {
