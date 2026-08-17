@@ -320,17 +320,68 @@ export interface KnownDeal {
 }
 
 export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
-  // Official pricing page (pricing-limits#deals): DeepSeek V4 Pro's 75%-off
-  // deal is measured against the old $1.74 list rate and retires when DeepSeek
-  // moves to peak/off-peak pricing on 2026-08-16 16:00 UTC - the 'expiresAt'
-  // below is that exact official end timestamp, so an un-updated plugin stops
-  // showing the discount the moment it lapses.
-  'deepseek/deepseek-v4-pro': { label: '75% off', expiresAt: '2026-08-16T15:59:59.999Z' },
+  // Note: DeepSeek V4 Pro's 75%-off deal was retired on 2026-08-16 16:00 UTC
+  // when DeepSeek moved to peak/off-peak pricing (see KNOWN_PEAK_PRICING); it
+  // was removed from this snapshot once it lapsed, per the skill's rule that
+  // expired deals are dropped from the official page.
   'google/gemini-3.7-flash': { label: '50% off', expiresAt: '2026-12-31T23:59:59Z' },
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
   'xiaomi/mimo-v2.5': { label: '98% off' },
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
+}
+
+/**
+ * Models with time-of-day (peak/off-peak) pricing, per the official pricing
+ * page (`/docs/resources/pricing-limits`). Since 2026-08-16 16:00 UTC, DeepSeek
+ * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h/day,
+ * full price); the other 17 hours are off-peak at half price. The picker shows
+ * the *current* state as a compact label (`Peak`/`Half`) matching the English
+ * noun style of the other markers (`Image`, `FREE`), so a developer can tell at
+ * a glance whether calling the model right now is cheap or expensive.
+ *
+ * Keep in sync with the official pricing page when the model set or the peak
+ * windows change (see the dsh-commandcode-upstream skill).
+ */
+export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+])
+
+/** Peak hours (UTC, hour-of-day range end-exclusive): 01–03 and 06–09. */
+const PEAK_HOUR_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [1, 4],
+  [6, 10],
+]
+
+/**
+ * Whether `now` (defaults to `Date.now()`) falls in a peak-pricing hour for
+ * time-of-day-priced models. `undefined` for models outside the snapshot.
+ */
+export function peakPricingState(
+  modelId: string,
+  now: number = Date.now(),
+): 'peak' | 'off-peak' | undefined {
+  if (!KNOWN_PEAK_PRICING.has(modelId)) return undefined
+  const hour = new Date(now).getUTCHours()
+  const inPeak = PEAK_HOUR_RANGES.some(([start, end]) => hour >= start && hour < end)
+  return inPeak ? 'peak' : 'off-peak'
+}
+
+/**
+ * Compact label for the current peak/off-peak state: `Peak` (full price) or
+ * `Half` (off-peak, half price). These English nouns match the picker's other
+ * markers (`Go`, `Image`, `FREE`), and since they appear only on time-of-day
+ * priced models they double as a "priced by the hour" signal. Returns undefined
+ * for models without time-of-day pricing.
+ */
+export function peakPricingLabel(
+  modelId: string,
+  now: number = Date.now(),
+): string | undefined {
+  const state = peakPricingState(modelId, now)
+  if (state === undefined) return undefined
+  return state === 'peak' ? 'Peak' : 'Half'
 }
 
 export const COMMAND_CODE_CLI_VERSION = '1.26.0'
@@ -396,9 +447,10 @@ export function formatContext(contextWindow: number | undefined): string | undef
 
 /**
  * Compact one-line summary for the model picker: plan tier, then any active
- * deal (discount or FREE), then `Image` for Vision-capable models, then the
- * context window. Text-only models simply omit the Image marker — "Text only"
- * adds nothing the picker needs to show.
+ * deal (discount or FREE), then the current peak/off-peak state (`Peak`/`Half`)
+ * for time-of-day-priced models, then `Image` for Vision-capable models, then
+ * the context window. Text-only models simply omit the Image marker — "Text
+ * only" adds nothing the picker needs to show.
  */
 export function capabilityDescription(
   modelId: string,
@@ -410,6 +462,8 @@ export function capabilityDescription(
   if (plan !== undefined) parts.push(plan)
   const deal = dealLabel(modelId, now)
   if (deal !== undefined) parts.push(deal)
+  const peak = peakPricingLabel(modelId, now)
+  if (peak !== undefined) parts.push(peak)
   if (KNOWN_IMAGE_MODELS.has(modelId)) parts.push('Image')
   const ctx = formatContext(contextWindow)
   if (ctx !== undefined) parts.push(ctx)

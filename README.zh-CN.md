@@ -19,7 +19,7 @@
 - **插件包**：可通过 `dsh plugin add` 安装到任意 dsh 配置，并提供 **`commandcode` provider 路由**，带实时模型目录（`GET {apiBase}/provider/v1/models`，缓存于 `~/.commandcode/models-cache.json`）。
 - **专属"Command Code"设置页**（设置 → **Command Code**），带 **API key 输入框** 与连接参数（API 地址、工作目录、请求/流超时）。密钥通过 dsh 凭据服务存储；连接参数写入 `llm-commandcode` 设置段，对下一次请求即刻生效，无需重启。
 - **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
-- **模型选择器标注**：每个模型显示包含它的**最低套餐**（`KNOWN_PLANS`）、**活动折扣**或 `FREE` 徽章（`KNOWN_DEALS`，到期自动隐藏已失效折扣）、Vision 模型的 **`Image`** 标记，以及**上下文长度**（`1M` / `256K` / `262K`）——例如 *"Go · 50% off · Image · 1M"*。列表**按套餐排序**（Go → GOAT → Pro → Provider/Max），你当前套餐能用的模型总是排在最前。
+- **模型选择器标注**：每个模型显示包含它的**最低套餐**（`KNOWN_PLANS`）、**活动折扣**或 `FREE` 徽章（`KNOWN_DEALS`，到期自动隐藏已失效折扣）、峰谷定价模型的**当前时段状态**（`Peak`/`Half`，按当前 UTC 小时动态判断）、Vision 模型的 **`Image`** 标记，以及**上下文长度**（`1M` / `256K` / `262K`）——例如 *"Go · 50% off · Image · 1M"*、*"Go · Half · 1M"*。列表**按套餐排序**（Go → GOAT → Pro → Provider/Max），你当前套餐能用的模型总是排在最前。
 - **推理强度（reasoning-effort）支持**：针对官方目录标为推理模型的模型（`KNOWN_EFFORTS`，与 `command-code@1.26.0` 一致）；没有可选档位但仍支持思考的模型会自动思考，与官方 CLI 行为完全一致。
 - **支持视觉模型的图片输入**（通过 dsh 附件服务、以官方 wire 格式发送）；纯文本模型会明确拒绝图片（`UNSUPPORTED_CONTENT`）而非静默丢弃。
 

@@ -21,10 +21,13 @@ import {
   KNOWN_THINKING_MODELS,
   KNOWN_PLANS,
   KNOWN_DEALS,
+  KNOWN_PEAK_PRICING,
   planLabel,
   dealLabel,
   formatContext,
   capabilityDescription,
+  peakPricingLabel,
+  peakPricingState,
   compareByPlan,
   COMMAND_CODE_CLI_VERSION,
   DEFAULT_API_BASE,
@@ -314,7 +317,9 @@ test('resolveModel() advertises plan tier, deal, Image, and context', async () =
     assert.equal(vision.description, 'Pro · Image')
     const textOnly = await adapter.resolveModel('commandcode', 'deepseek/deepseek-v4-flash')
     assert.deepEqual(textOnly.inputModalities, ['text'])
-    assert.equal(textOnly.description, 'Go') // text-only: no Image marker
+    // Text-only DeepSeek models carry a time-of-day pricing marker (Peak/Half
+    // by current UTC hour) instead of an Image marker.
+    assert.match(textOnly.description, /^Go · (?:Peak|Half)$/)
     // A model with a permanent deal shows its discount.
     const deal = await adapter.resolveModel('commandcode', 'MiniMaxAI/MiniMax-M3')
     assert.equal(deal.description, 'Go · 50% off · Image')
@@ -345,12 +350,14 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   const byId = new Map(models.map((m) => [m.id, m]))
   assert.deepEqual(byId.get('claude-sonnet-5')!.inputModalities, ['text', 'image'])
   assert.equal(byId.get('claude-sonnet-5')!.description, 'Pro · Image · 1M')
-  // DeepSeek V4 Pro's 75% off deal lapsed 2026-08-16 16:00 UTC (see
-  // KNOWN_DEALS.expiresAt), so dealLabel() no longer shows it — the picker
-  // reflects the deal-free description.
-  assert.equal(byId.get('deepseek/deepseek-v4-pro')!.description, 'Go · 1M')
+  // DeepSeek V4 Pro's 75% off deal was retired 2026-08-16 16:00 UTC and removed
+  // from KNOWN_DEALS once it lapsed, so the picker reflects the deal-free
+  // description. DeepSeek models carry time-of-day pricing, so the
+  // peak/off-peak marker (Peak/Half) depends on the current UTC hour; the
+  // fixed parts stay deterministic.
+  assert.match(byId.get('deepseek/deepseek-v4-pro')!.description, /^Go · (?:Peak|Half) · 1M$/)
   assert.deepEqual(byId.get('deepseek/deepseek-v4-flash')!.inputModalities, ['text'])
-  assert.equal(byId.get('deepseek/deepseek-v4-flash')!.description, 'Go · 1M')
+  assert.match(byId.get('deepseek/deepseek-v4-flash')!.description, /^Go · (?:Peak|Half) · 1M$/)
   assert.equal(byId.get('poolside/laguna-s-2.1-free')!.description, 'Go · FREE · 256K')
   // The picker shows rows in returned order: Go models lead, then Pro,
   // alphabetically within a tier (input order was deliberately shuffled).
@@ -854,10 +861,10 @@ test('known plan snapshot tiers models by the official plan pages', () => {
 })
 
 test('known deals snapshot has anchors and expiry-aware labels', () => {
-  // DeepSeek V4 Pro 75% off is time-limited: the official pricing page retires
-  // it on 2026-08-16 16:00 UTC when DeepSeek moves to peak/off-peak pricing.
-  assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'].label, '75% off')
-  assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'].expiresAt, '2026-08-16T15:59:59.999Z')
+  // DeepSeek V4 Pro's 75% off deal was retired on 2026-08-16 16:00 UTC when
+  // DeepSeek moved to peak/off-peak pricing, and was removed from the snapshot
+  // once it lapsed (see KNOWN_PEAK_PRICING).
+  assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'], undefined)
   // Free model is marked free.
   assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free'].free, true)
   // Gemini 3.7 Flash 50% off through 2026-12-31.
@@ -872,9 +879,9 @@ test('dealLabel() hides a deal after its expiry date', () => {
   assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2027-01-01T00:00:00Z')), undefined)
   // Permanent deals are unaffected by any time.
   assert.equal(dealLabel('MiniMaxAI/MiniMax-M3', Date.parse('2030-01-01T00:00:00Z')), '50% off')
-  // DeepSeek V4 Pro: shown before 2026-08-16 16:00 UTC, hidden after.
-  assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-16T00:00:00Z')), '75% off')
-  assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-16T20:00:00Z')), undefined)
+  // DeepSeek V4 Pro's deal was removed from the snapshot after it lapsed; the
+  // model now carries peak/off-peak pricing instead (KNOWN_PEAK_PRICING).
+  assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
   // No deal -> undefined.
@@ -899,8 +906,12 @@ test('capabilityDescription() composes plan, deal, Image, context', () => {
   assert.equal(capabilityDescription('poolside/laguna-s-2.1-free', 256_000), 'Go · FREE · 256K')
   // Discounted Image model with context.
   assert.equal(capabilityDescription('MiniMaxAI/MiniMax-M3', 1_000_000), 'Go · 50% off · Image · 1M')
-  // Text-only model: no Image marker.
-  assert.equal(capabilityDescription('deepseek/deepseek-v4-flash', 1_000_000), 'Go · 1M')
+  // Text-only model: no Image marker. DeepSeek V4 Flash carries time-of-day
+  // pricing; a fixed off-peak time (17:00 UTC) shows the `Half` marker.
+  assert.equal(
+    capabilityDescription('deepseek/deepseek-v4-flash', 1_000_000, Date.parse('2026-08-17T17:00:00Z')),
+    'Go · Half · 1M',
+  )
   // Expired deal vanishes from the composition.
   assert.equal(
     capabilityDescription('google/gemini-3.7-flash', 1_000_000, Date.parse('2027-01-01T00:00:00Z')),
@@ -908,6 +919,42 @@ test('capabilityDescription() composes plan, deal, Image, context', () => {
   )
   // No plan knowledge -> bare parts only.
   assert.equal(capabilityDescription('some-future-model', undefined), '')
+})
+
+test('peakPricingState/Label report the current UTC peak/off-peak window', () => {
+  // Both DeepSeek models are in the time-of-day pricing snapshot.
+  assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-pro'))
+  assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash'))
+  // Non-peak-priced models report no state.
+  assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
+  assert.equal(peakPricingLabel('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
+
+  // Official windows: peak 01:00–04:00 and 06:00–10:00 UTC, off-peak otherwise.
+  const peak = (h: number) => Date.parse(`2026-08-17T${String(h).padStart(2, '0')}:30:00Z`)
+  assert.equal(peakPricingState('deepseek/deepseek-v4-flash', peak(2)), 'peak')
+  assert.equal(peakPricingLabel('deepseek/deepseek-v4-flash', peak(2)), 'Peak')
+  assert.equal(peakPricingState('deepseek/deepseek-v4-flash', peak(8)), 'peak')
+  assert.equal(peakPricingLabel('deepseek/deepseek-v4-flash', peak(8)), 'Peak')
+  assert.equal(peakPricingState('deepseek/deepseek-v4-flash', peak(17)), 'off-peak')
+  assert.equal(peakPricingLabel('deepseek/deepseek-v4-flash', peak(17)), 'Half')
+  assert.equal(peakPricingState('deepseek/deepseek-v4-flash', peak(0)), 'off-peak')
+  assert.equal(peakPricingState('deepseek/deepseek-v4-flash', peak(4)), 'off-peak')
+  assert.equal(peakPricingState('deepseek/deepseek-v4-flash', peak(10)), 'off-peak')
+  // The boundary hours: 03:59 is still peak, 04:00 is off-peak.
+  assert.equal(
+    peakPricingState('deepseek/deepseek-v4-pro', Date.parse('2026-08-17T03:59:59Z')),
+    'peak',
+  )
+  assert.equal(
+    peakPricingState('deepseek/deepseek-v4-pro', Date.parse('2026-08-17T04:00:00Z')),
+    'off-peak',
+  )
+  // Peak is 7 hours/day total (01-03 + 06-09 = 3 + 4).
+  let peakHours = 0
+  for (let h = 0; h < 24; h++) {
+    if (peakPricingState('deepseek/deepseek-v4-flash', peak(h)) === 'peak') peakHours++
+  }
+  assert.equal(peakHours, 7)
 })
 
 test('CLI version and API base constants are stable', () => {
