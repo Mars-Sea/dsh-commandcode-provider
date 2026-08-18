@@ -945,7 +945,7 @@ test('projectSlugFromPath is not vulnerable to ReDoS on long separator runs', ()
 test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
-  // Synced from the official command-code@1.26.0 model table: models that
+  // Synced from the official command-code@1.27.1 model table: models that
   // ship with effort levels must be present, and absent ones must stay out.
   // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
   // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
@@ -967,7 +967,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
-  // Re-verified against the command-code@1.26.0 ZA table (2026-08-16): these
+  // Re-verified against the command-code@1.27.1 ZA table (2026-08-18): these
   // think automatically (reasoning:!0, no efforts) and belong in the set.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
@@ -998,10 +998,12 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash'], 'go')
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.7-Max'], 'go')
   assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
-  // GOAT adds a handful of closed/premium models.
+  // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
+  // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
   assert.equal(KNOWN_PLANS['xai/grok-4.6'], 'goat')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.2'], 'goat')
+  assert.equal(KNOWN_PLANS['gpt-5.6-sol'], 'goat')
   // Pro adds Claude Sonnet/Haiku, GPT-5.x, Gemini 3.5/3.1.
   assert.equal(KNOWN_PLANS['claude-sonnet-5'], 'pro')
   assert.equal(KNOWN_PLANS['gpt-5.4'], 'pro')
@@ -1115,7 +1117,7 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.26.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.27.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

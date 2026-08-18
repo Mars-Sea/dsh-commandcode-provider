@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm](https://img.shields.io/badge/npm-@mars--sea%2Fdsh--commandcode--provider-blue.svg)](https://www.npmjs.com/package/@mars-sea/dsh-commandcode-provider)
 
-Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) LLM provider plugin for **Command Code**, ported from [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider) (MIT). It registers a `commandcode` provider whose requests are translated to Command Code's Provider API (`POST /alpha/generate`, reverse-engineered by the pi plugin, `command-code@1.26.0`).
+Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) LLM provider plugin for **Command Code**, ported from [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider) (MIT). It registers a `commandcode` provider whose requests are translated to Command Code's Provider API (`POST /alpha/generate`, reverse-engineered by the pi plugin, `command-code@1.27.1`).
 
 > This is a community integration. You need your own Command Code account and API key or subscription, and Command Code's terms apply. This project is not affiliated with Command Code, Inc.
 
@@ -21,7 +21,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **API key resolution order**: `config.apiKey` → credential ref `apiKeyEnv` (default `COMMANDCODE_API_KEY`) → launch environment → the official CLI auth file (`~/.commandcode/auth.json`, from `command-code login`).
 - **Model-picker annotations**: every model shows the **minimum plan** that includes it (`KNOWN_PLANS`), an **active deal** or `FREE` badge (`KNOWN_DEALS`, expiry-aware so lapsed discounts hide themselves), the **current peak/off-peak state** (`Peak`/`Half`) for time-of-day-priced models, an **`Image`** marker for Vision models, and the **context window** (`1M` / `256K` / `262K`) — e.g. *"Go · 50% off · Image · 1M"*, *"Go · Half · 1M"*. The list is **sorted by plan tier** (Go → GOAT → Pro → Provider/Max), so the models your plan can use lead the picker.
 - **Plan-aware picker filtering**: the picker **hides models above your subscription tier** outright (resolved live from your account's billing state). It fails open — an unreachable billing endpoint, an unknown plan, or a positive on-demand credit balance (which the official CLI treats as unlocking every model) all keep the full catalog visible — and the server stays the final gate. Set **Hide out-of-plan models** off on the settings page (or `filterModelsByPlan: false` in the `llm-commandcode` settings section) to always list every model.
-- **Reasoning-effort support** for models the official catalog marks as such (`KNOWN_EFFORTS`, matching `command-code@1.26.0`); reasoning models without effort levels still think automatically, exactly like the official CLI.
+- **Reasoning-effort support** for models the official catalog marks as such (`KNOWN_EFFORTS`, matching `command-code@1.27.1`); reasoning models without effort levels still think automatically, exactly like the official CLI.
 - **Image input for Vision-capable models** (sent in the official wire format via the dsh attachment service); text-only models refuse images loudly (`UNSUPPORTED_CONTENT`) rather than dropping them.
 
 <img src="assets/screenshots/model-picker.png" alt="Model picker with plan, deal, image and context annotations" width="250">

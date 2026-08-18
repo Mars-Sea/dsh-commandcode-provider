@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-08-18
+
+### Changed
+
+- **Synced with the official command-code@1.27.1 CLI** (upstream moved from 1.26.0 → 1.27.0 → 1.27.1). `COMMAND_CODE_CLI_VERSION` is now `1.27.1`, sent as `x-command-code-version` on every request. The only user-visible upstream change is **GPT-5.6 Sol** (added in command-code@1.27.0, "50% off in GOAT and above"): it is a GOAT-tier model, so `KNOWN_PLANS` now maps `gpt-5.6-sol` to `goat` (was `pro`) — GOAT accounts will now see it in the picker instead of having it filtered out. Re-verified every other snapshot against the official sources with no changes: `KNOWN_EFFORTS` (identical to the 1.27.1 `ZA` table), `KNOWN_IMAGE_MODELS` (the docs registry's Vision set is unchanged and includes Sol), `KNOWN_THINKING_MODELS`, `KNOWN_SUBSCRIPTION_PLANS` (the `Nn`/`$n` plan maps are untouched), `KNOWN_DEALS` (the pricing page lists no Sol deal — its "50% off" is not a `KNOWN_DEALS` entry), and `KNOWN_PEAK_PRICING` (DeepSeek V4 Pro/Flash, 01–04 & 06–10 UTC). Wire protocol, endpoints, and auth flow are unchanged in the 1.27.x bundle.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added
