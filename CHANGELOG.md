@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-08-18
+
+### Fixed
+
+- **Tool results now round-trip the real tool name, fixing multi-turn tool calls on Google Gemini models ([#5](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/5)).** `messagesToCC()` hard-coded `toolName: ''` on replayed `tool-result` messages; Anthropic/OpenAI-style backends tolerate that (they correlate by `tool_call_id`), but Gemini's `functionResponse` requires a non-empty function name, so every multi-turn tool call on Gemini-family models failed mid-stream with `[Google] Tool message must have either name or tool_call_id`. The adapter now collects each paired tool call's `toolCallId → toolName` in the same pass that computes pairing and writes the real name onto the result, falling back to `'unknown'` — mirroring the official CLI's `tool_use_id -> toolName` map (`?? "unknown"`). Thanks to @seva324 for the precise root-cause report and patch. The replay tests now assert the carried name (they previously only checked the tool message existed, which is how this slipped through), plus a new fallback case.
+
 ## [0.4.1] - 2026-08-18
 
 ### Changed

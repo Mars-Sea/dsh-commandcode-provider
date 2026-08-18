@@ -206,9 +206,47 @@ test('stream() replays only paired tool calls', async () => {
   assert.equal(parts.length, 1)
   assert.equal(parts[0]!.type, 'tool-call')
   assert.equal((parts[0] as { toolCallId: string }).toolCallId, callId)
-  // The tool result round-trips under role 'tool'.
+  // The tool result round-trips under role 'tool' with the real tool name
+  // (Gemini rejects tool results whose function name is empty).
   const toolMsg = messages.find((m) => m.role === 'tool')!
   assert.ok(toolMsg)
+  const resultPart = (toolMsg.content as Record<string, unknown>[])[0]!
+  assert.equal(resultPart.type, 'tool-result')
+  assert.equal(resultPart.toolCallId, callId)
+  assert.equal(resultPart.toolName, 'bash')
+})
+
+test('stream() falls back to "unknown" for an empty tool-call name', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const callId = 'call-empty-name'
+  const adapter = makeAdapter({ fetchImpl })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [
+      userMessage('List files'),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: callId, name: '', arguments: '{}' }],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
+        source: { kind: 'tool', callId },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  const toolMsg = messages.find((m) => m.role === 'tool')!
+  const resultPart = (toolMsg.content as Record<string, unknown>[])[0]!
+  assert.equal(resultPart.toolName, 'unknown')
 })
 
 test('stream() rejects stop sequences (unsupported option)', async () => {

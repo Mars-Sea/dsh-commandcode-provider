@@ -727,16 +727,30 @@ async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): 
 // Only tool calls with a paired tool result are replayed.
 // ---------------------------------------------------------------------------
 
-function pairedToolCallIds(messages: readonly Message[]): Set<string> {
+/**
+ * Collect the tool calls that have a paired tool result, plus each call's
+ * name. The name map feeds the `toolName` of replayed tool results: some
+ * backends (e.g. Google Gemini `functionResponse`) reject a result whose
+ * function name is empty, so the real name must round-trip (the official
+ * CLI does the same via its `tool_use_id -> toolName` map).
+ */
+function pairedToolCalls(messages: readonly Message[]): {
+  ids: Set<string>
+  names: Map<string, string>
+} {
   const callIds = new Set<string>()
+  const names = new Map<string, string>()
   const resultIds = new Set<string>()
   for (const message of messages) {
     for (const block of message.content) {
-      if (message.role === 'assistant' && block.type === 'tool-call') callIds.add(block.id)
+      if (message.role === 'assistant' && block.type === 'tool-call') {
+        callIds.add(block.id)
+        names.set(block.id, block.name)
+      }
       if (block.type === 'tool-result') resultIds.add(block.toolCallId)
     }
   }
-  return new Set([...callIds].filter((id) => resultIds.has(id)))
+  return { ids: new Set([...callIds].filter((id) => resultIds.has(id))), names }
 }
 
 function blockText(block: ContentBlock): string {
@@ -781,7 +795,7 @@ async function messagesToCC(
   readImage?: (ref: ImageAttachmentRef) => Promise<Uint8Array>,
 ): Promise<unknown[]> {
   const out: unknown[] = []
-  const paired = pairedToolCallIds(messages)
+  const { ids: paired, names: toolNames } = pairedToolCalls(messages)
 
   for (const message of messages) {
     if (message.role === 'system') continue // folded into params.system by the caller
@@ -836,7 +850,10 @@ async function messagesToCC(
           {
             type: 'tool-result',
             toolCallId: block.toolCallId,
-            toolName: '',
+            // `paired` guarantees a call with this id exists, so the map
+            // always hits; `|| 'unknown'` also guards an empty call name
+            // (matches the official CLI's `?? "unknown"` fallback).
+            toolName: toolNames.get(block.toolCallId) || 'unknown',
             output: block.isError
               ? { type: 'error-text', value: toolResultText(block) }
               : { type: 'text', value: toolResultText(block) },
