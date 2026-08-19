@@ -16,11 +16,18 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import { CommandCodeAdapter } from './adapter.ts'
 import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
+import type { CommandCodeAccountUsage, CommandCodeAccountsReport } from './usage-wire.ts'
 
 /** Everything the command needs beyond the adapter itself. */
 export interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
   /** The registered adapter (for getUsage / listModels). */
   adapter: CommandCodeAdapter<C>
+  /**
+   * Multi-account report source (wired by the plugin entry). Absent in
+   * programmatic setups, the command falls back to a single
+   * `adapter.getUsage()` report.
+   */
+  reports?: () => Promise<CommandCodeAccountsReport>
 }
 
 /** Format a dollar amount. */
@@ -59,12 +66,20 @@ function bar(used: number, cap: number): string {
   return '█'.repeat(filled) + '░'.repeat(10 - filled)
 }
 
+/** Render one account's rotation mark / cooldown as a short badge. */
+function markLabel(entry: CommandCodeAccountUsage): string {
+  if (entry.mark === 'invalid-credential') return '  ⛔ 密钥无效'
+  if (entry.cooldownUntil > 0) return `  ⏳ 限额冷却中，重置 ${resetLabel(entry.cooldownUntil)}`
+  if (entry.mark === 'rate-limit') return '  ⏳ 已达限额（等待窗口探测）'
+  return ''
+}
+
 /** Render the usage report as a structured, aligned, bar-chart text view. */
-function renderReport(report: CommandCodeUsageReport): string {
+function renderReport(report: CommandCodeUsageReport, title?: string): string {
   const lines: string[] = []
   const account = report.account ? ` (${report.account.userName || report.account.name})` : ''
 
-  lines.push(`📊 Command Code 用量${account}`, '')
+  lines.push(title ?? `📊 Command Code 用量${account}`, '')
 
   if (report.plan && report.plan.name !== '') {
     const p = report.plan
@@ -124,6 +139,16 @@ export function commandDefinition<C extends CommandCodeConnectionOptions>(
     input: { hint: '[status]' },
     handler: async () => {
       try {
+        if (deps.reports !== undefined) {
+          const { accounts } = await deps.reports()
+          const sections = accounts.map((entry) => {
+            const badges = `${entry.active ? '  ✅ 当前使用' : ''}${markLabel(entry)}`
+            const title = `📊 ${entry.label}${badges}`
+            if (!entry.configured) return `${title}\n\n  (未配置 API 密钥)`
+            return renderReport(entry.report, title)
+          })
+          return { kind: 'success', text: sections.join('\n\n────────────────────\n\n') }
+        }
         const report = await adapter.getUsage()
         return { kind: 'success', text: renderReport(report) }
       } catch (error: unknown) {

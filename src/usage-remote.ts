@@ -17,13 +17,20 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import type { CommandCodeAdapter, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
+import type { CommandCodeAdapter, CommandCodeConnectionOptions } from './adapter.ts'
 import { USAGE_HOST_CONTRIBUTION } from './usage-wire.ts'
+import type { CommandCodeAccountsReport } from './usage-wire.ts'
 
 /** Everything the usage service needs beyond its Cordis context. */
 export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
   /** The registered adapter (for getUsage). */
   adapter: CommandCodeAdapter<C>
+  /**
+   * Multi-account report source (wired by the plugin entry). Absent in
+   * programmatic setups, the service falls back to a single default-account
+   * entry around `adapter.getUsage()`.
+   */
+  reports?: () => Promise<CommandCodeAccountsReport>
 }
 
 /**
@@ -52,13 +59,27 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
   }
 
   /**
-   * Account, usage, and credit state for the settings page's account card.
-   * Degrades per endpoint like the `/commandcode` command (failures land in
-   * `report.failures`); throws `MISSING_CREDENTIAL` when no key resolves, which
-   * the Gateway folds into the failure branch the page renders as a hint.
+   * Account, usage, and credit state for the settings page's account card —
+   * one entry per pool account when the plugin entry wired `reports`, a
+   * single default-account entry otherwise. Degrades per endpoint like the
+   * `/commandcode` command (failures land in `report.failures`); throws
+   * `MISSING_CREDENTIAL` when no key resolves, which the Gateway folds into
+   * the failure branch the page renders as a hint.
    */
-  async report(): Promise<CommandCodeUsageReport> {
-    return this.deps.adapter.getUsage()
+  async report(): Promise<CommandCodeAccountsReport> {
+    if (this.deps.reports !== undefined) return this.deps.reports()
+    const report = await this.deps.adapter.getUsage()
+    return {
+      accounts: [{
+        id: 'default',
+        label: 'Default',
+        configured: true,
+        active: true,
+        mark: '',
+        cooldownUntil: 0,
+        report,
+      }],
+    }
   }
 }
 

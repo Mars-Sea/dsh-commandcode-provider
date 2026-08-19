@@ -395,3 +395,179 @@ test('dispose() releases external subscriptions and stops publishing', () => {
   hostListener?.()
   assert.equal(controller.state().defaultWorkingDir, '/home/me/proj')
 })
+
+// ---------------------------------------------------------------------------
+// Multi-account management
+// ---------------------------------------------------------------------------
+
+test('starts with no extra accounts and stays clean', () => {
+  const { controller } = makeController()
+  assert.deepEqual(controller.state().accounts, [])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('addAccount stages a new account with a free credential reference', async () => {
+  const scope = makeScope({
+    value: { accounts: [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+    user: { accounts: [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+  })
+  const { controller } = makeController({ scope })
+  controller.addAccount()
+  const accounts = controller.state().accounts
+  assert.equal(accounts.length, 2)
+  assert.equal(accounts[0]?.ref, 'COMMANDCODE_API_KEY_2')
+  assert.equal(accounts[0]?.label, 'Go #2')
+  assert.equal(accounts[0]?.added, false)
+  // The staged addition takes the first free ref and is marked unsaved.
+  assert.equal(accounts[1]?.ref, 'COMMANDCODE_API_KEY_3')
+  assert.equal(accounts[1]?.added, true)
+  assert.equal(controller.state().dirty, true)
+})
+
+test('saving an added account writes the key through credentials and the list through the scope', async () => {
+  const scope = makeScope({})
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  controller.addAccount()
+  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
+  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
+  await controller.save()
+
+  // The key literal went to the credentials domain, never the settings doc.
+  assert.equal(api.store.get('COMMANDCODE_API_KEY_2'), 'sk-second')
+  const stored = scope.state.value.accounts as Array<Record<string, unknown>>
+  assert.deepEqual(stored, [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }])
+  assert.ok(!('apiKey' in stored[0]!))
+  // After the landed save the staging cleared and the account shows configured.
+  const account = controller.state().accounts[0]
+  assert.equal(account?.added, false)
+  assert.equal(account?.configured, true)
+  assert.equal(controller.state().dirty, false)
+})
+
+test('a blank key draft keeps the stored key but still saves label edits', async () => {
+  const scope = makeScope({
+    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+    user: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+  })
+  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-kept']]) })
+  const { controller } = makeController({ scope, api })
+  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
+  await controller.save()
+  assert.equal(api.store.get('COMMANDCODE_API_KEY_2'), 'sk-kept')
+  const stored = scope.state.value.accounts as Array<Record<string, unknown>>
+  assert.equal(stored[0]?.label, 'Go #2')
+})
+
+test('removeAccount stages removal of a stored account and save persists it', async () => {
+  const scope = makeScope({
+    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+    user: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+  })
+  const { controller } = makeController({ scope })
+  controller.removeAccount('COMMANDCODE_API_KEY_2')
+  assert.deepEqual(controller.state().accounts, [])
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.deepEqual(scope.state.value.accounts, [])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('removing an unsaved addition drops it without touching the scope', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  controller.addAccount()
+  controller.removeAccount('COMMANDCODE_API_KEY_2')
+  assert.deepEqual(controller.state().accounts, [])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('discard clears staged account edits', () => {
+  const { controller } = makeController()
+  controller.addAccount()
+  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-draft')
+  controller.discard()
+  assert.deepEqual(controller.state().accounts, [])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('extra account credential state comes from the credentials domain', async () => {
+  const scope = makeScope({
+    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+  })
+  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-stored']]) })
+  const { controller } = makeController({ scope, api })
+  // describeAll() ran from the constructor; wait for it to land.
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const account = controller.state().accounts[0]
+  assert.equal(account?.configured, true)
+  assert.equal(account?.writable, true)
+})
+
+test('activeAccount stages through the generic field machinery and saves to the section', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().activeAccount.text, '')
+  controller.edit('activeAccount', 'COMMANDCODE_API_KEY_2')
+  assert.equal(controller.state().activeAccount.text, 'COMMANDCODE_API_KEY_2')
+  assert.equal(controller.state().activeAccount.overridden, true)
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.equal(scope.state.value.activeAccount, 'COMMANDCODE_API_KEY_2')
+  assert.equal(controller.state().dirty, false)
+  // Selecting "auto" ('') on a stored value stages a clear; save unsets it.
+  controller.edit('activeAccount', '')
+  await controller.save()
+  assert.equal('activeAccount' in scope.state.value, false)
+})
+
+test('removing the pinned active account also stages the selection clear', async () => {
+  const scope = makeScope({
+    value: {
+      accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }],
+      activeAccount: 'COMMANDCODE_API_KEY_2',
+    },
+    user: {
+      accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }],
+      activeAccount: 'COMMANDCODE_API_KEY_2',
+    },
+  })
+  const { controller } = makeController({ scope })
+  controller.removeAccount('COMMANDCODE_API_KEY_2')
+  // The removal stages the activeAccount clear; one save persists both.
+  await controller.save()
+  assert.deepEqual(scope.state.value.accounts, [])
+  assert.equal('activeAccount' in scope.state.value, false)
+})
+
+test('a failed key write aborts the save before the accounts list lands', async () => {
+  const scope = makeScope({})
+  const store = new Map<string, string>()
+  const api = {
+    credentials: {
+      describe: async ({ refs }: { refs: string[] }) => ({
+        result: {
+          ok: true as const,
+          value: {
+            credentials: Object.fromEntries(refs.map((ref) => [ref, { configured: store.has(ref), writable: true }])),
+          },
+        },
+      }),
+      // The credentials domain rejects every write.
+      set: async () => ({ result: { ok: false as const, error: { message: 'read-only' } } }),
+    },
+  }
+  const { controller } = makeController({ scope, api: api as unknown as ReturnType<typeof makeApi> })
+  controller.addAccount()
+  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
+  await controller.save()
+
+  assert.equal(controller.state().failed, true)
+  // The accounts list write never ran (short-circuit at the failed key write),
+  // so nothing partial landed…
+  assert.equal('accounts' in scope.state.value, false)
+  // …and the staged addition survives exactly once for the retry — no
+  // stored-plus-staged duplication.
+  assert.equal(controller.state().accounts.length, 1)
+  assert.equal(controller.state().accounts[0]?.added, true)
+})

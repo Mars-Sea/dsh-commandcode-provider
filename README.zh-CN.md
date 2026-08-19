@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm](https://img.shields.io/badge/npm-@mars--sea%2Fdsh--commandcode--provider-blue.svg)](https://www.npmjs.com/package/@mars-sea/dsh-commandcode-provider)
 
-非官方 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的 LLM provider 插件，用于 **Command Code**，移植自 [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider)（MIT 协议）。它注册了一个 `commandcode` provider，将请求转换为 Command Code 的 Provider API（`POST /alpha/generate`，由 pi 插件逆向工程，对应 `command-code@1.27.1`）。
+非官方 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的 LLM provider 插件，用于 **Command Code**，移植自 [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider)（MIT 协议）。它注册了一个 `commandcode` provider，将请求转换为 Command Code 的 Provider API（`POST /alpha/generate`，由 pi 插件逆向工程，对应 `command-code@1.28.1`）。
 
 > 这是一个社区集成。你需要自己的 Command Code 账号、API key 或订阅，并遵守 Command Code 的服务条款。本项目与 Command Code, Inc. 无关。
 
@@ -18,10 +18,11 @@
 
 - **插件包**：可通过 `dsh plugin add` 安装到任意 dsh 配置，并提供 **`commandcode` provider 路由**，带实时模型目录（`GET {apiBase}/provider/v1/models`，缓存于 `~/.commandcode/models-cache.json`）。
 - **专属"Command Code"设置页**（设置 → **Command Code**），带 **API key 输入框**、连接参数（API 地址、工作目录、请求/流超时）、**实时「账户用量」卡片**（统计、额度、窗口进度条、订阅套餐徽章）以及**「隐藏套餐外模型」开关**。密钥通过 dsh 凭据服务存储；连接参数写入 `llm-commandcode` 设置段，对下一次请求即刻生效，无需重启。
+- **多账户轮换**：一个账户的用量窗口（如 Go 套餐的 5 小时限额）打满后，请求**无缝切换到下一个账户**——429/401 触发被动切换，请求体与账户无关（`threadId` 每次随机），模型完全无感；全部耗尽时报错并提示**最早的重置时间**。设置页的「多账户轮换」卡片可添加/命名/移除账户，`/commandcode` 与用量卡片按账户分别展示状态。详见[多账户轮换](#多账户轮换)。
 - **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
 - **模型选择器标注**：每个模型显示包含它的**最低套餐**（`KNOWN_PLANS`）、**活动折扣**或 `FREE` 徽章（`KNOWN_DEALS`，到期自动隐藏已失效折扣）、峰谷定价模型的**当前时段状态**（`Peak`/`Half`，按当前 UTC 小时动态判断）、Vision 模型的 **`Image`** 标记，以及**上下文长度**（`1M` / `256K` / `262K`）——例如 *"Go · 50% off · Image · 1M"*、*"Go · Half · 1M"*。列表**按套餐排序**（Go → GOAT → Pro → Provider/Max），你当前套餐能用的模型总是排在最前。
 - **按套餐过滤选择器**：选择器会**直接隐藏超出你订阅套餐的模型**（根据账户账单状态实时判断）。全程失败开放——账单接口不可用、套餐未知，或账户持有按需余额（官方 CLI 视为解锁全部模型）时都显示完整目录——服务端仍是最终闸门。在设置页关闭「隐藏套餐外模型」开关（或在 `llm-commandcode` 设置段中设 `filterModelsByPlan: false`）可始终列出全部模型。
-- **推理强度（reasoning-effort）支持**：针对官方目录标为推理模型的模型（`KNOWN_EFFORTS`，与 `command-code@1.27.1` 一致）；没有可选档位但仍支持思考的模型会自动思考，与官方 CLI 行为完全一致。
+- **推理强度（reasoning-effort）支持**：针对官方目录标为推理模型的模型（`KNOWN_EFFORTS`，与 `command-code@1.28.1` 一致）；没有可选档位但仍支持思考的模型会自动思考，与官方 CLI 行为完全一致。
 - **支持视觉模型的图片输入**（通过 dsh 附件服务、以官方 wire 格式发送）；纯文本模型会明确拒绝图片（`UNSUPPORTED_CONTENT`）而非静默丢弃。
 
 <img src="assets/screenshots/model-picker.png" alt="带套餐、折扣、图片与上下文标注的模型选择器" width="250">
@@ -138,6 +139,31 @@ dsh web
 ![用量面板](assets/screenshots/usage-dashboard.png)
 
 每个端点独立降级——某个端点临时失败不会影响其他数据，并会在末尾内联提示失败。
+
+## 多账户轮换
+
+有多个 Command Code 订阅时，插件可以在一个账户达到用量限额后**自动切换到下一个账户**：
+
+- **被动切换，零额外开销**：只有请求真正被 pre-stream 拒绝时才轮换——429（窗口打满）标记该账户耗尽、401 标记其密钥失效，adapter 随即用下一个账户的 key 重发同一请求（请求体与账户无关、`threadId` 每次随机，模型完全无感）。
+- **精确复活**：当所有账户都被标记时，插件会用每个 key 查询 `/alpha/billing/credits` 的真实 5 小时窗口——已重置的账户立即复活；仍全部耗尽则抛出 `RATE_LIMIT` 错误并注明**最早的重置时间**（全部为 401 则抛 `INVALID_CREDENTIAL`）。
+- **配置入口**：**设置 → Command Code** 的「多账户轮换」卡片——**添加账户**后为每个账户填备注名和 API key（每个 key 通过凭据服务存于独立引用 `COMMANDCODE_API_KEY_2`…，与默认 key 一样只写不回显）。顶层的 key 始终是第一顺位的 `default` 账户。
+- **手动切换**：同一张卡片上的「当前使用账户」下拉框可以**手动指定优先账户**（持久化为 `activeAccount` 设置项），保存后下次请求即生效；所选账户耗尽时仍自动回落到其他可用账户，窗口重置后自动回到所选账户。
+- **按账户展示**：设置页的「账户用量」卡片按账户分区显示，带「当前使用 / 限额冷却中 / 密钥无效」徽章；`/commandcode` 命令同样按账户输出。
+
+等价的 YAML（`$DSH_HOME/settings.yaml` 或组合配置）：
+
+```yaml
+llm-commandcode:
+  apiKeyEnv: COMMANDCODE_API_KEY        # 第一顺位（default）账户
+  activeAccount: COMMANDCODE_API_KEY_2   # 可选：手动指定当前账户（default 或某账户的凭据引用）
+  accounts:                              # 之后的轮换顺序
+    - label: Go #2
+      apiKeyEnv: COMMANDCODE_API_KEY_2
+    - label: Go #3
+      apiKeyEnv: COMMANDCODE_API_KEY_3
+```
+
+组合配置里每个账户也可写字面量 `apiKey`（优先于其 `apiKeyEnv`）；设置文档中永不存储密钥字面量。
 
 ## 配置
 

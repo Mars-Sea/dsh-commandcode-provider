@@ -17,8 +17,9 @@ import { useEffect } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
+import type { CommandCodeAccountUsage } from '../usage-wire.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
-import type { SettingsPageState, StagedField } from './settings.ts'
+import type { AccountItemState, SettingsPageState, StagedField } from './settings.ts'
 import type { UsagePageState } from './usage.ts'
 import { formatMoney, formatMoneyExact, formatResetAt, formatTokensCompact, windowRatio } from './usage.ts'
 
@@ -32,6 +33,10 @@ export interface CommandCodeSettingsProps {
   save(): void
   discard(): void
   refreshUsage(): void
+  addAccount(): void
+  removeAccount(id: string): void
+  editAccountLabel(id: string, text: string): void
+  editAccountKey(id: string, text: string): void
 }
 
 /** One labelled field row in the page body. */
@@ -218,54 +223,43 @@ function UsageWindow({
   )
 }
 
-/**
- * The account-usage card: the `/commandcode` dashboard's facts (account,
- * totals, credits, window limits) rendered as a native settings card. Data
- * arrives through the `commandcode/report` Remote; the API key never leaves
- * the Host.
- */
-function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
-  t: Translate<SettingsCommandCodeKey>
-  usage: UsagePageState
-  apiKeyConfigured: boolean
-  onRefresh(): void
-}) {
-  // First paint with a configured key fetches automatically; later fetches
-  // are explicit (refresh button) or follow a landed save.
-  useEffect(() => {
-    if (apiKeyConfigured && usage.status === 'idle') onRefresh()
-  }, [apiKeyConfigured, usage.status, onRefresh])
+/** One account's rotation state as a short badge next to its label. */
+function AccountMark({ entry, t }: { entry: CommandCodeAccountUsage; t: Translate<SettingsCommandCodeKey> }) {
+  if (entry.active) return <span className="cc-usagePlan">{t('usageActive')}</span>
+  if (entry.mark === 'invalid-credential') return <span className="cc-usagePlanStatus">{t('usageInvalidKey')}</span>
+  if (entry.cooldownUntil > 0) {
+    return <span className="cc-usagePlanStatus">{t('usageCooldown')} {formatResetAt(entry.cooldownUntil)}</span>
+  }
+  if (entry.mark === 'rate-limit') return <span className="cc-usagePlanStatus">{t('usageCooldown')}</span>
+  return null
+}
 
-  const loading = usage.status === 'loading'
-  const report = usage.report
-  const account = report?.account
+/**
+ * One pool account's facts (identity, totals, credits, window limits)
+ * rendered inside the account-usage card.
+ */
+function AccountReport({ entry, t }: { entry: CommandCodeAccountUsage; t: Translate<SettingsCommandCodeKey> }) {
+  const report = entry.report
+  const account = report.account
   const accountName = account === undefined ? '' : account.userName || account.name
-  const credits = report?.credits
-  const plan = report?.plan
+  const credits = report.credits
+  const plan = report.plan
   const planName = plan?.name ?? ''
   const planStatus = plan !== undefined && plan.status !== '' && plan.status !== 'active' ? plan.status : ''
 
   return (
-    <div className="cc-usageCard" aria-label={t('usageTitle')}>
+    <div className="cc-accountReport">
       <div className="cc-usageHead">
-        <h3 className="cc-usageTitle">{t('usageTitle')}</h3>
+        <h4 className="cc-usageTitle">{entry.label}</h4>
+        <AccountMark entry={entry} t={t} />
         {accountName !== '' ? <span className="cc-usageAccount">{accountName}</span> : null}
         {planName !== '' ? <span className="cc-usagePlan">{planName}</span> : null}
         {planStatus !== '' ? <span className="cc-usagePlanStatus">{planStatus}</span> : null}
-        <button type="button" className="cc-usageRefresh" disabled={loading || !apiKeyConfigured} onClick={onRefresh}>
-          {loading ? t('usageRefreshing') : t('usageRefresh')}
-        </button>
       </div>
 
-      {!apiKeyConfigured ? <p className="cc-usageHint">{t('usageNoKey')}</p> : null}
-      {apiKeyConfigured && report === undefined && loading ? <p className="cc-usageHint">{t('usageLoading')}</p> : null}
-      {usage.status === 'error' ? (
-        <p className="cc-usageError" role="status">
-          <span>{t('usageError')}{usage.error !== undefined && usage.error !== '' ? ` — ${usage.error}` : ''}</span>
-        </p>
-      ) : null}
+      {!entry.configured ? <p className="cc-usageHint">{t('usageUnconfigured')}</p> : null}
 
-      {report?.usage !== undefined ? (
+      {report.usage !== undefined ? (
         <div className="cc-usageStats">
           <UsageStat
             label={t('usageRequests')}
@@ -301,18 +295,176 @@ function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
         </div>
       ) : null}
 
-      {report !== undefined ? (
+      {plan !== undefined && plan.currentPeriodEnd > 0 ? (
         <div className="cc-usageMeta">
-          {plan !== undefined && plan.currentPeriodEnd > 0 ? (
-            <p className="cc-usageUpdated">{t('usagePeriodEnd')} {new Date(plan.currentPeriodEnd).toLocaleDateString()}</p>
-          ) : null}
-          {usage.fetchedAt !== undefined ? (
-            <p className="cc-usageUpdated">{t('usageUpdated')} {new Date(usage.fetchedAt).toLocaleTimeString()}</p>
-          ) : null}
+          <p className="cc-usageUpdated">{t('usagePeriodEnd')} {new Date(plan.currentPeriodEnd).toLocaleDateString()}</p>
           <span className="cc-usageMetaSpacer" />
           {report.failures.length > 0 ? <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p> : null}
         </div>
+      ) : report.failures.length > 0 ? (
+        <div className="cc-usageMeta">
+          <span className="cc-usageMetaSpacer" />
+          <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p>
+        </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * The account-usage card: the `/commandcode` dashboard's facts rendered as
+ * a native settings card — one section per pool account. Data arrives
+ * through the `commandcode/report` Remote; the API keys never leave the
+ * Host.
+ */
+function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
+  t: Translate<SettingsCommandCodeKey>
+  usage: UsagePageState
+  apiKeyConfigured: boolean
+  onRefresh(): void
+}) {
+  // First paint with a configured key fetches automatically; later fetches
+  // are explicit (refresh button) or follow a landed save.
+  useEffect(() => {
+    if (apiKeyConfigured && usage.status === 'idle') onRefresh()
+  }, [apiKeyConfigured, usage.status, onRefresh])
+
+  const loading = usage.status === 'loading'
+  const report = usage.report
+
+  return (
+    <div className="cc-usageCard" aria-label={t('usageTitle')}>
+      <div className="cc-usageHead">
+        <h3 className="cc-usageTitle">{t('usageTitle')}</h3>
+        <span className="cc-usageMetaSpacer" />
+        <button type="button" className="cc-usageRefresh" disabled={loading || !apiKeyConfigured} onClick={onRefresh}>
+          {loading ? t('usageRefreshing') : t('usageRefresh')}
+        </button>
+      </div>
+
+      {!apiKeyConfigured ? <p className="cc-usageHint">{t('usageNoKey')}</p> : null}
+      {apiKeyConfigured && report === undefined && loading ? <p className="cc-usageHint">{t('usageLoading')}</p> : null}
+      {usage.status === 'error' ? (
+        <p className="cc-usageError" role="status">
+          <span>{t('usageError')}{usage.error !== undefined && usage.error !== '' ? ` — ${usage.error}` : ''}</span>
+        </p>
+      ) : null}
+
+      {report?.accounts.map((entry) => <AccountReport key={entry.id} entry={entry} t={t} />)}
+
+      {report !== undefined && usage.fetchedAt !== undefined ? (
+        <div className="cc-usageMeta">
+          <span className="cc-usageMetaSpacer" />
+          <p className="cc-usageUpdated">{t('usageUpdated')} {new Date(usage.fetchedAt).toLocaleTimeString()}</p>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** One extra account row: label, key, configured badge, remove affordance. */
+function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
+  account: AccountItemState
+  disabled: boolean
+  t: Translate<SettingsCommandCodeKey>
+  onLabel(text: string): void
+  onKey(text: string): void
+  onRemove(): void
+}) {
+  const locked = !account.writable
+  return (
+    <div className="cc-field">
+      <div className="cc-fieldHead">
+        <label className="cc-label" htmlFor={`cc-account-label-${account.id}`}>{t('accountLabel')}</label>
+        <span className="cc-badges">
+          {account.added ? <span className="cc-badge">{t('unsaved')}</span> : null}
+          <span className={account.configured ? 'cc-badge' : 'cc-badgeMuted'}>
+            {account.configured ? t('apiKeySet') : t('apiKeyUnset')}
+          </span>
+          <button type="button" className="cc-reset" disabled={disabled} onClick={onRemove}>{t('accountRemove')}</button>
+        </span>
+      </div>
+      <input
+        id={`cc-account-label-${account.id}`}
+        className="cc-input"
+        type="text"
+        value={account.label}
+        disabled={disabled}
+        onChange={(event) => onLabel(event.target.value)}
+      />
+      <input
+        id={`cc-account-key-${account.id}`}
+        className="cc-input"
+        type="password"
+        autoComplete="off"
+        placeholder={t('accountKey')}
+        value={account.keyText}
+        disabled={disabled || locked}
+        onChange={(event) => onKey(event.target.value)}
+      />
+      <p className="cc-hint">{locked ? t('apiKeyLocked') : t('accountKeyHint')}</p>
+    </div>
+  )
+}
+
+/** The multi-account card: extra accounts in rotation order + add button. */
+function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onActive, onActiveReset }: {
+  t: Translate<SettingsCommandCodeKey>
+  state: SettingsPageState
+  disabled: boolean
+  onAdd(): void
+  onRemove(id: string): void
+  onLabel(id: string, text: string): void
+  onKey(id: string, text: string): void
+  onActive(text: string): void
+  onActiveReset(): void
+}) {
+  const active = state.activeAccount
+  return (
+    <div className="cc-card" aria-label={t('accountsTitle')}>
+      <div className="cc-field">
+        <div className="cc-fieldHead">
+          <label className="cc-label">{t('accountsTitle')}</label>
+          <span className="cc-badges">
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onAdd}>{t('accountAdd')}</button>
+          </span>
+        </div>
+        <p className="cc-hint">{t('accountsHint')}</p>
+      </div>
+      <div className="cc-field">
+        <div className="cc-fieldHead">
+          <label className="cc-label" htmlFor="cc-active-account">{t('activeAccount')}</label>
+          <span className="cc-badges">
+            {active.overridden ? <span className="cc-badge">{t('overridden')}</span> : null}
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onActiveReset}>{t('reset')}</button>
+          </span>
+        </div>
+        <select
+          id="cc-active-account"
+          className="cc-input"
+          value={active.text}
+          disabled={disabled}
+          onChange={(event) => onActive(event.target.value)}
+        >
+          <option value="">{t('activeAccountAuto')}</option>
+          <option value="default">{t('accountDefault')}</option>
+          {state.accounts.filter((account) => !account.added).map((account) => (
+            <option key={account.id} value={account.ref}>{account.label}</option>
+          ))}
+        </select>
+        <p className="cc-hint">{t('activeAccountHint')}</p>
+      </div>
+      {state.accounts.map((account) => (
+        <AccountRow
+          key={account.id}
+          account={account}
+          disabled={disabled}
+          t={t}
+          onLabel={(text) => onLabel(account.id, text)}
+          onKey={(text) => onKey(account.id, text)}
+          onRemove={() => onRemove(account.id)}
+        />
+      ))}
     </div>
   )
 }
@@ -332,8 +484,19 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
       <UsageCard
         t={t}
         usage={usage}
-        apiKeyConfigured={state.apiKeyConfigured}
+        apiKeyConfigured={state.anyAccountConfigured}
         onRefresh={props.refreshUsage}
+      />
+      <AccountsCard
+        t={t}
+        state={state}
+        disabled={disabled}
+        onAdd={props.addAccount}
+        onRemove={props.removeAccount}
+        onLabel={props.editAccountLabel}
+        onKey={props.editAccountKey}
+        onActive={(text) => props.edit('activeAccount', text)}
+        onActiveReset={() => props.resetField('activeAccount')}
       />
       <div className="cc-card">
         <SecretKeyField

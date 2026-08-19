@@ -14,7 +14,10 @@ An unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-har
 
 ```
 src/adapter.ts        CommandCodeAdapter (LlmAdapter) — wire protocol, message
-                      conversion, SSE/JSONL stream parsing, catalog + cache.
+                      conversion, SSE/JSONL stream parsing, catalog + cache,
+                      pre-stream account rotation loop.
+src/accounts.ts       CommandCodeAccountPool — multi-account slots, per-key
+                      rotation state (429/401 marks), window-probe revival.
 src/index.ts          Plugin entry: Config schema, credential resolution,
                       settings namespace, route + directory registration,
                       /commandcode command wiring, usage-Remote wiring.
@@ -37,6 +40,7 @@ src/client/section.tsx  The settings page React component (settings form +
 src/client/sessions.ts  selectModel friendly-error wrapper (React-free).
 src/client/locales.ts   zh/en copy + LocaleNamespaceMap augmentation.
 tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
+tests/accounts.test.ts Account-pool rotation tests.
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/client.test.ts  sessions-wrapper tests.
 tests/settings.test.ts settings-page controller tests.
@@ -60,13 +64,14 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   key through `connection.api.credentials` under the `COMMANDCODE_API_KEY`
   reference — never through the settings section, so the key literal cannot
   leak into a settings document. `tests/settings.test.ts` pins this contract.
-- **Wire protocol** (reverse-engineered, command-code@1.27.1):
+- **Wire protocol** (reverse-engineered, command-code@1.28.1):
   - `POST {apiBase}/alpha/generate` — body `{ config, memory, taste, skills, params: { model, messages, tools, system, max_tokens, temperature, stream, reasoning_effort? }, threadId }`.
   - Image parts use the official CLI wire shape: `{ type: 'image', source: { type: 'base64', media_type, data } }` (NOT pi's `data:` data-URI form).
   - Stream: SSE-ish JSONL events `text-delta | reasoning-start/delta/end | tool-call | tool-result | finish | error`.
   - Catalog: `GET {apiBase}/provider/v1/models` → `{ object: 'list', data: [{ id, name, context_length }] }`.
-  - Defaults: `apiBase = https://api.commandcode.ai`, `COMMAND_CODE_CLI_VERSION = '1.27.1'`.
+  - Defaults: `apiBase = https://api.commandcode.ai`, `COMMAND_CODE_CLI_VERSION = '1.28.1'`.
 - **API key resolution order** (in `src/index.ts`): `config.apiKey` → credential ref `apiKeyEnv` (default `COMMANDCODE_API_KEY`, via the dsh credentials seam) → launch environment → official CLI auth file `~/.commandcode/auth.json`. **pi/OMP auth files are intentionally NOT scanned** — keep it that way.
+- **Multi-account rotation** (`src/accounts.ts` + the adapter's connect loop): the top-level key forms the `default` slot; `Config.accounts` (`[{ label, apiKeyEnv | apiKey }]`) adds more, in rotation order. Rotation is **passive**: a key is marked only on a real pre-stream rejection (429 → `unknown` cooldown, 401 → `disabled`), and the adapter's `rotateApiKey` hook re-sends the same request with the next account's key (safe: nothing streamed, the body is account-independent, `threadId` random per request — mid-stream failures NEVER rotate). When every account is marked, the pool probes `/alpha/billing/credits` per key (`probeFiveHourWindow`) to revive reset windows, else throws `RATE_LIMIT` naming the earliest `resetAt` (all-401 → `INVALID_CREDENTIAL`). State is keyed by API key, not slot — shared credentials share one mark. **Manual selection**: `Config.activeAccount` (a slot id) pins the serving account via the pool's `preferredId` seam + `selectActiveAccount()` (shared with the usage view's active badge); a pinned-but-exhausted or unknown id falls back to rotation order. Extra-account slot ids are the credential reference itself (`COMMANDCODE_API_KEY_2`, …) so a stored selection survives list reorders/removals; only literal-only composition entries keep positional `account-N` ids. The settings page edits `activeAccount` through the generic section-field machinery (a `<select>` bound to a text field). The picker's billing-access cache is per key. The usage Remote result is `CommandCodeAccountsReport` (`{ accounts: [...] }`); host and client ship in one bundle, so wire-shape changes need no migration — only synced edits in `src/usage-wire.ts`, `src/usage-remote.ts`, `src/client/usage.ts`, and `src/commands.ts`.
 - **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings. Reasoning blocks are intentionally NOT replayed into later turns (matches the CLI; private reasoning must not leak). Only tool calls with a paired tool result are replayed.
 - **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 → `RATE_LIMIT`; other HTTP → `PROVIDER_HTTP_ERROR` (403 body's `error.code`, e.g. `MODEL_NOT_IN_PLAN`, is parsed into the message). Unsupported options (`stop`) and image input throw `UNSUPPORTED_OPTION` / `UNSUPPORTED_CONTENT` rather than silently dropping.
 - **Adapter is cordis-free** by design: `src/adapter.ts` takes a per-request `options()` thunk + `resolveApiKey()` from the plugin entry, so settings changes reach the next request without re-registration. It also accepts an injectable `fetchImpl` for tests.
@@ -85,7 +90,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the CLI bundle's `ZA` model table (`command-code/dist/cli.mjs`), **not** the docs page (whose `Reasoning` flag means "thinks", not "has effort levels").
   - `KNOWN_IMAGE_MODELS` — Vision-capable models, synced from [commandcode.ai/docs/reference/cli/models](https://commandcode.ai/docs/reference/cli/models); note catalog IDs can differ from doc IDs (e.g. `claude-haiku-4-5-20251001` vs doc's `claude-haiku-4-5`).
   - `KNOWN_THINKING_MODELS` — models with `reasoning:!0` but no effort levels in the `ZA` table (they think automatically). Not displayed in the picker.
-  - `KNOWN_PLANS` — catalog ID → minimum plan tier (`go`/`goat`/`pro`/`provider`), synced from the plan pages ([go](https://commandcode.ai/docs/plans/go) ⊂ [goat](https://commandcode.ai/docs/plans/goat) ⊂ [pro](https://commandcode.ai/docs/plans/pro) ⊂ provider/max). Strict superset chain; every catalog ID covered exactly once (33/37/50/55 as of 2026-08).
+  - `KNOWN_PLANS` — catalog ID → minimum plan tier (`go`/`goat`/`pro`/`provider`), synced from the plan pages ([go](https://commandcode.ai/docs/plans/go) ⊂ [goat](https://commandcode.ai/docs/plans/goat) ⊂ [pro](https://commandcode.ai/docs/plans/pro) ⊂ provider/max). Strict superset chain; every catalog ID covered exactly once (34/38/51/56 as of 2026-08-18, command-code@1.28.1).
   - `KNOWN_SUBSCRIPTION_PLANS` — subscription `planId` prefix → `{ name, monthlyCredits, tierWeight }` for the account's own plan (from `/alpha/billing/subscriptions`), synced from the CLI bundle's plan maps (`Nn`/`$n`; `tierWeight` is plugin-added for the picker filter). `subscriptionPlanInfo()` mirrors the CLI's `getPlanInfo` longest-prefix matching. Distinct from `KNOWN_PLANS` (model → minimum tier).
   - `KNOWN_DEALS` — catalog ID → `{ label, expiresAt?, free? }` from the pricing page's `#deals`. **Expiry-aware**: `dealLabel()` hides a deal once `Date.now()` passes its `expiresAt`, so an un-updated plugin never shows a lapsed discount.
   - `KNOWN_PEAK_PRICING` — catalog IDs with hourly (peak/off-peak) pricing, synced from the pricing page's model rows. Peak windows live in `PEAK_HOUR_RANGES` (UTC, end-exclusive); `peakPricingLabel()` maps the **current** UTC hour to `Peak`/`Half`.
@@ -111,7 +116,7 @@ npm pack --dry-run      # verify publish contents (must include lib/, cordis.pat
 3. `npm run typecheck && npm test && npm run build`.
 4. Commit, then `npm publish` (requires the maintainer's 2FA OTP; the maintainer runs it, not the agent).
 5. Tag and push: `git tag v<version> && git push && git push --tags`.
-6. **Create a GitHub Release** for the tag (`gh release create v<version> --title "v<version>" --notes "<notes from CHANGELOG>"`). Releases — not tags or pushes — are what star followers see in their activity feed and get notified about; skipping this step makes the release invisible to users who starred the repo.
+6. **Create a GitHub Release** for the tag (`gh release create v<version> --title "v<version>" --notes "<notes from CHANGELOG>"`). The release notes must be **bilingual**: the English CHANGELOG notes first, then a `---` divider and a `## 中文` section with the Simplified Chinese translation of the same notes (mirror the README.md / README.zh-CN.md pair). Releases — not tags or pushes — are what star followers see in their activity feed and get notified about; skipping this step makes the release invisible to users who starred the repo.
 
 ## Rules
 

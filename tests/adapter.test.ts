@@ -983,7 +983,10 @@ test('projectSlugFromPath is not vulnerable to ReDoS on long separator runs', ()
 test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
-  // Synced from the official command-code@1.27.1 model table: models that
+  // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
+  // both Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
+  assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
+  // Synced from the official command-code@1.28.1 model table: models that
   // ship with effort levels must be present, and absent ones must stay out.
   // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
   // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
@@ -1005,7 +1008,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
-  // Re-verified against the command-code@1.27.1 ZA table (2026-08-18): these
+  // Re-verified against the command-code@1.28.1 ZA table (2026-08-18): these
   // think automatically (reasoning:!0, no efforts) and belong in the set.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
@@ -1016,6 +1019,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5.1'))
   assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5.2-Fast'))
   // Models with selectable efforts are not "auto" — they carry their own UI.
+  assert.ok(!KNOWN_THINKING_MODELS.has('Qwen/Qwen3.8-27B'))
   assert.ok(!KNOWN_THINKING_MODELS.has('claude-opus-5'))
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.5'))
@@ -1026,6 +1030,8 @@ test('known image models snapshot has stable anchor entries', () => {
   // model (the latter is deliberately absent).
   assert.ok(KNOWN_IMAGE_MODELS.has('claude-sonnet-5'))
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
+  // Qwen 3.8 27B (command-code@1.28.0) is Vision per the official registry.
+  assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-27B'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
 })
@@ -1036,6 +1042,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash'], 'go')
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.7-Max'], 'go')
   assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
+  // Qwen 3.8 27B (command-code@1.28.0) is on the Go plan page.
+  assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-27B'], 'go')
   // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
   // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
@@ -1155,7 +1163,7 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.27.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.28.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -1172,4 +1180,140 @@ test('resolveAuthFileApiKey is safe without an auth file', async () => {
     threw = true
   }
   assert.equal(threw, false)
+})
+
+// ---------------------------------------------------------------------------
+// Multi-account rotation
+// ---------------------------------------------------------------------------
+
+/** A fetch stub that scripts one response per Bearer key and records calls. */
+function fetchByKey(byKey: Record<string, { status: number; body: string }>): {
+  fetchImpl: typeof fetch
+  calls: Array<{ key: string; status: number }>
+} {
+  const calls: Array<{ key: string; status: number }> = []
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    const key = (headers.Authorization ?? '').replace(/^Bearer /, '')
+    const canned = byKey[key] ?? { status: 500, body: 'unscripted key' }
+    calls.push({ key, status: canned.status })
+    return new Response(canned.body, {
+      status: canned.status,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+  return { fetchImpl, calls }
+}
+
+const FINISH_STREAM = 'data: {"type":"finish","finishReason":"stop"}\n\n'
+
+test('stream() rotates to the next account after a pre-stream 429', async () => {
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': { status: 429, body: 'rate limited' },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const rotated: Array<[string, string]> = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (rejected, rejection) => {
+      rotated.push([rejected, rejection])
+      return 'key-2'
+    },
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+
+  // Two connect attempts: key-1 refused, key-2 served; the rotation hook saw
+  // the rejection exactly once and the stream finished normally.
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.deepEqual(rotated, [['key-1', 'rate-limit']])
+  assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+})
+
+test('stream() rotates past an invalid-credential account (401)', async () => {
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': { status: 401, body: JSON.stringify({ error: { code: 'UNAUTHORIZED' } }) },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const rotated: Array<[string, string]> = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (rejected, rejection) => {
+      rotated.push([rejected, rejection])
+      return 'key-2'
+    },
+  })
+  await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.deepEqual(rotated, [['key-1', 'invalid-credential']])
+})
+
+test('stream() surfaces the 429 when rotation offers no other account', async () => {
+  const { fetchImpl, calls } = fetchByKey({ 'key-1': { status: 429, body: 'rate limited' } })
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async () => undefined,
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'RATE_LIMIT',
+  )
+  assert.equal(calls.length, 1)
+})
+
+test('stream() never retries with a key it already tried', async () => {
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': { status: 429, body: 'rate limited' },
+    'key-2': { status: 429, body: 'rate limited' },
+  })
+  // A misbehaving hook cycling key-1 <-> key-2 must terminate, not loop.
+  const keys = ['key-2', 'key-1']
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async () => keys.shift(),
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'RATE_LIMIT',
+  )
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+})
+
+test('stream() propagates the rotation hook’s all-exhausted error', async () => {
+  const { fetchImpl } = fetchByKey({ 'key-1': { status: 429, body: 'rate limited' } })
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async () => {
+      throw Object.assign(new Error('all 2 Command Code account(s) have exhausted their usage window; the earliest window resets at 2030-01-01'), { code: 'RATE_LIMIT' })
+    },
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string }
+      return e.code === 'RATE_LIMIT' && /earliest window resets/.test(e.message ?? '')
+    },
+  )
+})
+
+test('probeFiveHourWindow() parses the five-hour window limit', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/alpha/billing/credits': {
+      status: 200,
+      body: { windowLimits: { fiveHour: { used: 5, cap: 5, exceeded: true, resetAt: 1_800_000_000_000 } } },
+    },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  assert.deepEqual(await adapter.probeFiveHourWindow('key-1'), { exceeded: true, resetAt: 1_800_000_000_000 })
+})
+
+test('probeFiveHourWindow() degrades to undefined on endpoint or shape failure', async () => {
+  const failing = makeAdapter({ fetchImpl: fetchReturning(500, 'boom') })
+  assert.equal(await failing.probeFiveHourWindow('key-1'), undefined)
+  const shapeless = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify({ credits: {} })) })
+  assert.equal(await shapeless.probeFiveHourWindow('key-1'), undefined)
 })

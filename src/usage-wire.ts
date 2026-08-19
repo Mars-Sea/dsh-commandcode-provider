@@ -22,6 +22,29 @@
 import type { CommandCodeUsageReport } from './adapter.ts'
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
 
+/** One account's usage entry in the multi-account report. */
+export interface CommandCodeAccountUsage {
+  /** Stable slot id (`default`, `account-2`, …). */
+  id: string
+  /** Display label (user-provided or generated). */
+  label: string
+  /** Whether an API key resolved for this account. */
+  configured: boolean
+  /** Whether this account currently serves requests (first usable slot). */
+  active: boolean
+  /** Rotation mark: `''` (usable), `'rate-limit'`, or `'invalid-credential'`. */
+  mark: string
+  /** Known cooldown end in millis; 0 when unknown or not cooling down. */
+  cooldownUntil: number
+  /** The per-account report; `failures`-only when the fetch itself failed. */
+  report: CommandCodeUsageReport
+}
+
+/** The settings page's account card data: one entry per configured account. */
+export interface CommandCodeAccountsReport {
+  accounts: CommandCodeAccountUsage[]
+}
+
 /** The npm package identity both contribution registrations claim. */
 export const USAGE_REMOTE_PACKAGE = '@mars-sea/dsh-commandcode-provider'
 
@@ -133,13 +156,35 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
   return report
 }
 
+/** Parse one untrusted boundary value into a {@link CommandCodeAccountUsage}. */
+function parseAccountUsage(value: unknown): CommandCodeAccountUsage {
+  const source = record(value, 'account')
+  return {
+    id: stringField(source, 'id', 'account.id'),
+    label: stringField(source, 'label', 'account.label'),
+    configured: booleanField(source, 'configured', 'account.configured'),
+    active: booleanField(source, 'active', 'account.active'),
+    mark: stringField(source, 'mark', 'account.mark'),
+    cooldownUntil: numberField(source, 'cooldownUntil', 'account.cooldownUntil'),
+    report: parseUsageReport(source.report),
+  }
+}
+
+/** Parse the wire result into a {@link CommandCodeAccountsReport}. */
+function parseAccountsReport(value: unknown): CommandCodeAccountsReport {
+  const source = record(value, 'result')
+  const accounts = source.accounts
+  if (!Array.isArray(accounts)) reject('accounts')
+  return { accounts: accounts.map(parseAccountUsage) }
+}
+
 /**
  * The strict result codec both halves attach to the descriptor. Hand-rolled:
  * the client bundle may not require a schema library, and `TypertSchema` is
  * deliberately minimal so one `parse` function satisfies it.
  */
-export const usageReportSchema: TypertSchema<CommandCodeUsageReport> = {
-  parse: parseUsageReport,
+export const usageReportSchema: TypertSchema<CommandCodeAccountsReport> = {
+  parse: parseAccountsReport,
 }
 
 /**
@@ -156,7 +201,7 @@ export const USAGE_REPORT_DESCRIPTOR: InvocationDescriptor = {
   parameters: [],
   result: {
     mode: 'strict',
-    typeSymbol: `${USAGE_REMOTE_PACKAGE}#CommandCodeUsageReport`,
+    typeSymbol: `${USAGE_REMOTE_PACKAGE}#CommandCodeAccountsReport`,
     schema: usageReportSchema,
   },
 }

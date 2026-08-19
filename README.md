@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm](https://img.shields.io/badge/npm-@mars--sea%2Fdsh--commandcode--provider-blue.svg)](https://www.npmjs.com/package/@mars-sea/dsh-commandcode-provider)
 
-Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) LLM provider plugin for **Command Code**, ported from [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider) (MIT). It registers a `commandcode` provider whose requests are translated to Command Code's Provider API (`POST /alpha/generate`, reverse-engineered by the pi plugin, `command-code@1.27.1`).
+Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) LLM provider plugin for **Command Code**, ported from [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider) (MIT). It registers a `commandcode` provider whose requests are translated to Command Code's Provider API (`POST /alpha/generate`, reverse-engineered by the pi plugin, `command-code@1.28.1`).
 
 > This is a community integration. You need your own Command Code account and API key or subscription, and Command Code's terms apply. This project is not affiliated with Command Code, Inc.
 
@@ -18,10 +18,11 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 
 - **Plugin bundle** installable into any dsh profile with `dsh plugin add`, plus a **`commandcode` provider route** with a live catalog (`GET {apiBase}/provider/v1/models`, cached at `~/.commandcode/models-cache.json`).
 - **Dedicated "Command Code" settings page** (Settings → **Command Code**) with an **API-key field**, connection knobs (API base, working directory, request/stream timeouts), a **live "Account usage" card** (stats, credits, window-limit bars, subscription plan badge) and a **Hide out-of-plan models** toggle. The key is stored through the dsh credentials service; connection fields land in the `llm-commandcode` section and apply to the very next request, no restart.
+- **Multi-account rotation**: when one account's usage window (e.g. the Go plan's 5-hour limit) is exhausted, requests **seamlessly switch to the next account** — passive switching on 429/401, invisible to the model (the request body is account-independent and `threadId` is random per request); when every account is exhausted the error names **the earliest window reset**. The settings page's **Account rotation** card adds/labels/removes accounts, and `/commandcode` plus the usage card report per-account state. See [Account rotation](#account-rotation).
 - **API key resolution order**: `config.apiKey` → credential ref `apiKeyEnv` (default `COMMANDCODE_API_KEY`) → launch environment → the official CLI auth file (`~/.commandcode/auth.json`, from `command-code login`).
 - **Model-picker annotations**: every model shows the **minimum plan** that includes it (`KNOWN_PLANS`), an **active deal** or `FREE` badge (`KNOWN_DEALS`, expiry-aware so lapsed discounts hide themselves), the **current peak/off-peak state** (`Peak`/`Half`) for time-of-day-priced models, an **`Image`** marker for Vision models, and the **context window** (`1M` / `256K` / `262K`) — e.g. *"Go · 50% off · Image · 1M"*, *"Go · Half · 1M"*. The list is **sorted by plan tier** (Go → GOAT → Pro → Provider/Max), so the models your plan can use lead the picker.
 - **Plan-aware picker filtering**: the picker **hides models above your subscription tier** outright (resolved live from your account's billing state). It fails open — an unreachable billing endpoint, an unknown plan, or a positive on-demand credit balance (which the official CLI treats as unlocking every model) all keep the full catalog visible — and the server stays the final gate. Set **Hide out-of-plan models** off on the settings page (or `filterModelsByPlan: false` in the `llm-commandcode` settings section) to always list every model.
-- **Reasoning-effort support** for models the official catalog marks as such (`KNOWN_EFFORTS`, matching `command-code@1.27.1`); reasoning models without effort levels still think automatically, exactly like the official CLI.
+- **Reasoning-effort support** for models the official catalog marks as such (`KNOWN_EFFORTS`, matching `command-code@1.28.1`); reasoning models without effort levels still think automatically, exactly like the official CLI.
 - **Image input for Vision-capable models** (sent in the official wire format via the dsh attachment service); text-only models refuse images loudly (`UNSUPPORTED_CONTENT`) rather than dropping them.
 
 <img src="assets/screenshots/model-picker.png" alt="Model picker with plan, deal, image and context annotations" width="250">
@@ -138,6 +139,31 @@ The plugin registers a `/commandcode` slash command (requires the dsh `commands`
 ![Usage dashboard](assets/screenshots/usage-dashboard.png)
 
 Each endpoint degrades independently — a temporary failure of one leaves the rest visible and notes the failure inline.
+
+## Account rotation
+
+With several Command Code subscriptions, the plugin **switches to the next account automatically** when one hits its usage limit:
+
+- **Passive switching, zero extra cost**: rotation happens only when a request is actually rejected pre-stream — a 429 (window exhausted) marks the account exhausted, a 401 marks its key disabled, and the adapter immediately re-sends the same request with the next account's key (the request body is account-independent and `threadId` is random per request, so the switch is invisible to the model).
+- **Precise revival**: once every account is marked, the plugin probes each key's real five-hour window via `/alpha/billing/credits` — accounts whose window already reset come back immediately; if all are still exhausted the request fails with a `RATE_LIMIT` error naming **the earliest reset time** (all-401 throws `INVALID_CREDENTIAL`).
+- **Configuration surface**: the **Account rotation** card at Settings → **Command Code** — **Add account**, then give each a label and API key (every key is stored through the credentials service under its own reference `COMMANDCODE_API_KEY_2`, …, write-only like the default key). The top-level key always serves first as the `default` account.
+- **Manual switching**: the **Active account** dropdown on the same card pins the preferred account (persisted as the `activeAccount` setting) — effective on the next request after saving. If the pinned account is exhausted, requests still rotate to another usable account, and once its window resets the pinned account serves again.
+- **Per-account reporting**: the settings page's **Account usage** card renders one section per account with **Active / Cooling down / Invalid key** badges; `/commandcode` prints one dashboard section per account.
+
+The equivalent YAML (`$DSH_HOME/settings.yaml` or composition config):
+
+```yaml
+llm-commandcode:
+  apiKeyEnv: COMMANDCODE_API_KEY        # first (default) account
+  activeAccount: COMMANDCODE_API_KEY_2   # optional: pin the active account (`default` or an account's credential ref)
+  accounts:                              # rotation order after it
+    - label: Go #2
+      apiKeyEnv: COMMANDCODE_API_KEY_2
+    - label: Go #3
+      apiKeyEnv: COMMANDCODE_API_KEY_3
+```
+
+Each account may also carry a literal `apiKey` in composition config (winning over its `apiKeyEnv`); key literals are never stored in the settings document.
 
 ## Configure
 

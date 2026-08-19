@@ -100,6 +100,8 @@ const PAGE_CSS = `
 .cc-usageBarFillWarn{background:var(--dsw-alias-label-error)}
 .cc-usageWindowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 .cc-usageMeta{align-items:center;gap:8px;display:flex}
+.cc-accountReport{border-top:1px solid var(--dsw-alias-border-l2);padding-top:12px;flex-direction:column;gap:12px;display:flex}
+.cc-accountReport:first-of-type{border-top:none;padding-top:0}
 .cc-usageMetaSpacer{flex:1}
 .cc-usageUpdated{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 .cc-usagePartial{color:var(--dsw-alias-label-error);margin:0;font-size:11px;line-height:1.5}
@@ -203,10 +205,14 @@ export function apply(ctx: Context): void {
     // so the account card refetches; a failed save keeps the old data.
     save: () => void controller.save().then(() => {
       const settled = controller.state()
-      if (!settled.failed && settled.apiKeyConfigured) void usageController.refresh()
+      if (!settled.failed && settled.anyAccountConfigured) void usageController.refresh()
     }),
     discard: () => controller.discard(),
     refreshUsage: () => void usageController.refresh(),
+    addAccount: () => controller.addAccount(),
+    removeAccount: (id: string) => controller.removeAccount(id),
+    editAccountLabel: (id: string, text: string) => controller.editAccountLabel(id, text),
+    editAccountKey: (id: string, text: string) => controller.editAccountKey(id, text),
   })
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({

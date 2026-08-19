@@ -5,7 +5,7 @@
  * community-maintained integration; you need your own Command Code account
  * and API key or subscription, and Command Code's terms apply.
  *
- * Wire protocol (reverse-engineered by the pi plugin, command-code@1.27.1):
+ * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.1):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
  *          system, max_tokens, temperature, stream, reasoning_effort? }, threadId }
@@ -46,14 +46,14 @@ import {
 } from '@deepseek-ai/dsh-llm'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.27.1 bundled
+// Static capability snapshot (from the official command-code@1.28.1 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.27.1 bundled model
+  // Re-verified against the authoritative command-code@1.28.1 bundled model
   // table (dist/cli.mjs, the 'ZA' object): exactly these models carry
   // 'reasoningEfforts'. Models marked 'reasoning:!0' without 'reasoningEfforts'
   // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -62,6 +62,7 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // the OAuth provider tables (anthropic/openai) - only the Provider-API 'ZA'
   // table is authoritative for this plugin's route.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
+  'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-7': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-8': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -109,6 +110,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.6-Plus',
   'Qwen/Qwen3.7-Flash',
   'Qwen/Qwen3.7-Plus',
+  'Qwen/Qwen3.8-27B',
   'Qwen/Qwen3.8-Max',
   'claude-fable-5',
   'claude-haiku-4-5-20251001',
@@ -146,7 +148,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (`ZA` in command-code@1.27.1) marks
+ * Models the official CLI's model table (`ZA` in command-code@1.28.1) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -154,7 +156,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.27.1 bundled model table (dist/cli.mjs, the `ZA`
+ * Source: the command-code@1.28.1 bundled model table (dist/cli.mjs, the `ZA`
  * object), cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
@@ -205,6 +207,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.7-Flash': 'go',
   'Qwen/Qwen3.7-Max': 'go',
   'Qwen/Qwen3.7-Plus': 'go',
+  'Qwen/Qwen3.8-27B': 'go',
   'Qwen/Qwen3.8-Max': 'go',
   'deepseek/deepseek-v4-flash': 'go',
   'deepseek/deepseek-v4-pro': 'go',
@@ -296,7 +299,7 @@ export function compareByPlan(
 
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (`Nn`/`$n` in command-code@1.27.1 `dist/cli.mjs`): subscription `planId`
+ * (`Nn`/`$n` in command-code@1.28.1 `dist/cli.mjs`): subscription `planId`
  * prefix → display name and the plan's monthly credit total. This is the
  * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
  * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
@@ -455,7 +458,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.27.1'
+export const COMMAND_CODE_CLI_VERSION = '1.28.1'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -906,6 +909,15 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
   options: () => C
   /** Resolve a usable API key for the given connection facts, or throw `MISSING_CREDENTIAL`. */
   resolveApiKey: (connection: C) => Promise<string>
+  /**
+   * Multi-account rotation hook: the request sent with `rejectedKey` was
+   * refused with 429 (`rate-limit`) or 401 (`invalid-credential`) before
+   * any response body streamed. The host marks that key and returns the next
+   * account's key to retry with, or `undefined` to surface the failure.
+   * Only pre-stream rejections rotate — a mid-stream failure never replays a
+   * partially consumed generation against another account.
+   */
+  rotateApiKey?: (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential', connection: C) => Promise<string | undefined>
   /** HTTP transport override (tests); defaults to the global `fetch`. */
   fetchImpl?: typeof fetch
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
@@ -971,8 +983,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   private catalog: CommandCodeModel[] = []
   private readonly fetchImpl: typeof fetch
   private readonly resolveAttachments: ResolveAttachments | undefined
-  private billingAccess: { value: CommandCodeBillingAccess | undefined; at: number } | undefined
-  private billingAccessInflight: Promise<CommandCodeBillingAccess | undefined> | undefined
+  // Billing facts are per account: with a multi-account pool each key has its
+  // own subscription tier, so the cache and the in-flight dedupe are keyed by
+  // the resolved API key (process-local only, never logged).
+  private readonly billingAccess = new Map<string, { value: CommandCodeBillingAccess | undefined; at: number }>()
+  private readonly billingAccessInflight = new Map<string, Promise<CommandCodeBillingAccess | undefined>>()
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
     super()
@@ -1085,11 +1100,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /** The headers every authenticated account endpoint shares. */
-  private async accountHeaders(): Promise<Record<string, string>> {
+  private async accountHeaders(apiKey?: string): Promise<Record<string, string>> {
     const connection = this.deps.options()
-    const apiKey = await this.deps.resolveApiKey(connection)
+    const key = apiKey ?? (await this.deps.resolveApiKey(connection))
     return {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${key}`,
       'x-command-code-version': COMMAND_CODE_CLI_VERSION,
       'x-cli-environment': 'production',
       ...attributionHeaders(),
@@ -1102,17 +1117,26 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * `undefined` means "unknown — show everything" (fail-open).
    */
   private async loadBillingAccess(): Promise<CommandCodeBillingAccess | undefined> {
-    const cached = this.billingAccess
+    let apiKey: string
+    try {
+      apiKey = await this.deps.resolveApiKey(this.deps.options())
+    } catch {
+      return undefined
+    }
+    const cached = this.billingAccess.get(apiKey)
     if (cached !== undefined && Date.now() - cached.at < BILLING_ACCESS_TTL_MS) return cached.value
-    this.billingAccessInflight ??= this.fetchBillingAccess()
+    const existing = this.billingAccessInflight.get(apiKey)
+    if (existing !== undefined) return existing
+    const inflight = this.fetchBillingAccess(apiKey)
       .then((value) => {
-        this.billingAccess = { value, at: Date.now() }
+        this.billingAccess.set(apiKey, { value, at: Date.now() })
         return value
       })
       .finally(() => {
-        this.billingAccessInflight = undefined
+        this.billingAccessInflight.delete(apiKey)
       })
-    return this.billingAccessInflight
+    this.billingAccessInflight.set(apiKey, inflight)
+    return inflight
   }
 
   /**
@@ -1124,10 +1148,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * fallback (the CLI stamps plan identity from it too). Any failure resolves
    * to `undefined` (fail-open) rather than breaking the picker.
    */
-  private async fetchBillingAccess(): Promise<CommandCodeBillingAccess | undefined> {
+  private async fetchBillingAccess(apiKey: string): Promise<CommandCodeBillingAccess | undefined> {
     try {
       const connection = this.deps.options()
-      const headers = await this.accountHeaders()
+      const headers = await this.accountHeaders(apiKey)
       const base = connection.apiBase
       const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
         const response = await this.fetchImpl(`${base}${path}`, {
@@ -1174,11 +1198,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * Each endpoint degrades independently: a failed one lands in `failures`
    * while the rest still report, so a transient outage never blanks the whole
    * view. Requires a usable API key (throws `MISSING_CREDENTIAL` otherwise).
+   * Pass `apiKey` to report on a specific account of a multi-account pool;
+   * the default resolves the currently active account.
    */
-  async getUsage(): Promise<CommandCodeUsageReport> {
+  async getUsage(apiKey?: string): Promise<CommandCodeUsageReport> {
     const connection = this.deps.options()
     const base = connection.apiBase
-    const headers = await this.accountHeaders()
+    const headers = await this.accountHeaders(apiKey)
     const failures: string[] = []
 
     const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
@@ -1281,6 +1307,33 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     return report
   }
 
+  /**
+   * Probe one account's five-hour window from `/alpha/billing/credits`. The
+   * multi-account pool calls this when every account is marked exhausted: an
+   * account whose window no longer reports `exceeded` is revived, and the
+   * `resetAt` values feed the "earliest reset" error message. Returns
+   * `undefined` when the probe itself failed (transport, non-200, or a
+   * payload without window limits) — a failed probe never changes pool state.
+   */
+  async probeFiveHourWindow(apiKey: string): Promise<{ exceeded: boolean; resetAt: number } | undefined> {
+    try {
+      const connection = this.deps.options()
+      const response = await this.fetchImpl(`${connection.apiBase}/alpha/billing/credits`, {
+        headers: await this.accountHeaders(apiKey),
+        signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+      })
+      if (!response.ok) return undefined
+      const parsed: unknown = await response.json()
+      if (!isRecord(parsed)) return undefined
+      const windowLimits = isRecord(parsed.windowLimits) ? parsed.windowLimits : undefined
+      const fiveHour = windowLimits && isRecord(windowLimits.fiveHour) ? windowLimits.fiveHour : undefined
+      if (fiveHour === undefined) return undefined
+      return { exceeded: fiveHour.exceeded === true, resetAt: numberValue(fiveHour.resetAt) ?? 0 }
+    } catch {
+      return undefined
+    }
+  }
+
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     if (options.stop?.length) {
       // The Command Code wire format has no documented stop field; refuse
@@ -1318,7 +1371,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
 
     const connection = this.deps.options()
-    const apiKey = await this.deps.resolveApiKey(connection)
+    let apiKey = await this.deps.resolveApiKey(connection)
     const entry = this.catalog.find((m) => m.id === options.model)
     const modelMax = entry?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
     const maxTokens = Math.min(
@@ -1379,112 +1432,126 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // body after that duration, which cuts long reasoning/generation mid-stream
     // and surfaces as "failed while reading: aborted due to timeout". After
     // headers arrive, only the caller signal and streamIdleTimeoutMs may abort.
-    const connectAbort = new AbortController()
-    let connectTimedOut = false
-    const connectTimer = setTimeout(() => {
-      connectTimedOut = true
-      connectAbort.abort(
-        new DOMException(
-          `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`,
-          'TimeoutError',
-        ),
-      )
-    }, connection.requestTimeoutMs)
-    const onCallerAbort = () => {
-      connectAbort.abort(options.signal?.reason)
-    }
-    if (options.signal) {
-      if (options.signal.aborted) {
-        onCallerAbort()
-      } else {
-        options.signal.addEventListener('abort', onCallerAbort, { once: true })
+    //
+    // One connect attempt per account key: a pre-stream 429/401 hands the key
+    // to the multi-account rotation hook (when the host wired one) and retries
+    // with the next account — the request body is account-independent and
+    // nothing has streamed yet, so the switch is invisible to the caller.
+    const connect = async (
+      key: string,
+    ): Promise<{ response: Response; cleanup: () => void } | { status: number; errText: string }> => {
+      const connectAbort = new AbortController()
+      let connectTimedOut = false
+      const connectTimer = setTimeout(() => {
+        connectTimedOut = true
+        connectAbort.abort(
+          new DOMException(
+            `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`,
+            'TimeoutError',
+          ),
+        )
+      }, connection.requestTimeoutMs)
+      const onCallerAbort = () => {
+        connectAbort.abort(options.signal?.reason)
       }
-    }
-
-    let response: Response
-    try {
-      response = await this.fetchImpl(`${connection.apiBase}/alpha/generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-          'x-command-code-version': COMMAND_CODE_CLI_VERSION,
-          'x-cli-environment': 'production',
-          'x-project-slug': projectSlugFromPath(connection.workingDir),
-          'x-taste-learning': 'true',
-          'x-co-flag': 'false',
-          ...attributionHeaders(),
-        },
-        body: JSON.stringify(body),
-        signal: connectAbort.signal,
-      })
-      clearTimeout(connectTimer)
-    } catch (error: unknown) {
-      clearTimeout(connectTimer)
       if (options.signal) {
-        options.signal.removeEventListener('abort', onCallerAbort)
+        if (options.signal.aborted) {
+          onCallerAbort()
+        } else {
+          options.signal.addEventListener('abort', onCallerAbort, { once: true })
+        }
       }
-      if (options.signal?.aborted) {
-        throw error
+      // On success the caller-abort listener must outlive the connect phase
+      // (it aborts a stalled body read), so the streaming tail calls cleanup;
+      // every failure path cleans up before returning or throwing.
+      const cleanup = () => {
+        clearTimeout(connectTimer)
+        if (options.signal) {
+          options.signal.removeEventListener('abort', onCallerAbort)
+        }
       }
-      if (connectTimedOut || (error instanceof DOMException && error.name === 'TimeoutError')) {
+
+      let response: Response
+      try {
+        response = await this.fetchImpl(`${connection.apiBase}/alpha/generate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+            'x-command-code-version': COMMAND_CODE_CLI_VERSION,
+            'x-cli-environment': 'production',
+            'x-project-slug': projectSlugFromPath(connection.workingDir),
+            'x-taste-learning': 'true',
+            'x-co-flag': 'false',
+            ...attributionHeaders(),
+          },
+          body: JSON.stringify(body),
+          signal: connectAbort.signal,
+        })
+        clearTimeout(connectTimer)
+      } catch (error: unknown) {
+        cleanup()
+        if (options.signal?.aborted) {
+          throw error
+        }
+        if (connectTimedOut || (error instanceof DOMException && error.name === 'TimeoutError')) {
+          throw new LlmError(
+            `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`
+            + `: ${errorChain(error)}`,
+            'TIMEOUT',
+            { cause: error },
+          )
+        }
+        // fetch wraps every transport failure (DNS, refused connection, TLS,
+        // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
+        // detail lives on `cause`. Include the full chain so the failure reason
+        // shown in the web UI (which renders only the message, not `cause`)
+        // names the real root cause instead of a generic wrapper.
         throw new LlmError(
-          `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`
-          + `: ${errorChain(error)}`,
-          'TIMEOUT',
+          `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`,
+          'TRANSPORT',
           { cause: error },
         )
       }
-      // fetch wraps every transport failure (DNS, refused connection, TLS,
-      // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
-      // detail lives on `cause`. Include the full chain so the failure reason
-      // shown in the web UI (which renders only the message, not `cause`)
-      // names the real root cause instead of a generic wrapper.
-      throw new LlmError(
-        `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`,
-        'TRANSPORT',
-        { cause: error },
-      )
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '')
+        cleanup()
+        return { status: response.status, errText }
+      }
+      return { response, cleanup }
     }
 
-    if (!response.ok) {
-      if (options.signal) {
-        options.signal.removeEventListener('abort', onCallerAbort)
+    // Account rotation loop: the first attempt uses the pool's active key; a
+    // pre-stream 429/401 rotates to the next account (at most one attempt per
+    // distinct key, hard-capped so a misbehaving hook cannot loop forever).
+    const tried = new Set<string>()
+    let connected: { response: Response; cleanup: () => void } | undefined
+    for (;;) {
+      tried.add(apiKey)
+      const attempt = await connect(apiKey)
+      if ('response' in attempt) {
+        connected = attempt
+        break
       }
-      const errText = await response.text().catch(() => '')
-      // Command Code folds several business rejections into 403 (plan limits,
-      // CLI version, model access). Prefer the machine-readable `error.code`
-      // when present; the status alone cannot distinguish them.
-      let providerCode: string | undefined
-      try {
-        const parsed: unknown = JSON.parse(errText)
-        if (isRecord(parsed) && isRecord(parsed.error)) {
-          providerCode = stringValue(parsed.error.code)
+      const rotate = this.deps.rotateApiKey
+      if (
+        (attempt.status === 429 || attempt.status === 401)
+        && rotate !== undefined
+        && options.signal?.aborted !== true
+        && tried.size < MAX_ACCOUNT_ROTATIONS
+      ) {
+        const next = await rotate(apiKey, attempt.status === 429 ? 'rate-limit' : 'invalid-credential', connection)
+        if (next !== undefined && !tried.has(next)) {
+          apiKey = next
+          continue
         }
-      } catch {
-        // Plain-text bodies: rely on the status mapping below.
       }
-      const detail = providerCode ?? `HTTP ${response.status}`
-      if (response.status === 401) {
-        // An invalid or missing credential is a config problem, not a
-        // transport failure: retrying it identically cannot succeed.
-        throw new LlmError(
-          `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
-          + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file',
-          'INVALID_CREDENTIAL',
-          { status: 401 },
-        )
-      }
-      throw new LlmError(
-        `Command Code API error ${response.status}${detail === `HTTP ${response.status}` ? '' : ` (${detail})`}: ${errText.slice(0, 500)}`,
-        response.status === 429 ? 'RATE_LIMIT' : 'PROVIDER_HTTP_ERROR',
-        { status: response.status },
-      )
+      throw generateHttpError(attempt.status, attempt.errText)
     }
+    const { response, cleanup } = connected
     if (!response.body) {
-      if (options.signal) {
-        options.signal.removeEventListener('abort', onCallerAbort)
-      }
+      cleanup()
       throw new LlmError('Command Code API returned no response body', 'PROVIDER_PROTOCOL_ERROR')
     }
 
@@ -1715,13 +1782,48 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       }
     } finally {
       clearIdle()
-      if (options.signal) {
-        options.signal.removeEventListener('abort', onCallerAbort)
-      }
+      cleanup()
       await reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
   }
+}
+
+/** Hard cap on account rotations within one request (one attempt per distinct key). */
+const MAX_ACCOUNT_ROTATIONS = 16
+
+/**
+ * Map a pre-stream generate HTTP failure onto a stable LlmError. Command
+ * Code folds several business rejections into 403 (plan limits, CLI version,
+ * model access): prefer the machine-readable `error.code` when present; the
+ * status alone cannot distinguish them.
+ */
+function generateHttpError(status: number, errText: string): LlmError {
+  let providerCode: string | undefined
+  try {
+    const parsed: unknown = JSON.parse(errText)
+    if (isRecord(parsed) && isRecord(parsed.error)) {
+      providerCode = stringValue(parsed.error.code)
+    }
+  } catch {
+    // Plain-text bodies: rely on the status mapping below.
+  }
+  const detail = providerCode ?? `HTTP ${status}`
+  if (status === 401) {
+    // An invalid or missing credential is a config problem, not a
+    // transport failure: retrying it identically cannot succeed.
+    return new LlmError(
+      `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
+      + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file',
+      'INVALID_CREDENTIAL',
+      { status: 401 },
+    )
+  }
+  return new LlmError(
+    `Command Code API error ${status}${detail === `HTTP ${status}` ? '' : ` (${detail})`}: ${errText.slice(0, 500)}`,
+    status === 429 ? 'RATE_LIMIT' : 'PROVIDER_HTTP_ERROR',
+    { status },
+  )
 }
 
 function mapFinishReason(reason: unknown): FinishReason {

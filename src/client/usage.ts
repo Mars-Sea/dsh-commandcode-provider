@@ -13,7 +13,7 @@
  * @module dsh-commandcode-provider/client/usage
  */
 
-import type { CommandCodeUsageReport } from '../adapter.ts'
+import type { CommandCodeAccountsReport } from '../usage-wire.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
 /**
@@ -24,11 +24,11 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
  */
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteMap {
-    'commandcode/report': () => Promise<RemoteResult<CommandCodeUsageReport>>
+    'commandcode/report': () => Promise<RemoteResult<CommandCodeAccountsReport>>
   }
   interface TypertRemoteNamespaceMap {
     commandcode: {
-      report: () => Promise<RemoteResult<CommandCodeUsageReport>>
+      report: () => Promise<RemoteResult<CommandCodeAccountsReport>>
     }
   }
 }
@@ -36,7 +36,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 /** The narrow slice of the mounted Remote this controller calls. */
 export interface UsageRemote {
   report(): Promise<
-    | { ok: true; value: CommandCodeUsageReport }
+    | { ok: true; value: CommandCodeAccountsReport }
     | { ok: false; error: { message: string } }
   >
 }
@@ -56,7 +56,7 @@ export type UsageStatus =
 export interface UsagePageState {
   status: UsageStatus
   /** The last successfully fetched report (retained across refetches). */
-  report: CommandCodeUsageReport | undefined
+  report: CommandCodeAccountsReport | undefined
   /** The last failure's message (error status). */
   error: string | undefined
   /** Millis timestamp of the last successful fetch. */

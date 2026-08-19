@@ -61,6 +61,24 @@ export interface StagedField {
   invalid: boolean
 }
 
+/** One extra account row's staged state (the default account uses `apiKey`). */
+export interface AccountItemState {
+  /** Stable id — the account's credential reference. */
+  id: string
+  /** Credential reference this account's key lives under. */
+  ref: string
+  /** Label draft text (the stored/generated label until edited). */
+  label: string
+  /** The API key draft (write-only; starts blank, never echoes the stored key). */
+  keyText: string
+  /** Whether a key is stored for this account (Host-reported). */
+  configured: boolean
+  /** Whether the credentials domain can store the key. */
+  writable: boolean
+  /** Staged for addition (not yet saved). */
+  added: boolean
+}
+
 /** The page's full state face, projected from the scope + drafts + credential. */
 export interface SettingsPageState {
   /** Whether the namespace snapshot is ready. */
@@ -69,6 +87,8 @@ export interface SettingsPageState {
   writable: boolean
   /** Whether the API key is currently configured (Host-reported). */
   apiKeyConfigured: boolean
+  /** Whether ANY account (default or extra) has a stored key — gates the usage card. */
+  anyAccountConfigured: boolean
   /** Whether the credentials domain can store the key. */
   apiKeyWritable: boolean
   /** The API key draft (write-only; starts blank, never echoes the stored key). */
@@ -92,6 +112,14 @@ export interface SettingsPageState {
    * component renders it as a toggle; `''` means "inherit the default" (on).
    */
   filterModelsByPlan: StagedField
+  /**
+   * The manually selected active account, staged as a slot id (`default`
+   * or an extra account's credential reference); `''` means "auto — first
+   * usable account". The component renders it as a select.
+   */
+  activeAccount: StagedField
+  /** Extra accounts (multi-account rotation), in rotation order. */
+  accounts: AccountItemState[]
   /** Whether any staged edit differs from the stored section. */
   dirty: boolean
   /** Whether a staged numeric field fails to parse (save blocked). */
@@ -170,6 +198,7 @@ const SECTION_FIELDS: FieldSpec[] = [
   numberField('requestTimeoutMs'),
   numberField('streamIdleTimeoutMs'),
   booleanField('filterModelsByPlan'),
+  textField('activeAccount'),
 ]
 
 /**
@@ -186,7 +215,18 @@ export class CommandCodeSettingsController {
   private readonly disposers: Array<() => void> = []
   private disposed = false
   private defaultWorkingDir: string | undefined
-  private credential = { ref: DEFAULT_API_KEY_REF, configured: false, writable: true }
+  /** The credential reference the default account resolves. */
+  private credentialRef = DEFAULT_API_KEY_REF
+  /** Host-reported configured/writable state per credential reference. */
+  private readonly credentialStates = new Map<string, { configured: boolean; writable: boolean }>()
+  /** Staged account additions (not yet saved). */
+  private addedAccounts: Array<{ label: string; ref: string }> = []
+  /** Staged removals of stored extra accounts, by credential reference. */
+  private readonly removedRefs = new Set<string>()
+  /** Staged label drafts, by credential reference. */
+  private readonly labelDrafts = new Map<string, string>()
+  /** Staged key drafts, by credential reference (blank = keep stored key). */
+  private readonly keyDrafts = new Map<string, string>()
   private saving = false
   private failed = false
 
@@ -205,6 +245,7 @@ export class CommandCodeSettingsController {
     this.api = api
     this.disposers.push(scope.subscribe(() => {
       this.recomputeCredentialRef()
+      void this.describeAll()
       this.publish()
     }))
     if (hostDescription !== undefined) {
@@ -219,7 +260,7 @@ export class CommandCodeSettingsController {
       }))
     }
     this.recomputeCredentialRef()
-    void this.readCredential()
+    void this.describeAll()
   }
 
   /** Release every subscription held on external sources. Idempotent. */
@@ -242,9 +283,9 @@ export class CommandCodeSettingsController {
     const named = typeof snapshot.value?.apiKeyEnv === 'string' && snapshot.value.apiKeyEnv.length > 0
       ? snapshot.value.apiKeyEnv
       : DEFAULT_API_KEY_REF
-    if (named === this.credential.ref) return
-    this.credential = { ref: named, configured: false, writable: true }
-    void this.readCredential()
+    if (named === this.credentialRef) return
+    this.credentialRef = named
+    this.credentialStates.delete(named)
   }
 
   /** Subscribe to state projections. @returns the disposer. */
@@ -257,11 +298,14 @@ export class CommandCodeSettingsController {
   state(): SettingsPageState {
     const snapshot = this.scope.getSnapshot()
     const plan = this.plan()
+    const credential = this.credentialStates.get(this.credentialRef)
+    const accounts = this.effectiveAccounts()
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable,
-      apiKeyConfigured: this.credential.configured,
-      apiKeyWritable: this.credential.writable,
+      apiKeyConfigured: credential?.configured ?? false,
+      anyAccountConfigured: (credential?.configured ?? false) || accounts.some((account) => account.configured),
+      apiKeyWritable: credential?.writable ?? true,
       apiKey: {
         text: this.staged.get('apiKey')?.text ?? '',
         clear: false,
@@ -274,11 +318,64 @@ export class CommandCodeSettingsController {
       requestTimeoutMs: this.field('requestTimeoutMs'),
       streamIdleTimeoutMs: this.field('streamIdleTimeoutMs'),
       filterModelsByPlan: this.field('filterModelsByPlan'),
-      dirty: plan.length > 0,
+      activeAccount: this.field('activeAccount'),
+      accounts,
+      dirty: plan.length > 0 || this.accountsDirty(),
       invalid: plan.some((item) => item.run === undefined),
       saving: this.saving,
       failed: this.failed,
     }
+  }
+
+  /** Stage a new extra account (saved on the next `save()`). */
+  addAccount(): void {
+    const used = new Set([
+      this.credentialRef,
+      ...this.storedExtras().map((extra) => extra.ref),
+      ...this.addedAccounts.map((extra) => extra.ref),
+    ])
+    let n = 2
+    while (used.has(`COMMANDCODE_API_KEY_${n}`)) n += 1
+    const index = this.storedExtras().length + this.addedAccounts.length + 2
+    this.addedAccounts.push({ label: `Account ${index}`, ref: `COMMANDCODE_API_KEY_${n}` })
+    this.failed = false
+    void this.describeAll()
+    this.publish()
+  }
+
+  /** Stage one extra account's removal (or drop an unsaved addition). */
+  removeAccount(id: string): void {
+    const addedIndex = this.addedAccounts.findIndex((extra) => extra.ref === id)
+    if (addedIndex >= 0) this.addedAccounts.splice(addedIndex, 1)
+    else this.removedRefs.add(id)
+    this.labelDrafts.delete(id)
+    this.keyDrafts.delete(id)
+    // A pinned active account that is going away must not linger as a ghost
+    // selection: stage its clear alongside the removal (the host would fall
+    // back to rotation order, but the stored value would be meaningless).
+    const stagedActive = this.staged.get('activeAccount')
+    const activeValue = stagedActive !== undefined
+      ? stagedActive.clear ? '' : stagedActive.text
+      : typeof this.sectionValue('activeAccount') === 'string' ? this.sectionValue('activeAccount') as string : ''
+    if (activeValue === id) {
+      this.staged.set('activeAccount', { text: '', clear: true })
+    }
+    this.failed = false
+    this.publish()
+  }
+
+  /** Stage one extra account's label draft. */
+  editAccountLabel(id: string, text: string): void {
+    this.labelDrafts.set(id, text)
+    this.failed = false
+    this.publish()
+  }
+
+  /** Stage one extra account's key draft (blank keeps the stored key). */
+  editAccountKey(id: string, text: string): void {
+    this.keyDrafts.set(id, text)
+    this.failed = false
+    this.publish()
   }
 
   /** Stage one field's draft text. */
@@ -304,8 +401,9 @@ export class CommandCodeSettingsController {
 
   /** Discard every staged edit. */
   discard(): void {
-    if (this.staged.size === 0 && !this.failed) return
+    if (this.staged.size === 0 && !this.accountsStaged() && !this.failed) return
     this.staged.clear()
+    this.clearAccountStaging()
     this.failed = false
     this.publish()
   }
@@ -313,7 +411,8 @@ export class CommandCodeSettingsController {
   /** Write every staged edit, then re-read the Host's accepted state. */
   async save(): Promise<void> {
     const plan = this.plan()
-    if (plan.length === 0 || this.saving) return
+    const accountRuns = this.accountPlan()
+    if ((plan.length === 0 && accountRuns.length === 0) || this.saving) return
     const runs: Array<() => Promise<boolean>> = []
     for (const item of plan) {
       if (item.run === undefined) return
@@ -323,11 +422,48 @@ export class CommandCodeSettingsController {
     this.failed = false
     this.publish()
     let landed = true
-    for (const run of runs) landed = (await run()) && landed
+    // Keys land first so a saved accounts list never names a ref whose key
+    // write failed silently; the accounts list itself writes last. Stop at
+    // the first failure: running later writes after a failed one would
+    // persist a partial state the staged drafts no longer describe.
+    for (const run of [...runs, ...accountRuns]) {
+      if (!(await run())) {
+        landed = false
+        break
+      }
+    }
     this.saving = false
     this.failed = !landed
-    if (landed) this.staged.clear()
+    if (landed) {
+      this.staged.clear()
+      this.clearAccountStaging()
+    } else {
+      // A failed save may still have landed earlier writes (e.g. the accounts
+      // list made it while a key write did not). Reconcile the staging with
+      // the stored section so a landed account is not simultaneously stored
+      // AND staged-for-addition (which a retry would persist twice).
+      this.reconcileAccountStaging()
+    }
     this.publish()
+  }
+
+  /**
+   * Drop account staging the stored section already reflects: additions whose
+   * ref is now stored, removals whose ref is gone, and label drafts matching
+   * the stored label. Key drafts are kept — a landed key write is idempotent
+   * on retry, and the draft carries the user's intent when it was the
+   * accounts write that failed.
+   */
+  private reconcileAccountStaging(): void {
+    const stored = new Set(this.storedExtras().map((extra) => extra.ref))
+    this.addedAccounts = this.addedAccounts.filter((extra) => !stored.has(extra.ref))
+    for (const ref of [...this.removedRefs]) {
+      if (!stored.has(ref)) this.removedRefs.delete(ref)
+    }
+    for (const [ref, text] of [...this.labelDrafts]) {
+      const storedLabel = this.storedExtras().find((extra) => extra.ref === ref)?.label
+      if (storedLabel === undefined || storedLabel === text.trim()) this.labelDrafts.delete(ref)
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -422,37 +558,150 @@ export class CommandCodeSettingsController {
     return this.userLayer()?.[field] === value
   }
 
-  /** Write the staged key, then re-read whether the Host now holds one. */
+  /** Write the staged default key, then re-read whether the Host holds it. */
   private async writeKey(value: string): Promise<boolean> {
+    return this.writeKeyTo(this.credentialRef, value)
+  }
+
+  /** Write one account's key, then re-read the Host's credential states. */
+  private async writeKeyTo(ref: string, value: string): Promise<boolean> {
     try {
-      const response = await this.api.credentials.set({ ref: this.credential.ref, value })
+      const response = await this.api.credentials.set({ ref, value })
       if (!response.result.ok) return false
     } catch {
       return false
     }
-    await this.readCredential()
-    return this.credential.configured
+    await this.describeAll()
+    return this.credentialStates.get(ref)?.configured ?? false
   }
 
-  /** Ask the credentials domain about the reference this page writes. */
-  private async readCredential(): Promise<void> {
-    const ref = this.credential.ref
+  /** Ask the credentials domain about every reference this page writes. */
+  private async describeAll(): Promise<void> {
+    const refs = [
+      this.credentialRef,
+      ...this.storedExtras().map((extra) => extra.ref),
+      ...this.addedAccounts.map((extra) => extra.ref),
+    ]
     let response: Awaited<ReturnType<SettingsPageApi['credentials']['describe']>>
     try {
-      response = await this.api.credentials.describe({ refs: [ref] })
+      response = await this.api.credentials.describe({ refs })
     } catch {
       return
     }
     if (!response.result.ok) return
-    const view = response.result.value.credentials[ref]
-    const next = {
-      ref,
-      configured: view?.configured ?? false,
-      writable: view?.writable ?? true,
+    let changed = false
+    for (const ref of refs) {
+      const view = response.result.value.credentials[ref]
+      const next = {
+        configured: view?.configured ?? false,
+        writable: view?.writable ?? true,
+      }
+      const prev = this.credentialStates.get(ref)
+      if (prev === undefined || prev.configured !== next.configured || prev.writable !== next.writable) {
+        this.credentialStates.set(ref, next)
+        changed = true
+      }
     }
-    if (next.configured === this.credential.configured && next.writable === this.credential.writable) return
-    this.credential = next
-    this.publish()
+    if (changed) this.publish()
+  }
+
+  // -----------------------------------------------------------------------
+  // Multi-account staging
+  // -----------------------------------------------------------------------
+
+  /** The stored extra accounts from the settings section (`accounts`). */
+  private storedExtras(): Array<{ label: string; ref: string }> {
+    const raw = this.scope.getSnapshot().value?.accounts
+    if (!Array.isArray(raw)) return []
+    const out: Array<{ label: string; ref: string }> = []
+    for (const entry of raw) {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+      const record = entry as Record<string, unknown>
+      const ref = record.apiKeyEnv
+      if (typeof ref !== 'string' || ref === '') continue
+      const label = record.label
+      out.push({ label: typeof label === 'string' && label !== '' ? label : ref, ref })
+    }
+    return out
+  }
+
+  /** Every extra account row: stored (minus staged removals) + staged adds. */
+  private effectiveAccounts(): AccountItemState[] {
+    const stored = this.storedExtras()
+      .filter((extra) => !this.removedRefs.has(extra.ref))
+      .map((extra) => ({ ...extra, added: false }))
+    const added = this.addedAccounts.map((extra) => ({ ...extra, added: true }))
+    return [...stored, ...added].map((extra) => ({
+      id: extra.ref,
+      ref: extra.ref,
+      label: this.labelDrafts.get(extra.ref) ?? extra.label,
+      keyText: this.keyDrafts.get(extra.ref) ?? '',
+      configured: this.credentialStates.get(extra.ref)?.configured ?? false,
+      writable: this.credentialStates.get(extra.ref)?.writable ?? true,
+      added: extra.added,
+    }))
+  }
+
+  /** Whether any account-level staging (add/remove/label/key) exists. */
+  private accountsStaged(): boolean {
+    return this.addedAccounts.length > 0
+      || this.removedRefs.size > 0
+      || this.labelDrafts.size > 0
+      || this.keyDrafts.size > 0
+  }
+
+  /** Whether the staged account edits differ from the stored section. */
+  private accountsDirty(): boolean {
+    if (this.addedAccounts.length > 0 || this.removedRefs.size > 0) return true
+    for (const [ref, text] of this.labelDrafts) {
+      const base = this.storedExtras().find((extra) => extra.ref === ref)?.label
+      if (base !== undefined && text.trim() !== '' && text !== base) return true
+    }
+    for (const text of this.keyDrafts.values()) {
+      if (text.trim() !== '') return true
+    }
+    return false
+  }
+
+  /** Reset every account-level staged edit. */
+  private clearAccountStaging(): void {
+    this.addedAccounts = []
+    this.removedRefs.clear()
+    this.labelDrafts.clear()
+    this.keyDrafts.clear()
+  }
+
+  /** The account-level writes a save performs (empty when nothing staged). */
+  private accountPlan(): Array<() => Promise<boolean>> {
+    if (!this.accountsDirty()) return []
+    const runs: Array<() => Promise<boolean>> = []
+    for (const [ref, text] of this.keyDrafts) {
+      const value = text.trim()
+      if (value !== '' && !this.removedRefs.has(ref)) {
+        runs.push(() => this.writeKeyTo(ref, value))
+      }
+    }
+    runs.push(() => this.writeAccounts())
+    return runs
+  }
+
+  /** Persist the staged accounts list into the settings section. */
+  private async writeAccounts(): Promise<boolean> {
+    const base = [
+      ...this.storedExtras().filter((extra) => !this.removedRefs.has(extra.ref)),
+      ...this.addedAccounts,
+    ]
+    // Defensive dedupe by ref: a partially landed earlier save can leave an
+    // account both stored and staged-for-addition; never persist duplicates.
+    const seen = new Set<string>()
+    const list = base.filter((extra) => !seen.has(extra.ref) && (seen.add(extra.ref), true)).map((extra) => {
+      const draft = this.labelDrafts.get(extra.ref)?.trim()
+      return { label: draft !== undefined && draft !== '' ? draft : extra.label, apiKeyEnv: extra.ref }
+    })
+    await this.scope.set('accounts', list)
+    const after = this.storedExtras()
+    return after.length === list.length
+      && list.every((item, index) => after[index]?.ref === item.apiKeyEnv)
   }
 
   private publish(): void {

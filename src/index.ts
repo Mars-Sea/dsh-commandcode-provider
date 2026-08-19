@@ -38,9 +38,12 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
-import type { CommandCodeConnectionOptions } from './adapter.ts'
+import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
+import { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
+import type { CommandCodeAccountConfig, CommandCodeAccountSlot } from './accounts.ts'
 import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
+import type { CommandCodeAccountsReport } from './usage-wire.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -78,6 +81,9 @@ export type { CommandCodeCommandDeps } from './commands.ts'
 export { applyUsageRemote, CommandCodeUsageService } from './usage-remote.ts'
 export type { CommandCodeUsageDeps } from './usage-remote.ts'
 export { USAGE_REPORT_ENDPOINT, usageReportSchema } from './usage-wire.ts'
+export type { CommandCodeAccountUsage, CommandCodeAccountsReport } from './usage-wire.ts'
+export { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
+export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState } from './accounts.ts'
 
 export const name = 'llm-commandcode'
 export const inject = ['llm']
@@ -119,6 +125,24 @@ export interface Config {
    * full catalog visible). Set false to always list every model.
    */
   filterModelsByPlan?: boolean
+  /**
+   * Extra accounts for multi-account rotation. The top-level
+   * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first
+   * (`default`) account; each entry here adds one more. When a request is
+   * rejected pre-stream with 429 (usage window exhausted) or 401, the next
+   * account's key retried transparently; when every account is exhausted the
+   * request fails with a `RATE_LIMIT` error naming the earliest window
+   * reset. Entries without `apiKey` or `apiKeyEnv` are ignored.
+   */
+  accounts?: CommandCodeAccountConfig[]
+  /**
+   * Manually selected active account: a slot id — `default`, or an extra
+   * account's credential reference (e.g. `COMMANDCODE_API_KEY_2`). The
+   * selected account serves whenever it is usable; an unknown id or an
+   * exhausted selected account falls back to the first usable slot (automatic
+   * rotation still applies). Unset means "first usable account".
+   */
+  activeAccount?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -130,6 +154,12 @@ export const Config: z<Config> = z.object({
   requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   filterModelsByPlan: z.boolean(),
+  accounts: z.array(z.object({
+    label: z.string(),
+    apiKeyEnv: z.string().role('credential-ref'),
+    apiKey: z.string(),
+  })),
+  activeAccount: z.string(),
 })
 
 /** One resolution's complete request facts: connection plus credential reference. */
@@ -169,25 +199,81 @@ export function apply(ctx: Context, config: Config): void {
   }
   options()
 
-  const resolveApiKey = async (connection: ResolvedCommandCodeOptions): Promise<string> => {
-    // 1. A literal key in composition config wins outright.
-    const literal = current().apiKey
-    if (literal) return assertUsableApiKey(literal, 'llm-commandcode', 'config.apiKey')
-    // 2. The credential seam (web Models page) or the trusted environment.
-    const ref = connection.apiKeyEnv
+  // The account slots, rebuilt from the live config on every resolution so
+  // a settings-page accounts change reaches the very next request. The
+  // top-level apiKey/apiKeyEnv (+ the CLI auth file) form the default
+  // account; each config.accounts entry adds one more.
+  const slots = (): CommandCodeAccountSlot[] => {
+    const raw = current()
+    const list: CommandCodeAccountSlot[] = [{
+      id: 'default',
+      label: 'Default',
+      ref: credentialRef(raw.apiKeyEnv ?? DEFAULT_API_KEY_ENV),
+      literal: raw.apiKey,
+      allowAuthFile: true,
+    }]
+    for (const [index, account] of (raw.accounts ?? []).entries()) {
+      const refName = typeof account.apiKeyEnv === 'string' && account.apiKeyEnv.trim() !== ''
+        ? account.apiKeyEnv.trim()
+        : undefined
+      const literal = typeof account.apiKey === 'string' && account.apiKey !== '' ? account.apiKey : undefined
+      if (refName === undefined && literal === undefined) continue
+      list.push({
+        // Slot ids must survive account-list edits: an extra's id is its
+        // credential reference (stable across reorders/removals), falling
+        // back to the positional id only for literal-only composition
+        // entries, which no settings document can name anyway.
+        id: refName ?? `account-${index + 2}`,
+        label: typeof account.label === 'string' && account.label.trim() !== ''
+          ? account.label.trim()
+          : `Account ${index + 2}`,
+        ref: refName === undefined ? undefined : credentialRef(refName),
+        literal,
+        allowAuthFile: false,
+      })
+    }
+    return list
+  }
+
+  // The manually selected account (settings page / config), re-read per
+  // resolution like every other settings-backed fact.
+  const preferredId = (): string | undefined => {
+    const raw = current().activeAccount
+    return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
+  }
+
+  const resolveRef = async (ref: ReturnType<typeof credentialRef>): Promise<string | undefined> => {
     const credentials = ctx.get('credentials')
     if (credentials !== undefined) {
       const hit = await credentials.resolve(ref)
-      if (hit !== undefined) return assertUsableApiKey(hit.value, 'llm-commandcode', ref)
-    } else {
-      const ambient = launchEnvironmentOf(ctx).get(ref)
-      if (ambient !== undefined && ambient.value.length > 0) {
-        return assertUsableApiKey(ambient.value, 'llm-commandcode', ref)
-      }
+      return hit?.value
     }
-    // 3. Last resort: reuse the official Command Code CLI login (~/.commandcode/auth.json).
-    const authFileKey = resolveAuthFileApiKey()
-    if (authFileKey) return assertUsableApiKey(authFileKey, 'llm-commandcode', '~/.commandcode/auth.json')
+    const ambient = launchEnvironmentOf(ctx).get(ref)
+    return ambient !== undefined && ambient.value.length > 0 ? ambient.value : undefined
+  }
+
+  // The multi-account pool: passive rotation only — a key is marked when a
+  // request using it is actually rejected (429/401), and the marks are
+  // re-checked against the live window limits only once every account is
+  // marked, so the steady state costs zero extra API calls.
+  // Explicit annotations break the pool↔adapter inference cycle (the pool's
+  // probe calls the adapter; the adapter's rotation hook calls the pool).
+  const pool: CommandCodeAccountPool = new CommandCodeAccountPool({
+    slots,
+    resolveRef,
+    authFileKey: resolveAuthFileApiKey,
+    // The adapter reference is assigned right below; the probe runs only at
+    // request time, never during plugin startup.
+    probeWindow: (apiKey: string) => adapter.probeFiveHourWindow(apiKey),
+    preferredId,
+  })
+
+  const resolveApiKey = async (connection: ResolvedCommandCodeOptions): Promise<string> => {
+    const resolved = await pool.resolveKey()
+    if (resolved !== undefined) {
+      return assertUsableApiKey(resolved.key, 'llm-commandcode', resolved.slot.ref ?? `${resolved.slot.label} (config.apiKey)`)
+    }
+    const ref = connection.apiKeyEnv
     throw new LlmError(
       `llm-commandcode: no API key for provider route "${PROVIDER}"; store ${ref} through the`
       + ' credentials service (the web Models page writes it), export it in the launching'
@@ -197,9 +283,26 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  const adapter = new CommandCodeAdapter({
+  const adapter: CommandCodeAdapter<ResolvedCommandCodeOptions> = new CommandCodeAdapter({
     options,
     resolveApiKey,
+    // Pre-stream 429/401: mark the rejected key and hand the adapter the next
+    // account's key. When every account is exhausted the pool throws the
+    // RATE_LIMIT/INVALID_CREDENTIAL error that names the earliest reset —
+    // that error, not the raw 429, is what the caller sees.
+    rotateApiKey: async (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential'): Promise<string | undefined> => {
+      pool.markRejected(rejectedKey, rejection)
+      // Exclude the just-rejected key from probe-revival: a probe clearing its
+      // window must not re-offer the same key within this request (the
+      // adapter refuses already-tried keys); the next request picks it up.
+      const resolved = await pool.resolveKey({ exclude: rejectedKey })
+      // Normalize like the initial resolution does: the pool keys its state
+      // by the resolved key, so the adapter must send (and report back) the
+      // same normalized form or the marks would miss.
+      return resolved === undefined
+        ? undefined
+        : assertUsableApiKey(resolved.key, 'llm-commandcode', resolved.slot.ref ?? `${resolved.slot.label} (config.apiKey)`)
+    },
     // The durable attachment service carries image bytes referenced by
     // ImageBlock; resolved lazily only when a request actually has images.
     resolveAttachments: () => {
@@ -215,17 +318,57 @@ export function apply(ctx: Context, config: Config): void {
   // The live route: this is what makes models requestable under `commandcode`.
   ctx.llm.registerAdapter([PROVIDER], adapter)
 
+  // Per-account usage for the /commandcode dashboard and the settings
+  // page's account card: every pool account (configured or not) gets one
+  // entry, each fetched with its own key so plan/credit facts never mix.
+  const usageReports = async (): Promise<CommandCodeAccountsReport> => {
+    // describeAccounts (not deduped) so two slots sharing one credential are
+    // both reported as configured; the active badge follows the deduped
+    // serving selection.
+    const described = await pool.describeAccounts()
+    const byId = new Map(described.map((account) => [account.slot.id, account]))
+    const active = selectActiveAccount(await pool.resolvedAccounts(), preferredId())
+    const entries = await Promise.all(slots().map(async (slot) => {
+      const account = byId.get(slot.id)
+      let report: CommandCodeUsageReport
+      if (account === undefined) {
+        report = { failures: [] }
+      } else {
+        try {
+          report = await adapter.getUsage(account.key)
+        } catch (error: unknown) {
+          report = { failures: [error instanceof Error ? error.message : String(error)] }
+        }
+      }
+      const state = account?.state
+      // The mark mirrors servability: a usable account (never marked, or a
+      // cooldown whose reset passed) shows no mark; a cooldown without a
+      // known reset still shows "rate-limit" (it is not serving).
+      const usable = accountUsable(state)
+      return {
+        id: slot.id,
+        label: slot.label,
+        configured: account !== undefined,
+        active: account !== undefined && active?.slot.id === slot.id,
+        mark: usable ? '' : state?.kind === 'disabled' ? 'invalid-credential' : 'rate-limit',
+        cooldownUntil: !usable && state?.kind === 'cooldown' ? state.until : 0,
+        report,
+      }
+    }))
+    return { accounts: entries }
+  }
+
   // The /commandcode usage command rides the optional `commands` service: a
   // child fiber injects it, so it registers whenever the profile mounts
   // dsh-commands and the fiber simply never activates when it does not.
   ctx.inject(['commands'], (commandCtx) => {
-    applyCommands(commandCtx, { adapter })
+    applyCommands(commandCtx, { adapter, reports: usageReports })
   })
 
   // The settings page's account card: getUsage exposed to the browser through
   // the Typert Gateway (`commandcode/report`). Rides the optional `typert`
   // registry service, so profiles without the web stack never activate it.
-  applyUsageRemote(ctx, { adapter })
+  applyUsageRemote(ctx, { adapter, reports: usageReports })
 
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => {

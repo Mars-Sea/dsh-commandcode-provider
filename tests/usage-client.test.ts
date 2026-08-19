@@ -18,20 +18,30 @@ import {
   windowRatio,
   type UsageRemote,
 } from '../src/client/usage.ts'
-import type { CommandCodeUsageReport } from '../src/adapter.ts'
+import type { CommandCodeAccountsReport } from '../src/usage-wire.ts'
 
-/** A minimal valid report fixture. */
-function makeReport(): CommandCodeUsageReport {
+/** A minimal valid multi-account report fixture. */
+function makeReport(): CommandCodeAccountsReport {
   return {
-    account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
-    credits: {
-      monthlyCredits: 50,
-      purchasedCredits: 10,
-      freeCredits: 2,
-      fiveHour: { used: 1.5, cap: 5, exceeded: false, resetAt: 1_800_000_000_000 },
-      weekly: { used: 12, cap: 100, exceeded: false, resetAt: 0 },
-    },
-    failures: [],
+    accounts: [{
+      id: 'default',
+      label: 'Default',
+      configured: true,
+      active: true,
+      mark: '',
+      cooldownUntil: 0,
+      report: {
+        account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
+        credits: {
+          monthlyCredits: 50,
+          purchasedCredits: 10,
+          freeCredits: 2,
+          fiveHour: { used: 1.5, cap: 5, exceeded: false, resetAt: 1_800_000_000_000 },
+          weekly: { used: 12, cap: 100, exceeded: false, resetAt: 0 },
+        },
+        failures: [],
+      },
+    }],
   }
 }
 
@@ -61,7 +71,7 @@ test('a successful refresh publishes the report and a fetch timestamp', async ()
   controller.subscribe(() => seen.push(controller.state().status))
   await controller.refresh()
   assert.deepEqual(seen, ['loading', 'ready'])
-  assert.equal(controller.state().report?.account?.userName, 'mars-sea')
+  assert.equal(controller.state().report?.accounts[0]?.report.account?.userName, 'mars-sea')
   assert.equal(typeof controller.state().fetchedAt, 'number')
   assert.equal(remote.calls, 1)
 })
@@ -109,7 +119,7 @@ test('an error retains the last good report', async () => {
   fail = true
   await controller.refresh()
   assert.equal(controller.state().status, 'error')
-  assert.equal(controller.state().report?.account?.userName, 'mars-sea')
+  assert.equal(controller.state().report?.accounts[0]?.report.account?.userName, 'mars-sea')
 })
 
 test('dispose drops a late in-flight result', async () => {

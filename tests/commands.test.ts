@@ -219,3 +219,57 @@ test('command errors when getUsage throws', async () => {
   assert.equal(result.kind, 'error')
   assert.match(result.text, /key missing/)
 })
+
+test('command renders one section per pool account with rotation badges', async () => {
+  const adapter = makeAdapter(makeFetch({}))
+  const resetAt = 1_800_000_000_000
+  const def = commandDefinition({
+    adapter,
+    reports: async () => ({
+      accounts: [
+        {
+          id: 'default',
+          label: 'Default',
+          configured: true,
+          active: true,
+          mark: '',
+          cooldownUntil: 0,
+          report: {
+            account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
+            credits: {
+              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0,
+              fiveHour: { used: 3, cap: 3, exceeded: true, resetAt },
+              weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
+            },
+            failures: [],
+          },
+        },
+        {
+          id: 'account-2',
+          label: 'Go #2',
+          configured: true,
+          active: false,
+          mark: 'rate-limit',
+          cooldownUntil: resetAt,
+          report: { failures: [] },
+        },
+        {
+          id: 'account-3',
+          label: 'Go #3',
+          configured: false,
+          active: false,
+          mark: '',
+          cooldownUntil: 0,
+          report: { failures: [] },
+        },
+      ],
+    }),
+  })
+  const result = await invoke(def, '')
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /📊 Default  ✅ 当前使用/)
+  assert.match(result.text, /📊 Go #2  ⏳ 限额冷却中，重置/)
+  assert.match(result.text, /📊 Go #3/)
+  assert.match(result.text, /未配置 API 密钥/)
+  assert.match(result.text, /⚠️ 超限!/)
+})

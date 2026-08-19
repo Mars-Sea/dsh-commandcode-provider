@@ -33,6 +33,17 @@ export type SettingsCommandCodeKey =
   | 'streamIdleTimeoutMsHint'
   | 'filterModelsByPlan'
   | 'filterModelsByPlanHint'
+  | 'accountsTitle'
+  | 'accountsHint'
+  | 'accountAdd'
+  | 'accountRemove'
+  | 'accountLabel'
+  | 'accountKey'
+  | 'accountKeyHint'
+  | 'accountDefault'
+  | 'activeAccount'
+  | 'activeAccountAuto'
+  | 'activeAccountHint'
   | 'overridden'
   | 'reset'
   | 'invalidNumber'
@@ -66,6 +77,10 @@ export type SettingsCommandCodeKey =
   | 'usagePartial'
   | 'usageUpdated'
   | 'usagePeriodEnd'
+  | 'usageActive'
+  | 'usageCooldown'
+  | 'usageInvalidKey'
+  | 'usageUnconfigured'
 
 export const zh: Record<SettingsCommandCodeKey, string> = {
   nav: 'Command Code',
@@ -88,6 +103,17 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300000（长思考模型可静默数分钟，默认值刻意放宽）。',
   filterModelsByPlan: '隐藏套餐外模型',
   filterModelsByPlanHint: '开启后，模型选择器只列出当前套餐可用的模型；账户持有按需余额时会显示全部。',
+  accountsTitle: '多账户轮换',
+  accountsHint: '当前账户达到用量限额（429）或密钥失效（401）时，请求自动切换到下一个账户；全部耗尽时会提示最早的重置时间。',
+  accountAdd: '添加账户',
+  accountRemove: '移除',
+  accountLabel: '账户备注名',
+  accountKey: 'API 密钥',
+  accountKeyHint: '该账户的 API 密钥。留空保存不会覆盖已存储的密钥。',
+  accountDefault: '默认账户',
+  activeAccount: '当前使用账户',
+  activeAccountAuto: '自动（第一个可用账户）',
+  activeAccountHint: '手动指定优先使用的账户，保存后下次请求即生效；所选账户耗尽时仍会自动切换到其他可用账户。',
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
@@ -121,6 +147,10 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   usagePartial: '部分端点数据不可用',
   usageUpdated: '更新于',
   usagePeriodEnd: '账期截止',
+  usageActive: '当前使用',
+  usageCooldown: '限额冷却中',
+  usageInvalidKey: '密钥无效',
+  usageUnconfigured: '该账户尚未配置 API 密钥。',
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
@@ -149,6 +179,20 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   filterModelsByPlan: 'Hide out-of-plan models',
   filterModelsByPlanHint: 'When on, the model picker lists only models your subscription'
     + ' includes; any on-demand credit balance shows the full catalog.',
+  accountsTitle: 'Account rotation',
+  accountsHint: 'When the active account hits its usage limit (429) or its key'
+    + ' fails (401), requests switch to the next account; when every account is'
+    + ' exhausted the error names the earliest window reset.',
+  accountAdd: 'Add account',
+  accountRemove: 'Remove',
+  accountLabel: 'Account label',
+  accountKey: 'API key',
+  accountKeyHint: 'This account’s API key. Saving with the field blank keeps the stored key.',
+  accountDefault: 'Default account',
+  activeAccount: 'Active account',
+  activeAccountAuto: 'Auto (first usable account)',
+  activeAccountHint: 'Pin the preferred account; applies to the next request after saving.'
+    + ' If the selected account is exhausted, requests still rotate to another usable account.',
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',
@@ -182,4 +226,8 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   usagePartial: 'Some endpoint data unavailable',
   usageUpdated: 'Updated',
   usagePeriodEnd: 'Period ends',
+  usageActive: 'Active',
+  usageCooldown: 'Cooling down',
+  usageInvalidKey: 'Invalid key',
+  usageUnconfigured: 'No API key configured for this account yet.',
 }
