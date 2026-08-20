@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-19
+
+### Changed
+
+- **Synced with the official command-code@1.28.4 CLI** (upstream moved 1.28.1 → 1.28.4: 1.28.2 raised the Qwen 3.8 27B usage allowance on GOAT and Pro, 1.28.3 fixed a CLI UI overlay issue; 1.28.4 is not on the changelog page yet). `COMMAND_CODE_CLI_VERSION` is now `1.28.4`. No snapshot or wire changes: the 1.28.4 bundle's effort map, plan maps, ZA model table, endpoints, request fields, and stream event types are all identical to 1.28.1, and the live catalog still lists the same 56 models.
+- **The settings page's account-usage card is now a carousel.** With several accounts configured, a tab strip (account label + status dot) switches between per-account reports instead of stacking them, so the page no longer grows with each account; the selector defaults to the currently serving account. Each account's report carries its own **remove** button (staged like every other edit, persisted on save) — offered only for accounts the settings document actually owns (the default account and composition-only literal-key accounts are not removable from the page), and the per-row remove buttons in the account-management card below were removed (unsaved additions keep theirs, since they never appear in the Host-side usage report). Accounts staged for removal disappear from the carousel immediately and stay hidden across the post-save refresh.
+
 ## [0.5.0] - 2026-08-19
 
 ### Added

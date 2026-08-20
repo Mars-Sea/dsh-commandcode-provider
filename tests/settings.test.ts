@@ -571,3 +571,18 @@ test('a failed key write aborts the save before the accounts list lands', async 
   assert.equal(controller.state().accounts.length, 1)
   assert.equal(controller.state().accounts[0]?.added, true)
 })
+
+test('staged removals surface in accountsRemoving until the save lands', async () => {
+  const scope = makeScope({
+    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+    user: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
+  })
+  const { controller } = makeController({ scope })
+  assert.deepEqual(controller.state().accountsRemoving, [])
+  controller.removeAccount('COMMANDCODE_API_KEY_2')
+  // Staged: hidden from the accounts list, visible to the usage card.
+  assert.deepEqual(controller.state().accounts, [])
+  assert.deepEqual(controller.state().accountsRemoving, ['COMMANDCODE_API_KEY_2'])
+  await controller.save()
+  assert.deepEqual(controller.state().accountsRemoving, [])
+})

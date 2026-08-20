@@ -13,7 +13,7 @@
  * (see src/client/index.ts) and class-prefixed `cc-` to stay local.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
@@ -238,7 +238,12 @@ function AccountMark({ entry, t }: { entry: CommandCodeAccountUsage; t: Translat
  * One pool account's facts (identity, totals, credits, window limits)
  * rendered inside the account-usage card.
  */
-function AccountReport({ entry, t }: { entry: CommandCodeAccountUsage; t: Translate<SettingsCommandCodeKey> }) {
+function AccountReport({ entry, t, onRemove }: {
+  entry: CommandCodeAccountUsage
+  t: Translate<SettingsCommandCodeKey>
+  /** Present only for removable (non-default) accounts on a writable page. */
+  onRemove?: (() => void) | undefined
+}) {
   const report = entry.report
   const account = report.account
   const accountName = account === undefined ? '' : account.userName || account.name
@@ -255,6 +260,10 @@ function AccountReport({ entry, t }: { entry: CommandCodeAccountUsage; t: Transl
         {accountName !== '' ? <span className="cc-usageAccount">{accountName}</span> : null}
         {planName !== '' ? <span className="cc-usagePlan">{planName}</span> : null}
         {planStatus !== '' ? <span className="cc-usagePlanStatus">{planStatus}</span> : null}
+        <span className="cc-usageMetaSpacer" />
+        {onRemove !== undefined ? (
+          <button type="button" className="cc-usageRefresh" onClick={onRemove}>{t('accountRemove')}</button>
+        ) : null}
       </div>
 
       {!entry.configured ? <p className="cc-usageHint">{t('usageUnconfigured')}</p> : null}
@@ -311,17 +320,42 @@ function AccountReport({ entry, t }: { entry: CommandCodeAccountUsage; t: Transl
   )
 }
 
+/** The status dot on an account tab: cooling/invalid warn, everything else ok. */
+function AccountTabDot({ entry }: { entry: CommandCodeAccountUsage }) {
+  const cls = entry.mark === 'invalid-credential'
+    ? 'cc-tabDot cc-tabDotError'
+    : entry.mark !== '' || entry.cooldownUntil > 0
+      ? 'cc-tabDot cc-tabDotWarn'
+      : 'cc-tabDot cc-tabDotOk'
+  return <span className={cls} />
+}
+
 /**
  * The account-usage card: the `/commandcode` dashboard's facts rendered as
- * a native settings card — one section per pool account. Data arrives
- * through the `commandcode/report` Remote; the API keys never leave the
- * Host.
+ * a native settings card. With several accounts the card is a carousel — a
+ * tab strip (label + status dot) switches between accounts so the page stays
+ * short; each account's report carries its own remove affordance (the
+ * default account is not removable). Accounts staged for removal in the
+ * management card are hidden here immediately. Data arrives through the
+ * `commandcode/report` Remote; the API keys never leave the Host.
  */
-function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
+function UsageCard({ t, usage, apiKeyConfigured, removingIds, removableIds, canManage, onRefresh, onRemoveAccount }: {
   t: Translate<SettingsCommandCodeKey>
   usage: UsagePageState
   apiKeyConfigured: boolean
+  /** Ids of accounts staged for removal (hidden from the carousel). */
+  removingIds: string[]
+  /**
+   * Ids of accounts the settings document can actually remove (the stored
+   * extra accounts' refs). Composition-only accounts (literal-key slots with
+   * positional `account-N` ids) are NOT removable from the page — the
+   * settings document cannot name them — so they get no remove button.
+   */
+  removableIds: string[]
+  /** Whether the page accepts writes (the remove affordance follows it). */
+  canManage: boolean
   onRefresh(): void
+  onRemoveAccount(id: string): void
 }) {
   // First paint with a configured key fetches automatically; later fetches
   // are explicit (refresh button) or follow a landed save.
@@ -331,6 +365,37 @@ function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
 
   const loading = usage.status === 'loading'
   const report = usage.report
+  // Locally remembered removals: the usage controller keeps the old report
+  // until the post-save refresh lands, and removedRefs clears at save-land —
+  // without this the just-removed account would pop back in for one refresh
+  // round-trip. Cleared when a fresh report arrives (fetchedAt changes).
+  const [locallyRemoved, setLocallyRemoved] = useState<readonly string[]>([])
+  useEffect(() => {
+    setLocallyRemoved([])
+  }, [usage.fetchedAt])
+  const hidden = new Set([...removingIds, ...locallyRemoved])
+  const seenIds = new Set<string>()
+  const entries = (report?.accounts ?? []).filter((entry) => {
+    if (hidden.has(entry.id)) return false
+    // Hand-edited settings can name the same credential ref twice; dedupe so
+    // the tab strip never carries duplicate keys/selections.
+    if (seenIds.has(entry.id)) return false
+    seenIds.add(entry.id)
+    return true
+  })
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
+  // The selected tab: the explicit choice while it still exists, else the
+  // serving (active) account, else the first entry.
+  const selected = entries.find((entry) => entry.id === selectedId)
+    ?? entries.find((entry) => entry.active)
+    ?? entries[0]
+  const removeSelected = canManage && selected !== undefined && removableIds.includes(selected.id)
+    ? () => {
+        const id = selected.id
+        setLocallyRemoved((prev) => [...prev, id])
+        onRemoveAccount(id)
+      }
+    : undefined
 
   return (
     <div className="cc-usageCard" aria-label={t('usageTitle')}>
@@ -350,7 +415,32 @@ function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
         </p>
       ) : null}
 
-      {report?.accounts.map((entry) => <AccountReport key={entry.id} entry={entry} t={t} />)}
+      {entries.length > 1 ? (
+        <div className="cc-tabs" role="tablist" aria-label={t('accountsTitle')}>
+          {entries.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={selected?.id === entry.id}
+              className={selected?.id === entry.id ? 'cc-tab cc-tabActive' : 'cc-tab'}
+              onClick={() => setSelectedId(entry.id)}
+            >
+              <AccountTabDot entry={entry} />
+              {entry.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {selected !== undefined ? (
+        <AccountReport
+          key={selected.id}
+          entry={selected}
+          t={t}
+          onRemove={removeSelected}
+        />
+      ) : null}
 
       {report !== undefined && usage.fetchedAt !== undefined ? (
         <div className="cc-usageMeta">
@@ -362,7 +452,13 @@ function UsageCard({ t, usage, apiKeyConfigured, onRefresh }: {
   )
 }
 
-/** One extra account row: label, key, configured badge, remove affordance. */
+/**
+ * One extra account row: label, key, configured badge. Saved accounts are
+ * removed from the usage card above; a NOT-YET-SAVED addition never appears
+ * there (the usage report is Host-side), so it keeps its own remove button —
+ * otherwise the only way to undo a mistaken Add would be discarding every
+ * other staged edit.
+ */
 function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
   account: AccountItemState
   disabled: boolean
@@ -381,7 +477,9 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
           <span className={account.configured ? 'cc-badge' : 'cc-badgeMuted'}>
             {account.configured ? t('apiKeySet') : t('apiKeyUnset')}
           </span>
-          <button type="button" className="cc-reset" disabled={disabled} onClick={onRemove}>{t('accountRemove')}</button>
+          {account.added ? (
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onRemove}>{t('accountRemove')}</button>
+          ) : null}
         </span>
       </div>
       <input
@@ -407,7 +505,7 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
   )
 }
 
-/** The multi-account card: extra accounts in rotation order + add button. */
+/** The multi-account card: the active-account selector + extra accounts in rotation order + add button. */
 function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onActive, onActiveReset }: {
   t: Translate<SettingsCommandCodeKey>
   state: SettingsPageState
@@ -485,7 +583,11 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         t={t}
         usage={usage}
         apiKeyConfigured={state.anyAccountConfigured}
+        removingIds={state.accountsRemoving}
+        removableIds={state.accounts.map((account) => account.id)}
+        canManage={state.writable}
         onRefresh={props.refreshUsage}
+        onRemoveAccount={props.removeAccount}
       />
       <AccountsCard
         t={t}

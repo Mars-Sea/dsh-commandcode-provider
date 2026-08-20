@@ -5,7 +5,7 @@
  * community-maintained integration; you need your own Command Code account
  * and API key or subscription, and Command Code's terms apply.
  *
- * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.1):
+ * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
  *          system, max_tokens, temperature, stream, reasoning_effort? }, threadId }
@@ -46,14 +46,14 @@ import {
 } from '@deepseek-ai/dsh-llm'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.28.1 bundled
+// Static capability snapshot (from the official command-code@1.28.4 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.28.1 bundled model
+  // Re-verified against the authoritative command-code@1.28.4 bundled model
   // table (dist/cli.mjs, the 'ZA' object): exactly these models carry
   // 'reasoningEfforts'. Models marked 'reasoning:!0' without 'reasoningEfforts'
   // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -148,7 +148,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (`ZA` in command-code@1.28.1) marks
+ * Models the official CLI's model table (`ZA` in command-code@1.28.4) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -156,7 +156,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.28.1 bundled model table (dist/cli.mjs, the `ZA`
+ * Source: the command-code@1.28.4 bundled model table (dist/cli.mjs, the `ZA`
  * object), cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
@@ -299,7 +299,7 @@ export function compareByPlan(
 
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (`Nn`/`$n` in command-code@1.28.1 `dist/cli.mjs`): subscription `planId`
+ * (`Nn`/`$n` in command-code@1.28.4 `dist/cli.mjs`): subscription `planId`
  * prefix → display name and the plan's monthly credit total. This is the
  * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
  * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
@@ -458,7 +458,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.28.1'
+export const COMMAND_CODE_CLI_VERSION = '1.28.4'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536

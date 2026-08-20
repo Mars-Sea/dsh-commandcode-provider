@@ -100,8 +100,14 @@ const PAGE_CSS = `
 .cc-usageBarFillWarn{background:var(--dsw-alias-label-error)}
 .cc-usageWindowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 .cc-usageMeta{align-items:center;gap:8px;display:flex}
-.cc-accountReport{border-top:1px solid var(--dsw-alias-border-l2);padding-top:12px;flex-direction:column;gap:12px;display:flex}
-.cc-accountReport:first-of-type{border-top:none;padding-top:0}
+.cc-accountReport{flex-direction:column;gap:12px;display:flex}
+.cc-tabs{flex-wrap:wrap;gap:6px;display:flex}
+.cc-tab{align-items:center;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:2px 10px;font-size:12px;line-height:18px;display:inline-flex;gap:6px}
+.cc-tab:hover:not(.cc-tabActive){color:var(--dsw-alias-label-primary)}
+.cc-tabActive{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-brand-primary)}
+.cc-tabDotOk{background:var(--dsw-alias-brand-primary);border-radius:50%;width:6px;height:6px}
+.cc-tabDotWarn{background:#d97706;border-radius:50%;width:6px;height:6px}
+.cc-tabDotError{background:var(--dsw-alias-label-error);border-radius:50%;width:6px;height:6px}
 .cc-usageMetaSpacer{flex:1}
 .cc-usageUpdated{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 .cc-usagePartial{color:var(--dsw-alias-label-error);margin:0;font-size:11px;line-height:1.5}

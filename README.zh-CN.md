@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm](https://img.shields.io/badge/npm-@mars--sea%2Fdsh--commandcode--provider-blue.svg)](https://www.npmjs.com/package/@mars-sea/dsh-commandcode-provider)
 
-非官方 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的 LLM provider 插件，用于 **Command Code**，移植自 [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider)（MIT 协议）。它注册了一个 `commandcode` provider，将请求转换为 Command Code 的 Provider API（`POST /alpha/generate`，由 pi 插件逆向工程，对应 `command-code@1.28.1`）。
+非官方 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的 LLM provider 插件，用于 **Command Code**，移植自 [pi-commandcode-provider](https://github.com/patlux/pi-commandcode-provider)（MIT 协议）。它注册了一个 `commandcode` provider，将请求转换为 Command Code 的 Provider API（`POST /alpha/generate`，由 pi 插件逆向工程，对应 `command-code@1.28.4`）。
 
 > 这是一个社区集成。你需要自己的 Command Code 账号、API key 或订阅，并遵守 Command Code 的服务条款。本项目与 Command Code, Inc. 无关。
 
@@ -22,7 +22,7 @@
 - **API key 解析顺序**：`config.apiKey` → 凭据引用 `apiKeyEnv`（默认 `COMMANDCODE_API_KEY`）→ 启动环境变量 → 官方 CLI 认证文件（`~/.commandcode/auth.json`，由 `command-code login` 写入）。
 - **模型选择器标注**：每个模型显示包含它的**最低套餐**（`KNOWN_PLANS`）、**活动折扣**或 `FREE` 徽章（`KNOWN_DEALS`，到期自动隐藏已失效折扣）、峰谷定价模型的**当前时段状态**（`Peak`/`Half`，按当前 UTC 小时动态判断）、Vision 模型的 **`Image`** 标记，以及**上下文长度**（`1M` / `256K` / `262K`）——例如 *"Go · 50% off · Image · 1M"*、*"Go · Half · 1M"*。列表**按套餐排序**（Go → GOAT → Pro → Provider/Max），你当前套餐能用的模型总是排在最前。
 - **按套餐过滤选择器**：选择器会**直接隐藏超出你订阅套餐的模型**（根据账户账单状态实时判断）。全程失败开放——账单接口不可用、套餐未知，或账户持有按需余额（官方 CLI 视为解锁全部模型）时都显示完整目录——服务端仍是最终闸门。在设置页关闭「隐藏套餐外模型」开关（或在 `llm-commandcode` 设置段中设 `filterModelsByPlan: false`）可始终列出全部模型。
-- **推理强度（reasoning-effort）支持**：针对官方目录标为推理模型的模型（`KNOWN_EFFORTS`，与 `command-code@1.28.1` 一致）；没有可选档位但仍支持思考的模型会自动思考，与官方 CLI 行为完全一致。
+- **推理强度（reasoning-effort）支持**：针对官方目录标为推理模型的模型（`KNOWN_EFFORTS`，与 `command-code@1.28.4` 一致）；没有可选档位但仍支持思考的模型会自动思考，与官方 CLI 行为完全一致。
 - **支持视觉模型的图片输入**（通过 dsh 附件服务、以官方 wire 格式发送）；纯文本模型会明确拒绝图片（`UNSUPPORTED_CONTENT`）而非静默丢弃。
 
 <img src="assets/screenshots/model-picker.png" alt="带套餐、折扣、图片与上下文标注的模型选择器" width="250">

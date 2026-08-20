@@ -120,6 +120,8 @@ export interface SettingsPageState {
   activeAccount: StagedField
   /** Extra accounts (multi-account rotation), in rotation order. */
   accounts: AccountItemState[]
+  /** Refs of stored accounts staged for removal (the usage card hides them). */
+  accountsRemoving: string[]
   /** Whether any staged edit differs from the stored section. */
   dirty: boolean
   /** Whether a staged numeric field fails to parse (save blocked). */
@@ -320,6 +322,7 @@ export class CommandCodeSettingsController {
       filterModelsByPlan: this.field('filterModelsByPlan'),
       activeAccount: this.field('activeAccount'),
       accounts,
+      accountsRemoving: [...this.removedRefs],
       dirty: plan.length > 0 || this.accountsDirty(),
       invalid: plan.some((item) => item.run === undefined),
       saving: this.saving,

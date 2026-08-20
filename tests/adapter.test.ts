@@ -986,7 +986,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
   // both Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
-  // Synced from the official command-code@1.28.1 model table: models that
+  // Synced from the official command-code@1.28.4 model table: models that
   // ship with effort levels must be present, and absent ones must stay out.
   // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
   // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
@@ -1008,7 +1008,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
-  // Re-verified against the command-code@1.28.1 ZA table (2026-08-18): these
+  // Re-verified against the command-code@1.28.4 ZA table (2026-08-18): these
   // think automatically (reasoning:!0, no efforts) and belong in the set.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
@@ -1163,7 +1163,7 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.28.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.28.4')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
