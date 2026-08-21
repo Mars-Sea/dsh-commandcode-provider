@@ -19,7 +19,9 @@
  * @module dsh-commandcode-provider/usage-wire
  */
 
-import type { CommandCodeUsageReport } from './adapter.ts'
+import type { CommandCodeUsageReport, UsageBlockReason } from './adapter.ts'
+
+export type { CommandCodeUsageReport, UsageBlockReason }
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
 
 /** One account's usage entry in the multi-account report. */
@@ -104,6 +106,12 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
   const failures = source.failures
   if (!Array.isArray(failures) || failures.some((entry) => typeof entry !== 'string')) reject('failures')
   const report: CommandCodeUsageReport = { failures: failures as string[] }
+
+  if (source.blocked !== undefined) {
+    const blocked = source.blocked
+    if (blocked !== 'invalid-key' && blocked !== 'service-unavailable' && blocked !== 'network') reject('blocked')
+    report.blocked = blocked
+  }
 
   if (source.account !== undefined) {
     const account = record(source.account, 'account')

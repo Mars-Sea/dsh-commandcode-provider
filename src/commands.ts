@@ -40,8 +40,7 @@ function moneyShort(value: number): string {
   return `$${value.toFixed(2)}`
 }
 
-/** Format a token count with thousands separators. */
-/** Format a large token count compactly (1.9亿 style). */
+/** Format a large token count compactly (1.9M style). */
 function tokensCompact(value: number): string {
   if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`
   if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`
@@ -80,6 +79,16 @@ function renderReport(report: CommandCodeUsageReport, title?: string): string {
   const account = report.account ? ` (${report.account.userName || report.account.name})` : ''
 
   lines.push(title ?? `📊 Command Code 用量${account}`, '')
+
+  // A total failure names its cause up front; the per-endpoint failure list
+  // at the bottom would bury it.
+  if (report.blocked === 'invalid-key') {
+    lines.push('⛔ API 密钥无效或已过期 — 服务端拒绝了全部请求（401），请检查该账户的密钥配置', '')
+  } else if (report.blocked === 'service-unavailable') {
+    lines.push('⚠️ Command Code 服务暂时不可用（5xx），稍后重试', '')
+  } else if (report.blocked === 'network') {
+    lines.push('⚠️ 无法连接 Command Code 服务 — 请检查网络或 API 地址', '')
+  }
 
   if (report.plan && report.plan.name !== '') {
     const p = report.plan

@@ -288,13 +288,26 @@ export const PLAN_ORDER: Readonly<Record<string, number>> = {
 }
 
 /**
- * Comparator for the model picker: sort by plan tier (lowest first), then by
- * model name, then by id as a tiebreak. Models with no known plan sort last.
+ * Whether a model is free (requests cost no credits), per the pricing page's
+ * deals (`KNOWN_DEALS` `free: true`). Free models lead the picker regardless
+ * of tier — they are usable by every account, so they are the best default
+ * candidates.
+ */
+export function isFreeModel(modelId: string): boolean {
+  return KNOWN_DEALS[modelId]?.free === true
+}
+
+/**
+ * Comparator for the model picker: free models first (zero credit cost, usable
+ * by every account), then by plan tier (lowest first), then by model name,
+ * then by id as a tiebreak. Models with no known plan sort last.
  */
 export function compareByPlan(
   a: { id: string; name: string },
   b: { id: string; name: string },
 ): number {
+  const freeDelta = Number(isFreeModel(b.id)) - Number(isFreeModel(a.id))
+  if (freeDelta !== 0) return freeDelta
   const pa = PLAN_ORDER[KNOWN_PLANS[a.id] ?? ''] ?? Number.MAX_SAFE_INTEGER
   const pb = PLAN_ORDER[KNOWN_PLANS[b.id] ?? ''] ?? Number.MAX_SAFE_INTEGER
   if (pa !== pb) return pa - pb
@@ -400,10 +413,6 @@ export interface KnownDeal {
 }
 
 export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
-  // Note: DeepSeek V4 Pro's 75%-off deal was retired on 2026-08-16 16:00 UTC
-  // when DeepSeek moved to peak/off-peak pricing (see KNOWN_PEAK_PRICING); it
-  // was removed from this snapshot once it lapsed, per the skill's rule that
-  // expired deals are dropped from the official page.
   'google/gemini-3.7-flash': { label: '50% off', expiresAt: '2026-12-31T23:59:59Z' },
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
@@ -978,6 +987,16 @@ export interface CommandCodePlan {
   currentPeriodEnd: number
 }
 
+/**
+ * Why every account endpoint failed at once (the report then carries no data
+ * at all, so the degraded per-endpoint view would hide the root cause behind
+ * a generic "partial data" note). Undefined for partial failures.
+ */
+export type UsageBlockReason = 'invalid-key' | 'service-unavailable' | 'network'
+
+/** Account endpoints fetched by one `getUsage()` run (see the classification there). */
+const USAGE_ENDPOINT_COUNT = 4
+
 /** Everything the usage endpoints report, fetched together. */
 export interface CommandCodeUsageReport {
   account?: CommandCodeAccount
@@ -986,6 +1005,13 @@ export interface CommandCodeUsageReport {
   plan?: CommandCodePlan
   /** Endpoint failures degrade the report instead of failing it. */
   failures: string[]
+  /**
+   * The single reason every endpoint failed, when they all did: `invalid-key`
+   * (every call rejected with 401 — the stored key is wrong or expired),
+   * `service-unavailable` (every call answered 5xx), or `network` (no HTTP
+   * response at all). Undefined when any endpoint succeeded.
+   */
+  blocked?: UsageBlockReason
 }
 
 export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
@@ -1232,6 +1258,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const base = connection.apiBase
     const headers = await this.accountHeaders(apiKey)
     const failures: string[] = []
+    // HTTP status per failed endpoint (undefined for transport failures), in
+    // failure order — the all-failed classification below reads it.
+    const failedStatuses: Array<number | undefined> = []
 
     const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
       try {
@@ -1243,12 +1272,14 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         })
         if (!response.ok) {
           failures.push(`${path}: HTTP ${response.status}`)
+          failedStatuses.push(response.status)
           return undefined
         }
         const parsed: unknown = await response.json()
         return isRecord(parsed) ? parsed : undefined
       } catch (error: unknown) {
         failures.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
+        failedStatuses.push(undefined)
         return undefined
       }
     }
@@ -1327,6 +1358,22 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         status: stringValue(subData?.status) ?? '',
         monthlyCredits: info?.monthlyCredits ?? null,
         currentPeriodEnd: periodEndValue(subData?.currentPeriodEnd),
+      }
+    }
+
+    // Classify a TOTAL failure: when every endpoint failed with one class of
+    // error, the degraded per-endpoint view would hide the root cause behind
+    // a generic "partial data" note — name it instead. Four endpoints are
+    // fetched (whoami, usage/summary, billing/credits, billing/subscriptions;
+    // the last may carry an orgId query, so classification counts, not paths).
+    if (failures.length === USAGE_ENDPOINT_COUNT) {
+      const codes = failedStatuses.filter((status): status is number => status !== undefined)
+      if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code === 401)) {
+        report.blocked = 'invalid-key'
+      } else if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code >= 500)) {
+        report.blocked = 'service-unavailable'
+      } else if (codes.length === 0) {
+        report.blocked = 'network'
       }
     }
 
@@ -1845,10 +1892,12 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
   const detail = providerCode ?? `HTTP ${status}`
   if (status === 401) {
     // An invalid or missing credential is a config problem, not a
-    // transport failure: retrying it identically cannot succeed.
+    // transport failure: retrying it identically cannot succeed. Bilingual —
+    // the harness UI renders this message verbatim in its retry chrome.
     return new LlmError(
       `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
-      + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file',
+      + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file'
+      + '；Command Code API 返回 401：API 密钥缺失或无效——请在设置页检查 COMMANDCODE_API_KEY 存储的密钥，或检查 auth 文件',
       'INVALID_CREDENTIAL',
       { status: 401 },
     )

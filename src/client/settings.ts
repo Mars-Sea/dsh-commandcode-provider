@@ -40,6 +40,8 @@ export interface SettingsPageApi {
       result: { ok: true; value: { credentials: Record<string, { configured: boolean; writable: boolean }> } } | { ok: false; error: { message: string } }
     }>
     set(request: { ref: string; value: string }): Promise<{ result: { ok: true; value?: unknown } | { ok: false; error: { message: string } } }>
+    /** Remove one stored credential entirely (the Host's `credentials.unset`). */
+    unset(request: { ref: string }): Promise<{ result: { ok: true; value?: unknown } | { ok: false; error: { message: string } } }>
   }
 }
 
@@ -85,6 +87,8 @@ export interface AccountItemState {
   writable: boolean
   /** Staged for addition (not yet saved). */
   added: boolean
+  /** Staged for key removal on the next save (the stored key is bad/unwanted). */
+  clearStaged: boolean
 }
 
 /** The page's full state face, projected from the scope + drafts + credential. */
@@ -101,6 +105,8 @@ export interface SettingsPageState {
   apiKeyWritable: boolean
   /** The API key draft (write-only; starts blank, never echoes the stored key). */
   apiKey: StagedField
+  /** Whether the default account's stored key is staged for removal on the next save. */
+  apiKeyClearStaged: boolean
   /** apiBase draft. */
   apiBase: StagedField
   /** workingDir draft. */
@@ -266,6 +272,8 @@ export class CommandCodeSettingsController {
   private readonly labelDrafts = new Map<string, string>()
   /** Staged key drafts, by credential reference (blank = keep stored key). */
   private readonly keyDrafts = new Map<string, string>()
+  /** Credential references staged for removal on the next save. */
+  private readonly keyClears = new Set<string>()
   private saving = false
   private failed = false
   private savedCount = 0
@@ -353,6 +361,7 @@ export class CommandCodeSettingsController {
         invalid: false,
         invalidReason: undefined,
       },
+      apiKeyClearStaged: this.keyClears.has(this.credentialRef),
       apiBase: this.field('apiBase'),
       workingDir: this.field('workingDir'),
       defaultWorkingDir: this.defaultWorkingDir,
@@ -417,13 +426,42 @@ export class CommandCodeSettingsController {
   /** Stage one extra account's key draft (blank keeps the stored key). */
   editAccountKey(id: string, text: string): void {
     this.keyDrafts.set(id, text)
+    // Typing a replacement cancels a staged removal — the two intents are
+    // mutually exclusive (replace vs remove), and a staged clear would
+    // otherwise silently discard what is being typed.
+    this.keyClears.delete(id)
     this.failed = false
+    this.publish()
+  }
+
+  /**
+   * Toggle the staged removal of one account's stored key: the next save
+   * unsets the credential so the account reports unconfigured and falls back
+   * to its other key sources. Only meaningful while a key is actually
+   * stored. `target` is `'default'` (the implicit first account) or an extra
+   * account's credential reference.
+   */
+  toggleKeyClear(target: string): void {
+    const ref = target === 'default' ? this.credentialRef : target
+    if (this.keyClears.has(ref)) {
+      this.keyClears.delete(ref)
+    } else {
+      if (this.credentialStates.get(ref)?.configured !== true) return
+      // A staged replacement and a staged removal are mutually exclusive.
+      this.keyDrafts.delete(ref)
+      if (ref === this.credentialRef) this.staged.delete('apiKey')
+      this.keyClears.add(ref)
+    }
+    this.failed = false
+    void this.describeAll()
     this.publish()
   }
 
   /** Stage one field's draft text. */
   edit(field: string, text: string): void {
     this.staged.set(field, { text, clear: false })
+    // Typing a replacement for the default key cancels a staged removal.
+    if (field === 'apiKey') this.keyClears.delete(this.credentialRef)
     this.failed = false
     this.publish()
   }
@@ -507,6 +545,11 @@ export class CommandCodeSettingsController {
     for (const [ref, text] of [...this.labelDrafts]) {
       const storedLabel = this.storedExtras().find((extra) => extra.ref === ref)?.label
       if (storedLabel === undefined || storedLabel === text.trim()) this.labelDrafts.delete(ref)
+    }
+    // A landed clear already did its job (the Host reports unconfigured);
+    // keep only clears that failed so a retry re-attempts them.
+    for (const ref of [...this.keyClears]) {
+      if (this.credentialStates.get(ref)?.configured !== true) this.keyClears.delete(ref)
     }
   }
 
@@ -685,15 +728,17 @@ export class CommandCodeSettingsController {
       configured: this.credentialStates.get(extra.ref)?.configured ?? false,
       writable: this.credentialStates.get(extra.ref)?.writable ?? true,
       added: extra.added,
+      clearStaged: this.keyClears.has(extra.ref),
     }))
   }
 
-  /** Whether any account-level staging (add/remove/label/key) exists. */
+  /** Whether any account-level staging (add/remove/label/key/clear) exists. */
   private accountsStaged(): boolean {
     return this.addedAccounts.length > 0
       || this.removedRefs.size > 0
       || this.labelDrafts.size > 0
       || this.keyDrafts.size > 0
+      || this.keyClears.size > 0
   }
 
   /** Whether the staged account edits differ from the stored section. */
@@ -706,6 +751,11 @@ export class CommandCodeSettingsController {
     for (const text of this.keyDrafts.values()) {
       if (text.trim() !== '') return true
     }
+    // A staged clear is only meaningful while the key is actually stored —
+    // staging one against an unconfigured ref is a no-op, not dirt.
+    for (const ref of this.keyClears) {
+      if (this.credentialStates.get(ref)?.configured === true) return true
+    }
     return false
   }
 
@@ -715,15 +765,36 @@ export class CommandCodeSettingsController {
     this.removedRefs.clear()
     this.labelDrafts.clear()
     this.keyDrafts.clear()
+    this.keyClears.clear()
+  }
+
+  /** Unset one stored credential, then re-read the Host's credential states. */
+  private async unsetKey(ref: string): Promise<boolean> {
+    try {
+      const response = await this.api.credentials.unset({ ref })
+      if (!response.result.ok) return false
+    } catch {
+      return false
+    }
+    await this.describeAll()
+    return this.credentialStates.get(ref)?.configured !== true
   }
 
   /** The account-level writes a save performs (empty when nothing staged). */
   private accountPlan(): Array<() => Promise<boolean>> {
     if (!this.accountsDirty()) return []
     const runs: Array<() => Promise<boolean>> = []
+    // Staged removals land first: a cleared credential must be gone before
+    // the accounts list write, or a removed row would leave an orphaned
+    // secret behind. Removed rows keep their clear (clean removal).
+    for (const ref of this.keyClears) {
+      if (this.credentialStates.get(ref)?.configured === true) {
+        runs.push(() => this.unsetKey(ref))
+      }
+    }
     for (const [ref, text] of this.keyDrafts) {
       const value = text.trim()
-      if (value !== '' && !this.removedRefs.has(ref)) {
+      if (value !== '' && !this.removedRefs.has(ref) && !this.keyClears.has(ref)) {
         runs.push(() => this.writeKeyTo(ref, value))
       }
     }

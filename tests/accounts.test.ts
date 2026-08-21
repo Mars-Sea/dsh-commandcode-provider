@@ -123,7 +123,14 @@ test('deduplicates slots resolving to the same key', async () => {
   assert.equal(accounts.length, 1)
   // Marking the shared key exhausts every slot that resolves to it.
   pool.markRejected('key-1', 'rate-limit')
-  await assert.rejects(() => pool.resolveKey(), /exhausted/)
+  const error = await pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as Error,
+  )
+  // Bilingual: English first, then the Chinese reading (the harness UI
+  // renders the message verbatim in its retry chrome).
+  assert.match(error.message, /exhausted/)
+  assert.match(error.message, /已用尽全部/)
 })
 
 test('revives an account whose window probe reports no longer exceeded', async () => {

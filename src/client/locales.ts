@@ -80,6 +80,15 @@ export type SettingsCommandCodeKey =
   | 'usageExceeded'
   | 'usageReset'
   | 'usagePartial'
+  | 'usageKeyClear'
+  | 'usageKeyClearStaged'
+  | 'usageUndoKeyClear'
+  | 'usageKeyInvalid'
+  | 'usageKeyInvalidHint'
+  | 'usageServiceUnavailable'
+  | 'usageServiceUnavailableHint'
+  | 'usageNetworkError'
+  | 'usageNetworkHint'
   | 'usageUpdated'
   | 'usagePeriodEnd'
   | 'usageActive'
@@ -155,6 +164,15 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   usageExceeded: '已超限',
   usageReset: '重置于',
   usagePartial: '部分端点数据不可用',
+  usageKeyClear: '清除已存密钥',
+  usageKeyClearStaged: '将清除（保存后生效）',
+  usageUndoKeyClear: '撤销清除',
+  usageKeyInvalid: 'API 密钥无效或已过期',
+  usageKeyInvalidHint: '服务端拒绝了全部请求（401）。请检查该账户配置的密钥，或到 commandcode.ai 控制台重新生成。',
+  usageServiceUnavailable: 'Command Code 服务暂时不可用',
+  usageServiceUnavailableHint: '服务端返回了错误（5xx），稍后点击刷新重试。',
+  usageNetworkError: '无法连接 Command Code 服务',
+  usageNetworkHint: '所有请求都没有到达服务端。请检查网络连接或 API 地址设置。',
   usageUpdated: '更新于',
   usagePeriodEnd: '账期截止',
   usageActive: '当前使用',
@@ -239,6 +257,15 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   usageExceeded: 'Exceeded',
   usageReset: 'Resets',
   usagePartial: 'Some endpoint data unavailable',
+  usageKeyClear: 'Clear stored key',
+  usageKeyClearStaged: 'Will be cleared on save',
+  usageUndoKeyClear: 'Undo clear',
+  usageKeyInvalid: 'API key invalid or expired',
+  usageKeyInvalidHint: 'The server rejects every request (401). Check the key configured for this account, or generate a new one in the commandcode.ai console.',
+  usageServiceUnavailable: 'The Command Code service is temporarily unavailable',
+  usageServiceUnavailableHint: 'The server returned errors (5xx); try Refresh again later.',
+  usageNetworkError: 'Could not reach the Command Code service',
+  usageNetworkHint: 'No request reached the server. Check your network connection or the API base setting.',
   usageUpdated: 'Updated',
   usagePeriodEnd: 'Period ends',
   usageActive: 'Active',

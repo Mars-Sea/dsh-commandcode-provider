@@ -237,9 +237,14 @@ export class CommandCodeAccountPool {
     const latest = await this.resolvedAccounts()
     const disabled = latest.filter((account) => account.state?.kind === 'disabled')
     if (disabled.length === latest.length) {
+      // Bilingual: the harness UI renders this message verbatim inside its
+      // (already localized) retry/turn-error chrome, so both languages ride
+      // in one string — English first, then the Chinese reading.
       throw new LlmError(
         `llm-commandcode: every configured Command Code account (${latest.length}) was rejected with 401`
-          + ' — check the stored API keys (Models page / settings) or the auth file',
+          + ' — check the stored API keys (Models page / settings) or the auth file'
+          + `；已配置的 ${latest.length} 个 Command Code 账户密钥均被拒绝（401）`
+          + '——请在设置页检查存储的 API 密钥，或重新运行 command-code login',
         'INVALID_CREDENTIAL',
       )
     }
@@ -259,7 +264,10 @@ export class CommandCodeAccountPool {
     throw new LlmError(
       `llm-commandcode: all ${latest.length} Command Code account(s) have exhausted their usage window`
         + (earliest > 0 ? `; the earliest window resets at ${clockLabel(earliest)}` : '')
-        + ' — requests will succeed again after the reset (or add another account)',
+        + ' — requests will succeed again after the reset (or add another account)'
+        + `；已用尽全部 ${latest.length} 个 Command Code 账户的用量窗口`
+        + (earliest > 0 ? `，最早的重置时间为 ${clockLabel(earliest)}` : '')
+        + '——窗口重置后请求会自动恢复（也可以添加更多账户）',
       'RATE_LIMIT',
       wait > 0 && wait <= RETRY_MAX_DELAY_MS ? { providerRetryAfterMs: wait } : undefined,
     )

@@ -397,14 +397,15 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   assert.deepEqual(byId.get('deepseek/deepseek-v4-flash')!.inputModalities, ['text'])
   assert.match(byId.get('deepseek/deepseek-v4-flash')!.description, /^Go · (?:Peak|Half) · 1M$/)
   assert.equal(byId.get('poolside/laguna-s-2.1-free')!.description, 'Go · FREE · 256K')
-  // The picker shows rows in returned order: Go models lead, then Pro,
-  // alphabetically within a tier (input order was deliberately shuffled).
+  // The picker shows rows in returned order: the free model leads, then Go
+  // models, then Pro, alphabetically within a tier (input order was
+  // deliberately shuffled).
   assert.deepEqual(
     models.map((m) => m.id),
     [
+      'poolside/laguna-s-2.1-free',
       'deepseek/deepseek-v4-flash',
       'deepseek/deepseek-v4-pro',
-      'poolside/laguna-s-2.1-free',
       'claude-sonnet-5',
     ],
   )
@@ -567,11 +568,26 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
   assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: 4, onDemandCredits: 0 }), true)
 })
 
-test('compareByPlan() sorts by plan tier then name, unknown plans last', () => {
-  // Go beats Pro regardless of name.
+test('compareByPlan() sorts free models first, then plan tier, then name', () => {
+  // Free models (KNOWN_DEALS free: true) lead the list regardless of tier.
+  assert.ok(compareByPlan(
+    { id: 'stealth/ox-alpha', name: 'Ox Alpha (CC)' },
+    { id: 'claude-opus-5', name: 'Claude Opus 5 (CC)' },
+  ) < 0)
+  // A paid Go model still sorts before a higher-tier model...
   assert.ok(compareByPlan(
     { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
     { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
+  ) < 0)
+  // ...but after every free model.
+  assert.ok(compareByPlan(
+    { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
+    { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
+  ) < 0)
+  // Free models order among themselves by name.
+  assert.ok(compareByPlan(
+    { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
+    { id: 'stealth/ox-alpha', name: 'Ox Alpha (CC)' },
   ) < 0)
   // Within a tier, alphabetical by name.
   assert.ok(compareByPlan(
@@ -1386,4 +1402,49 @@ test('stream() drops a Retry-After above the policy cap so normal mode keeps ret
       return e.code === 'RATE_LIMIT' && e.failure?.providerRetryAfterMs === undefined
     },
   )
+})
+
+// ---------------------------------------------------------------------------
+// getUsage(): total-failure classification (the settings card's blocked banner)
+// ---------------------------------------------------------------------------
+
+test('getUsage() classifies an all-401 run as an invalid key', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(401, 'unauthorized') })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(report.blocked, 'invalid-key')
+  assert.equal(report.account, undefined)
+  assert.equal(report.usage, undefined)
+  assert.equal(report.failures.length, 4)
+})
+
+test('getUsage() classifies an all-5xx run as service unavailable', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(502, 'bad gateway') })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(report.blocked, 'service-unavailable')
+})
+
+test('getUsage() classifies an all-transport-failure run as network', async () => {
+  const adapter = makeAdapter({
+    fetchImpl: (async () => {
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch,
+  })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(report.blocked, 'network')
+})
+
+test('getUsage() leaves partial failures unclassified', async () => {
+  // whoami answers; the rest fail — the report carries identity data, so the
+  // card keeps its degraded per-endpoint view instead of a blocked banner.
+  const { fetchImpl } = fetchRouting({
+    '/alpha/whoami': { status: 200, body: { user: { id: 'u1', name: 'n', userName: 'un' }, org: { id: 'org1' } } },
+    '/alpha/usage/summary': { status: 500, body: 'boom' },
+    '/alpha/billing/credits': { status: 500, body: 'boom' },
+    '/alpha/billing/subscriptions': { status: 500, body: 'boom' },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(report.blocked, undefined)
+  assert.notEqual(report.account, undefined)
+  assert.equal(report.failures.length, 3)
 })

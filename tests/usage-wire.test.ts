@@ -96,6 +96,17 @@ test('schema accepts a minimal report (failures only)', () => {
   assert.deepEqual(usageReportSchema.parse(value), value)
 })
 
+test('schema accepts and preserves a blocked classification', () => {
+  const value = wrap(makeAccount({ failures: ['/alpha/whoami: HTTP 401'], blocked: 'invalid-key' }))
+  assert.deepEqual(usageReportSchema.parse(value), value)
+  assert.equal(usageReportSchema.parse(value).accounts[0]?.report.blocked, 'invalid-key')
+})
+
+test('schema rejects an unknown blocked reason', () => {
+  const value = wrap(makeAccount({ failures: ['x'], blocked: 'quantum' as never }))
+  assert.throws(() => usageReportSchema.parse(value), /invalid blocked/)
+})
+
 test('schema accepts an empty accounts array', () => {
   assert.deepEqual(usageReportSchema.parse({ accounts: [] }), { accounts: [] })
 })

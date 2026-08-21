@@ -72,7 +72,7 @@ function makeScope(init: {
 type Scope = ReturnType<typeof makeScope>
 
 /** The credentials-domain slice the page writes through. */
-function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string>; failSet?: boolean }) {
+function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string>; failSet?: boolean; failUnset?: boolean }) {
   const store = init.store ?? new Map<string, string>()
   const configured = init.configured ?? store.has(DEFAULT_API_KEY_REF)
   const writable = init.writable ?? true
@@ -91,6 +91,11 @@ function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<s
     set: async ({ ref, value }: { ref: string; value: string }) => {
       if (init.failSet === true) return { result: { ok: false as const, error: { message: 'write refused' } } }
       store.set(ref, value)
+      return { result: { ok: true as const, value: {} } }
+    },
+    unset: async ({ ref }: { ref: string }) => {
+      if (init.failUnset === true) return { result: { ok: false as const, error: { message: 'unset refused' } } }
+      store.delete(ref)
       return { result: { ok: true as const, value: {} } }
     },
   }
@@ -117,6 +122,11 @@ function makeController(opts?: {
     hostDescription,
   )
   return { controller, scope, api }
+}
+
+/** Let the constructor's fire-and-forget describeAll settle. */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve))
 }
 
 // ---------------------------------------------------------------------------
@@ -623,4 +633,79 @@ test('staged removals surface in accountsRemoving until the save lands', async (
   assert.deepEqual(controller.state().accountsRemoving, ['COMMANDCODE_API_KEY_2'])
   await controller.save()
   assert.deepEqual(controller.state().accountsRemoving, [])
+})
+
+// ---------------------------------------------------------------------------
+// Clearing a stored (bad) key — the credentials.unset path
+// ---------------------------------------------------------------------------
+
+test('a staged default-key clear unsets the credential on save', async () => {
+  const store = new Map<string, string>([[DEFAULT_API_KEY_REF, 'sk-expired']])
+  const api = makeApi({ store })
+  const { controller } = makeController({ api })
+  await flush()
+  assert.equal(controller.state().apiKeyConfigured, true)
+  controller.toggleKeyClear('default')
+  assert.equal(controller.state().apiKeyClearStaged, true)
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.equal(store.has(DEFAULT_API_KEY_REF), false)
+  assert.equal(controller.state().apiKeyConfigured, false)
+  assert.equal(controller.state().apiKeyClearStaged, false)
+  assert.equal(controller.state().savedCount, 1)
+})
+
+test('toggleKeyClear toggles, and typing a replacement cancels the staged clear', async () => {
+  const store = new Map<string, string>([[DEFAULT_API_KEY_REF, 'sk-old']])
+  const api = makeApi({ store })
+  const { controller } = makeController({ api })
+  await flush()
+  controller.toggleKeyClear('default')
+  assert.equal(controller.state().apiKeyClearStaged, true)
+  controller.toggleKeyClear('default')
+  assert.equal(controller.state().apiKeyClearStaged, false)
+  // Staging again, then typing a replacement: the clear must be dropped so
+  // the typed key is what lands.
+  controller.toggleKeyClear('default')
+  controller.edit('apiKey', 'sk-new')
+  assert.equal(controller.state().apiKeyClearStaged, false)
+  await controller.save()
+  assert.equal(store.get(DEFAULT_API_KEY_REF), 'sk-new')
+})
+
+test('staging a clear on an unconfigured key is a no-op', async () => {
+  const api = makeApi({ store: new Map() })
+  const { controller } = makeController({ api })
+  controller.toggleKeyClear('default')
+  assert.equal(controller.state().apiKeyClearStaged, false)
+  assert.equal(controller.state().dirty, false)
+})
+
+test('an extra account key can be cleared through its reference', async () => {
+  const store = new Map<string, string>([['COMMANDCODE_API_KEY_2', 'sk-bad']])
+  const api = makeApi({ store })
+  const scope = makeScope({ value: { accounts: [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] } })
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.equal(controller.state().accounts[0]?.configured, true)
+  controller.toggleKeyClear('COMMANDCODE_API_KEY_2')
+  assert.equal(controller.state().accounts[0]?.clearStaged, true)
+  await controller.save()
+  assert.equal(store.has('COMMANDCODE_API_KEY_2'), false)
+  assert.equal(controller.state().accounts[0]?.configured, false)
+  assert.equal(controller.state().accounts[0]?.clearStaged, false)
+})
+
+test('a failed unset keeps the staged clear and reports the failure', async () => {
+  const store = new Map<string, string>([[DEFAULT_API_KEY_REF, 'sk-expired']])
+  const api = makeApi({ store, failUnset: true })
+  const { controller } = makeController({ api })
+  await flush()
+  controller.toggleKeyClear('default')
+  await controller.save()
+  assert.equal(controller.state().failed, true)
+  // The clear did not land; it stays staged so a retry re-attempts it.
+  assert.equal(controller.state().apiKeyClearStaged, true)
+  assert.equal(store.has(DEFAULT_API_KEY_REF), true)
+  assert.equal(controller.state().savedCount, 0)
 })

@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
-import type { CommandCodeAccountUsage } from '../usage-wire.ts'
+import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
 import type { AccountItemState, SettingsPageState, StagedField } from './settings.ts'
 import type { UsagePageState } from './usage.ts'
@@ -38,6 +38,7 @@ export interface CommandCodeSettingsProps {
   removeAccount(id: string): void
   editAccountLabel(id: string, text: string): void
   editAccountKey(id: string, text: string): void
+  toggleKeyClear(id: string): void
 }
 
 /** One labelled field row in the page body. */
@@ -152,7 +153,8 @@ function ToggleField({
 /**
  * The API-key control: write-only, reports configured state, never echoes the
  * key. The input is masked by default with a Show/Hide toggle so a pasted key
- * can be spot-checked without leaving the field.
+ * can be spot-checked without leaving the field, and a stored key can be
+ * staged for removal (the next save unsets it) when it is bad or unwanted.
  */
 function SecretKeyField({
   label,
@@ -162,9 +164,14 @@ function SecretKeyField({
   configured,
   configuredLabel,
   unconfiguredLabel,
+  clearStaged,
   showLabel,
   hideLabel,
+  clearLabel,
+  clearStagedLabel,
+  undoClearLabel,
   onEdit,
+  onToggleClear,
 }: {
   label: string
   hint: string
@@ -173,9 +180,14 @@ function SecretKeyField({
   configured: boolean
   configuredLabel: string
   unconfiguredLabel: string
+  clearStaged: boolean
   showLabel: string
   hideLabel: string
+  clearLabel: string
+  clearStagedLabel: string
+  undoClearLabel: string
   onEdit(text: string): void
+  onToggleClear(): void
 }) {
   const [visible, setVisible] = useState(false)
   return (
@@ -186,6 +198,12 @@ function SecretKeyField({
           <span className={configured ? 'cc-badge' : 'cc-badgeMuted'}>
             {configured ? configuredLabel : unconfiguredLabel}
           </span>
+          {clearStaged ? <span className="cc-badge cc-badgeWarn">{clearStagedLabel}</span> : null}
+          {configured ? (
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onToggleClear}>
+              {clearStaged ? undoClearLabel : clearLabel}
+            </button>
+          ) : null}
           <button
             type="button"
             className="cc-reset"
@@ -294,6 +312,13 @@ function AccountReport({ entry, t, onRemove }: {
 
       {!entry.configured ? <p className="cc-usageHint">{t('usageUnconfigured')}</p> : null}
 
+      {report.blocked !== undefined ? (
+        <div className="cc-usageBlocked" role="alert">
+          <p className="cc-usageBlockedTitle">{blockedTitle(report.blocked, t)}</p>
+          <p className="cc-usageBlockedHint">{blockedHint(report.blocked, t)}</p>
+        </div>
+      ) : null}
+
       {report.usage !== undefined ? (
         <div className="cc-usageStats">
           <UsageStat
@@ -334,9 +359,11 @@ function AccountReport({ entry, t, onRemove }: {
         <div className="cc-usageMeta">
           <p className="cc-usageUpdated">{t('usagePeriodEnd')} {new Date(plan.currentPeriodEnd).toLocaleDateString()}</p>
           <span className="cc-usageMetaSpacer" />
-          {report.failures.length > 0 ? <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p> : null}
+          {report.failures.length > 0 && report.blocked === undefined
+            ? <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p>
+            : null}
         </div>
-      ) : report.failures.length > 0 ? (
+      ) : report.failures.length > 0 && report.blocked === undefined ? (
         <div className="cc-usageMeta">
           <span className="cc-usageMetaSpacer" />
           <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p>
@@ -344,6 +371,20 @@ function AccountReport({ entry, t, onRemove }: {
       ) : null}
     </div>
   )
+}
+
+/** The headline copy for a report whose every endpoint failed the same way. */
+function blockedTitle(reason: CommandCodeUsageReport['blocked'], t: Translate<SettingsCommandCodeKey>): string {
+  if (reason === 'invalid-key') return t('usageKeyInvalid')
+  if (reason === 'service-unavailable') return t('usageServiceUnavailable')
+  return t('usageNetworkError')
+}
+
+/** The actionable hint under a blocked report's headline. */
+function blockedHint(reason: CommandCodeUsageReport['blocked'], t: Translate<SettingsCommandCodeKey>): string {
+  if (reason === 'invalid-key') return t('usageKeyInvalidHint')
+  if (reason === 'service-unavailable') return t('usageServiceUnavailableHint')
+  return t('usageNetworkHint')
 }
 
 /** The status dot on an account tab: cooling/invalid warn, everything else ok. */
@@ -485,12 +526,13 @@ function UsageCard({ t, usage, apiKeyConfigured, removingIds, removableIds, canM
  * otherwise the only way to undo a mistaken Add would be discarding every
  * other staged edit.
  */
-function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
+function AccountRow({ account, disabled, t, onLabel, onKey, onToggleClear, onRemove }: {
   account: AccountItemState
   disabled: boolean
   t: Translate<SettingsCommandCodeKey>
   onLabel(text: string): void
   onKey(text: string): void
+  onToggleClear(): void
   onRemove(): void
 }) {
   const locked = !account.writable
@@ -504,6 +546,17 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
           <span className={account.configured ? 'cc-badge' : 'cc-badgeMuted'}>
             {account.configured ? t('apiKeySet') : t('apiKeyUnset')}
           </span>
+          {account.clearStaged ? <span className="cc-badge cc-badgeWarn">{t('usageKeyClearStaged')}</span> : null}
+          {account.configured && !account.clearStaged ? (
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onToggleClear}>
+              {t('usageKeyClear')}
+            </button>
+          ) : null}
+          {account.clearStaged ? (
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onToggleClear}>
+              {t('usageUndoKeyClear')}
+            </button>
+          ) : null}
           <button
             type="button"
             className="cc-reset"
@@ -542,7 +595,7 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
 }
 
 /** The multi-account card: the active-account selector + extra accounts in rotation order + add button. */
-function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onActive, onActiveReset }: {
+function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onToggleClear, onActive, onActiveReset }: {
   t: Translate<SettingsCommandCodeKey>
   state: SettingsPageState
   disabled: boolean
@@ -550,6 +603,7 @@ function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onA
   onRemove(id: string): void
   onLabel(id: string, text: string): void
   onKey(id: string, text: string): void
+  onToggleClear(id: string): void
   onActive(text: string): void
   onActiveReset(): void
 }) {
@@ -596,6 +650,7 @@ function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onA
           t={t}
           onLabel={(text) => onLabel(account.id, text)}
           onKey={(text) => onKey(account.id, text)}
+          onToggleClear={() => onToggleClear(account.id)}
           onRemove={() => onRemove(account.id)}
         />
       ))}
@@ -650,6 +705,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onRemove={props.removeAccount}
         onLabel={props.editAccountLabel}
         onKey={props.editAccountKey}
+        onToggleClear={(id) => props.toggleKeyClear(id)}
         onActive={(text) => props.edit('activeAccount', text)}
         onActiveReset={() => props.resetField('activeAccount')}
       />
@@ -662,9 +718,14 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           configured={state.apiKeyConfigured}
           configuredLabel={t('apiKeySet')}
           unconfiguredLabel={t('apiKeyUnset')}
+          clearStaged={state.apiKeyClearStaged}
           showLabel={t('show')}
           hideLabel={t('hide')}
+          clearLabel={t('usageKeyClear')}
+          clearStagedLabel={t('usageKeyClearStaged')}
+          undoClearLabel={t('usageUndoKeyClear')}
           onEdit={(text) => props.edit('apiKey', text)}
+          onToggleClear={() => props.toggleKeyClear('default')}
         />
         <Field
           id="cc-api-base"

@@ -111,8 +111,12 @@ const PAGE_CSS = `
 .cc-usageMetaSpacer{flex:1}
 .cc-usageUpdated{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 .cc-usagePartial{color:var(--dsw-alias-label-error);margin:0;font-size:11px;line-height:1.5}
+.cc-usageBlocked{border:1px solid var(--dsw-alias-label-error);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px}
+.cc-usageBlockedTitle{color:var(--dsw-alias-label-error);margin:0;font-size:13px;font-weight:600;line-height:1.5}
+.cc-usageBlockedHint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px;line-height:1.5}
 .cc-version{margin:4px 0 0;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .cc-saved{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));margin:0;font-size:12px;font-weight:500;line-height:1.5}
+.cc-badgeWarn{background:var(--dsw-alias-state-warning-secondary,var(--dsw-alias-bg-module-platform));color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-secondary))}
 `
 
 /** Inject the page stylesheet once (idempotent per tag). */
@@ -136,7 +140,6 @@ function injectPageCss(): void {
 export function apply(ctx: Context): void {
   injectPageCss()
 
-  // Friendly image-gate error wrapper (unchanged behaviour).
   const connection = ctx.get('connection') as ConnectionLike | undefined
   if (connection !== undefined) {
     installFriendlyImageError(connection)
@@ -221,6 +224,7 @@ export function apply(ctx: Context): void {
     removeAccount: (id: string) => controller.removeAccount(id),
     editAccountLabel: (id: string, text: string) => controller.editAccountLabel(id, text),
     editAccountKey: (id: string, text: string) => controller.editAccountKey(id, text),
+    toggleKeyClear: (id: string) => controller.toggleKeyClear(id),
   })
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({

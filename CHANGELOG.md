@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-08-21
+
+### Added
+
+- **Stored API keys can now be cleared, not just replaced.** A "Clear stored key" action on the default key and on every account stages a removal (with a visible "will be cleared on save" badge and an undo); saving unsets the credential through the Host's `credentials.unset`, so the account reports unconfigured again and falls back to its other key sources. Previously a bad key could only be overwritten, never removed.
+
+### Changed
+
+- **Free models now lead the model picker.** Models whose deals mark them free (currently Ox Alpha and Laguna S 2.1) sort ahead of every paid tier — they cost no credits and work on any account, so they make the best defaults. The rest of the order is unchanged: Go → GOAT → Pro → Provider/Max, alphabetical within each tier.
+
+### Fixed
+
+- **An invalid or expired API key no longer hides behind "Some endpoint data unavailable".** When every account endpoint rejects with 401 (wrong/expired key), the usage card now shows a prominent "API key invalid or expired" banner with an actionable hint instead of the generic partial-data note; a total 5xx or network outage gets their own distinct banners too. The `/commandcode` command surfaces the same cause up front. Partial failures keep the existing degraded view.
+- **Retry and credential failure messages are now bilingual (English + 中文).** The harness UI renders these messages verbatim inside its retry/turn-error chrome, so the "all accounts exhausted" rate-limit error, the all-401 credential error, and the single-account 401 error now carry both readings in one string — no more parsing an English-only wall of text to learn when your window resets.
+
 ## [0.6.1] - 2026-08-22
 
 ### Added
