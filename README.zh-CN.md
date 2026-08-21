@@ -153,11 +153,11 @@ MIT —— 见 [LICENSE](./LICENSE)。部分内容移植自 [pi-commandcode-prov
 
 **模型选择器** —— 套餐档位、折扣/FREE、峰谷时段、Image 与上下文标注：
 
-<img src="assets/screenshots/model-picker.png" alt="带套餐、折扣、图片与上下文标注的模型选择器" width="420">
+<img src="assets/screenshots/model-picker.png" alt="带套餐、折扣、图片与上下文标注的模型选择器" width="320">
 
 **用量面板** —— `/commandcode` 的分账户报告：
 
-![用量面板](assets/screenshots/usage-dashboard.png)
+<img src="assets/screenshots/usage-dashboard.png" alt="用量面板" width="520">
 
 **设置页** —— API 密钥、连接参数、多账户轮换与实时账户用量卡片：
 
