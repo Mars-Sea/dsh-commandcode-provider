@@ -986,8 +986,9 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
   // both Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
-  // Synced from the official command-code@1.28.4 model table: models that
-  // ship with effort levels must be present, and absent ones must stay out.
+  // Synced from the official command-code@1.30.1 model table (re-verified
+  // 2026-08-21 against 1.28.4 and 1.30.1 — identical capability sets): models
+  // that ship with effort levels must be present, and absent ones must stay out.
   // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
   // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
   // carry NO reasoningEfforts in the CLI's ZA table — re-verified 2026-08-16.
@@ -1008,7 +1009,11 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
-  // Re-verified against the command-code@1.28.4 ZA table (2026-08-18): these
+  // stealth/ox-alpha (command-code@1.31.0) reasons automatically — no
+  // reasoningEfforts levels in the ZA table.
+  assert.ok(KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
+  // Re-verified against the command-code@1.28.4 ZA table (2026-08-18) and
+  // re-confirmed against 1.30.1 (2026-08-21): these
   // think automatically (reasoning:!0, no efforts) and belong in the set.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
@@ -1030,6 +1035,8 @@ test('known image models snapshot has stable anchor entries', () => {
   // model (the latter is deliberately absent).
   assert.ok(KNOWN_IMAGE_MODELS.has('claude-sonnet-5'))
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
+  // stealth/ox-alpha (command-code@1.31.0) ships with text+image modalities.
+  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/ox-alpha'))
   // Qwen 3.8 27B (command-code@1.28.0) is Vision per the official registry.
   assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-27B'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
@@ -1044,6 +1051,9 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
   // Qwen 3.8 27B (command-code@1.28.0) is on the Go plan page.
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-27B'], 'go')
+  // stealth/ox-alpha (command-code@1.31.0) is free "on every plan" per the
+  // changelog; the Go plan page lists it, so its minimum tier is Go.
+  assert.equal(KNOWN_PLANS['stealth/ox-alpha'], 'go')
   // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
   // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
@@ -1072,6 +1082,9 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'], undefined)
   // Free model is marked free.
   assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free'].free, true)
+  // stealth/ox-alpha is free while the stealth preview lasts (open-ended).
+  assert.equal(KNOWN_DEALS['stealth/ox-alpha'].free, true)
+  assert.equal(dealLabel('stealth/ox-alpha', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
   // Gemini 3.7 Flash 50% off through 2026-12-31.
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].label, '50% off')
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].expiresAt, '2026-12-31T23:59:59Z')
@@ -1163,7 +1176,7 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.28.4')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.31.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -1316,4 +1329,61 @@ test('probeFiveHourWindow() degrades to undefined on endpoint or shape failure',
   assert.equal(await failing.probeFiveHourWindow('key-1'), undefined)
   const shapeless = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify({ credits: {} })) })
   assert.equal(await shapeless.probeFiveHourWindow('key-1'), undefined)
+})
+
+test('providerRetryPolicy() pins the near-unbounded transient-only retry policy', () => {
+  // dsh-llm-retry executes this at the agent-step boundary: normal mode with
+  // an explicit 1000-attempt cap retries the five transient codes (an
+  // opencode-like persistence that still fails fast on permanent errors such
+  // as INVALID_CREDENTIAL), waits double from 500 ms capped at 15 minutes
+  // with ±10% jitter, and honors an attached providerRetryAfterMs at or
+  // below the cap. Pinned so a dsh default change cannot silently alter the
+  // visible retry cadence or whitelist.
+  const adapter = makeAdapter()
+  const policy = adapter.providerRetryPolicy('commandcode')
+  assert.equal(policy.mode, 'normal')
+  assert.equal(policy.maxRetries, 1000)
+  assert.deepEqual([...policy.retryableCodes], ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
+  assert.equal(policy.initialDelayMs, 500)
+  assert.equal(policy.maxDelayMs, 900000)
+  assert.equal(policy.jitterRatio, 0.1)
+})
+
+test('stream() attaches a 429 Retry-After header as providerRetryAfterMs', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(429, 'rate limited', { 'retry-after': '7' }) })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; failure?: { providerRetryAfterMs?: number } }
+      return e.code === 'RATE_LIMIT' && e.failure?.providerRetryAfterMs === 7000
+    },
+  )
+})
+
+test('stream() drops a non-finite Retry-After instead of failing error construction', async () => {
+  // `1e308` seconds is finite but overflows to Infinity in milliseconds;
+  // LlmError validates its options and would replace the provider failure
+  // with an internal construction error if the value rode along.
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(429, 'rate limited', { 'retry-after': '1e308' }) })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; failure?: { providerRetryAfterMs?: number } }
+      return e.code === 'RATE_LIMIT' && e.failure?.providerRetryAfterMs === undefined
+    },
+  )
+})
+
+test('stream() drops a Retry-After above the policy cap so normal mode keeps retrying', async () => {
+  // In normal mode the executor ABANDONS a retry whose attached wait exceeds
+  // backoff.maxDelayMs instead of falling back to local backoff — a 20-minute
+  // Retry-After must ride the capped local cadence, not kill the retry.
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(429, 'rate limited', { 'retry-after': '1200' }) })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; failure?: { providerRetryAfterMs?: number } }
+      return e.code === 'RATE_LIMIT' && e.failure?.providerRetryAfterMs === undefined
+    },
+  )
 })

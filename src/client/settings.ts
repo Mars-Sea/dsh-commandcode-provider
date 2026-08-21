@@ -59,7 +59,15 @@ export interface StagedField {
   overridden: boolean
   /** Whether the staged draft fails to parse (blocks save). */
   invalid: boolean
+  /**
+   * Why the draft is invalid — a non-number (`format`) or an out-of-range
+   * number (`tooSmall`/`tooLarge`); undefined when valid.
+   */
+  invalidReason: InvalidReason | undefined
 }
+
+/** Why a staged draft fails validation (drives the per-field error copy). */
+export type InvalidReason = 'format' | 'tooSmall' | 'tooLarge'
 
 /** One extra account row's staged state (the default account uses `apiKey`). */
 export interface AccountItemState {
@@ -130,10 +138,19 @@ export interface SettingsPageState {
   saving: boolean
   /** Whether the last save failed (drafts retained for correction). */
   failed: boolean
+  /**
+   * Monotonic counter bumped once per accepted save. The component watches it
+   * to flash the "Saved ✓" affordance (timing lives in the component; the
+   * controller stays a plain state machine with no timers).
+   */
+  savedCount: number
 }
 
 /** Parsed outcome of one field's draft. */
-type Parsed = { kind: 'set'; value: string | number | boolean } | { kind: 'clear' } | { kind: 'invalid' }
+type Parsed =
+  | { kind: 'set'; value: string | number | boolean }
+  | { kind: 'clear' }
+  | { kind: 'invalid'; reason: InvalidReason }
 
 /** One field's staged draft (internal; the public face adds derived flags). */
 interface Staged {
@@ -160,8 +177,15 @@ function textField(field: string): FieldSpec {
   }
 }
 
-/** A whole-number field; an empty draft clears it, anything non-numeric blocks save. */
-function numberField(field: string): FieldSpec {
+/**
+ * A numeric field; an empty draft clears it, anything non-numeric blocks
+ * save, and an optional inclusive `bounds` range rejects out-of-range values
+ * with a specific reason (the Host schema would reject them at save time with
+ * only a generic failure — catching it here names the problem while typing).
+ * Decimals pass: the Host schema is `z.number()` too, and a fractional
+ * millisecond value is harmless even if pointless.
+ */
+function numberField(field: string, bounds?: { min?: number; max?: number }): FieldSpec {
   return {
     field,
     format: (value) => (typeof value === 'number' ? String(value) : ''),
@@ -169,7 +193,10 @@ function numberField(field: string): FieldSpec {
       const trimmed = text.trim()
       if (trimmed === '') return { kind: 'clear' }
       const parsed = Number(trimmed)
-      return Number.isFinite(parsed) ? { kind: 'set', value: parsed } : { kind: 'invalid' }
+      if (!Number.isFinite(parsed)) return { kind: 'invalid', reason: 'format' }
+      if (bounds?.min !== undefined && parsed < bounds.min) return { kind: 'invalid', reason: 'tooSmall' }
+      if (bounds?.max !== undefined && parsed > bounds.max) return { kind: 'invalid', reason: 'tooLarge' }
+      return { kind: 'set', value: parsed }
     },
   }
 }
@@ -188,17 +215,27 @@ function booleanField(field: string): FieldSpec {
       if (trimmed === '') return { kind: 'clear' }
       if (trimmed === 'true') return { kind: 'set', value: true }
       if (trimmed === 'false') return { kind: 'set', value: false }
-      return { kind: 'invalid' }
+      return { kind: 'invalid', reason: 'format' }
     },
   }
 }
+
+/**
+ * Inclusive bounds for the millisecond timeout fields, mirroring the Host
+ * Config schema (`z.number().min(1).max(MAX_TIMER_DELAY_MS)` in src/index.ts;
+ * `MAX_TIMER_DELAY_MS` is dsh-timeout's 2^31-1 timer ceiling). The client
+ * bundle cannot import the node-side package, so the bound is pinned here —
+ * the host remains the final gate.
+ */
+export const MIN_TIMEOUT_MS = 1
+export const MAX_TIMEOUT_MS = 2147483647
 
 /** The fields this page edits inside the `llm-commandcode` namespace. */
 const SECTION_FIELDS: FieldSpec[] = [
   textField('apiBase'),
   textField('workingDir'),
-  numberField('requestTimeoutMs'),
-  numberField('streamIdleTimeoutMs'),
+  numberField('requestTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
+  numberField('streamIdleTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
   booleanField('filterModelsByPlan'),
   textField('activeAccount'),
 ]
@@ -231,6 +268,7 @@ export class CommandCodeSettingsController {
   private readonly keyDrafts = new Map<string, string>()
   private saving = false
   private failed = false
+  private savedCount = 0
 
   /**
    * @param scope - bound scope for the `llm-commandcode` namespace.
@@ -313,6 +351,7 @@ export class CommandCodeSettingsController {
         clear: false,
         overridden: false,
         invalid: false,
+        invalidReason: undefined,
       },
       apiBase: this.field('apiBase'),
       workingDir: this.field('workingDir'),
@@ -327,6 +366,7 @@ export class CommandCodeSettingsController {
       invalid: plan.some((item) => item.run === undefined),
       saving: this.saving,
       failed: this.failed,
+      savedCount: this.savedCount,
     }
   }
 
@@ -438,6 +478,7 @@ export class CommandCodeSettingsController {
     this.saving = false
     this.failed = !landed
     if (landed) {
+      this.savedCount += 1
       this.staged.clear()
       this.clearAccountStaging()
     } else {
@@ -489,6 +530,7 @@ export class CommandCodeSettingsController {
         clear: false,
         overridden: this.stored(field),
         invalid: false,
+        invalidReason: undefined,
       }
     }
     const parsed = staged.clear ? { kind: 'clear' as const } : spec.parse(staged.text)
@@ -497,6 +539,7 @@ export class CommandCodeSettingsController {
       clear: staged.clear,
       overridden: parsed.kind === 'set',
       invalid: parsed.kind === 'invalid',
+      invalidReason: parsed.kind === 'invalid' ? parsed.reason : undefined,
     }
   }
 

@@ -72,7 +72,7 @@ function makeScope(init: {
 type Scope = ReturnType<typeof makeScope>
 
 /** The credentials-domain slice the page writes through. */
-function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string> }) {
+function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string>; failSet?: boolean }) {
   const store = init.store ?? new Map<string, string>()
   const configured = init.configured ?? store.has(DEFAULT_API_KEY_REF)
   const writable = init.writable ?? true
@@ -89,6 +89,7 @@ function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<s
       return { result: { ok: true as const, value: { credentials: credentialsMap } } }
     },
     set: async ({ ref, value }: { ref: string; value: string }) => {
+      if (init.failSet === true) return { result: { ok: false as const, error: { message: 'write refused' } } }
       store.set(ref, value)
       return { result: { ok: true as const, value: {} } }
     },
@@ -202,8 +203,45 @@ test('an invalid numeric draft blocks save', () => {
   controller.edit('requestTimeoutMs', 'abc')
   const state = controller.state()
   assert.equal(state.requestTimeoutMs.invalid, true)
+  assert.equal(state.requestTimeoutMs.invalidReason, 'format')
   assert.equal(state.invalid, true)
   assert.equal(state.dirty, true)
+})
+
+test('an out-of-range numeric draft names the violated bound', () => {
+  const { controller } = makeController()
+  controller.edit('requestTimeoutMs', '0')
+  let state = controller.state()
+  assert.equal(state.requestTimeoutMs.invalid, true)
+  assert.equal(state.requestTimeoutMs.invalidReason, 'tooSmall')
+  controller.edit('requestTimeoutMs', '99999999999')
+  state = controller.state()
+  assert.equal(state.requestTimeoutMs.invalid, true)
+  assert.equal(state.requestTimeoutMs.invalidReason, 'tooLarge')
+  // The inclusive upper bound itself stays valid.
+  controller.edit('requestTimeoutMs', '2147483647')
+  state = controller.state()
+  assert.equal(state.requestTimeoutMs.invalid, false)
+  assert.equal(state.requestTimeoutMs.invalidReason, undefined)
+})
+
+test('an accepted save bumps savedCount for the footer flash', async () => {
+  const store = new Map<string, string>()
+  const api = makeApi({ store })
+  const { controller } = makeController({ api })
+  const before = controller.state().savedCount
+  assert.equal(before, 0)
+  controller.edit('apiKey', 'sk-abc123')
+  await controller.save()
+  assert.equal(controller.state().savedCount, before + 1)
+  // A failed save must not count as saved.
+  const failingApi = makeApi({ store, failSet: true })
+  const scope2 = makeScope({})
+  const failing = makeController({ scope: scope2, api: failingApi }).controller
+  failing.edit('apiKey', 'sk-refused')
+  await failing.save()
+  assert.equal(failing.state().failed, true)
+  assert.equal(failing.state().savedCount, 0)
 })
 
 test('discard() drops every staged edit', () => {

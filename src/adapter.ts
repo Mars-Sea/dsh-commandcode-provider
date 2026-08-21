@@ -5,7 +5,9 @@
  * community-maintained integration; you need your own Command Code account
  * and API key or subscription, and Command Code's terms apply.
  *
- * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4):
+ * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
+ * re-verified against command-code@1.31.0 — endpoints, request shape, and
+ * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
  *          system, max_tokens, temperature, stream, reasoning_effort? }, threadId }
@@ -44,16 +46,17 @@ import {
   type StreamChunk,
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
+import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.28.4 bundled
+// Static capability snapshot (from the official command-code@1.31.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.28.4 bundled model
+  // Re-verified against the authoritative command-code@1.30.1 bundled model
   // table (dist/cli.mjs, the 'ZA' object): exactly these models carry
   // 'reasoningEfforts'. Models marked 'reasoning:!0' without 'reasoningEfforts'
   // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -140,6 +143,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'moonshotai/Kimi-K2.7-Code-Highspeed',
   'moonshotai/Kimi-K3',
   'sakana/fugu-ultra',
+  'stealth/ox-alpha',
   'stepfun/Step-3.7-Flash',
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
@@ -148,7 +152,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (`ZA` in command-code@1.28.4) marks
+ * Models the official CLI's model table (`ZA` in command-code@1.31.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -156,7 +160,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.28.4 bundled model table (dist/cli.mjs, the `ZA`
+ * Source: the command-code@1.31.0 bundled model table (dist/cli.mjs, the `ZA`
  * object), cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
@@ -180,6 +184,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
   'meta/muse-spark-1.2-contributor',
+  'stealth/ox-alpha',
 ])
 
 /**
@@ -198,7 +203,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (33) ---
+  // --- Go (35) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -220,6 +225,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'moonshotai/Kimi-K3': 'go',
   'nvidia/nemotron-3-ultra-550b-a55b': 'go',
   'poolside/laguna-s-2.1-free': 'go',
+  'stealth/ox-alpha': 'go',
   'stepfun/Step-3.5-Flash': 'go',
   'stepfun/Step-3.7-Flash': 'go',
   'tencent/hy3-paid': 'go',
@@ -299,7 +305,7 @@ export function compareByPlan(
 
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (`Nn`/`$n` in command-code@1.28.4 `dist/cli.mjs`): subscription `planId`
+ * (`Nn`/`$n` in command-code@1.31.0 `dist/cli.mjs`): subscription `planId`
  * prefix → display name and the plan's monthly credit total. This is the
  * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
  * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
@@ -403,6 +409,9 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
   'xiaomi/mimo-v2.5': { label: '98% off' },
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
+  // Free while the stealth preview lasts (no fixed expiry; treated as
+  // permanent like the other open-ended free deals).
+  'stealth/ox-alpha': { label: 'FREE', free: true },
 }
 
 /**
@@ -458,7 +467,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.28.4'
+export const COMMAND_CODE_CLI_VERSION = '1.31.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -996,15 +1005,32 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /**
-   * Command Code is a metered subscription API: 429 (rate limit) and 5xx
-   * (transient server errors) are worth retrying at the agent-step boundary,
-   * which is where dsh-llm-retry executes the policy returned here. The
-   * default policy already retries `RATE_LIMIT` and `SERVER`; declaring it
-   * explicitly documents the intent and gives the plugin entry a stable hook
-   * to override (e.g. a stricter cap for a metered plan).
+   * Near-unbounded retry for transient failures only (`mode: 'normal'` with
+   * an explicit 1000-attempt cap — opencode-style persistence without the
+   * unbounded loop): `RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`/
+   * `EMPTY_RESPONSE` retry up to 1000 times with waits doubling from 500 ms
+   * and capping at 15 minutes (±10% jitter), so an exhausted 5-hour window
+   * recovers in-session instead of failing after two tries. Permanent
+   * failures (an invalid key's `INVALID_CREDENTIAL`, `UNSUPPORTED_CONTENT`,
+   * plan rejections) are absent from the whitelist and surface immediately
+   * instead of looping. Waits the pool/adapter attach as
+   * `providerRetryAfterMs` are honored verbatim at or below the 15-minute
+   * cap and never attached above it (in normal mode a longer attached wait
+   * makes the executor abandon the retry outright — see RETRY_MAX_DELAY_MS).
+   *
+   * Captured once at route registration (dsh-llm snapshots this value), so a
+   * future config knob for it would apply on profile restart, not per request.
    */
   override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
-    return resolveRetryPolicy(undefined, 'llm-commandcode: retryPolicy')
+    return resolveRetryPolicy(
+      {
+        mode: 'normal',
+        maxRetries: 1000,
+        retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+        backoff: { initialDelayMs: 500, maxDelayMs: RETRY_MAX_DELAY_MS, jitterRatio: 0.1 },
+      },
+      'llm-commandcode: retryPolicy',
+    )
   }
 
   /** Refresh the catalog (live fetch, cache fallback) and return it. */
@@ -1439,7 +1465,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // nothing has streamed yet, so the switch is invisible to the caller.
     const connect = async (
       key: string,
-    ): Promise<{ response: Response; cleanup: () => void } | { status: number; errText: string }> => {
+    ): Promise<{ response: Response; cleanup: () => void } | { status: number; errText: string; retryAfterMs?: number }> => {
       const connectAbort = new AbortController()
       let connectTimedOut = false
       const connectTimer = setTimeout(() => {
@@ -1517,7 +1543,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       if (!response.ok) {
         const errText = await response.text().catch(() => '')
         cleanup()
-        return { status: response.status, errText }
+        const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
+        // exactOptionalPropertyTypes: the key must be absent, not undefined.
+        return retryAfterMs === undefined
+          ? { status: response.status, errText }
+          : { status: response.status, errText, retryAfterMs }
       }
       return { response, cleanup }
     }
@@ -1547,7 +1577,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           continue
         }
       }
-      throw generateHttpError(attempt.status, attempt.errText)
+      throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs)
     }
     const { response, cleanup } = connected
     if (!response.body) {
@@ -1796,9 +1826,13 @@ const MAX_ACCOUNT_ROTATIONS = 16
  * Map a pre-stream generate HTTP failure onto a stable LlmError. Command
  * Code folds several business rejections into 403 (plan limits, CLI version,
  * model access): prefer the machine-readable `error.code` when present; the
- * status alone cannot distinguish them.
+ * status alone cannot distinguish them. A 429's `Retry-After` rides along as
+ * `providerRetryAfterMs` so dsh-llm-retry can wait exactly that long instead
+ * of guessing at the backoff cadence — capped at RETRY_MAX_DELAY_MS, because
+ * in normal mode a longer attached wait makes the executor abandon the retry
+ * outright instead of falling back to local backoff.
  */
-function generateHttpError(status: number, errText: string): LlmError {
+function generateHttpError(status: number, errText: string, retryAfterMs?: number): LlmError {
   let providerCode: string | undefined
   try {
     const parsed: unknown = JSON.parse(errText)
@@ -1822,8 +1856,35 @@ function generateHttpError(status: number, errText: string): LlmError {
   return new LlmError(
     `Command Code API error ${status}${detail === `HTTP ${status}` ? '' : ` (${detail})`}: ${errText.slice(0, 500)}`,
     status === 429 ? 'RATE_LIMIT' : 'PROVIDER_HTTP_ERROR',
-    { status },
+    {
+      status,
+      ...(retryAfterMs !== undefined && retryAfterMs > 0 && retryAfterMs <= RETRY_MAX_DELAY_MS
+        ? { providerRetryAfterMs: retryAfterMs }
+        : {}),
+    },
   )
+}
+
+/**
+ * Parse an HTTP `Retry-After` value (delay-seconds or an HTTP-date) into
+ * milliseconds; undefined when absent or unparseable. An HTTP-date in the
+ * past yields 0, which the caller drops (LlmError wants a positive delay).
+ * A delay-seconds value whose millisecond product is not finite (e.g. `1e308`)
+ * also yields undefined: LlmError validates its options and would otherwise
+ * replace the provider failure with an internal construction error.
+ */
+function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): number | undefined {
+  if (value === undefined || value === null) return undefined
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  const seconds = Number(trimmed)
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    const ms = seconds * 1000
+    return Number.isFinite(ms) ? Math.round(ms) : undefined
+  }
+  const date = Date.parse(trimmed)
+  if (!Number.isNaN(date)) return Math.max(0, date - now)
+  return undefined
 }
 
 function mapFinishReason(reason: unknown): FinishReason {

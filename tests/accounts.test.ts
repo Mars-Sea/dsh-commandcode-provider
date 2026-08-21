@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { LlmError } from '@deepseek-ai/dsh-llm'
 import { CommandCodeAccountPool, accountUsable } from '../src/accounts.ts'
 import type { CommandCodeAccountSlot, FiveHourWindowProbe } from '../src/accounts.ts'
 
@@ -262,6 +263,51 @@ test('a revived preferred account serves again', async () => {
 test('an unknown preferred id falls back to rotation order', async () => {
   const { pool } = makePool({ ...TWO_ACCOUNTS, preferredId: 'no-such-account' })
   assert.equal((await pool.resolveKey())?.key, 'key-1')
+})
+
+test('the all-exhausted RATE_LIMIT carries the wait until the earliest reset', async () => {
+  // dsh-llm-retry reads providerRetryAfterMs and waits exactly that long (at
+  // or below the policy's maxDelayMs), so the retry policy sleeps through the
+  // window instead of polling at its backoff cadence.
+  const resetAt = Date.now() + 60_000
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    probes: {
+      'key-1': { exceeded: true, resetAt },
+      'key-2': { exceeded: true, resetAt: resetAt + 30_000 },
+    },
+  })
+  pool.markRejected('key-1', 'rate-limit')
+  pool.markRejected('key-2', 'rate-limit')
+  const error = await pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as LlmError,
+  )
+  assert.equal(error.code, 'RATE_LIMIT')
+  const wait = error.failure.providerRetryAfterMs ?? 0
+  assert.ok(wait >= 59_000 && wait <= 60_000, `expected ~60s wait, got ${wait}`)
+})
+
+test('a reset further out than the retry cap is not attached', async () => {
+  // In normal mode the executor ABANDONs a retry whose attached wait exceeds
+  // backoff.maxDelayMs instead of falling back to local backoff — a 2-hour
+  // reset must ride the capped local cadence (and the probe revival), not
+  // kill the retry.
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    probes: {
+      'key-1': { exceeded: true, resetAt: Date.now() + 7_200_000 },
+      'key-2': { exceeded: true, resetAt: Date.now() + 7_230_000 },
+    },
+  })
+  pool.markRejected('key-1', 'rate-limit')
+  pool.markRejected('key-2', 'rate-limit')
+  const error = await pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as LlmError,
+  )
+  assert.equal(error.code, 'RATE_LIMIT')
+  assert.equal(error.failure.providerRetryAfterMs, undefined)
 })
 
 test('the probe pass never re-offers the excluded (just-rejected) key', async () => {

@@ -13,8 +13,10 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import { withFriendlyImageError, isImageSessionRejection } from '../src/client/sessions.ts'
+import { PLUGIN_VERSION } from '../src/client/version.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,4 +119,17 @@ test('withFriendlyImageError() preserves success results', async () => {
   const wrapped = withFriendlyImageError(sessionsReturning(original) as never)
   const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'claude-sonnet-5' })
   assert.deepEqual(result, original)
+})
+
+// ---------------------------------------------------------------------------
+// PLUGIN_VERSION (settings-page footer)
+// ---------------------------------------------------------------------------
+
+test('PLUGIN_VERSION mirrors the published package version', () => {
+  // The settings-page footer renders this string; it must track package.json
+  // (the build inlines the JSON import) and stay semver-shaped — a broken
+  // build-time inlining would surface here as undefined or a placeholder.
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+  assert.equal(PLUGIN_VERSION, pkg.version)
+  assert.match(PLUGIN_VERSION, /^\d+\.\d+\.\d+/)
 })

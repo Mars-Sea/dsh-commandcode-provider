@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-08-22
+
+### Added
+
+- **New model: Ox Alpha (`stealth/ox-alpha`, command-code@1.31.0).** A free 1M-context reasoning model with vision input, included on every plan: it appears in the picker under the Go tier with `FREE` · `Image` · `1M` markers, is whitelisted as vision-capable and auto-thinking (it reasons automatically with no selectable effort levels), and carries a `FREE` deal while the stealth preview lasts.
+- **The settings page now shows the plugin version** as a muted footer line ("Command Code Provider v0.6.1"), read from package.json at build time so it always matches the published release.
+- **Settings-page input polish:** a brief "Saved ✓" confirmation flashes after each accepted save (failures already showed an error); the two millisecond timeout fields now validate their range while typing with specific messages ("must be at least 1" / "above the allowed maximum") instead of a generic save-time failure; and the API-key fields (default + every account) gained a Show/Hide toggle so a pasted key can be spot-checked.
+
+### Changed
+
+- **Retries are now persistent (opencode-style) instead of two attempts.** Transient failures — rate limits, server errors, timeouts, transport drops, empty responses — retry up to 1000 times at the agent-step boundary, with waits doubling from 500 ms and capping at 15 minutes (±10% jitter). Permanent failures (an invalid key, unsupported content, plan rejections) still fail fast on the first attempt. Waits are smart: a 429's `Retry-After` header and the rotation pool's earliest known window-reset time are honored verbatim up to the 15-minute cap, so when every account's usage window is exhausted the session sleeps through the window and recovers in place instead of dying after two quick tries.
+- **Synced with the official command-code@1.31.0 CLI** (upstream moved 1.28.4 → 1.29.0 → 1.30.0 → 1.30.1 → 1.31.0; the intermediate releases shipped BYOK provider support, model-traffic routing, and CLI UI fixes — none touch the Provider API). `COMMAND_CODE_CLI_VERSION` is now `1.31.0`. The only snapshot change across those releases is the new Ox Alpha model above; wire protocol, endpoints, effort map, plan maps, deals, and peak pricing are all unchanged.
+- **Verified compatibility with DeepSeek Harness 0.1.0-rc.7 / 0.1.0-rc.8 / 0.1.1-rc.1**, including rc.8's reworked client boot protocol: the client bundle now declares its module-graph dependency (`dsh.client.external`), so client-module load order no longer relies on the platform seed table. The supported peer range widened to `^0.1.0-rc.6 || ^0.1.1-rc.1`, so 0.1.1 hosts install without unmet-peer-dependency warnings.
+
 ## [0.6.0] - 2026-08-19
 
 ### Changed

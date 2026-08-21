@@ -29,6 +29,17 @@
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 
+/**
+ * Upper bound on the retry wait this pool attaches to the all-exhausted
+ * `RATE_LIMIT` error. Must equal the `backoff.maxDelayMs` in the adapter's
+ * `providerRetryPolicy` (which imports it from here): dsh-llm-retry honors a
+ * provider-specified wait verbatim only at or below that cap — in normal mode
+ * a LONGER attached wait makes the executor abandon the retry entirely
+ * instead of falling back to local backoff, which would turn "poll until the
+ * window opens" into "fail now".
+ */
+export const RETRY_MAX_DELAY_MS = 900_000
+
 /** One extra account's raw configuration (composition config or settings). */
 export interface CommandCodeAccountConfig {
   /** Display label shown in the usage dashboard and settings page. */
@@ -237,11 +248,20 @@ export class CommandCodeAccountPool {
       .filter((state): state is CommandCodeAccountState => state !== undefined && state.kind === 'cooldown' && state.until > 0)
       .map((state) => state.until)
     const earliest = resets.length > 0 ? Math.min(...resets) : 0
+    // Hand dsh-llm-retry the exact wait until the earliest known reset so the
+    // retry policy sleeps through the window instead of polling at its
+    // backoff cadence. Capped at RETRY_MAX_DELAY_MS: the executor honors a
+    // provider wait verbatim only at or below the policy's maxDelayMs — a
+    // LONGER attached wait makes it abandon the retry entirely (normal mode),
+    // which would turn "poll until the window opens" into "fail now". Longer
+    // resets simply ride the capped local backoff and the probe revival.
+    const wait = earliest > 0 ? Math.max(1000, earliest - Date.now()) : 0
     throw new LlmError(
       `llm-commandcode: all ${latest.length} Command Code account(s) have exhausted their usage window`
         + (earliest > 0 ? `; the earliest window resets at ${clockLabel(earliest)}` : '')
         + ' — requests will succeed again after the reset (or add another account)',
       'RATE_LIMIT',
+      wait > 0 && wait <= RETRY_MAX_DELAY_MS ? { providerRetryAfterMs: wait } : undefined,
     )
   }
 

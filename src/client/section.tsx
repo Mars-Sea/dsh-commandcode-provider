@@ -22,6 +22,7 @@ import type { SettingsCommandCodeKey } from './locales.ts'
 import type { AccountItemState, SettingsPageState, StagedField } from './settings.ts'
 import type { UsagePageState } from './usage.ts'
 import { formatMoney, formatMoneyExact, formatResetAt, formatTokensCompact, windowRatio } from './usage.ts'
+import { PLUGIN_VERSION } from './version.ts'
 
 /** Props composed by the slot registration: locale seat + injected face. */
 export interface CommandCodeSettingsProps {
@@ -83,10 +84,17 @@ function Field({
         onChange={(event) => onEdit(event.target.value)}
       />
       <p className={state.invalid ? 'cc-invalid' : 'cc-hint'}>
-        {state.invalid ? t('invalidNumber') : hint}
+        {state.invalid ? invalidCopy(state.invalidReason, t) : hint}
       </p>
     </div>
   )
+}
+
+/** The per-field error copy for a staged draft's failure reason. */
+function invalidCopy(reason: StagedField['invalidReason'], t: Translate<SettingsCommandCodeKey>): string {
+  if (reason === 'tooSmall') return t('numberTooSmall')
+  if (reason === 'tooLarge') return t('numberTooLarge')
+  return t('invalidNumber')
 }
 
 /**
@@ -141,7 +149,11 @@ function ToggleField({
   )
 }
 
-/** The API-key control: write-only, reports configured state, never echoes the key. */
+/**
+ * The API-key control: write-only, reports configured state, never echoes the
+ * key. The input is masked by default with a Show/Hide toggle so a pasted key
+ * can be spot-checked without leaving the field.
+ */
 function SecretKeyField({
   label,
   hint,
@@ -150,6 +162,8 @@ function SecretKeyField({
   configured,
   configuredLabel,
   unconfiguredLabel,
+  showLabel,
+  hideLabel,
   onEdit,
 }: {
   label: string
@@ -159,8 +173,11 @@ function SecretKeyField({
   configured: boolean
   configuredLabel: string
   unconfiguredLabel: string
+  showLabel: string
+  hideLabel: string
   onEdit(text: string): void
 }) {
+  const [visible, setVisible] = useState(false)
   return (
     <div className="cc-field">
       <div className="cc-fieldHead">
@@ -169,13 +186,22 @@ function SecretKeyField({
           <span className={configured ? 'cc-badge' : 'cc-badgeMuted'}>
             {configured ? configuredLabel : unconfiguredLabel}
           </span>
+          <button
+            type="button"
+            className="cc-reset"
+            disabled={disabled}
+            onClick={() => setVisible((value) => !value)}
+          >
+            {visible ? hideLabel : showLabel}
+          </button>
         </span>
       </div>
       <input
         id="cc-api-key"
         className="cc-input"
-        type="password"
+        type={visible ? 'text' : 'password'}
         autoComplete="off"
+        spellCheck={false}
         value={state.text}
         disabled={disabled}
         onChange={(event) => onEdit(event.target.value)}
@@ -468,6 +494,7 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
   onRemove(): void
 }) {
   const locked = !account.writable
+  const [keyVisible, setKeyVisible] = useState(false)
   return (
     <div className="cc-field">
       <div className="cc-fieldHead">
@@ -477,6 +504,14 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
           <span className={account.configured ? 'cc-badge' : 'cc-badgeMuted'}>
             {account.configured ? t('apiKeySet') : t('apiKeyUnset')}
           </span>
+          <button
+            type="button"
+            className="cc-reset"
+            disabled={disabled}
+            onClick={() => setKeyVisible((value) => !value)}
+          >
+            {keyVisible ? t('hide') : t('show')}
+          </button>
           {account.added ? (
             <button type="button" className="cc-reset" disabled={disabled} onClick={onRemove}>{t('accountRemove')}</button>
           ) : null}
@@ -493,8 +528,9 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onRemove }: {
       <input
         id={`cc-account-key-${account.id}`}
         className="cc-input"
-        type="password"
+        type={keyVisible ? 'text' : 'password'}
         autoComplete="off"
+        spellCheck={false}
         placeholder={t('accountKey')}
         value={account.keyText}
         disabled={disabled || locked}
@@ -567,6 +603,22 @@ function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onA
   )
 }
 
+/**
+ * Show the "Saved ✓" affordance for a short window after each accepted save.
+ * The controller only counts saves (`savedCount`); the flash timing lives
+ * here so the state machine stays timer-free.
+ */
+function useSavedFlash(tick: number): boolean {
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    if (tick === 0) return
+    setVisible(true)
+    const timer = setTimeout(() => setVisible(false), 2500)
+    return () => clearTimeout(timer)
+  }, [tick])
+  return visible
+}
+
 /** The settings page body: connection facts for the Command Code provider. */
 export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const { t } = props
@@ -574,6 +626,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const usage = props.useCommandCodeUsage((snapshot) => snapshot)
   const disabled = !state.writable
   const keyLocked = !state.apiKeyWritable
+  const savedVisible = useSavedFlash(state.savedCount)
   return (
     <section className="cc-section" aria-label={t('title')}>
       <h2 className="cc-title">{t('title')}</h2>
@@ -609,6 +662,8 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           configured={state.apiKeyConfigured}
           configuredLabel={t('apiKeySet')}
           unconfiguredLabel={t('apiKeyUnset')}
+          showLabel={t('show')}
+          hideLabel={t('hide')}
           onEdit={(text) => props.edit('apiKey', text)}
         />
         <Field
@@ -668,6 +723,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
       </div>
       <div className="cc-footer">
         {state.failed ? <p className="cc-failed" role="status">{t('saveFailed')}</p> : null}
+        {savedVisible ? <p className="cc-saved" role="status">{t('saved')}</p> : null}
         <Button variant="ghost" size="sm" disabled={!state.dirty || state.saving} onClick={props.discard}>
           {t('discard')}
         </Button>
@@ -680,6 +736,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           {t(state.saving ? 'saving' : 'save')}
         </Button>
       </div>
+      <p className="cc-version">Command Code Provider v{PLUGIN_VERSION}</p>
     </section>
   )
 }

@@ -47,13 +47,18 @@ export type SettingsCommandCodeKey =
   | 'overridden'
   | 'reset'
   | 'invalidNumber'
+  | 'numberTooSmall'
+  | 'numberTooLarge'
   | 'readOnly'
   | 'unsaved'
   | 'save'
   | 'saving'
+  | 'saved'
   | 'saveFailed'
   | 'discard'
   | 'cancel'
+  | 'show'
+  | 'hide'
   | 'usageTitle'
   | 'usageRefresh'
   | 'usageRefreshing'
@@ -117,13 +122,18 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
+  numberTooSmall: '不能小于 1（毫秒）',
+  numberTooLarge: '超出允许上限（2147483647 毫秒）',
   readOnly: '当前配置为只读。',
   unsaved: '未保存',
   save: '保存',
   saving: '保存中',
+  saved: '已保存 ✓',
   saveFailed: '保存失败，请重试。',
   discard: '放弃',
   cancel: '取消',
+  show: '显示',
+  hide: '隐藏',
   usageTitle: '账户用量',
   usageRefresh: '刷新',
   usageRefreshing: '刷新中…',
@@ -196,13 +206,18 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',
+  numberTooSmall: 'Must be at least 1 (ms)',
+  numberTooLarge: 'Above the allowed maximum (2147483647 ms)',
   readOnly: 'Settings are read-only.',
   unsaved: 'Unsaved',
   save: 'Save',
   saving: 'Saving',
+  saved: 'Saved ✓',
   saveFailed: 'Save failed, please retry.',
   discard: 'Discard',
   cancel: 'Cancel',
+  show: 'Show',
+  hide: 'Hide',
   usageTitle: 'Account usage',
   usageRefresh: 'Refresh',
   usageRefreshing: 'Refreshing…',
