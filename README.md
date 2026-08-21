@@ -52,7 +52,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider
 
 ```sh
 # Pin a release tag (recommended — readable and immutable)
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.2.2
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.6.1
 # Or pin any exact commit by its SHA
 dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#<full-commit-sha>
 ```
@@ -108,7 +108,7 @@ The patch layer is read from the **installed package** at every boot, so updatin
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider
 
 # GitHub (pinned): point at the new tag — no uninstall needed, pnpm swaps it in place
-dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.2.2
+dsh plugin --profile web add github:Mars-Sea/dsh-commandcode-provider#v0.6.1
 
 # local checkout: pull, rebuild, restart
 git -C /path/to/dsh-commandcode-provider pull
