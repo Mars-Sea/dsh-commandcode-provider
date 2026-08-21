@@ -50,7 +50,7 @@ npm i -g command-code@latest
 cmd login        # macOS/Linux; native Windows: cmdc login
 ```
 
-Alternatively, create a key in the browser ([Command Code Studio](https://commandcode.ai/studio/auth/cli)) and paste it into **Settings → Command Code**, or `export COMMANDCODE_API_KEY="user_..."`.
+Alternatively, create a key on the [Keys settings page](https://commandcode.ai/mars-sea/settings/keys) and paste it into **Settings → Command Code**, or `export COMMANDCODE_API_KEY="user_..."`.
 
 ## Verify it works
 

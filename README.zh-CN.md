@@ -48,7 +48,7 @@ npm i -g command-code@latest
 cmd login        # macOS/Linux；Windows 原生版：cmdc login
 ```
 
-也可以在 [Command Code Studio](https://commandcode.ai/studio/auth/cli) 创建 key 后粘贴到 **设置 → Command Code**，或 `export COMMANDCODE_API_KEY="user_..."`。
+也可以在 [Keys 设置页](https://commandcode.ai/mars-sea/settings/keys) 创建 key 后粘贴到 **设置 → Command Code**，或 `export COMMANDCODE_API_KEY="user_..."`。
 
 ## 验证是否生效
 
