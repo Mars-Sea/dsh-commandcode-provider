@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-08-22
+
+### Fixed
+
+- **The active-account dropdown now aligns with the other settings fields.** The browser draws native `<select>` controls with its own box model and internal text metrics, so the picker under "Active account" rendered two pixels shorter than every input on the page, with its value sitting at a slightly different height. It now matches the inputs exactly (same height, same text position) and carries a custom chevron that stays legible in both themes.
+- **The usage card's two timestamps share one line.** The billing period end ("Period ends …") and the fetch time ("Updated …") used to occupy two stacked rows; the fetch time now sits on the same row, pushed to the right edge, so the account card ends one line shorter.
+- **README: the documented update command is now `dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest`** (the `plugin` command forwards to pnpm, whose `update` verb is what refreshes an installed plugin).
+
 ## [0.7.0] - 2026-08-22
 
 ### Added

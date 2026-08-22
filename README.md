@@ -36,7 +36,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ## Updating
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest
 ```
 
 Then restart the web app.

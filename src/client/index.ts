@@ -61,6 +61,13 @@ const PAGE_CSS = `
 .cc-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:0 12px;font-size:13px;line-height:1.5}
 .cc-input:focus-visible{border-color:var(--dsw-alias-brand-primary);outline:none}
 .cc-input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
+/* Selects need their own treatment to sit flush with the text inputs:
+ * the UA stylesheet renders <select> border-box (34px total vs the inputs'
+ * 36px) and forces its own menulist text metrics, so drop the native
+ * chrome entirely (appearance:none), restore content-box so the outer box
+ * matches the inputs again, and draw the chevron ourselves. Longhand
+ * background-* only — the shorthand would reset .cc-input's background. */
+select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box-sizing:content-box;padding-right:32px;background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' viewBox='0 0 12 7'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888f98' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center}
 .cc-inputInvalid{border-color:var(--dsw-alias-label-error)}
 .cc-invalid{color:var(--dsw-alias-label-error);margin:0;font-size:12px;line-height:1.5}
 .cc-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}

@@ -34,7 +34,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ## 更新
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest
 ```
 
 然后重启 Web 应用。

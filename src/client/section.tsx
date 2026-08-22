@@ -282,8 +282,14 @@ function AccountMark({ entry, t }: { entry: CommandCodeAccountUsage; t: Translat
  * One pool account's facts (identity, totals, credits, window limits)
  * rendered inside the account-usage card.
  */
-function AccountReport({ entry, t, onRemove }: {
+function AccountReport({ entry, fetchedAt, t, onRemove }: {
   entry: CommandCodeAccountUsage
+  /**
+   * When the shared usage snapshot was fetched — shares the account's bottom
+   * meta row with the billing period end so the two timestamps occupy one
+   * line (period/partial facts left, fetch freshness right).
+   */
+  fetchedAt?: number | undefined
   t: Translate<SettingsCommandCodeKey>
   /** Present only for removable (non-default) accounts on a writable page. */
   onRemove?: (() => void) | undefined
@@ -295,6 +301,8 @@ function AccountReport({ entry, t, onRemove }: {
   const plan = report.plan
   const planName = plan?.name ?? ''
   const planStatus = plan !== undefined && plan.status !== '' && plan.status !== 'active' ? plan.status : ''
+  const showPeriod = plan !== undefined && plan.currentPeriodEnd > 0
+  const showPartial = report.failures.length > 0 && report.blocked === undefined
 
   return (
     <div className="cc-accountReport">
@@ -355,18 +363,18 @@ function AccountReport({ entry, t, onRemove }: {
         </div>
       ) : null}
 
-      {plan !== undefined && plan.currentPeriodEnd > 0 ? (
+      {showPeriod || showPartial || fetchedAt !== undefined ? (
         <div className="cc-usageMeta">
-          <p className="cc-usageUpdated">{t('usagePeriodEnd')} {new Date(plan.currentPeriodEnd).toLocaleDateString()}</p>
+          {showPeriod ? (
+            <p className="cc-usageUpdated">{t('usagePeriodEnd')} {new Date(plan.currentPeriodEnd).toLocaleDateString()}</p>
+          ) : null}
+          {showPartial ? (
+            <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p>
+          ) : null}
           <span className="cc-usageMetaSpacer" />
-          {report.failures.length > 0 && report.blocked === undefined
-            ? <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p>
-            : null}
-        </div>
-      ) : report.failures.length > 0 && report.blocked === undefined ? (
-        <div className="cc-usageMeta">
-          <span className="cc-usageMetaSpacer" />
-          <p className="cc-usagePartial" title={report.failures.join('; ')}>{t('usagePartial')}</p>
+          {fetchedAt !== undefined ? (
+            <p className="cc-usageUpdated">{t('usageUpdated')} {new Date(fetchedAt).toLocaleTimeString()}</p>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -504,16 +512,10 @@ function UsageCard({ t, usage, apiKeyConfigured, removingIds, removableIds, canM
         <AccountReport
           key={selected.id}
           entry={selected}
+          fetchedAt={usage.fetchedAt}
           t={t}
           onRemove={removeSelected}
         />
-      ) : null}
-
-      {report !== undefined && usage.fetchedAt !== undefined ? (
-        <div className="cc-usageMeta">
-          <span className="cc-usageMetaSpacer" />
-          <p className="cc-usageUpdated">{t('usageUpdated')} {new Date(usage.fetchedAt).toLocaleTimeString()}</p>
-        </div>
       ) : null}
     </div>
   )
