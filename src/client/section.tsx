@@ -20,20 +20,26 @@ import type { CommandCodeCredits } from '../adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
 import type { AccountItemState, SettingsPageState, StagedField } from './settings.ts'
+import type { CommandCodeLoginFailureReason } from '../login-wire.ts'
+import type { LoginPageState } from './login.ts'
 import type { UsagePageState } from './usage.ts'
 import { formatMoney, formatMoneyExact, formatResetAt, formatTokensCompact, windowRatio } from './usage.ts'
-import { PLUGIN_VERSION } from './version.ts'
+import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
+import { checkForUpdate, localStorageUpdateStore } from './update.ts'
 
 /** Props composed by the slot registration: locale seat + injected face. */
 export interface CommandCodeSettingsProps {
   t: Translate<SettingsCommandCodeKey>
   useCommandCodeSettings<T>(selector: (state: SettingsPageState) => T): T
   useCommandCodeUsage<T>(selector: (state: UsagePageState) => T): T
+  useCommandCodeLogin<T>(selector: (state: LoginPageState) => T): T
   edit(field: string, text: string): void
   resetField(field: string): void
   save(): void
   discard(): void
   refreshUsage(): void
+  beginLogin(): void
+  cancelLogin(): void
   addAccount(): void
   removeAccount(id: string): void
   editAccountLabel(id: string, text: string): void
@@ -225,6 +231,69 @@ function SecretKeyField({
         onChange={(event) => onEdit(event.target.value)}
       />
       <p className="cc-hint">{hint}</p>
+    </div>
+  )
+}
+
+/** The per-reason copy for a failed login attempt. */
+function loginFailureCopy(reason: CommandCodeLoginFailureReason | undefined, t: Translate<SettingsCommandCodeKey>): string {
+  if (reason === 'denied') return t('loginDenied')
+  if (reason === 'timeout') return t('loginTimeout')
+  if (reason === 'invalid-key') return t('loginInvalidKey')
+  if (reason === 'network') return t('loginNetwork')
+  if (reason === 'unavailable') return t('loginStoreFailed')
+  if (reason === 'cancelled') return t('loginCancelled')
+  return t('loginFailedGeneric')
+}
+
+/**
+ * The sign-in alternative to pasting a key: one field row that starts the
+ * Host-side browser login, links to the Studio authorization page while the
+ * attempt is live, and reports the outcome. The key itself never crosses to
+ * the browser — only "who signed in" does.
+ */
+function LoginPanel({ state, disabled, t, onBegin, onCancel }: {
+  state: LoginPageState
+  disabled: boolean
+  t: Translate<SettingsCommandCodeKey>
+  onBegin(): void
+  onCancel(): void
+}) {
+  const busy = state.phase === 'starting' || state.phase === 'waiting'
+  let hint = t('loginHintIdle')
+  let hintTitle: string | undefined
+  let hintClass = 'cc-hint'
+  if (state.phase === 'starting' || state.phase === 'waiting') hint = t(state.phase === 'starting' ? 'loginStarting' : 'loginWaiting')
+  else if (state.phase === 'success') {
+    const keyName = state.keyName !== undefined && state.keyName !== '' ? ` · ${state.keyName}` : ''
+    hint = `${t('loginSuccess')} ${state.userName ?? ''}${keyName}`.trim()
+    hintClass = 'cc-loginDone'
+  } else if (state.phase === 'failed') {
+    hint = loginFailureCopy(state.reason, t)
+    hintClass = 'cc-loginError'
+    if (state.message !== undefined) hintTitle = state.message
+  } else if (state.phase === 'unavailable') {
+    hint = `${t('loginUnavailable')} ${state.message ?? ''}`.trim()
+    hintClass = 'cc-loginError'
+  }
+  return (
+    <div className="cc-field">
+      <div className="cc-fieldHead">
+        <label className="cc-label">{t('loginTitle')}</label>
+        <span className="cc-badges">
+          {busy ? (
+            <button type="button" className="cc-reset" onClick={onCancel}>{t('loginCancel')}</button>
+          ) : (
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onBegin}>{t('loginButton')}</button>
+          )}
+        </span>
+      </div>
+      {state.authUrl !== undefined ? (
+        <p className="cc-hint">
+          <a className="cc-loginLink" href={state.authUrl} target="_blank" rel="noreferrer">{t('loginOpenLink')}</a>
+        </p>
+      ) : null}
+      <p className={hintClass} title={hintTitle}>{hint}</p>
     </div>
   )
 }
@@ -676,14 +745,42 @@ function useSavedFlash(tick: number): boolean {
   return visible
 }
 
+/**
+ * The update hint: one throttled npm-registry check per page open (the
+ * throttle and all failure handling live in ./update.ts). Resolves to the
+ * newest published version when it is newer than this build, else undefined —
+ * every failure mode degrades to no hint at all.
+ */
+function usePluginUpdate(): string | undefined {
+  const [available, setAvailable] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    let cancelled = false
+    void checkForUpdate({
+      currentVersion: PLUGIN_VERSION,
+      now: Date.now(),
+      store: localStorageUpdateStore(),
+    }).then((version) => {
+      if (!cancelled) setAvailable(version)
+      // A rejected checkForUpdate would be a bug (it catches internally);
+      // swallow it regardless — the footer must never break the page.
+    }, () => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return available
+}
+
 /** The settings page body: connection facts for the Command Code provider. */
 export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const { t } = props
   const state = props.useCommandCodeSettings((snapshot) => snapshot)
   const usage = props.useCommandCodeUsage((snapshot) => snapshot)
+  const login = props.useCommandCodeLogin((snapshot) => snapshot)
   const disabled = !state.writable
   const keyLocked = !state.apiKeyWritable
   const savedVisible = useSavedFlash(state.savedCount)
+  const updateVersion = usePluginUpdate()
   return (
     <section className="cc-section" aria-label={t('title')}>
       <h2 className="cc-title">{t('title')}</h2>
@@ -728,6 +825,13 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           undoClearLabel={t('usageUndoKeyClear')}
           onEdit={(text) => props.edit('apiKey', text)}
           onToggleClear={() => props.toggleKeyClear('default')}
+        />
+        <LoginPanel
+          state={login}
+          disabled={disabled || keyLocked}
+          t={t}
+          onBegin={props.beginLogin}
+          onCancel={props.cancelLogin}
         />
         <Field
           id="cc-api-base"
@@ -799,7 +903,23 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           {t(state.saving ? 'saving' : 'save')}
         </Button>
       </div>
-      <p className="cc-version">Command Code Provider v{PLUGIN_VERSION}</p>
+      <p className="cc-version">
+        Command Code Provider v{PLUGIN_VERSION}
+        {updateVersion !== undefined ? (
+          <>
+            {' · '}
+            <a
+              className="cc-versionLink"
+              href={PLUGIN_RELEASES_URL}
+              target="_blank"
+              rel="noreferrer"
+              title={t('updateHint')}
+            >
+              v{updateVersion} {t('updateAvailable')}
+            </a>
+          </>
+        ) : null}
+      </p>
     </section>
   )
 }

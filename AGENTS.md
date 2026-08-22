@@ -39,14 +39,28 @@ src/client/section.tsx  The settings page React component (settings form +
                       account-usage card).
 src/client/sessions.ts  selectModel friendly-error wrapper (React-free).
 src/client/version.ts  Plugin version for the settings-page footer (package.json import, inlined at build).
+src/client/update.ts   Update hint: throttled npm-registry `latest` check +
+                       tolerant semver compare (React-free, storage/fetch/time
+                       seams); the page footer links to releases when newer.
+src/login.ts           Host half of the browser login: loopback callback
+                       server mirroring `command-code login` (POST /callback,
+                       state token, whoami validation) → storeKey seam.
+src/login-wire.ts      Login Remote contract: `commandcode/login*` endpoints'
+                       descriptors + strict status parser (dependency-free).
 src/client/locales.ts   zh/en copy + LocaleNamespaceMap augmentation.
 tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
 tests/accounts.test.ts Account-pool rotation tests.
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/client.test.ts  sessions-wrapper tests.
 tests/settings.test.ts settings-page controller tests.
+tests/update.test.ts  update-hint tests (semver compare, payload parse,
+                      throttle cache, failure semantics).
 tests/usage-wire.test.ts usage-Remote schema + descriptor tests.
 tests/usage-client.test.ts account-card controller tests.
+tests/login.test.ts   browser-login flow integration tests (real loopback
+                      server driven with fetch; every failure reason).
+tests/login-wire.test.ts login descriptor uniformity + status parser.
+tests/login-client.test.ts login-panel controller poll lifecycle.
 cordis.patch.yml      Bundle patch layer (inserts the llm-commandcode row).
 tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 ```
@@ -87,6 +101,26 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `ctx.remote.commandcode` access throws `cannot get property ... without
   inject`), and a static inject would deadlock because the namespace service
   exists only after our own mount. Keep that pattern when touching the mount.
+- **Browser login (`commandcode/loginBegin|loginStatus|loginCancel`)**: the
+  settings page's key field can start the official `command-code login` flow
+  instead of pasting a key — reverse-engineered from the CLI bundle's
+  `createAuthFlowController`/`createAuthServer` (command-code@1.32.1): bind
+  `127.0.0.1` from port 5959 upward, open
+  `{studio}/studio/auth/cli?callback=http://localhost:{port}/callback&state=…`,
+  receive a **POST JSON body** `{apiKey,state,userId,userName,keyName}` from
+  the Studio page (no OAuth code exchange), validate via `/alpha/whoami`,
+  then store through the credentials seam under the default slot's ref. The
+  loopback server mirrors the CLI contract exactly (POST-only `/callback`,
+  10 KB body cap, state-token equality, `{success}` JSON responses); two
+  deliberate hardenings — CORS origins are echoed **only when allowlisted**
+  (the CLI falls back to the first origin), and `Connection: close`. The
+  three endpoints ride the SAME `commandcodeUsage` service and one combined
+  contribution (one Host registration, one Client mount); the namespace-level
+  `TypertRemoteNamespaceMap.commandcode` augmentation lives ONLY in
+  `src/client/usage.ts` (interface merging forbids duplicate members). A
+  literal composition `apiKey` still outranks the stored credential; a
+  remote-Host setup (browser ≠ Host machine) falls back to manual paste by
+  design.
 - **Static capability snapshots** (all in `src/adapter.ts`, all synced from official sources — see the `dsh-commandcode-upstream` skill for the exact extraction procedures):
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the CLI bundle's `ZA` model table (`command-code/dist/cli.mjs`), **not** the docs page (whose `Reasoning` flag means "thinks", not "has effort levels").
   - `KNOWN_IMAGE_MODELS` — Vision-capable models, synced from [commandcode.ai/docs/reference/cli/models](https://commandcode.ai/docs/reference/cli/models); note catalog IDs can differ from doc IDs (e.g. `claude-haiku-4-5-20251001` vs doc's `claude-haiku-4-5`).

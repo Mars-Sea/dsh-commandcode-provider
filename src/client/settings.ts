@@ -489,6 +489,15 @@ export class CommandCodeSettingsController {
     this.publish()
   }
 
+  /**
+   * Re-read the Host's credential facts without any staged edit. The browser
+   * login stores a key Host-side behind the page's back; the plugin entry
+   * calls this when a login lands so the configured/writable badges follow.
+   */
+  refreshCredentials(): void {
+    void this.describeAll()
+  }
+
   /** Write every staged edit, then re-read the Host's accepted state. */
   async save(): Promise<void> {
     const plan = this.plan()

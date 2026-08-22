@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-22
+
+### Added
+
+- **The settings page can now sign you in instead of asking for a pasted key.** A "Sign in to Command Code" action on the key field starts the same authorization flow the official `command-code login` CLI command performs: your browser opens the commandcode.ai approval page, and once approved the delivered API key is validated against the Provider API and stored in the local credential service under the plugin's default reference — the very next request uses it, no restart, and the key itself never crosses into the browser. The attempt is single-flight with a 2-minute window, cancellable, state-token-checked, and every failure (denied, timeout, invalid key, unreachable validation, unwritable store, remote Host without a loopback) lands in a distinct message that points back at manual paste.
+- **The settings page now tells you when a plugin update is available.** Opening the "Command Code" page quietly asks npm (at most once a day, cached in the browser) for the latest published version; when it is newer than the running build, the footer version line gains a small warning-tinted "vX.Y.Z update available" link to that release's notes on GitHub. The check degrades silently — an unreachable network or registry simply shows nothing, a failed attempt never retries more than once per day, and any previously learned version keeps its hint alive.
+
 ## [0.7.1] - 2026-08-22
 
 ### Fixed

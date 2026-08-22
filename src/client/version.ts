@@ -14,3 +14,10 @@ import pkg from '../../package.json'
 
 /** The published package version (e.g. `'0.6.0'`). */
 export const PLUGIN_VERSION: string = pkg.version
+
+/**
+ * This package's GitHub releases page, derived from the repository field so
+ * the update hint's link target can never drift from the published home.
+ */
+export const PLUGIN_RELEASES_URL: string =
+  `${pkg.repository.url.replace(/^git\+/, '').replace(/\.git$/, '')}/releases`

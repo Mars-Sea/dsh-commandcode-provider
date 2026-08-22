@@ -20,6 +20,23 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { CommandCodeAdapter, CommandCodeConnectionOptions } from './adapter.ts'
 import { USAGE_HOST_CONTRIBUTION } from './usage-wire.ts'
 import type { CommandCodeAccountsReport } from './usage-wire.ts'
+import { LOGIN_DESCRIPTORS } from './login-wire.ts'
+import type { CommandCodeLoginStatus } from './login-wire.ts'
+
+/**
+ * The browser-login face the usage service exposes (`commandcode/login*`).
+ * Backed by the Host-half {@link !CommandCodeLoginFlow} when the plugin entry
+ * wired one; absent, the methods degrade to a no-op status so an old client
+ * against a fresh page still answers instead of hanging.
+ */
+export interface LoginFlowFacade {
+  /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
+  begin(): Promise<CommandCodeLoginStatus>
+  /** The current attempt's status. */
+  status(): CommandCodeLoginStatus
+  /** Cancel a waiting attempt. */
+  cancel(): void
+}
 
 /** Everything the usage service needs beyond its Cordis context. */
 export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
@@ -31,6 +48,12 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
    * entry around `adapter.getUsage()`.
    */
   reports?: () => Promise<CommandCodeAccountsReport>
+  /**
+   * The browser-login flow (wired by the plugin entry). Absent means the
+   * login endpoints answer `idle` / reject with a plain message — the page's
+   * manual paste path stays the fallback.
+   */
+  login?: LoginFlowFacade
 }
 
 /**
@@ -81,6 +104,36 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
       }],
     }
   }
+
+  /**
+   * Start (or rejoin) a browser-login attempt and return its fresh status —
+   * `waiting` carrying the Studio URL. Rejects when the flow cannot start
+   * (no free loopback port, disposed plugin); the Gateway folds the throw
+   * into the failure branch the page renders.
+   */
+  async loginBegin(): Promise<CommandCodeLoginStatus> {
+    const login = this.requireLogin()
+    return login.begin()
+  }
+
+  /** Poll a login attempt's status. */
+  async loginStatus(): Promise<CommandCodeLoginStatus> {
+    return this.deps.login?.status() ?? { state: 'idle' }
+  }
+
+  /** Cancel a waiting attempt; returns the post-cancel status. */
+  async loginCancel(): Promise<CommandCodeLoginStatus> {
+    this.deps.login?.cancel()
+    return this.deps.login?.status() ?? { state: 'idle' }
+  }
+
+  private requireLogin(): LoginFlowFacade {
+    const login = this.deps.login
+    if (login === undefined) {
+      throw new Error('login flow is not wired in this setup; paste the API key instead')
+    }
+    return login
+  }
 }
 
 /**
@@ -95,7 +148,13 @@ export function applyUsageRemote<C extends CommandCodeConnectionOptions>(
   ctx.inject(['typert'], (remoteCtx) => {
     new CommandCodeUsageService(remoteCtx, deps)
     const registry = remoteCtx.typert as unknown as TypertContributionRegistry
-    const unregister = registry.register(USAGE_HOST_CONTRIBUTION)
+    // One registration carries the report endpoint and the login endpoints:
+    // the descriptors are unique per endpoint, and a single contribution
+    // keeps the Host's registry bookkeeping (and the Client mount) 1:1.
+    const unregister = registry.register({
+      ...USAGE_HOST_CONTRIBUTION,
+      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, ...LOGIN_DESCRIPTORS],
+    })
     // The registry's own effect would outlive this fiber; withdraw the
     // contribution when the plugin unloads.
     remoteCtx.effect(() => () => void unregister(), 'dsh-commandcode-provider: usage remote')

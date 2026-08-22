@@ -95,6 +95,24 @@ export type SettingsCommandCodeKey =
   | 'usageCooldown'
   | 'usageInvalidKey'
   | 'usageUnconfigured'
+  | 'updateAvailable'
+  | 'updateHint'
+  | 'loginTitle'
+  | 'loginHintIdle'
+  | 'loginButton'
+  | 'loginStarting'
+  | 'loginWaiting'
+  | 'loginOpenLink'
+  | 'loginCancel'
+  | 'loginSuccess'
+  | 'loginUnavailable'
+  | 'loginDenied'
+  | 'loginTimeout'
+  | 'loginInvalidKey'
+  | 'loginNetwork'
+  | 'loginStoreFailed'
+  | 'loginCancelled'
+  | 'loginFailedGeneric'
 
 export const zh: Record<SettingsCommandCodeKey, string> = {
   nav: 'Command Code',
@@ -179,6 +197,24 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   usageCooldown: '限额冷却中',
   usageInvalidKey: '密钥无效',
   usageUnconfigured: '该账户尚未配置 API 密钥。',
+  updateAvailable: '可更新',
+  updateHint: '已发布新版本，点击查看发布说明；更新插件后刷新本页，提示会自动消失。',
+  loginTitle: '通过官方登录获取密钥',
+  loginHintIdle: '不想手动创建密钥？点击登录后浏览器会打开 commandcode.ai 授权页，完成后密钥自动写入本机凭据服务，下次请求即生效。',
+  loginButton: '登录 Command Code',
+  loginStarting: '正在启动本地回调服务…',
+  loginWaiting: '等待在浏览器中完成授权…',
+  loginOpenLink: '打开授权页面 ↗',
+  loginCancel: '取消登录',
+  loginSuccess: '已登录为',
+  loginUnavailable: '此环境暂不支持登录流程，请手动粘贴密钥。',
+  loginDenied: '授权被拒绝。可重试，或手动粘贴密钥。',
+  loginTimeout: '等待超时：未在窗口期内收到授权回调，请重试。',
+  loginInvalidKey: '获取到的密钥未通过校验（401），请重试或手动粘贴。',
+  loginNetwork: '无法连接 Command Code 服务校验密钥，请检查网络后重试。',
+  loginStoreFailed: '密钥无法写入本机凭据服务，请手动粘贴。',
+  loginCancelled: '登录已取消。',
+  loginFailedGeneric: '登录失败，请重试或手动粘贴密钥。',
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
@@ -272,4 +308,22 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   usageCooldown: 'Cooling down',
   usageInvalidKey: 'Invalid key',
   usageUnconfigured: 'No API key configured for this account yet.',
+  updateAvailable: 'update available',
+  updateHint: 'A newer version has been published; click for release notes. The notice disappears once the plugin is updated.',
+  loginTitle: 'Sign in to fetch a key',
+  loginHintIdle: 'Rather not create a key by hand? Sign in and your browser opens the commandcode.ai authorization page; the approved key is stored in the local credential service and applies to the next request.',
+  loginButton: 'Sign in to Command Code',
+  loginStarting: 'Starting the local callback server…',
+  loginWaiting: 'Waiting for authorization in your browser…',
+  loginOpenLink: 'Open the authorization page ↗',
+  loginCancel: 'Cancel sign-in',
+  loginSuccess: 'Signed in as',
+  loginUnavailable: 'Sign-in is unavailable in this environment; paste the API key instead.',
+  loginDenied: 'Authorization was denied. Try again or paste the key manually.',
+  loginTimeout: 'Timed out waiting for the authorization callback; try again.',
+  loginInvalidKey: 'The delivered key failed validation (401). Try again or paste it manually.',
+  loginNetwork: 'Could not reach the Command Code service to validate the key; check your network and retry.',
+  loginStoreFailed: 'The key could not be stored in the local credential service; paste it manually.',
+  loginCancelled: 'Sign-in cancelled.',
+  loginFailedGeneric: 'Sign-in failed; try again or paste the key manually.',
 }

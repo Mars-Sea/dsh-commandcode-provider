@@ -44,6 +44,8 @@ import type { CommandCodeAccountConfig, CommandCodeAccountSlot } from './account
 import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
 import type { CommandCodeAccountsReport } from './usage-wire.ts'
+import { CommandCodeLoginFlow } from './login.ts'
+import type { CommandCodeLoginCredentials } from './login.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -79,9 +81,36 @@ export type { CommandCodeAdapterDeps, CommandCodeBillingAccess, CommandCodeConne
 export { applyCommands, commandDefinition } from './commands.ts'
 export type { CommandCodeCommandDeps } from './commands.ts'
 export { applyUsageRemote, CommandCodeUsageService } from './usage-remote.ts'
-export type { CommandCodeUsageDeps } from './usage-remote.ts'
+export type { CommandCodeUsageDeps, LoginFlowFacade } from './usage-remote.ts'
 export { USAGE_REPORT_ENDPOINT, usageReportSchema } from './usage-wire.ts'
 export type { CommandCodeAccountUsage, CommandCodeAccountsReport } from './usage-wire.ts'
+export {
+  LOGIN_BEGIN_ENDPOINT,
+  LOGIN_STATUS_ENDPOINT,
+  LOGIN_CANCEL_ENDPOINT,
+  parseLoginStatus,
+  loginStatusSchema,
+} from './login-wire.ts'
+export type {
+  CommandCodeLoginStatus,
+  CommandCodeLoginFailureReason,
+} from './login-wire.ts'
+export {
+  LOGIN_TIMEOUT_MS,
+  LOGIN_START_PORT,
+  LOGIN_MAX_PORT_ATTEMPTS,
+  LOGIN_BODY_LIMIT_BYTES,
+  LOGIN_ALLOWED_ORIGINS,
+  buildCommandAuthUrl,
+  studioBaseForApiBase,
+  validateCommandApiKey,
+  CommandCodeLoginFlow,
+} from './login.ts'
+export type {
+  CommandCodeLoginCredentials,
+  CommandCodeLoginFlowDeps,
+  ApiKeyValidation,
+} from './login.ts'
 export { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
 export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState } from './accounts.ts'
 
@@ -368,7 +397,23 @@ export function apply(ctx: Context, config: Config): void {
   // The settings page's account card: getUsage exposed to the browser through
   // the Typert Gateway (`commandcode/report`). Rides the optional `typert`
   // registry service, so profiles without the web stack never activate it.
-  applyUsageRemote(ctx, { adapter, reports: usageReports })
+  // The same service also exposes the browser-login flow: the Host binds a
+  // loopback callback server (the official `command-code login` dance) and
+  // stores the delivered key through the credentials seam under the same
+  // reference the default slot resolves — no restart, no settings document.
+  const loginFlow = new CommandCodeLoginFlow({
+    apiBase: () => options().apiBase,
+    storeKey: async ({ apiKey }: CommandCodeLoginCredentials): Promise<void> => {
+      const ref = credentialRef(current().apiKeyEnv ?? DEFAULT_API_KEY_ENV)
+      const credentials = ctx.get('credentials')
+      if (credentials === undefined) {
+        throw new Error('the credentials service is unavailable in this profile; paste the key manually')
+      }
+      await credentials.set(ref, apiKey)
+    },
+  })
+  ctx.effect(() => () => loginFlow.dispose(), 'dsh-commandcode-provider: login flow')
+  applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow })
 
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => {

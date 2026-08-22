@@ -18,6 +18,7 @@
 
 - **插件包**：一条 `dsh plugin add` 命令安装到任意 dsh 配置，注册 `commandcode` provider 路由，带实时模型目录。
 - **专属设置页**：API key 输入、连接参数、实时「账户用量」卡片和「隐藏套餐外模型」开关。
+- **浏览器内登录获取 key**：设置页一键发起官方授权（与 `cmd login` 同一流程），完成后密钥自动写入本机凭据服务，无需手动创建或粘贴；不可用时随时退回手动粘贴。
 - **多账户轮换**：一个账户用量打满后，请求自动切换到下一个账户。详见[多账户轮换](#多账户轮换)。
 - **key 配置灵活**：设置页填写、环境变量或官方 CLI 登录文件均可。
 - **模型选择器标注**：每个模型标注最低套餐、折扣/FREE 徽章、峰谷时段、图片支持与上下文长度，免费模型置顶。
@@ -48,7 +49,9 @@ npm i -g command-code@latest
 cmd login        # macOS/Linux；Windows 原生版：cmdc login
 ```
 
-也可以在 [Keys 设置页](https://commandcode.ai/mars-sea/settings/keys) 创建 key 后粘贴到 **设置 → Command Code**，或 `export COMMANDCODE_API_KEY="user_..."`。
+也可以不装 CLI，直接在 **设置 → Command Code** 点击「登录 Command Code」：浏览器会打开 commandcode.ai 授权页（与 `cmd login` 相同的流程），完成后密钥自动写入本机凭据服务。还可以在 [Keys 设置页](https://commandcode.ai/mars-sea/settings/keys) 创建 key 后手动粘贴，或 `export COMMANDCODE_API_KEY="user_..."`。
+
+> 登录流程依赖 Host 与浏览器在同一台机器（回环回调）。Host 在远程机器上时请使用手动粘贴；若组合配置里写了字面量 `apiKey`，它仍优先于登录写入的凭据。
 
 ## 验证是否生效
 

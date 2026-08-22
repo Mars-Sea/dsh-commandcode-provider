@@ -34,7 +34,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { installFriendlyImageError } from './sessions.ts'
 import { CommandCodeSettingsController, COMMANDCODE_NS, type SettingsPageState } from './settings.ts'
 import { CommandCodeUsageController, type UsagePageState, type UsageRemote } from './usage.ts'
+import { CommandCodeLoginController, type LoginPageState, type LoginRemote } from './login.ts'
 import { USAGE_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
+import { LOGIN_REMOTE_CONTRIBUTION } from '../login-wire.ts'
+import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { CommandCodeSettingsPage } from './section.tsx'
 import { zh, en } from './locales.ts'
 
@@ -122,6 +125,17 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-usageBlockedTitle{color:var(--dsw-alias-label-error);margin:0;font-size:13px;font-weight:600;line-height:1.5}
 .cc-usageBlockedHint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px;line-height:1.5}
 .cc-version{margin:4px 0 0;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
+/* The update hint rides the footer version line: warning-tinted (with a
+ * muted fallback for themes without the alias), quiet until hovered. */
+.cc-versionLink{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-secondary));text-decoration:none}
+.cc-versionLink:hover{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-position:under}
+/* The login panel rides the connection card as one more field row; the
+ * authorization link is the only branded element on it. */
+.cc-loginLink{color:var(--dsw-alias-brand-primary);text-decoration:none;font-size:12px;line-height:1.5}
+.cc-loginLink:hover{text-decoration:underline;text-underline-position:under}
+.cc-loginBusy{color:var(--dsw-alias-label-tertiary)}
+.cc-loginDone{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary))}
+.cc-loginError{color:var(--dsw-alias-label-error)}
 .cc-saved{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));margin:0;font-size:12px;font-weight:500;line-height:1.5}
 .cc-badgeWarn{background:var(--dsw-alias-state-warning-secondary,var(--dsw-alias-bg-module-platform));color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-secondary))}
 `
@@ -166,19 +180,26 @@ export function apply(ctx: Context): void {
   const store = createSnapshotStore<SettingsPageState>(controller.state())
   controller.subscribe(() => store.set(controller.state()))
 
-  // The account-usage card: mount the shared Remote contribution, then resolve
-  // the `remote.commandcode` namespace through a scoped inject. Cordis only
-  // serves services a fiber declares in `inject`, and the namespace service
-  // exists only after the mount — a static inject would deadlock the plugin
-  // (the mounter would wait for its own mount), so the inject is registered
-  // dynamically once the mount lands. A Host half that predates the Remote
-  // fails the call instead, and the card renders its error branch.
+  // The account-usage card + login panel: mount the shared Remote contribution
+  // (one mount carries every endpoint this plugin serves — report and login —
+  // so the Client's bookkeeping stays 1:1 with the Host's single registry
+  // registration), then resolve the `remote.commandcode` namespace through a
+  // scoped inject. Cordis only serves services a fiber declares in `inject`,
+  // and the namespace service exists only after the mount — a static inject
+  // would deadlock the plugin (the mounter would wait for its own mount), so
+  // the inject is registered dynamically once the mount lands. A Host half
+  // that predates the Remote fails the calls instead, and the surfaces render
+  // their error branches.
   let usageNamespace: (typeof ctx.remote)['commandcode'] | undefined
   let usageMountError: string | undefined
+  const contribution: TypertRemoteContribution = {
+    package: USAGE_REMOTE_CONTRIBUTION.package,
+    descriptors: [...USAGE_REMOTE_CONTRIBUTION.descriptors, ...LOGIN_REMOTE_CONTRIBUTION.descriptors],
+  }
   ctx.effect(() => {
     let cancelled = false
     let unmount: (() => Promise<void>) | undefined
-    void ctx.remote.$mount(USAGE_REMOTE_CONTRIBUTION).then((dispose) => {
+    void ctx.remote.$mount(contribution).then((dispose) => {
       if (cancelled) {
         void dispose()
         return
@@ -215,8 +236,47 @@ export function apply(ctx: Context): void {
   const usageStore = createSnapshotStore<UsagePageState>(usageController.state())
   usageController.subscribe(() => usageStore.set(usageController.state()))
 
+  // The login panel: same namespace, three endpoints; the key never crosses
+  // to the browser — the Host validates and stores it through the credentials
+  // seam, and a landed login re-reads the credential badges + usage card.
+  const loginRemote: LoginRemote = {
+    loginBegin: async () => {
+      if (usageNamespace === undefined) {
+        return { ok: false, error: { message: usageMountError ?? 'commandcode remote is not mounted' } }
+      }
+      return usageNamespace.loginBegin()
+    },
+    loginStatus: async () => {
+      if (usageNamespace === undefined) {
+        return { ok: false, error: { message: usageMountError ?? 'commandcode remote is not mounted' } }
+      }
+      return usageNamespace.loginStatus()
+    },
+    loginCancel: async () => {
+      if (usageNamespace === undefined) {
+        return { ok: false, error: { message: usageMountError ?? 'commandcode remote is not mounted' } }
+      }
+      return usageNamespace.loginCancel()
+    },
+  }
+  const loginController = new CommandCodeLoginController(() => loginRemote)
+  ctx.effect(() => () => loginController.dispose(), 'dsh-commandcode-provider: login controller')
+  const loginStore = createSnapshotStore<LoginPageState>(loginController.state())
+  let lastLoginPhase = loginController.state().phase
+  loginController.subscribe(() => {
+    const phase = loginController.state().phase
+    // A landed login stored the key Host-side behind the page's back; the
+    // badges must follow and the account card can finally fetch.
+    if (phase === 'success' && lastLoginPhase !== 'success') {
+      controller.refreshCredentials()
+      void usageController.refresh()
+    }
+    lastLoginPhase = phase
+    loginStore.set(loginController.state())
+  })
+
   const injected = () => ({
-    hooks: { commandCodeSettings: store, commandCodeUsage: usageStore },
+    hooks: { commandCodeSettings: store, commandCodeUsage: usageStore, commandCodeLogin: loginStore },
     edit: (field: string, text: string) => controller.edit(field, text),
     resetField: (field: string) => controller.resetField(field),
     // A landed save can change the key or endpoint the usage endpoints read,
@@ -227,6 +287,8 @@ export function apply(ctx: Context): void {
     }),
     discard: () => controller.discard(),
     refreshUsage: () => void usageController.refresh(),
+    beginLogin: () => void loginController.begin(),
+    cancelLogin: () => void loginController.cancel(),
     addAccount: () => controller.addAccount(),
     removeAccount: (id: string) => controller.removeAccount(id),
     editAccountLabel: (id: string, text: string) => controller.editAccountLabel(id, text),
