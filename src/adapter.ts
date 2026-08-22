@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.31.0 — endpoints, request shape, and
+ * re-verified against command-code@1.32.1 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -49,21 +49,21 @@ import {
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.31.0 bundled
+// Static capability snapshot (from the official command-code@1.32.1 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.30.1 bundled model
-  // table (dist/cli.mjs, the 'ZA' object): exactly these models carry
-  // 'reasoningEfforts'. Models marked 'reasoning:!0' without 'reasoningEfforts'
+  // Re-verified against the authoritative command-code@1.32.1 bundled model
+  // table (dist/cli.mjs, the provider effort map): exactly these models carry
+  // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
   // think automatically and are absent here - the CLI omits 'reasoning_effort'
   // for them, so the picker must not offer a selector. Do NOT add entries from
-  // the OAuth provider tables (anthropic/openai) - only the Provider-API 'ZA'
-  // table is authoritative for this plugin's route.
+  // the OAuth provider tables (anthropic/openai) - only the Provider-API table
+  // is authoritative for this plugin's route.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -73,6 +73,7 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'claude-sonnet-4-6': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-sonnet-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'deepseek/deepseek-v4-flash': ['high', 'max'],
+  'deepseek/deepseek-v4-flash-vision-exp': ['high', 'max'],
   'deepseek/deepseek-v4-pro': ['high', 'max'],
   'google/gemini-3.1-flash-lite': ['low', 'medium', 'high'],
   'google/gemini-3.5-flash': ['low', 'medium', 'high'],
@@ -87,6 +88,7 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
+  'stealth/ox-alpha': ['low', 'high', 'max'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
   'zai-org/GLM-5.2': ['high', 'max'],
@@ -122,6 +124,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'claude-opus-5',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
+  'deepseek/deepseek-v4-flash-vision-exp',
   'google/gemini-3.1-flash-lite',
   'google/gemini-3.5-flash',
   'google/gemini-3.5-flash-lite',
@@ -152,7 +155,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (`ZA` in command-code@1.31.0) marks
+ * Models the official CLI's model table (command-code@1.32.1) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -160,8 +163,10 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.31.0 bundled model table (dist/cli.mjs, the `ZA`
- * object), cross-checked with https://commandcode.ai/docs/reference/cli/models.
+ * Source: the command-code@1.32.1 bundled model table (dist/cli.mjs),
+ * cross-checked with https://commandcode.ai/docs/reference/cli/models.
+ * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
+ * selectable `['low', 'high', 'max']` efforts.)
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
 export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
@@ -184,7 +189,6 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
   'meta/muse-spark-1.2-contributor',
-  'stealth/ox-alpha',
 ])
 
 /**
@@ -203,7 +207,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (35) ---
+  // --- Go (36) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -215,6 +219,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.8-27B': 'go',
   'Qwen/Qwen3.8-Max': 'go',
   'deepseek/deepseek-v4-flash': 'go',
+  'deepseek/deepseek-v4-flash-vision-exp': 'go',
   'deepseek/deepseek-v4-pro': 'go',
   'gpt-5.6-luna': 'go',
   'meta/muse-spark-1.2-contributor': 'go',
@@ -318,7 +323,8 @@ export function compareByPlan(
 
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (`Nn`/`$n` in command-code@1.31.0 `dist/cli.mjs`): subscription `planId`
+ * (`Nn`/`$n` in command-code@1.31.0 `dist/cli.mjs`, re-verified unchanged
+ * against 1.32.1 where they appear as `Zn`/`er`): subscription `planId`
  * prefix → display name and the plan's monthly credit total. This is the
  * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
  * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
@@ -427,10 +433,12 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
  * Models with time-of-day (peak/off-peak) pricing, per the official pricing
  * page (`/docs/resources/pricing-limits`). Since 2026-08-16 16:00 UTC, DeepSeek
  * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h/day,
- * full price); the other 17 hours are off-peak at half price. The picker shows
- * the *current* state as a compact label (`Peak`/`Half`) matching the English
- * noun style of the other markers (`Image`, `FREE`), so a developer can tell at
- * a glance whether calling the model right now is cheap or expensive.
+ * full price); the other 17 hours are off-peak at half price. The V4 Flash
+ * Vision (exp) variant (command-code@1.32.0) shares the V4 Flash windows and
+ * peak prices ($0.44/$1.32). The picker shows the *current* state as a compact
+ * label (`Peak`/`Half`) matching the English noun style of the other markers
+ * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
+ * model right now is cheap or expensive.
  *
  * Keep in sync with the official pricing page when the model set or the peak
  * windows change (see the dsh-commandcode-upstream skill).
@@ -438,6 +446,7 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
 export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-v4-flash-vision-exp',
 ])
 
 /** Peak hours (UTC, hour-of-day range end-exclusive): 01–03 and 06–09. */
@@ -476,7 +485,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.31.0'
+export const COMMAND_CODE_CLI_VERSION = '1.32.1'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -1570,7 +1579,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         if (connectTimedOut || (error instanceof DOMException && error.name === 'TimeoutError')) {
           throw new LlmError(
             `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`
-            + `: ${errorChain(error)}`,
+            + `: ${errorChain(error)}`
+            + `；Command Code API 请求在 ${connection.requestTimeoutMs} 毫秒内未收到响应——通常是网络或代理问题，请检查后重试`,
             'TIMEOUT',
             { cause: error },
           )
@@ -1581,7 +1591,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         // shown in the web UI (which renders only the message, not `cause`)
         // names the real root cause instead of a generic wrapper.
         throw new LlmError(
-          `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`,
+          `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`
+          + '；Command Code API 请求连接失败——通常是网络或代理问题，请检查网络或代理设置后重试',
           'TRANSPORT',
           { cause: error },
         )
@@ -1813,7 +1824,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           // surfaces here. Caller cancellation propagates as-is.
           if (options.signal?.aborted) throw error
           throw new LlmError(
-            `Command Code API stream from ${connection.apiBase} failed while reading: ${errorChain(error)}`,
+            `Command Code API stream from ${connection.apiBase} failed while reading: ${errorChain(error)}`
+            + '；Command Code API 流式响应中途断开——网络波动所致，重试通常可恢复',
             'TRANSPORT',
             { cause: error },
           )
@@ -1828,7 +1840,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           if (idleFired) {
             throw new LlmError(
               `Command Code API stream from ${connection.apiBase} was idle for ${connection.streamIdleTimeoutMs}ms`
-              + ' (no events) and was treated as a dead connection',
+              + ' (no events) and was treated as a dead connection'
+              + `；Command Code API 流式响应已 ${connection.streamIdleTimeoutMs} 毫秒无任何事件，被判定为死连接——长思考模型可在设置中调大流空闲超时`,
               'TIMEOUT',
             )
           }
@@ -1853,7 +1866,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         yield* closeText()
         yield* closeReasoning()
         if (!sawContent) {
-          throw new LlmError('Command Code returned an empty response', 'EMPTY_RESPONSE')
+          throw new LlmError('Command Code returned an empty response；Command Code 返回了空响应，重试通常可恢复', 'EMPTY_RESPONSE')
         }
         yield { type: 'finish', reason: { kind: 'stop' } }
       }

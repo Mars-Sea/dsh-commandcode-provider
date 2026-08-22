@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-22
+
+### Added
+
+- **New model: DeepSeek V4 Flash Vision (exp) (`deepseek/deepseek-v4-flash-vision-exp`, command-code@1.32.0).** An experimental Go-tier vision reasoning model with a 1M context: it appears in the picker under the Go tier with `Image` · `1M` markers, is whitelisted as vision-capable, offers `high`/`max` effort levels, and shares V4 Flash's peak/off-peak hourly pricing — the picker's `Peak`/`Half` marker reflects the current UTC hour.
+
+### Changed
+
+- **Ox Alpha now has selectable reasoning-effort levels** (`low` / `high` / `max`, command-code@1.32.1) — the picker offers an effort selector for it instead of letting Command Code choose the depth silently. It accordingly left the auto-thinking set.
+- **Synced with the official command-code@1.32.1 CLI** (upstream moved 1.31.0 → 1.32.0 → 1.32.1; both releases only added model capabilities and touch nothing in the Provider API). `COMMAND_CODE_CLI_VERSION` is now `1.32.1`. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, subscription plan maps, deals, and peak windows are identical; plan tiers gained only the new Vision model above.
+- **The remaining network and timeout errors are now bilingual (English + 中文).** The connect timeout, connection failure, mid-stream drop, stream idle watchdog, and empty-response errors — the ones that repeat in the retry chrome during transient network trouble — now carry both readings in one string, each with an actionable hint (check the network/proxy; long-thinking models can raise the stream idle timeout). Like the 0.6.2 credential and rate-limit messages, the English reading leads and the Chinese reading follows.
+
 ## [0.6.2] - 2026-08-21
 
 ### Added

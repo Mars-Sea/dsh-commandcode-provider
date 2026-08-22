@@ -771,6 +771,7 @@ test('stream() wraps a network-level fetch failure as TRANSPORT with the cause c
       const e = err as { code?: string; message?: string; cause?: unknown }
       return e.code === 'TRANSPORT'
         && /alpha\/generate failed: fetch failed: connect ECONNREFUSED 127\.0\.0\.1:443/.test(e.message ?? '')
+        && /请求连接失败/.test(e.message ?? '')
         && e.cause === cause
     },
   )
@@ -813,6 +814,7 @@ test('stream() wraps a mid-stream read failure as TRANSPORT with the cause chain
       const e = err as { code?: string; message?: string; cause?: unknown }
       return e.code === 'TRANSPORT'
         && /failed while reading: socket hang up/.test(e.message ?? '')
+        && /流式响应中途断开/.test(e.message ?? '')
         && e.cause === cause
     },
   )
@@ -845,6 +847,7 @@ test('stream() aborts the generate request when the connection phase exceeds req
       const e = err as { code?: string; message?: string }
       return e.code === 'TIMEOUT'
         && /did not respond within 20ms/.test(e.message ?? '')
+        && /毫秒内未收到响应/.test(e.message ?? '')
     },
   )
 })
@@ -901,6 +904,7 @@ test('stream() fails with TIMEOUT when the stream stalls past streamIdleTimeoutM
     (err: unknown) => {
       const e = err as { code?: string; message?: string }
       return e.code === 'TIMEOUT' && /idle for 20ms/.test(e.message ?? '')
+        && /被判定为死连接/.test(e.message ?? '')
     },
   )
 })
@@ -1002,9 +1006,14 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
   // both Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
-  // Synced from the official command-code@1.30.1 model table (re-verified
-  // 2026-08-21 against 1.28.4 and 1.30.1 — identical capability sets): models
-  // that ship with effort levels must be present, and absent ones must stay out.
+  // command-code@1.32.0 added DeepSeek V4 Flash Vision (exp) with
+  // ['high','max']; 1.32.1 ("Add reasoning effort to Ox Alpha") gave
+  // stealth/ox-alpha selectable ['low','high','max'].
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-vision-exp'], ['high', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['stealth/ox-alpha'], ['low', 'high', 'max'])
+  // Synced from the official command-code@1.32.1 model table (re-verified
+  // against 1.28.4, 1.30.1 and 1.31.0 along the way): models that ship with
+  // effort levels must be present, and absent ones must stay out.
   // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
   // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
   // carry NO reasoningEfforts in the CLI's ZA table — re-verified 2026-08-16.
@@ -1025,9 +1034,9 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
-  // stealth/ox-alpha (command-code@1.31.0) reasons automatically — no
-  // reasoningEfforts levels in the ZA table.
-  assert.ok(KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
+  // stealth/ox-alpha reasoned automatically until command-code@1.32.1 gave it
+  // selectable ['low','high','max'] efforts — it now belongs to KNOWN_EFFORTS.
+  assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
   // Re-verified against the command-code@1.28.4 ZA table (2026-08-18) and
   // re-confirmed against 1.30.1 (2026-08-21): these
   // think automatically (reasoning:!0, no efforts) and belong in the set.
@@ -1053,9 +1062,13 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
   // stealth/ox-alpha (command-code@1.31.0) ships with text+image modalities.
   assert.ok(KNOWN_IMAGE_MODELS.has('stealth/ox-alpha'))
+  // DeepSeek V4 Flash Vision (exp) (command-code@1.32.0) is Vision per the
+  // official registry; its non-Vision siblings stay text-only.
+  assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash-vision-exp'))
   // Qwen 3.8 27B (command-code@1.28.0) is Vision per the official registry.
   assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-27B'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-pro'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
 })
 
@@ -1063,6 +1076,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // Go: the entry plan covers open models + a few premium ones.
   assert.equal(KNOWN_PLANS['MiniMaxAI/MiniMax-M3'], 'go')
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash'], 'go')
+  // DeepSeek V4 Flash Vision (exp) (command-code@1.32.0) joined the Go plan.
+  assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash-vision-exp'], 'go')
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.7-Max'], 'go')
   assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
   // Qwen 3.8 27B (command-code@1.28.0) is on the Go plan page.
@@ -1156,9 +1171,11 @@ test('capabilityDescription() composes plan, deal, Image, context', () => {
 })
 
 test('peakPricingState/Label report the current UTC peak/off-peak window', () => {
-  // Both DeepSeek models are in the time-of-day pricing snapshot.
+  // All DeepSeek hourly-priced models are in the time-of-day pricing snapshot
+  // (the V4 Flash Vision variant shares V4 Flash's windows per the pricing page).
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-pro'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash'))
+  assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-vision-exp'))
   // Non-peak-priced models report no state.
   assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
   assert.equal(peakPricingLabel('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
@@ -1192,7 +1209,7 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.31.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.32.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
