@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-08-25
+
+### Changed
+
+- **Synced with the official command-code@1.32.2 CLI** (upstream shipped two CLI-internal fixes — BYOK model-picker improvements and a session fix for malformed tool results — neither touching the Provider API). `COMMAND_CODE_CLI_VERSION` is now `1.32.2`. Re-verified against the official sources with no changes: wire protocol, endpoints, auth flow, the live model catalog (58 models), reasoning-effort maps, plan tiers, subscription plans, deals, and peak windows are all identical.
+
 ## [0.8.0] - 2026-08-22
 
 ### Added

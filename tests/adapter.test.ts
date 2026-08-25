@@ -1011,8 +1011,8 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // stealth/ox-alpha selectable ['low','high','max'].
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-vision-exp'], ['high', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['stealth/ox-alpha'], ['low', 'high', 'max'])
-  // Synced from the official command-code@1.32.1 model table (re-verified
-  // against 1.28.4, 1.30.1 and 1.31.0 along the way): models that ship with
+  // Synced from the official command-code@1.32.2 model table (re-verified
+  // against 1.28.4, 1.30.1, 1.31.0 and 1.32.1 along the way): models that ship with
   // effort levels must be present, and absent ones must stay out.
   // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
   // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
@@ -1209,7 +1209,7 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.32.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.32.2')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
