@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-08-26
+
+### Added
+
+- **New free models: MiniMax M3 Free (`minimax/minimax-m3-free`) and MiniMax M2.7 Free (`minimax/minimax-m2.7-free`, command-code@1.33.0).** Command Code's own free variants of the paid M3/M2.7, free through September 5, 2026 — they appear at the top of the picker with `FREE` markers and drop the badge automatically once the promo ends. M3 Free is a Go-tier 1M-context model with image input (it reasons automatically); M2.7 Free is a text-only 197K model.
+
+### Changed
+
+- **Qwen 3.8 Max now carries the hourly-pricing marker** (`Peak`/`Half` by current UTC hour) — it joined DeepSeek V4 Flash/Vision on time-of-day pricing per the official pricing page.
+- **The model picker's group header now reads "Command Code"** instead of the lowercase route id (`commandcode`), matching the name shown on the settings page.
+- **Synced with the official command-code@1.33.0 CLI** (upstream's only change was adding the two free models above). `COMMAND_CODE_CLI_VERSION` is now `1.33.0`. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, reasoning-effort maps, subscription plans, and peak windows are all identical; plan tiers gained only the two new Go-tier variants.
+
 ## [0.8.1] - 2026-08-25
 
 ### Changed

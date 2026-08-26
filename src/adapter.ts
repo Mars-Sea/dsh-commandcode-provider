@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.32.2 — endpoints, request shape, and
+ * re-verified against command-code@1.33.0 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -41,6 +41,7 @@ import {
   type FinishReason,
   type GenerateOptions,
   type LlmModelInfo,
+  type LlmProviderInfo,
   type LlmResolvedModelInfo,
   type Message,
   type StreamChunk,
@@ -49,14 +50,14 @@ import {
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.32.2 bundled
+// Static capability snapshot (from the official command-code@1.33.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.32.2 bundled model
+  // Re-verified against the authoritative command-code@1.33.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -140,6 +141,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
   'meta/muse-spark-1.2-contributor',
+  'minimax/minimax-m3-free',
   'moonshotai/Kimi-K2.5',
   'moonshotai/Kimi-K2.6',
   'moonshotai/Kimi-K2.7-Code',
@@ -155,7 +157,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (command-code@1.32.2) marks
+ * Models the official CLI's model table (command-code@1.33.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -163,7 +165,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.32.2 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.33.0 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
  * selectable `['low', 'high', 'max']` efforts.)
@@ -176,6 +178,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.7-Flash',
   'Qwen/Qwen3.7-Max',
   'Qwen/Qwen3.7-Plus',
+  'minimax/minimax-m3-free',
   'moonshotai/Kimi-K3',
   'moonshotai/Kimi-K2.7-Code',
   'moonshotai/Kimi-K2.7-Code-Highspeed',
@@ -207,7 +210,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (36) ---
+  // --- Go (38) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -223,6 +226,8 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'deepseek/deepseek-v4-pro': 'go',
   'gpt-5.6-luna': 'go',
   'meta/muse-spark-1.2-contributor': 'go',
+  'minimax/minimax-m2.7-free': 'go',
+  'minimax/minimax-m3-free': 'go',
   'moonshotai/Kimi-K2.5': 'go',
   'moonshotai/Kimi-K2.6': 'go',
   'moonshotai/Kimi-K2.7-Code': 'go',
@@ -423,6 +428,11 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
   'xiaomi/mimo-v2.5': { label: '98% off' },
+  // Gateway's own free variants of the paid MiniMax M3 / M2.7 (the paid rows
+  // keep their own rates); free through September 5, 2026 per the pricing
+  // page's #deals section.
+  'minimax/minimax-m3-free': { label: 'FREE', free: true, expiresAt: '2026-09-05T23:59:59Z' },
+  'minimax/minimax-m2.7-free': { label: 'FREE', free: true, expiresAt: '2026-09-05T23:59:59Z' },
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
   // Free while the stealth preview lasts (no fixed expiry; treated as
   // permanent like the other open-ended free deals).
@@ -435,7 +445,11 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
  * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h/day,
  * full price); the other 17 hours are off-peak at half price. The V4 Flash
  * Vision (exp) variant (command-code@1.32.0) shares the V4 Flash windows and
- * peak prices ($0.44/$1.32). The picker shows the *current* state as a compact
+ * peak prices ($0.44/$1.32). Qwen 3.8 Max joined the hourly set by
+ * 2026-08-26 with the same windows (the page's prose still names all three
+ * DeepSeek variants even though the V4 Pro table row lost its hover
+ * annotation — kept here on the prose's authority). The picker shows the
+ * *current* state as a compact
  * label (`Peak`/`Half`) matching the English noun style of the other markers
  * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
  * model right now is cheap or expensive.
@@ -447,6 +461,7 @@ export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
   'deepseek/deepseek-v4-flash-vision-exp',
+  'Qwen/Qwen3.8-Max',
 ])
 
 /** Peak hours (UTC, hour-of-day range end-exclusive): 01–03 and 06–09. */
@@ -485,7 +500,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.32.2'
+export const COMMAND_CODE_CLI_VERSION = '1.33.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -1037,6 +1052,17 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     super()
     this.fetchImpl = deps.fetchImpl ?? fetch
     this.resolveAttachments = deps.resolveAttachments
+  }
+
+  /**
+   * Display metadata for the picker's provider group header. The base class
+   * returns the raw route id (`commandcode`, all lowercase) as the name, which
+   * is what the model selector shows as this group's sticky title; return the
+   * proper display name instead, matching the Models settings page card (the
+   * configurable-provider `displayName`). The id must stay equal to the route.
+   */
+  override providerInfo(provider: string): LlmProviderInfo {
+    return { id: provider, name: 'Command Code' }
   }
 
   /**

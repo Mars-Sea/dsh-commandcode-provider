@@ -1034,6 +1034,9 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
+  // MiniMax M3 Free (command-code@1.33.0) reasons automatically like its paid
+  // sibling — reasoning:!0 with no effort levels in the ZA table.
+  assert.ok(KNOWN_THINKING_MODELS.has('minimax/minimax-m3-free'))
   // stealth/ox-alpha reasoned automatically until command-code@1.32.1 gave it
   // selectable ['low','high','max'] efforts — it now belongs to KNOWN_EFFORTS.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
@@ -1067,6 +1070,10 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash-vision-exp'))
   // Qwen 3.8 27B (command-code@1.28.0) is Vision per the official registry.
   assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-27B'))
+  // MiniMax M3 Free (command-code@1.33.0) is Vision ("Text input, Vision,
+  // Reasoning") like the paid M3; its M2.7 Free sibling stays text-only.
+  assert.ok(KNOWN_IMAGE_MODELS.has('minimax/minimax-m3-free'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('minimax/minimax-m2.7-free'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-pro'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
@@ -1085,6 +1092,10 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // stealth/ox-alpha (command-code@1.31.0) is free "on every plan" per the
   // changelog; the Go plan page lists it, so its minimum tier is Go.
   assert.equal(KNOWN_PLANS['stealth/ox-alpha'], 'go')
+  // MiniMax M3/M2.7 Free variants (command-code@1.33.0) are promo rows of the
+  // Go-tier open models — same tier as their paid siblings.
+  assert.equal(KNOWN_PLANS['minimax/minimax-m3-free'], 'go')
+  assert.equal(KNOWN_PLANS['minimax/minimax-m2.7-free'], 'go')
   // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
   // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
@@ -1116,6 +1127,11 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // stealth/ox-alpha is free while the stealth preview lasts (open-ended).
   assert.equal(KNOWN_DEALS['stealth/ox-alpha'].free, true)
   assert.equal(dealLabel('stealth/ox-alpha', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  // MiniMax M3/M2.7 Free (command-code@1.33.0): free through September 5, 2026.
+  assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'].free, true)
+  assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'].expiresAt, '2026-09-05T23:59:59Z')
+  assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'].free, true)
+  assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'].expiresAt, '2026-09-05T23:59:59Z')
   // Gemini 3.7 Flash 50% off through 2026-12-31.
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].label, '50% off')
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].expiresAt, '2026-12-31T23:59:59Z')
@@ -1133,6 +1149,11 @@ test('dealLabel() hides a deal after its expiry date', () => {
   assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  // MiniMax free variants lapse after September 5, 2026: shown before, hidden
+  // after — an un-updated plugin must never advertise a dead promo.
+  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-05T12:00:00Z')), 'FREE')
+  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
+  assert.equal(dealLabel('minimax/minimax-m2.7-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
   // No deal -> undefined.
   assert.equal(dealLabel('claude-sonnet-5'), undefined)
 })
@@ -1176,6 +1197,8 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-pro'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-vision-exp'))
+  // Qwen 3.8 Max joined the hourly set by 2026-08-26 (pricing page annotation).
+  assert.ok(KNOWN_PEAK_PRICING.has('Qwen/Qwen3.8-Max'))
   // Non-peak-priced models report no state.
   assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
   assert.equal(peakPricingLabel('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
@@ -1209,7 +1232,9 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.32.2')
+  // command-code@1.33.0 (2026-08-26): "Add MiniMax M3 Free and M2.7 Free" —
+  // the version rides every request as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.33.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -1380,6 +1405,16 @@ test('providerRetryPolicy() pins the near-unbounded transient-only retry policy'
   assert.equal(policy.initialDelayMs, 500)
   assert.equal(policy.maxDelayMs, 900000)
   assert.equal(policy.jitterRatio, 0.1)
+})
+
+test('providerInfo() names the picker group "Command Code"', () => {
+  // The model picker renders provider groups in registration order with the
+  // adapter-supplied name as the sticky group title; the base class would
+  // show the raw route id ("commandcode"). Pinned so the display name stays
+  // in step with the Models settings page card (displayName "Command Code"),
+  // and the id keeps equaling the route (dsh-llm validates that).
+  const adapter = makeAdapter()
+  assert.deepEqual(adapter.providerInfo('commandcode'), { id: 'commandcode', name: 'Command Code' })
 })
 
 test('stream() attaches a 429 Retry-After header as providerRetryAfterMs', async () => {
