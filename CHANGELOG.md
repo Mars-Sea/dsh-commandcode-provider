@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-08-26
+
+### Fixed
+
+- **Qwen 3.8 Max no longer shows the hourly-pricing (`Peak`/`Half`) marker.** The official pricing page's hover annotation for the three hourly-billed DeepSeek models had been misattributed to this neighboring row; Qwen 3.8 Max is not billed by the hour. Everything else is identical to 0.8.2.
+
 ## [0.8.2] - 2026-08-26
 
 ### Added
