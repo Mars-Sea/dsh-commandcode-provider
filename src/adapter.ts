@@ -445,14 +445,18 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
  * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h/day,
  * full price); the other 17 hours are off-peak at half price. The V4 Flash
  * Vision (exp) variant (command-code@1.32.0) shares the V4 Flash windows and
- * peak prices ($0.44/$1.32). Qwen 3.8 Max joined the hourly set by
- * 2026-08-26 with the same windows (the page's prose still names all three
- * DeepSeek variants even though the V4 Pro table row lost its hover
- * annotation — kept here on the prose's authority). The picker shows the
+ * peak prices ($0.44/$1.32) — each row's hover annotation states exactly 2×
+ * that row's displayed off-peak prices. The picker shows the
  * *current* state as a compact
  * label (`Peak`/`Half`) matching the English noun style of the other markers
  * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
  * model right now is cheap or expensive.
+ *
+ * Extraction caution: in the page's HTML each annotation div sits inside its
+ * OWN row's container, immediately before the NEXT row starts — flattening
+ * the page to text makes every annotation look like it belongs to the model
+ * printed after it. Verify membership against the enclosing row and the 2×
+ * price relation, not the flat-text neighbor.
  *
  * Keep in sync with the official pricing page when the model set or the peak
  * windows change (see the dsh-commandcode-upstream skill).
@@ -461,7 +465,6 @@ export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
   'deepseek/deepseek-v4-flash-vision-exp',
-  'Qwen/Qwen3.8-Max',
 ])
 
 /** Peak hours (UTC, hour-of-day range end-exclusive): 01–03 and 06–09. */

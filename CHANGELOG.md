@@ -12,7 +12,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Qwen 3.8 Max now carries the hourly-pricing marker** (`Peak`/`Half` by current UTC hour) — it joined DeepSeek V4 Flash/Vision on time-of-day pricing per the official pricing page.
 - **The model picker's group header now reads "Command Code"** instead of the lowercase route id (`commandcode`), matching the name shown on the settings page.
 - **Synced with the official command-code@1.33.0 CLI** (upstream's only change was adding the two free models above). `COMMAND_CODE_CLI_VERSION` is now `1.33.0`. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, reasoning-effort maps, subscription plans, and peak windows are all identical; plan tiers gained only the two new Go-tier variants.
 

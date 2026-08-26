@@ -1197,9 +1197,11 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-pro'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-vision-exp'))
-  // Qwen 3.8 Max joined the hourly set by 2026-08-26 (pricing page annotation).
-  assert.ok(KNOWN_PEAK_PRICING.has('Qwen/Qwen3.8-Max'))
-  // Non-peak-priced models report no state.
+  // Non-peak-priced models report no state. Qwen 3.8 Max looks annotated when
+  // the pricing page is flattened to text, but its hover annotation actually
+  // lives in the V4 Flash Vision row above it (each annotation states exactly
+  // 2x that row's own prices) — Qwen's own row carries none.
+  assert.ok(!KNOWN_PEAK_PRICING.has('Qwen/Qwen3.8-Max'))
   assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
   assert.equal(peakPricingLabel('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
 
