@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.33.0 — endpoints, request shape, and
+ * re-verified against command-code@1.36.0 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -50,23 +50,26 @@ import {
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.33.0 bundled
+// Static capability snapshot (from the official command-code@1.36.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.33.0 bundled model
+  // Re-verified against the authoritative command-code@1.36.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
   // think automatically and are absent here - the CLI omits 'reasoning_effort'
   // for them, so the picker must not offer a selector. Do NOT add entries from
   // the OAuth provider tables (anthropic/openai) - only the Provider-API table
-  // is authoritative for this plugin's route.
+  // is authoritative for this plugin's route. `stealth/ox-alpha` (['low',
+  // 'high', 'max']) was removed in command-code@1.34.0 when its preview ended;
+  // its successor, `z-ai/glm-5.3-flash`, ships the same effort set.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
+  'Qwen/Qwen3.8-Flash': ['low', 'medium', 'xhigh'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-7': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-8': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -89,9 +92,9 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
-  'stealth/ox-alpha': ['low', 'high', 'max'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
+  'z-ai/glm-5.3-flash': ['low', 'high', 'max'],
   'zai-org/GLM-5.2': ['high', 'max'],
   'zai-org/GLM-5.3': ['low', 'high', 'max'],
 }
@@ -117,6 +120,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.7-Flash',
   'Qwen/Qwen3.7-Plus',
   'Qwen/Qwen3.8-27B',
+  'Qwen/Qwen3.8-Flash',
   'Qwen/Qwen3.8-Max',
   'claude-fable-5',
   'claude-haiku-4-5-20251001',
@@ -148,16 +152,16 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'moonshotai/Kimi-K2.7-Code-Highspeed',
   'moonshotai/Kimi-K3',
   'sakana/fugu-ultra',
-  'stealth/ox-alpha',
   'stepfun/Step-3.7-Flash',
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
   'xai/grok-4.5',
   'xiaomi/mimo-v2.5',
+  'z-ai/glm-5.3-flash',
 ])
 
 /**
- * Models the official CLI's model table (command-code@1.33.0) marks
+ * Models the official CLI's model table (command-code@1.36.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -165,10 +169,11 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.33.0 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.36.0 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
- * selectable `['low', 'high', 'max']` efforts.)
+ * selectable `['low', 'high', 'max']` efforts; the preview then ended in
+ * 1.34.0, removing the model from the catalog entirely.)
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
 export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
@@ -210,7 +215,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (38) ---
+  // --- Go (39) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -220,6 +225,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.7-Max': 'go',
   'Qwen/Qwen3.7-Plus': 'go',
   'Qwen/Qwen3.8-27B': 'go',
+  'Qwen/Qwen3.8-Flash': 'go',
   'Qwen/Qwen3.8-Max': 'go',
   'deepseek/deepseek-v4-flash': 'go',
   'deepseek/deepseek-v4-flash-vision-exp': 'go',
@@ -235,7 +241,6 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'moonshotai/Kimi-K3': 'go',
   'nvidia/nemotron-3-ultra-550b-a55b': 'go',
   'poolside/laguna-s-2.1-free': 'go',
-  'stealth/ox-alpha': 'go',
   'stepfun/Step-3.5-Flash': 'go',
   'stepfun/Step-3.7-Flash': 'go',
   'tencent/hy3-paid': 'go',
@@ -244,6 +249,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'xai/grok-4.5': 'go',
   'xiaomi/mimo-v2.5': 'go',
   'xiaomi/mimo-v2.5-pro': 'go',
+  'z-ai/glm-5.3-flash': 'go',
   'zai-org/GLM-5': 'go',
   'zai-org/GLM-5.1': 'go',
   'zai-org/GLM-5.2': 'go',
@@ -434,9 +440,6 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'minimax/minimax-m3-free': { label: 'FREE', free: true, expiresAt: '2026-09-05T23:59:59Z' },
   'minimax/minimax-m2.7-free': { label: 'FREE', free: true, expiresAt: '2026-09-05T23:59:59Z' },
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
-  // Free while the stealth preview lasts (no fixed expiry; treated as
-  // permanent like the other open-ended free deals).
-  'stealth/ox-alpha': { label: 'FREE', free: true },
 }
 
 /**
@@ -503,7 +506,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.33.0'
+export const COMMAND_CODE_CLI_VERSION = '1.36.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536

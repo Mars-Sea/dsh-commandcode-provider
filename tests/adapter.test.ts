@@ -571,7 +571,7 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
 test('compareByPlan() sorts free models first, then plan tier, then name', () => {
   // Free models (KNOWN_DEALS free: true) lead the list regardless of tier.
   assert.ok(compareByPlan(
-    { id: 'stealth/ox-alpha', name: 'Ox Alpha (CC)' },
+    { id: 'minimax/minimax-m3-free', name: 'MiniMax M3 (CC)' },
     { id: 'claude-opus-5', name: 'Claude Opus 5 (CC)' },
   ) < 0)
   // A paid Go model still sorts before a higher-tier model...
@@ -587,7 +587,7 @@ test('compareByPlan() sorts free models first, then plan tier, then name', () =>
   // Free models order among themselves by name.
   assert.ok(compareByPlan(
     { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
-    { id: 'stealth/ox-alpha', name: 'Ox Alpha (CC)' },
+    { id: 'minimax/minimax-m2.7-free', name: 'MiniMax M2.7 (CC)' },
   ) < 0)
   // Within a tier, alphabetical by name.
   assert.ok(compareByPlan(
@@ -1004,19 +1004,23 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
   // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
-  // both Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
+  // all three Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
+  // Qwen 3.8 Flash joined in command-code@1.36.0.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
+  assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Flash'], ['low', 'medium', 'xhigh'])
   // command-code@1.32.0 added DeepSeek V4 Flash Vision (exp) with
-  // ['high','max']; 1.32.1 ("Add reasoning effort to Ox Alpha") gave
-  // stealth/ox-alpha selectable ['low','high','max'].
+  // ['high','max']; 1.35.0 added z-ai/glm-5.3-flash (the stealth/ox-alpha
+  // successor after the preview ended in 1.34.0) with the same effort set.
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-vision-exp'], ['high', 'max'])
-  assert.deepEqual(KNOWN_EFFORTS['stealth/ox-alpha'], ['low', 'high', 'max'])
-  // Synced from the official command-code@1.32.2 model table (re-verified
-  // against 1.28.4, 1.30.1, 1.31.0 and 1.32.1 along the way): models that ship with
-  // effort levels must be present, and absent ones must stay out.
-  // The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo V2.5, Claude
-  // Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent Hy3, ...) that
-  // carry NO reasoningEfforts in the CLI's ZA table — re-verified 2026-08-16.
+  assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flash'], ['low', 'high', 'max'])
+  // stealth/ox-alpha left the catalog in 1.34.0 when its preview ended.
+  assert.ok(!KNOWN_EFFORTS['stealth/ox-alpha'])
+  // Synced from the official command-code@1.36.0 model table (re-verified
+  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2 and 1.33.0 along the way):
+  // models that ship with effort levels must be present, and absent ones must
+  // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
+  // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
+  // Hy3, ...) that carry NO reasoningEfforts in the CLI's ZA table.
   assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K2.5'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5-pro'])
@@ -1038,7 +1042,8 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   // sibling — reasoning:!0 with no effort levels in the ZA table.
   assert.ok(KNOWN_THINKING_MODELS.has('minimax/minimax-m3-free'))
   // stealth/ox-alpha reasoned automatically until command-code@1.32.1 gave it
-  // selectable ['low','high','max'] efforts — it now belongs to KNOWN_EFFORTS.
+  // selectable ['low','high','max'] efforts; the model then left the catalog
+  // entirely in 1.34.0 when its preview ended. It belongs to neither set now.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
   // Re-verified against the command-code@1.28.4 ZA table (2026-08-18) and
   // re-confirmed against 1.30.1 (2026-08-21): these
@@ -1063,13 +1068,19 @@ test('known image models snapshot has stable anchor entries', () => {
   // model (the latter is deliberately absent).
   assert.ok(KNOWN_IMAGE_MODELS.has('claude-sonnet-5'))
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
-  // stealth/ox-alpha (command-code@1.31.0) ships with text+image modalities.
-  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/ox-alpha'))
+  // stealth/ox-alpha (command-code@1.31.0) was Vision; the model left the
+  // catalog in 1.34.0 when its preview ended, so it is no longer whitelisted.
+  assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/ox-alpha'))
   // DeepSeek V4 Flash Vision (exp) (command-code@1.32.0) is Vision per the
   // official registry; its non-Vision siblings stay text-only.
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash-vision-exp'))
-  // Qwen 3.8 27B (command-code@1.28.0) is Vision per the official registry.
+  // Qwen 3.8 27B (command-code@1.28.0) and Qwen 3.8 Flash (1.36.0) are
+  // Vision per the official registry.
   assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-27B'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-Flash'))
+  // z-ai/glm-5.3-flash (command-code@1.35.0) replaced stealth/ox-alpha as
+  // the open-weight 1M-context Vision reasoning model and is Vision.
+  assert.ok(KNOWN_IMAGE_MODELS.has('z-ai/glm-5.3-flash'))
   // MiniMax M3 Free (command-code@1.33.0) is Vision ("Text input, Vision,
   // Reasoning") like the paid M3; its M2.7 Free sibling stays text-only.
   assert.ok(KNOWN_IMAGE_MODELS.has('minimax/minimax-m3-free'))
@@ -1087,11 +1098,14 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash-vision-exp'], 'go')
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.7-Max'], 'go')
   assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
-  // Qwen 3.8 27B (command-code@1.28.0) is on the Go plan page.
+  // Qwen 3.8 27B (command-code@1.28.0) and Qwen 3.8 Flash (1.36.0) are on
+  // the Go plan page.
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-27B'], 'go')
-  // stealth/ox-alpha (command-code@1.31.0) is free "on every plan" per the
-  // changelog; the Go plan page lists it, so its minimum tier is Go.
-  assert.equal(KNOWN_PLANS['stealth/ox-alpha'], 'go')
+  assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-Flash'], 'go')
+  // z-ai/glm-5.3-flash (command-code@1.35.0) replaced stealth/ox-alpha on
+  // the Go plan when the stealth preview ended in 1.34.0.
+  assert.equal(KNOWN_PLANS['z-ai/glm-5.3-flash'], 'go')
+  assert.equal(KNOWN_PLANS['stealth/ox-alpha'], undefined)
   // MiniMax M3/M2.7 Free variants (command-code@1.33.0) are promo rows of the
   // Go-tier open models — same tier as their paid siblings.
   assert.equal(KNOWN_PLANS['minimax/minimax-m3-free'], 'go')
@@ -1124,9 +1138,10 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'], undefined)
   // Free model is marked free.
   assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free'].free, true)
-  // stealth/ox-alpha is free while the stealth preview lasts (open-ended).
-  assert.equal(KNOWN_DEALS['stealth/ox-alpha'].free, true)
-  assert.equal(dealLabel('stealth/ox-alpha', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  // stealth/ox-alpha's free deal ended in command-code@1.34.0 when the model
+  // was retired; its successor z-ai/glm-5.3-flash has no deal (1.35.0).
+  assert.equal(KNOWN_DEALS['stealth/ox-alpha'], undefined)
+  assert.equal(KNOWN_DEALS['z-ai/glm-5.3-flash'], undefined)
   // MiniMax M3/M2.7 Free (command-code@1.33.0): free through September 5, 2026.
   assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'].free, true)
   assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'].expiresAt, '2026-09-05T23:59:59Z')
@@ -1234,9 +1249,10 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.33.0 (2026-08-26): "Add MiniMax M3 Free and M2.7 Free" —
-  // the version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.33.0')
+  // command-code@1.36.0 (2026-08-27): "Add Qwen 3.8 Flash" — the version rides
+  // every request as x-command-code-version. The 1.33.0 → 1.36.0 sync also
+  // added z-ai/glm-5.3-flash and retired stealth/ox-alpha.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.36.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

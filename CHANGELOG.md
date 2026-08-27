@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-08-27
+
+### Added
+
+- **New model: Qwen 3.8 Flash (`Qwen/Qwen3.8-Flash`, command-code@1.36.0).** A Go-tier 1M-context Vision reasoning model with `low`/`medium`/`xhigh` effort levels, rounding out the Qwen 3.8 family alongside the existing Max and 27B variants.
+- **New model: GLM-5.3 Flash (`z-ai/glm-5.3-flash`, command-code@1.35.0).** A Go-tier 1M-context Vision reasoning model with `low`/`high`/`max` effort levels, added to the catalog as the official replacement when the Ox Alpha preview ended.
+
+### Removed
+
+- **The Ox Alpha preview is over (`stealth/ox-alpha`, command-code@1.34.0).** The model is gone from the catalog, the picker, and the FREE deal list; accounts that were using it should switch to GLM-5.3 Flash (same effort set, Vision-capable, free on every plan).
+
+### Changed
+
+- **Synced with the official command-code@1.36.0 CLI.** `COMMAND_CODE_CLI_VERSION` is now `1.36.0`. Plan tiers now read 39/43/56/61 (Go / cumulative-through-Goat / cumulative-through-Pro / cumulative-through-Provider): the two new Go models enter Go, and `stealth/ox-alpha` leaves every tier. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, `KNOWN_SUBSCRIPTION_PLANS` (the `individual-*` plan map and its monthly-credit totals are identical to 1.33.0), `KNOWN_PEAK_PRICING` (DeepSeek V4 Pro/Flash/Vision, 01–04 and 06–10 UTC), and every other deal on the pricing page.
+
 ## [0.8.3] - 2026-08-26
 
 ### Fixed
