@@ -46,6 +46,7 @@ import { applyUsageRemote } from './usage-remote.ts'
 import type { CommandCodeAccountsReport } from './usage-wire.ts'
 import { CommandCodeLoginFlow } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
+import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -172,6 +173,18 @@ export interface Config {
    * rotation still applies). Unset means "first usable account".
    */
   activeAccount?: string
+  /**
+   * Language override for the `/commandcode` Host-side command's user-facing
+   * copy. Host commands cannot read the client's `ctx.locale`, so this is
+   * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
+   * `LC_ALL`/`LANG` from the launching shell, falling back to `'zh'`. The
+   * web settings page is unaffected — it follows the browser's language
+   * preference on its own. Two surfaces, two independent locales. The
+   * declared type is `string` (the schemastery `pattern` cannot narrow
+   * literal types); an unknown value is treated as "unset" by
+   * `pickCommandLocale`.
+   */
+  lang?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -189,6 +202,7 @@ export const Config: z<Config> = z.object({
     apiKey: z.string(),
   })),
   activeAccount: z.string(),
+  lang: z.string().pattern(/^(zh|en)$/).default('zh' as const),
 })
 
 /** One resolution's complete request facts: connection plus credential reference. */
@@ -390,8 +404,14 @@ export function apply(ctx: Context, config: Config): void {
   // The /commandcode usage command rides the optional `commands` service: a
   // child fiber injects it, so it registers whenever the profile mounts
   // dsh-commands and the fiber simply never activates when it does not.
+  // The command runs Host-side and has no access to the client's locale
+  // service, so its language is resolved here from `Config.lang` (explicit
+  // override) and the launching shell's `LC_ALL`/`LANG` (inferred default);
+  // resolved per invocation so a settings change reaches the next command
+  // run without a restart.
+  const commandLocale = (): LocaleId => pickCommandLocale(current().lang)
   ctx.inject(['commands'], (commandCtx) => {
-    applyCommands(commandCtx, { adapter, reports: usageReports })
+    applyCommands(commandCtx, { adapter, reports: usageReports, getLocale: commandLocale })
   })
 
   // The settings page's account card: getUsage exposed to the browser through

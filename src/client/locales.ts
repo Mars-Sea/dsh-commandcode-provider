@@ -31,6 +31,11 @@ export type SettingsCommandCodeKey =
   | 'requestTimeoutMsHint'
   | 'streamIdleTimeoutMs'
   | 'streamIdleTimeoutMsHint'
+  | 'advancedSettings'
+  | 'advancedSettingsHint'
+  | 'advancedOverriddenOne'
+  | 'advancedOverriddenMany'
+  | 'advancedInvalid'
   | 'filterModelsByPlan'
   | 'filterModelsByPlanHint'
   | 'accountsTitle'
@@ -113,6 +118,11 @@ export type SettingsCommandCodeKey =
   | 'loginStoreFailed'
   | 'loginCancelled'
   | 'loginFailedGeneric'
+  | 'cardTitle'
+  | 'cardRouteActive'
+  | 'cardLoadingHint'
+  | 'cardRegistrationHint'
+  | 'cardConfiguredHint'
 
 export const zh: Record<SettingsCommandCodeKey, string> = {
   nav: 'Command Code',
@@ -133,6 +143,11 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   requestTimeoutMsHint: '等待响应首个字节的超时；默认 60000。',
   streamIdleTimeoutMs: '流空闲超时（毫秒）',
   streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300000（长思考模型可静默数分钟，默认值刻意放宽）。',
+  advancedSettings: '高级设置',
+  advancedSettingsHint: 'API 地址、工作目录、超时与模型过滤等不常修改的选项。',
+  advancedOverriddenOne: '已自定义 1 项',
+  advancedOverriddenMany: '已自定义 {count} 项',
+  advancedInvalid: '高级设置中有未填好的数字，请展开修正后再保存。',
   filterModelsByPlan: '隐藏套餐外模型',
   filterModelsByPlanHint: '开启后，模型选择器只列出当前套餐可用的模型；账户持有按需余额时会显示全部。',
   accountsTitle: '多账户轮换',
@@ -215,6 +230,11 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   loginStoreFailed: '密钥无法写入本机凭据服务，请手动粘贴。',
   loginCancelled: '登录已取消。',
   loginFailedGeneric: '登录失败，请重试或手动粘贴密钥。',
+  cardTitle: 'Command Code 连接',
+  cardRouteActive: '已启用',
+  cardLoadingHint: '正在读取 Command Code 配置…',
+  cardRegistrationHint: '此卡片随 Command Code 插件注册，需要较新版本的 DeepSeek Harness 才会显示完整内容。',
+  cardConfiguredHint: 'API 密钥已就绪。如需更换密钥、添加多账户轮换、查看用量或修改 API 地址，请前往设置中的「Command Code」页。',
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
@@ -240,6 +260,11 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   streamIdleTimeoutMs: 'Stream idle timeout (ms)',
   streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 300000'
     + ' (deliberately generous — long-thinking models can stay silent for minutes).',
+  advancedSettings: 'Advanced',
+  advancedSettingsHint: 'Rarely touched options: API base URL, working directory, timeouts, and model filtering.',
+  advancedOverriddenOne: '1 customized',
+  advancedOverriddenMany: '{count} customized',
+  advancedInvalid: 'A number in Advanced settings is not ready to save; expand to fix it.',
   filterModelsByPlan: 'Hide out-of-plan models',
   filterModelsByPlanHint: 'When on, the model picker lists only models your subscription'
     + ' includes; any on-demand credit balance shows the full catalog.',
@@ -326,4 +351,9 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   loginStoreFailed: 'The key could not be stored in the local credential service; paste it manually.',
   loginCancelled: 'Sign-in cancelled.',
   loginFailedGeneric: 'Sign-in failed; try again or paste the key manually.',
+  cardTitle: 'Command Code connection',
+  cardRouteActive: 'Active',
+  cardLoadingHint: 'Loading the Command Code configuration…',
+  cardRegistrationHint: 'This card is contributed by the Command Code plugin; a newer DeepSeek Harness is needed to show the full controls.',
+  cardConfiguredHint: 'The API key is ready. To replace it, add account rotation, review usage, or change the API base, open the "Command Code" page in Settings.',
 }

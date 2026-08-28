@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.36.0 — endpoints, request shape, and
+ * re-verified against command-code@1.37.0 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -50,23 +50,24 @@ import {
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.36.0 bundled
+// Static capability snapshot (from the official command-code@1.37.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.36.0 bundled model
+  // Re-verified against the authoritative command-code@1.37.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
-  // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.2, Tencent Hy3, GLM-5/5.1/5.2-Fast)
-  // think automatically and are absent here - the CLI omits 'reasoning_effort'
-  // for them, so the picker must not offer a selector. Do NOT add entries from
-  // the OAuth provider tables (anthropic/openai) - only the Provider-API table
-  // is authoritative for this plugin's route. `stealth/ox-alpha` (['low',
-  // 'high', 'max']) was removed in command-code@1.34.0 when its preview ended;
-  // its successor, `z-ai/glm-5.3-flash`, ships the same effort set.
+  // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.1, Tencent Hy3/Hy4 Preview,
+  // GLM-5/5.1/5.2-Fast) think automatically and are absent here - the CLI omits
+  // 'reasoning_effort' for them, so the picker must not offer a selector. Do
+  // NOT add entries from the OAuth provider tables (anthropic/openai) - only
+  // the Provider-API table is authoritative for this plugin's route.
+  // `stealth/ox-alpha` (['low', 'high', 'max']) was removed in
+  // command-code@1.34.0 when its preview ended; its successor,
+  // `z-ai/glm-5.3-flash`, ships the same effort set.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Flash': ['low', 'medium', 'xhigh'],
@@ -161,7 +162,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (command-code@1.36.0) marks
+ * Models the official CLI's model table (command-code@1.37.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -169,11 +170,13 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.36.0 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.37.0 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
  * selectable `['low', 'high', 'max']` efforts; the preview then ended in
- * 1.34.0, removing the model from the catalog entirely.)
+ * 1.34.0, removing the model from the catalog entirely. `tencent/hy4-preview`
+ * joined this set in command-code@1.37.0 — reasoning:!0, no efforts, 1M
+ * context, routed through OpenRouter.)
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
 export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
@@ -190,6 +193,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'stepfun/Step-3.5-Flash',
   'stepfun/Step-3.7-Flash',
   'tencent/hy3-paid',
+  'tencent/hy4-preview',
   'nvidia/nemotron-3-ultra-550b-a55b',
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
@@ -215,7 +219,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (39) ---
+  // --- Go (40) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -244,6 +248,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'stepfun/Step-3.5-Flash': 'go',
   'stepfun/Step-3.7-Flash': 'go',
   'tencent/hy3-paid': 'go',
+  'tencent/hy4-preview': 'go',
   'thinkingmachines/inkling': 'go',
   'thinkingmachines/inkling-small': 'go',
   'xai/grok-4.5': 'go',
@@ -506,7 +511,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.36.0'
+export const COMMAND_CODE_CLI_VERSION = '1.37.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536

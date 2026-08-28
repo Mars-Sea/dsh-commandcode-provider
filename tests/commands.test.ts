@@ -40,13 +40,21 @@ function makeAdapter(fetchImpl: typeof fetch): CommandCodeAdapter {
   })
 }
 
-function invoke(def: ReturnType<typeof commandDefinition>, rawInput: string): Promise<{ kind: string; text: string }> {
+function invoke(
+  def: ReturnType<typeof commandDefinition>,
+  rawInput: string,
+  _getLocale?: () => 'zh' | 'en',
+): Promise<{ kind: string; text: string }> {
   const invocation = {
     commandId: 'c1',
     agent: 'main',
     rawInput,
     signal: new AbortController().signal,
   } as unknown as CommandInvocation
+  // The locale is captured by the def itself (constructed with the right
+  // `getLocale` upstream); this shim exists so older callers passing a
+  // bare `def` keep working. New tests construct the def with the locale
+  // they want and call `invoke(def, rawInput)` directly.
   return def.handler(invocation) as Promise<{ kind: string; text: string }>
 }
 
@@ -161,7 +169,7 @@ test('getUsage requires a key', async () => {
 // /commandcode command rendering
 // ---------------------------------------------------------------------------
 
-test('command renders a full usage report', async () => {
+test('command renders a full usage report in zh', async () => {
   const adapter = makeAdapter(makeFetch({
     '/alpha/whoami': { status: 200, body: { success: true, user: { id: 'u1', name: 'Mars-Sea', userName: 'mars-sea' } } },
     '/alpha/usage/summary': {
@@ -184,7 +192,7 @@ test('command renders a full usage report', async () => {
       },
     },
   }))
-  const def = commandDefinition({ adapter })
+  const def = commandDefinition({ adapter, getLocale: () => 'zh' })
   const result = await invoke(def, 'status')
   assert.equal(result.kind, 'success')
   assert.match(result.text, /mars-sea/)
@@ -193,6 +201,41 @@ test('command renders a full usage report', async () => {
   assert.match(result.text, /\$1\.3187/)
   assert.match(result.text, /\$8\.68/)
   assert.match(result.text, /5 小时/)
+  assert.match(result.text, /█/) // bar chart glyph present
+})
+
+test('command renders a full usage report in en', async () => {
+  const adapter = makeAdapter(makeFetch({
+    '/alpha/whoami': { status: 200, body: { success: true, user: { id: 'u1', name: 'Mars-Sea', userName: 'mars-sea' } } },
+    '/alpha/usage/summary': {
+      status: 200,
+      body: {
+        totalCount: 935, totalCost: 1.3187, successRate: 100,
+        completedCount: 935, failedCount: 0,
+        totalTokensIn: 1000, totalTokensOut: 500, totalCredits: 1.3187,
+        periodBasis: 'billing-period',
+      },
+    },
+    '/alpha/billing/credits': {
+      status: 200,
+      body: {
+        credits: { monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0 },
+        windowLimits: {
+          fiveHour: { used: 0.035, cap: 3, exceeded: false, resetAt: 0 },
+          weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
+        },
+      },
+    },
+  }))
+  const def = commandDefinition({ adapter, getLocale: () => 'en' })
+  const result = await invoke(def, 'status')
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /mars-sea/)
+  assert.match(result.text, /Requests 935/)
+  assert.match(result.text, /success rate 100%/)
+  assert.match(result.text, /\$1\.3187/)
+  assert.match(result.text, /\$8\.68/)
+  assert.match(result.text, /5-hour/)
   assert.match(result.text, /█/) // bar chart glyph present
 })
 
@@ -220,11 +263,12 @@ test('command errors when getUsage throws', async () => {
   assert.match(result.text, /key missing/)
 })
 
-test('command renders one section per pool account with rotation badges', async () => {
+test('command renders one section per pool account with rotation badges in zh', async () => {
   const adapter = makeAdapter(makeFetch({}))
   const resetAt = 1_800_000_000_000
   const def = commandDefinition({
     adapter,
+    getLocale: () => 'zh',
     reports: async () => ({
       accounts: [
         {
@@ -272,4 +316,59 @@ test('command renders one section per pool account with rotation badges', async 
   assert.match(result.text, /📊 Go #3/)
   assert.match(result.text, /未配置 API 密钥/)
   assert.match(result.text, /⚠️ 超限!/)
+})
+
+test('command renders one section per pool account with rotation badges in en', async () => {
+  const adapter = makeAdapter(makeFetch({}))
+  const resetAt = 1_800_000_000_000
+  const def = commandDefinition({
+    adapter,
+    getLocale: () => 'en',
+    reports: async () => ({
+      accounts: [
+        {
+          id: 'default',
+          label: 'Default',
+          configured: true,
+          active: true,
+          mark: '',
+          cooldownUntil: 0,
+          report: {
+            account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
+            credits: {
+              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0,
+              fiveHour: { used: 3, cap: 3, exceeded: true, resetAt },
+              weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
+            },
+            failures: [],
+          },
+        },
+        {
+          id: 'account-2',
+          label: 'Go #2',
+          configured: true,
+          active: false,
+          mark: 'rate-limit',
+          cooldownUntil: resetAt,
+          report: { failures: [] },
+        },
+        {
+          id: 'account-3',
+          label: 'Go #3',
+          configured: false,
+          active: false,
+          mark: '',
+          cooldownUntil: 0,
+          report: { failures: [] },
+        },
+      ],
+    }),
+  })
+  const result = await invoke(def, '')
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /📊 Default  ✅ active/)
+  assert.match(result.text, /📊 Go #2  ⏳ cooling down, resets/)
+  assert.match(result.text, /📊 Go #3/)
+  assert.match(result.text, /no API key configured/)
+  assert.match(result.text, /⚠️ exceeded!/)
 })

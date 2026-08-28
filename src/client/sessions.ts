@@ -21,9 +21,18 @@
  * extra peer dependency into the package; the shapes are stable and the
  * client build inlines them anyway.
  *
+ * The wrapper takes a `getLocale` thunk because it is reached from a
+ * non-React path that has no `t` in scope; the supplied thunk reads the
+ * active locale at call time (typically `() => ctx.locale.getLocale().active`
+ * in the client entry), and the message template lives in the shared
+ * `commandcodeCommand` dictionary used by the Host-side `/commandcode`
+ * command — the same bilingual surface serves both.
+ *
  * This module is deliberately free of React and other client-platform
  * imports so the node test runner can exercise it directly.
  */
+
+import { commandcodeCommand, type LocaleId } from '../command-locales.ts'
 
 /** The `model-unavailable` error details: provider + model id. */
 interface ModelUnavailableDetails {
@@ -74,7 +83,10 @@ export function isImageSessionRejection(
 }
 
 /** Wrap the shared sessions API so selectModel failures read friendlier. */
-export function withFriendlyImageError(sessions: SessionsLike): SessionsLike {
+export function withFriendlyImageError(
+  sessions: SessionsLike,
+  getLocale: () => LocaleId,
+): SessionsLike {
   const selectModel = sessions.selectModel.bind(sessions)
   return {
     ...sessions,
@@ -82,15 +94,15 @@ export function withFriendlyImageError(sessions: SessionsLike): SessionsLike {
       const result = await selectModel(payload, signal)
       if (!isImageSessionRejection(result)) return result
       const model = result.result.error.details?.model ?? payload.model
+      const template = commandcodeCommand[getLocale()].imageGate
+        ?? commandcodeCommand.en.imageGate
       return {
         ...result,
         result: {
           ...result.result,
           error: {
             ...result.result.error,
-            message:
-              `当前会话已包含图片，而模型 ${model} 不支持图片输入；`
-              + '请选择支持图片的模型，或先移除会话中的图片。',
+            message: template.replace('{model}', model),
           },
         },
       }
@@ -104,6 +116,9 @@ export interface ConnectionLike {
 }
 
 /** Install the wrapper on a connection's shared sessions face. */
-export function installFriendlyImageError(connection: ConnectionLike): void {
-  connection.api.sessions = withFriendlyImageError(connection.api.sessions)
+export function installFriendlyImageError(
+  connection: ConnectionLike,
+  getLocale: () => LocaleId,
+): void {
+  connection.api.sessions = withFriendlyImageError(connection.api.sessions, getLocale)
 }

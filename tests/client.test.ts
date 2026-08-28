@@ -86,9 +86,9 @@ test('isImageSessionRejection() ignores other failures', () => {
 // withFriendlyImageError
 // ---------------------------------------------------------------------------
 
-test('withFriendlyImageError() rewrites the image-gate message with the model name', async () => {
+test('withFriendlyImageError() rewrites the image-gate message with the model name in zh', async () => {
   const sessions = sessionsReturning(imageGateError('deepseek/deepseek-v4-flash'))
-  const wrapped = withFriendlyImageError(sessions as never)
+  const wrapped = withFriendlyImageError(sessions as never, () => 'zh')
   const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'deepseek/deepseek-v4-flash' })
   assert.equal(result.result.ok, false)
   assert.equal(result.result.error.code, 'model-unavailable')
@@ -96,6 +96,18 @@ test('withFriendlyImageError() rewrites the image-gate message with the model na
   assert.match(result.result.error.message, /当前会话已包含图片/)
   assert.match(result.result.error.message, /deepseek\/deepseek-v4-flash/)
   assert.match(result.result.error.message, /不支持图片输入/)
+})
+
+test('withFriendlyImageError() rewrites the image-gate message with the model name in en', async () => {
+  const sessions = sessionsReturning(imageGateError('deepseek/deepseek-v4-flash'))
+  const wrapped = withFriendlyImageError(sessions as never, () => 'en')
+  const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'deepseek/deepseek-v4-flash' })
+  assert.equal(result.result.ok, false)
+  assert.equal(result.result.error.code, 'model-unavailable')
+  assert.equal(result.result.error.details.model, 'deepseek/deepseek-v4-flash')
+  assert.match(result.result.error.message, /session already contains images/i)
+  assert.match(result.result.error.message, /deepseek\/deepseek-v4-flash/)
+  assert.match(result.result.error.message, /does not accept image input/i)
 })
 
 test('withFriendlyImageError() passes through non-image failures unchanged', async () => {
@@ -106,7 +118,7 @@ test('withFriendlyImageError() passes through non-image failures unchanged', asy
       error: { code: 'model-unavailable', message: 'plan limit', details: { provider: 'commandcode', model: 'x' } },
     },
   }
-  const wrapped = withFriendlyImageError(sessionsReturning(original) as never)
+  const wrapped = withFriendlyImageError(sessionsReturning(original) as never, () => 'zh')
   const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'x' })
   assert.deepEqual(result, original)
 })
@@ -116,7 +128,7 @@ test('withFriendlyImageError() preserves success results', async () => {
     rpcId: 'rpc-1',
     result: { ok: true as const, value: { selected: { provider: 'commandcode', model: 'claude-sonnet-5' } } },
   }
-  const wrapped = withFriendlyImageError(sessionsReturning(original) as never)
+  const wrapped = withFriendlyImageError(sessionsReturning(original) as never, () => 'zh')
   const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'claude-sonnet-5' })
   assert.deepEqual(result, original)
 })

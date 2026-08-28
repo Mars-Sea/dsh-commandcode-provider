@@ -39,6 +39,7 @@ import { USAGE_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
 import { LOGIN_REMOTE_CONTRIBUTION } from '../login-wire.ts'
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { CommandCodeSettingsPage } from './section.tsx'
+import { CommandCodeProviderCard } from './card.tsx'
 import { zh, en } from './locales.ts'
 
 export { isImageSessionRejection, withFriendlyImageError } from './sessions.ts'
@@ -73,6 +74,16 @@ const PAGE_CSS = `
 select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box-sizing:content-box;padding-right:32px;background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' viewBox='0 0 12 7'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888f98' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center}
 .cc-inputInvalid{border-color:var(--dsw-alias-label-error)}
 .cc-invalid{color:var(--dsw-alias-label-error);margin:0;font-size:12px;line-height:1.5}
+/* The Advanced card: its header row is one full-width toggle button; the
+ * chevron is two borders on a rotated square (no icon dependency). */
+.cc-advancedHead{align-items:center;gap:8px;display:flex;width:100%;padding:12px 0;background:0 0;border:none;cursor:pointer;font:inherit;text-align:left}
+.cc-advancedHead:hover .cc-advancedTitle{color:var(--dsw-alias-label-primary)}
+.cc-advancedTitle{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}
+.cc-advancedSpacer{flex:1}
+.cc-chevron{flex-shrink:0;border-right:1.5px solid var(--dsw-alias-label-tertiary);border-bottom:1.5px solid var(--dsw-alias-label-tertiary);width:8px;height:8px;margin-right:4px;margin-bottom:2px;transform:rotate(45deg);transition:transform .15s ease}
+.cc-chevronUp{transform:rotate(-135deg);margin-bottom:-3px}
+.cc-advancedBody{flex-direction:column;display:flex}
+.cc-advancedBody>.cc-field:first-of-type{border-top:1px solid var(--dsw-alias-border-l2)}
 .cc-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
 .cc-footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}
 .cc-toggleRow{align-items:center;gap:8px;cursor:pointer;display:flex}
@@ -163,7 +174,12 @@ export function apply(ctx: Context): void {
 
   const connection = ctx.get('connection') as ConnectionLike | undefined
   if (connection !== undefined) {
-    installFriendlyImageError(connection)
+    // The wrapper is reached from a non-React path that has no `t` in scope;
+    // it reads the active client locale at call time, so a language switch
+    // immediately applies to the next selectModel failure. The wrapper
+    // refuses to fall back to any other source — the user's web-locale
+    // preference is the only sensible signal on a browser surface.
+    installFriendlyImageError(connection, () => ctx.locale.getLocale().active)
   }
 
   // The "Command Code" settings page: register the section once the
@@ -304,6 +320,34 @@ export function apply(ctx: Context): void {
     locale: 'settings.commandcode',
     inject: injected,
   }, CommandCodeSettingsPage))
+
+  // The Models-page provider card (dsh 0.1.2-alpha.1): a keyed slot the
+  // Models section dispatches with `entryKey = settingsNs` on every provider
+  // card of an adapter family. Registering under `llm-commandcode` renders
+  // the card's extension area on every Command Code row — including the
+  // first-run setup posture, exactly where a user without a key lands.
+  // The registration carries its own inject face (store hooks + actions)
+  // because the declaring entry is ui-settings-models', not ours; the `t`
+  // seat comes from the registration's own `locale` namespace.
+  //
+  // On dsh builds without this slot the declaration never exists and
+  // `slots.inject` never fires its callback — the registration silently
+  // does not happen, and nothing else about the plugin changes.
+  ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
+    name: 'settings.models.provider-card',
+    key: 'llm-commandcode',
+    locale: 'settings.commandcode',
+    inject: () => ({
+      hooks: { commandCodeSettings: store, commandCodeLogin: loginStore },
+      edit: (field: string, text: string) => controller.edit(field, text),
+      save: () => void controller.save().then(() => {
+        const settled = controller.state()
+        if (!settled.failed && settled.anyAccountConfigured) void usageController.refresh()
+      }),
+      beginLogin: () => void loginController.begin(),
+      cancelLogin: () => void loginController.cancel(),
+    }),
+  }, CommandCodeProviderCard))
 }
 
 export const inject: readonly string[] = [

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.9.1] - 2026-08-28
+
+### Added
+
+- **New model: Tencent Hy4 Preview (`tencent/hy4-preview`, command-code@1.37.0).** A Go-tier 1M-context reasoning model routed through OpenRouter: it appears in the picker under the Go tier with `1M` markers, is tracked as an auto-thinking model (reasons automatically with no selectable effort levels), and lives outside the Vision whitelist — text input only.
+
+### Changed
+
+- **Synced with the official command-code@1.37.0 CLI** (upstream's only change was the new model above). `COMMAND_CODE_CLI_VERSION` is now `1.37.0`. Plan tiers now read 40/44/57/62 (Go / cumulative-through-Goat / cumulative-through-Pro / cumulative-through-Provider): the new model enters Go. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, reasoning-effort map, subscription plan maps (`individual-*`), image registry, deals, and peak/off-peak windows are all identical; Tencent Hy4 Preview is not hourly-priced.
+
+## [0.9.0] - 2026-08-28
+
+### Added
+
+- **Bilingual (`zh` / `en`) copy for the Host-side `/commandcode` command and the friendly image-gate error rewrite.** All user-facing strings the command prints (title, blocked-state headline, plan/usage/credit/window sections, mark labels, account badges, partial-failure footer, error text) and the model's `does not accept image input` message rewrite are now resolved through a shared `commandcodeCommand` dictionary. The Host command's locale comes from the new `Config.lang` setting (explicit override, with `LC_ALL`/`LANG` fallback, defaulting to `'zh'` to match the existing single-language behavior); the image-gate wrapper reads the client's active locale at call time (`ctx.locale.getLocale().active`), so a language switch in the settings UI applies to the next selectModel failure immediately. The two surfaces are independent by design — they live on different processes and have no shared locale seam, so each follows the most natural signal for its own runtime.
+
+### Changed
+
+- **`withFriendlyImageError(sessions, getLocale)` now takes a `getLocale` thunk** (previously had no locale parameter). Existing call sites are updated; programmatic consumers can pass `() => 'zh'` (the prior hardcoded language) for unchanged behavior. The `installFriendlyImageError(connection, getLocale)` helper mirrors the new signature.
+- **`commandDefinition(deps)` and `applyCommands(ctx, deps)` accept an optional `getLocale?: () => LocaleId` dep.** The plugin entry wires it from `Config.lang` and the shell's `LC_ALL`/`LANG`; programmatic setups that don't supply it keep rendering with the default `'zh'` (the prior hardcoded language).
+
 ## [0.8.4] - 2026-08-27
 
 ### Added

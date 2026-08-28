@@ -1015,8 +1015,8 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flash'], ['low', 'high', 'max'])
   // stealth/ox-alpha left the catalog in 1.34.0 when its preview ended.
   assert.ok(!KNOWN_EFFORTS['stealth/ox-alpha'])
-  // Synced from the official command-code@1.36.0 model table (re-verified
-  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2 and 1.33.0 along the way):
+  // Synced from the official command-code@1.37.0 model table (re-verified
+  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0 and 1.36.0 along the way):
   // models that ship with effort levels must be present, and absent ones must
   // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
   // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
@@ -1029,6 +1029,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'])
   assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid'])
   assert.ok(!KNOWN_EFFORTS['tencent/Hy3'])
+  assert.ok(!KNOWN_EFFORTS['tencent/hy4-preview'])
   assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3']) // no official effort levels
   assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K3'])
 })
@@ -1045,11 +1046,13 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   // selectable ['low','high','max'] efforts; the model then left the catalog
   // entirely in 1.34.0 when its preview ended. It belongs to neither set now.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
-  // Re-verified against the command-code@1.28.4 ZA table (2026-08-18) and
-  // re-confirmed against 1.30.1 (2026-08-21): these
+  // Re-verified against the command-code@1.28.4 ZA table (2026-08-18),
+  // re-confirmed against 1.30.1 (2026-08-21) and 1.37.0 (2026-08-28): these
   // think automatically (reasoning:!0, no efforts) and belong in the set.
+  // command-code@1.37.0 added tencent/hy4-preview (OpenRouter-routed, 1M, no efforts).
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
+  assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy4-preview'))
   assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
   // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (ZA reasoning:false, docs
   // "Text input" only) — the 0.2.0 snapshot wrongly included them.
@@ -1105,6 +1108,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // z-ai/glm-5.3-flash (command-code@1.35.0) replaced stealth/ox-alpha on
   // the Go plan when the stealth preview ended in 1.34.0.
   assert.equal(KNOWN_PLANS['z-ai/glm-5.3-flash'], 'go')
+  // tencent/hy4-preview (command-code@1.37.0, OpenRouter-routed, 1M) joined Go.
+  assert.equal(KNOWN_PLANS['tencent/hy4-preview'], 'go')
   assert.equal(KNOWN_PLANS['stealth/ox-alpha'], undefined)
   // MiniMax M3/M2.7 Free variants (command-code@1.33.0) are promo rows of the
   // Go-tier open models — same tier as their paid siblings.
@@ -1215,8 +1220,10 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
   // Non-peak-priced models report no state. Qwen 3.8 Max looks annotated when
   // the pricing page is flattened to text, but its hover annotation actually
   // lives in the V4 Flash Vision row above it (each annotation states exactly
-  // 2x that row's own prices) — Qwen's own row carries none.
+  // 2x that row's own prices) — Qwen's own row carries none. Same for the
+  // new tencent/hy4-preview (1.37.0, text-only, priced per token, not per hour).
   assert.ok(!KNOWN_PEAK_PRICING.has('Qwen/Qwen3.8-Max'))
+  assert.ok(!KNOWN_PEAK_PRICING.has('tencent/hy4-preview'))
   assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
   assert.equal(peakPricingLabel('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
 
@@ -1249,10 +1256,11 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.36.0 (2026-08-27): "Add Qwen 3.8 Flash" — the version rides
-  // every request as x-command-code-version. The 1.33.0 → 1.36.0 sync also
-  // added z-ai/glm-5.3-flash and retired stealth/ox-alpha.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.36.0')
+  // command-code@1.37.0 (2026-08-28): "Add Tencent Hy4 Preview, routed through
+  // OpenRouter" — the version rides every request as x-command-code-version.
+  // The 1.33.0 → 1.36.0 sync also added z-ai/glm-5.3-flash and retired
+  // stealth/ox-alpha; 1.36.0 → 1.37.0 adds tencent/hy4-preview to Go.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.37.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

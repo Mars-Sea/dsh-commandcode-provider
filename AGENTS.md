@@ -29,7 +29,9 @@ src/usage-remote.ts   Host half of the usage Remote: `commandcodeUsage`
                       service + `typert` registry contribution (optional inject).
 src/client/index.ts   Browser client entry: registers the "Command Code"
                       settings page (settings.section, id `commandcode`) and
-                      installs the friendly image-gate error wrapper.
+                      the Models-page provider card
+                      (settings.models.provider-card, key `llm-commandcode`),
+                      and installs the friendly image-gate error wrapper.
 src/client/settings.ts  Settings-page controller (scope + credentials + staged
                       form; React-free so node tests can drive it).
 src/client/usage.ts   Account-card controller (Remote fetch lifecycle +
@@ -37,6 +39,9 @@ src/client/usage.ts   Account-card controller (Remote fetch lifecycle +
                       declaration for `commandcode/report`.
 src/client/section.tsx  The settings page React component (settings form +
                       account-usage card).
+src/client/card.tsx   The Models-page provider card (keyed-slot component +
+                      the SlotMap merge for `settings.models.provider-card` /
+                      `settings.models.footer` mirroring upstream 0.1.2).
 src/client/sessions.ts  selectModel friendly-error wrapper (React-free).
 src/client/version.ts  Plugin version for the settings-page footer (package.json import, inlined at build).
 src/client/update.ts   Update hint: throttled npm-registry `latest` check +
@@ -53,6 +58,8 @@ tests/accounts.test.ts Account-pool rotation tests.
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/client.test.ts  sessions-wrapper tests.
 tests/settings.test.ts settings-page controller tests.
+tests/card.test.ts    Models-page provider-card tests (posture logic, key
+                      write path, login affordance parity).
 tests/update.test.ts  update-hint tests (semver compare, payload parse,
                       throttle cache, failure semantics).
 tests/usage-wire.test.ts usage-Remote schema + descriptor tests.
@@ -79,12 +86,28 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   key through `connection.api.credentials` under the `COMMANDCODE_API_KEY`
   reference — never through the settings section, so the key literal cannot
   leak into a settings document. `tests/settings.test.ts` pins this contract.
-- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified unchanged against 1.36.0):
+- **Models-page provider card (`settings.models.provider-card`)**: a keyed
+  SlotMap seat ui-settings-models declares as of dsh 0.1.2-alpha.1 — it
+  dispatches with `entryKey = settingsNs` on every provider card of an adapter
+  family. The client entry registers a cell with `key: 'llm-commandcode'`
+  (the directory row's settings namespace), carrying its own inject face
+  (store hooks + actions) because the declaring entry is ui-settings-models',
+  not ours; the `t` seat comes from the registration's own `locale`
+  namespace. The card (src/client/card.tsx) shows key status + paste field +
+  sign-in when unconfigured, a "configured" pointer to the dedicated page
+  when set; the authoritative credential fact is the SHARED settings
+  controller's `apiKeyConfigured` (the owner's `keyConfigured` is fallback
+  only). The SlotMap merge for the two seats lives in card.tsx and must stay
+  structurally identical to upstream's declaration (compile-time duplicate
+  merge would fail once a peer ships it). On dsh builds without the slot the
+  declaration never exists and `slots.inject` never fires — the registration
+  silently does not happen; do not "harden" that into an error.
+- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified unchanged against 1.37.0):
   - `POST {apiBase}/alpha/generate` — body `{ config, memory, taste, skills, params: { model, messages, tools, system, max_tokens, temperature, stream, reasoning_effort? }, threadId }`.
   - Image parts use the official CLI wire shape: `{ type: 'image', source: { type: 'base64', media_type, data } }` (NOT pi's `data:` data-URI form).
   - Stream: SSE-ish JSONL events `text-delta | reasoning-start/delta/end | tool-call | tool-result | finish | error`.
   - Catalog: `GET {apiBase}/provider/v1/models` → `{ object: 'list', data: [{ id, name, context_length }] }`.
-  - Defaults: `apiBase = https://api.commandcode.ai`, `COMMAND_CODE_CLI_VERSION = '1.36.0'`.
+  - Defaults: `apiBase = https://api.commandcode.ai`, `COMMAND_CODE_CLI_VERSION = '1.37.0'`.
 - **API key resolution order** (in `src/index.ts`): `config.apiKey` → credential ref `apiKeyEnv` (default `COMMANDCODE_API_KEY`, via the dsh credentials seam) → launch environment → official CLI auth file `~/.commandcode/auth.json`. **pi/OMP auth files are intentionally NOT scanned** — keep it that way.
 - **Multi-account rotation** (`src/accounts.ts` + the adapter's connect loop): the top-level key forms the `default` slot; `Config.accounts` (`[{ label, apiKeyEnv | apiKey }]`) adds more, in rotation order. Rotation is **passive**: a key is marked only on a real pre-stream rejection (429 → `unknown` cooldown, 401 → `disabled`), and the adapter's `rotateApiKey` hook re-sends the same request with the next account's key (safe: nothing streamed, the body is account-independent, `threadId` random per request — mid-stream failures NEVER rotate). When every account is marked, the pool probes `/alpha/billing/credits` per key (`probeFiveHourWindow`) to revive reset windows, else throws `RATE_LIMIT` naming the earliest `resetAt` (all-401 → `INVALID_CREDENTIAL`). State is keyed by API key, not slot — shared credentials share one mark. **Manual selection**: `Config.activeAccount` (a slot id) pins the serving account via the pool's `preferredId` seam + `selectActiveAccount()` (shared with the usage view's active badge); a pinned-but-exhausted or unknown id falls back to rotation order. Extra-account slot ids are the credential reference itself (`COMMANDCODE_API_KEY_2`, …) so a stored selection survives list reorders/removals; only literal-only composition entries keep positional `account-N` ids. The settings page edits `activeAccount` through the generic section-field machinery (a `<select>` bound to a text field). The picker's billing-access cache is per key. The usage Remote result is `CommandCodeAccountsReport` (`{ accounts: [...] }`); host and client ship in one bundle, so wire-shape changes need no migration — only synced edits in `src/usage-wire.ts`, `src/usage-remote.ts`, `src/client/usage.ts`, and `src/commands.ts`.
 - **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings. Reasoning blocks are intentionally NOT replayed into later turns (matches the CLI; private reasoning must not leak). Only tool calls with a paired tool result are replayed.
@@ -125,7 +148,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the CLI bundle's `ZA` model table (`command-code/dist/cli.mjs`), **not** the docs page (whose `Reasoning` flag means "thinks", not "has effort levels").
   - `KNOWN_IMAGE_MODELS` — Vision-capable models, synced from [commandcode.ai/docs/reference/cli/models](https://commandcode.ai/docs/reference/cli/models); note catalog IDs can differ from doc IDs (e.g. `claude-haiku-4-5-20251001` vs doc's `claude-haiku-4-5`).
   - `KNOWN_THINKING_MODELS` — models with `reasoning:!0` but no effort levels in the `ZA` table (they think automatically). Not displayed in the picker.
-  - `KNOWN_PLANS` — catalog ID → minimum plan tier (`go`/`goat`/`pro`/`provider`), synced from the plan pages ([go](https://commandcode.ai/docs/plans/go) ⊂ [goat](https://commandcode.ai/docs/plans/goat) ⊂ [pro](https://commandcode.ai/docs/plans/pro) ⊂ provider/max). Strict superset chain; every catalog ID covered exactly once (39/43/56/61 as of 2026-08-27, command-code@1.36.0 — `Qwen/Qwen3.8-Flash` + `z-ai/glm-5.3-flash` joined Go and `stealth/ox-alpha` left when its preview ended in 1.34.0; 38/40/53/60 as of 2026-08-26, command-code@1.33.0 — the `minimax/minimax-m3-free` + `minimax/minimax-m2.7-free` promo variants joined Go; 36/40/53/58 at 1.32.2 when `deepseek/deepseek-v4-flash-vision-exp` joined Go in 1.32.0; 35/39/52/57 at 1.31.0 when `stealth/ox-alpha` joined Go; 34/38/51/56 at 1.28.4).
+  - `KNOWN_PLANS` — catalog ID → minimum plan tier (`go`/`goat`/`pro`/`provider`), synced from the plan pages ([go](https://commandcode.ai/docs/plans/go) ⊂ [goat](https://commandcode.ai/docs/plans/goat) ⊂ [pro](https://commandcode.ai/docs/plans/pro) ⊂ provider/max). Strict superset chain; every catalog ID covered exactly once (40/44/57/62 as of 2026-08-28, command-code@1.37.0 — `tencent/hy4-preview` joined Go (routed through OpenRouter); 39/43/56/61 as of 2026-08-27, command-code@1.36.0 — `Qwen/Qwen3.8-Flash` + `z-ai/glm-5.3-flash` joined Go and `stealth/ox-alpha` left when its preview ended in 1.34.0; 38/40/53/60 as of 2026-08-26, command-code@1.33.0 — the `minimax/minimax-m3-free` + `minimax/minimax-m2.7-free` promo variants joined Go; 36/40/53/58 at 1.32.2 when `deepseek/deepseek-v4-flash-vision-exp` joined Go in 1.32.0; 35/39/52/57 at 1.31.0 when `stealth/ox-alpha` joined Go; 34/38/51/56 at 1.28.4).
   - `KNOWN_SUBSCRIPTION_PLANS` — subscription `planId` prefix → `{ name, monthlyCredits, tierWeight }` for the account's own plan (from `/alpha/billing/subscriptions`), synced from the CLI bundle's plan maps (`Nn`/`$n`; `tierWeight` is plugin-added for the picker filter). `subscriptionPlanInfo()` mirrors the CLI's `getPlanInfo` longest-prefix matching. Distinct from `KNOWN_PLANS` (model → minimum tier).
   - `KNOWN_DEALS` — catalog ID → `{ label, expiresAt?, free? }` from the pricing page's `#deals`. **Expiry-aware**: `dealLabel()` hides a deal once `Date.now()` passes its `expiresAt`, so an un-updated plugin never shows a lapsed discount.
   - `KNOWN_PEAK_PRICING` — catalog IDs with hourly (peak/off-peak) pricing, synced from the pricing page's model rows. Peak windows live in `PEAK_HOUR_RANGES` (UTC, end-exclusive); `peakPricingLabel()` maps the **current** UTC hour to `Peak`/`Half`.

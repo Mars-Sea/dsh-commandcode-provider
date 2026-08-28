@@ -9,7 +9,10 @@
  *
  * The layout mirrors the harness's settings pages: a max-width content
  * column, labelled fields with hints, a reset affordance, and a
- * save/discard footer. Styles are injected once by the client entry
+ * save/discard footer. Rarely touched connection facts (API base, working
+ * directory, timeouts, plan filter) fold into a collapsed Advanced card
+ * (`AdvancedSection`) so the page leads with the key and the usage facts.
+ * Styles are injected once by the client entry
  * (see src/client/index.ts) and class-prefixed `cc-` to stay local.
  */
 
@@ -46,6 +49,16 @@ export interface CommandCodeSettingsProps {
   editAccountKey(id: string, text: string): void
   toggleKeyClear(id: string): void
 }
+
+/** The section fields folded into the collapsible Advanced card. */
+type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'filterModelsByPlan'
+const ADVANCED_FIELDS: readonly AdvancedField[] = [
+  'apiBase',
+  'workingDir',
+  'requestTimeoutMs',
+  'streamIdleTimeoutMs',
+  'filterModelsByPlan',
+]
 
 /** One labelled field row in the page body. */
 function Field({
@@ -102,6 +115,113 @@ function invalidCopy(reason: StagedField['invalidReason'], t: Translate<Settings
   if (reason === 'tooSmall') return t('numberTooSmall')
   if (reason === 'tooLarge') return t('numberTooLarge')
   return t('invalidNumber')
+}
+
+/**
+ * The collapsed "Advanced" card: API base, working dir, both timeouts, and
+ * the plan filter live here so the page leads with the facts a user actually
+ * touches. Starts collapsed on every visit; expands on demand. While
+ * collapsed, a badge names the customized count so a nonzero override stays
+ * visible (a number field's error blocks save and must be reachable).
+ */
+function AdvancedSection({
+  state,
+  disabled,
+  t,
+  onEdit,
+  onReset,
+}: {
+  state: SettingsPageState
+  disabled: boolean
+  t: Translate<SettingsCommandCodeKey>
+  onEdit(field: string, text: string): void
+  onReset(field: string): void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const overridden = ADVANCED_FIELDS.filter((field) => state[field].overridden).length
+  const invalid = ADVANCED_FIELDS.some((field) => state[field].invalid)
+  return (
+    <div className="cc-card">
+      <button
+        type="button"
+        className="cc-advancedHead"
+        aria-expanded={expanded}
+        aria-controls="cc-advanced-body"
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="cc-advancedTitle">{t('advancedSettings')}</span>
+        {overridden > 0 ? (
+          <span className="cc-badge">
+            {overridden === 1 ? t('advancedOverriddenOne') : t('advancedOverriddenMany').replace('{count}', String(overridden))}
+          </span>
+        ) : null}
+        <span className="cc-advancedSpacer" />
+        <span className={expanded ? 'cc-chevron cc-chevronUp' : 'cc-chevron'} aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <div id="cc-advanced-body" className="cc-advancedBody">
+          <p className="cc-hint">{t('advancedSettingsHint')}</p>
+          <Field
+            id="cc-api-base"
+            label={t('apiBase')}
+            hint={t('apiBaseHint')}
+            state={state.apiBase}
+            disabled={disabled}
+            onEdit={(text) => onEdit('apiBase', text)}
+            onReset={() => onReset('apiBase')}
+            t={t}
+          />
+          <Field
+            id="cc-working-dir"
+            label={t('workingDir')}
+            hint={t('workingDirHint')}
+            state={state.workingDir}
+            disabled={disabled}
+            placeholder={state.defaultWorkingDir}
+            onEdit={(text) => onEdit('workingDir', text)}
+            onReset={() => onReset('workingDir')}
+            t={t}
+          />
+          <Field
+            id="cc-request-timeout"
+            label={t('requestTimeoutMs')}
+            hint={t('requestTimeoutMsHint')}
+            state={state.requestTimeoutMs}
+            disabled={disabled}
+            numeric
+            onEdit={(text) => onEdit('requestTimeoutMs', text)}
+            onReset={() => onReset('requestTimeoutMs')}
+            t={t}
+          />
+          <Field
+            id="cc-stream-idle-timeout"
+            label={t('streamIdleTimeoutMs')}
+            hint={t('streamIdleTimeoutMsHint')}
+            state={state.streamIdleTimeoutMs}
+            disabled={disabled}
+            numeric
+            onEdit={(text) => onEdit('streamIdleTimeoutMs', text)}
+            onReset={() => onReset('streamIdleTimeoutMs')}
+            t={t}
+          />
+          <ToggleField
+            id="cc-filter-models-by-plan"
+            label={t('filterModelsByPlan')}
+            hint={t('filterModelsByPlanHint')}
+            state={state.filterModelsByPlan}
+            disabled={disabled}
+            defaultChecked
+            onEdit={(text) => onEdit('filterModelsByPlan', text)}
+            onReset={() => onReset('filterModelsByPlan')}
+            t={t}
+          />
+        </div>
+      ) : null}
+      {expanded && invalid ? (
+        <p className="cc-invalid" role="status">{t('advancedInvalid')}</p>
+      ) : null}
+    </div>
+  )
 }
 
 /**
@@ -833,61 +953,14 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           onBegin={props.beginLogin}
           onCancel={props.cancelLogin}
         />
-        <Field
-          id="cc-api-base"
-          label={t('apiBase')}
-          hint={t('apiBaseHint')}
-          state={state.apiBase}
-          disabled={disabled}
-          onEdit={(text) => props.edit('apiBase', text)}
-          onReset={() => props.resetField('apiBase')}
-          t={t}
-        />
-        <Field
-          id="cc-working-dir"
-          label={t('workingDir')}
-          hint={t('workingDirHint')}
-          state={state.workingDir}
-          disabled={disabled}
-          placeholder={state.defaultWorkingDir}
-          onEdit={(text) => props.edit('workingDir', text)}
-          onReset={() => props.resetField('workingDir')}
-          t={t}
-        />
-        <Field
-          id="cc-request-timeout"
-          label={t('requestTimeoutMs')}
-          hint={t('requestTimeoutMsHint')}
-          state={state.requestTimeoutMs}
-          disabled={disabled}
-          numeric
-          onEdit={(text) => props.edit('requestTimeoutMs', text)}
-          onReset={() => props.resetField('requestTimeoutMs')}
-          t={t}
-        />
-        <Field
-          id="cc-stream-idle-timeout"
-          label={t('streamIdleTimeoutMs')}
-          hint={t('streamIdleTimeoutMsHint')}
-          state={state.streamIdleTimeoutMs}
-          disabled={disabled}
-          numeric
-          onEdit={(text) => props.edit('streamIdleTimeoutMs', text)}
-          onReset={() => props.resetField('streamIdleTimeoutMs')}
-          t={t}
-        />
-        <ToggleField
-          id="cc-filter-models-by-plan"
-          label={t('filterModelsByPlan')}
-          hint={t('filterModelsByPlanHint')}
-          state={state.filterModelsByPlan}
-          disabled={disabled}
-          defaultChecked
-          onEdit={(text) => props.edit('filterModelsByPlan', text)}
-          onReset={() => props.resetField('filterModelsByPlan')}
-          t={t}
-        />
       </div>
+      <AdvancedSection
+        state={state}
+        disabled={disabled}
+        t={t}
+        onEdit={props.edit}
+        onReset={props.resetField}
+      />
       <div className="cc-footer">
         {state.failed ? <p className="cc-failed" role="status">{t('saveFailed')}</p> : null}
         {savedVisible ? <p className="cc-saved" role="status">{t('saved')}</p> : null}
