@@ -26,22 +26,50 @@
  * the React component renders.
  */
 
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
-
 /** The settings namespace the plugin registers (host half, src/index.ts). */
 export const COMMANDCODE_NS = 'llm-commandcode'
 /** Default credential reference the plugin resolves when none is named. */
 export const DEFAULT_API_KEY_REF = 'COMMANDCODE_API_KEY'
 
+/** The settings-scope snapshot fields consumed by this controller. */
+export interface SettingsScopeSnapshot<T> {
+  status: 'loading' | 'ready' | 'unavailable'
+  value: T | undefined
+  base: unknown
+  user: unknown
+  revision: number | undefined
+  writable: boolean
+  mode: 'host' | 'memory'
+}
+
+/** Current settings-scope service face used without importing a browser plugin value. */
+export interface SettingsScope<T> {
+  getSnapshot(): SettingsScopeSnapshot<T>
+  subscribe(listener: () => void): () => void
+  set(field: string, value: unknown): Promise<void>
+  unset(field: string): Promise<void>
+}
+
+/** Result envelope returned by one current Typert Remote call. */
+interface RemoteResult<T> {
+  ok: boolean
+  value?: T
+  error?: { message: string }
+}
+
+/** Credential facts returned without exposing the credential value. */
+interface CredentialInfo {
+  configured: boolean
+  writable: boolean
+}
+
 /** The narrow slice of the wire face this controller needs. */
 export interface SettingsPageApi {
+  /** Credential methods exposed by the current Typert Remote namespace. */
   credentials: {
-    describe(request: { refs: string[] }): Promise<{
-      result: { ok: true; value: { credentials: Record<string, { configured: boolean; writable: boolean }> } } | { ok: false; error: { message: string } }
-    }>
-    set(request: { ref: string; value: string }): Promise<{ result: { ok: true; value?: unknown } | { ok: false; error: { message: string } } }>
-    /** Remove one stored credential entirely (the Host's `credentials.unset`). */
-    unset(request: { ref: string }): Promise<{ result: { ok: true; value?: unknown } | { ok: false; error: { message: string } } }>
+    describe(refs: string[]): Promise<RemoteResult<Record<string, CredentialInfo>>>
+    set(ref: string, value: string): Promise<RemoteResult<void>>
+    unset(ref: string): Promise<RemoteResult<void>>
   }
 }
 
@@ -664,8 +692,8 @@ export class CommandCodeSettingsController {
   /** Write one account's key, then re-read the Host's credential states. */
   private async writeKeyTo(ref: string, value: string): Promise<boolean> {
     try {
-      const response = await this.api.credentials.set({ ref, value })
-      if (!response.result.ok) return false
+      const response = await this.api.credentials.set(ref, value)
+      if (!response.ok) return false
     } catch {
       return false
     }
@@ -682,14 +710,14 @@ export class CommandCodeSettingsController {
     ]
     let response: Awaited<ReturnType<SettingsPageApi['credentials']['describe']>>
     try {
-      response = await this.api.credentials.describe({ refs })
+      response = await this.api.credentials.describe(refs)
     } catch {
       return
     }
-    if (!response.result.ok) return
+    if (!response.ok) return
     let changed = false
     for (const ref of refs) {
-      const view = response.result.value.credentials[ref]
+      const view = response.value?.[ref]
       const next = {
         configured: view?.configured ?? false,
         writable: view?.writable ?? true,
@@ -780,8 +808,8 @@ export class CommandCodeSettingsController {
   /** Unset one stored credential, then re-read the Host's credential states. */
   private async unsetKey(ref: string): Promise<boolean> {
     try {
-      const response = await this.api.credentials.unset({ ref })
-      if (!response.result.ok) return false
+      const response = await this.api.credentials.unset(ref)
+      if (!response.ok) return false
     } catch {
       return false
     }

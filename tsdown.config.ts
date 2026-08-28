@@ -50,7 +50,7 @@ const client = defineConfig({
     '@deepseek-ai/cordis',
     'react',
     'react/jsx-runtime',
-    '@deepseek-ai/dsh-client-runtime/client',
+    '@deepseek-ai/dsh-client-store',
     '@deepseek-ai/dsh-client-ui-primitives',
   ],
   outputOptions: {

@@ -78,7 +78,7 @@ function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<s
   const writable = init.writable ?? true
   const credential = { configured, writable }
   const credentials = {
-    describe: async ({ refs }: { refs: string[] }) => {
+    describe: async (refs: string[]) => {
       const credentialsMap: Record<string, { configured: boolean; writable: boolean }> = {}
       for (const ref of refs) {
         credentialsMap[ref] = {
@@ -86,17 +86,17 @@ function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<s
           writable,
         }
       }
-      return { result: { ok: true as const, value: { credentials: credentialsMap } } }
+      return { ok: true as const, value: credentialsMap }
     },
-    set: async ({ ref, value }: { ref: string; value: string }) => {
-      if (init.failSet === true) return { result: { ok: false as const, error: { message: 'write refused' } } }
+    set: async (ref: string, value: string) => {
+      if (init.failSet === true) return { ok: false as const, error: { message: 'write refused' } }
       store.set(ref, value)
-      return { result: { ok: true as const, value: {} } }
+      return { ok: true as const, value: undefined }
     },
-    unset: async ({ ref }: { ref: string }) => {
-      if (init.failUnset === true) return { result: { ok: false as const, error: { message: 'unset refused' } } }
+    unset: async (ref: string) => {
+      if (init.failUnset === true) return { ok: false as const, error: { message: 'unset refused' } }
       store.delete(ref)
-      return { result: { ok: true as const, value: {} } }
+      return { ok: true as const, value: undefined }
     },
   }
   return { credential, credentials, store }
@@ -593,16 +593,12 @@ test('a failed key write aborts the save before the accounts list lands', async 
   const store = new Map<string, string>()
   const api = {
     credentials: {
-      describe: async ({ refs }: { refs: string[] }) => ({
-        result: {
-          ok: true as const,
-          value: {
-            credentials: Object.fromEntries(refs.map((ref) => [ref, { configured: store.has(ref), writable: true }])),
-          },
-        },
+      describe: async (refs: string[]) => ({
+        ok: true as const,
+        value: Object.fromEntries(refs.map((ref) => [ref, { configured: store.has(ref), writable: true }])),
       }),
       // The credentials domain rejects every write.
-      set: async () => ({ result: { ok: false as const, error: { message: 'read-only' } } }),
+      set: async () => ({ ok: false as const, error: { message: 'read-only' } }),
     },
   }
   const { controller } = makeController({ scope, api: api as unknown as ReturnType<typeof makeApi> })

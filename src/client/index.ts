@@ -8,31 +8,31 @@
  *    unknown-adapter-family card for the `commandcode` provider and disables
  *    its submit, so the API key cannot be configured there; this page is the
  *    dedicated surface. It writes the API key through the credentials domain
- *    (the `COMMANDCODE_API_KEY` reference the plugin resolves) and the
- *    connection facts through the `llm-commandcode` settings namespace, so a
- *    saved key or endpoint reaches the very next request.
+ *    (the `COMMANDCODE_API_KEY` reference the plugin resolves via
+ *    `ctx.remote.credentials`) and the connection facts through the
+ *    `llm-commandcode` settings namespace, so a saved key or endpoint reaches
+ *    the very next request.
  *
- * 2. The friendly-error wrapper for the harness's image-session gate — see
- *    `./sessions.ts`. The wrapper is deliberately narrow: only the
- *    `model-unavailable` code is rewritten, only when the message matches the
- *    image-session gate, and only the message text changes.
- *
- * The wire types are spelled structurally in `./sessions.ts` (not imported
- * from `@deepseek-ai/dsh-host-apiproxy`) so this client bundle does not drag
- * an extra peer dependency into the package; the shapes are stable and the
- * client build inlines them anyway.
+ * 2. The Models-page provider card (settings.models.provider-card) and the
+ *    friendly image-gate error wrapper — see `./card.tsx` / `./sessions.ts`.
+ *    The wrapper is deliberately narrow: only the `model-unavailable` code is
+ *    rewritten, only when the message matches the image-session gate, and only
+ *    the message text changes.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 // Type-only imports that pull in the client-service augmentations
 // (`slots`/`remote`/`locale` on Context) and the `settings.section` SlotMap
 // entry (`settingsScope` arrives through dsh-client-ui-settings).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { installFriendlyImageError } from './sessions.ts'
+import type { ConnectionLike } from './sessions.ts'
 import { CommandCodeSettingsController, COMMANDCODE_NS, type SettingsPageState } from './settings.ts'
+import type { SettingsPageApi } from './settings.ts'
 import { CommandCodeUsageController, type UsagePageState, type UsageRemote } from './usage.ts'
 import { CommandCodeLoginController, type LoginPageState, type LoginRemote } from './login.ts'
 import { USAGE_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
@@ -43,7 +43,6 @@ import { CommandCodeProviderCard } from './card.tsx'
 import { zh, en } from './locales.ts'
 
 export { isImageSessionRejection, withFriendlyImageError } from './sessions.ts'
-import type { ConnectionLike } from './sessions.ts'
 
 /** CSS for the settings page, injected once (harness bundle convention). */
 const PAGE_CSS = `
@@ -165,9 +164,9 @@ function injectPageCss(): void {
 
 /**
  * Client plugin body. Gates on the services the settings page needs
- * (`slots`, `locale`, `connection`, `remote`, `settingsScope`) plus the
- * `connection` used by the friendly-error wrapper — the same inject list the
- * harness's own settings-surface plugins declare.
+ * (`slots`, `locale`, `connection`, `remote`, `remote.credentials`,
+ * `settingsScope`) — the same inject list the harness's own settings-surface
+ * plugins declare, plus the credential Remote that 0.1.2 introduces.
  */
 export function apply(ctx: Context): void {
   injectPageCss()
@@ -188,13 +187,22 @@ export function apply(ctx: Context): void {
   // `slots.inject` waits for the declaration).
   ctx.effect(() => ctx.locale.register('settings.commandcode', { zh, en }), 'dsh-commandcode-provider: page copy')
 
-  const api = ctx.get('connection').api
-  const hostDescription = ctx.get('connection').hostDescription
   const scope = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: COMMANDCODE_NS })
-  const controller = new CommandCodeSettingsController(scope, { credentials: api.credentials }, hostDescription)
+  const credentialRemote = (ctx.remote as unknown as { credentials: SettingsPageApi['credentials'] }).credentials
+  // Preserve hostDescription (cwd placeholder) when the Host still exposes it;
+  // 0.1.2 may no longer provide it, so the field is optional and the page
+  // degrades to no placeholder.
+  const hostDescription = (ctx.get('connection') as unknown as { hostDescription?: { getSnapshot(): { cwd?: string } | undefined; subscribe(fn: () => void): () => void } } | undefined)?.hostDescription
+  const controller = new CommandCodeSettingsController(scope, { credentials: credentialRemote }, hostDescription)
   ctx.effect(() => () => controller.dispose(), 'dsh-commandcode-provider: settings controller')
   const store = createSnapshotStore<SettingsPageState>(controller.state())
   controller.subscribe(() => store.set(controller.state()))
+  ctx.effect(
+    () => (ctx.remote as unknown as {
+      $on(event: 'credentials/reference-updated', listener: (ref: string) => void): () => void
+    }).$on('credentials/reference-updated', () => { controller.refreshCredentials() }),
+    'dsh-commandcode-provider: credential invalidations',
+  )
 
   // The account-usage card + login panel: mount the shared Remote contribution
   // (one mount carries every endpoint this plugin serves — report and login —
@@ -355,5 +363,6 @@ export const inject: readonly string[] = [
   'locale',
   'connection',
   'remote',
+  'remote.credentials',
   'settingsScope',
 ]

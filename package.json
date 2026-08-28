@@ -23,13 +23,13 @@
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-api-remotes"
       ],
       "external": [
-        "@deepseek-ai/dsh-client-runtime/client"
+        "@deepseek-ai/dsh-client-store"
       ],
       "platform": "web"
     }
@@ -78,23 +78,32 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-commands": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-credentials": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-timeout": "^0.1.0-rc.6 || ^0.1.1-rc.1",
-    "@deepseek-ai/dsh-typert-protocol": "^0.1.0-rc.6 || ^0.1.1-rc.1",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-attachment": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-connection": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-locale": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-store": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-commands": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-credentials": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-launch-environment": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-settings": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-timeout": "^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.2-alpha.1",
     "@deepseek-ai/schemastery": "^3.18.1",
     "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-store": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-renderer": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -102,7 +111,6 @@
     "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",

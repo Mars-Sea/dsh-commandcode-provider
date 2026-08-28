@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Adapted the provider to DeepSeek Harness 0.1.2-alpha.1.** Tool-call IDs now use the current branded chunk vocabulary, credential operations use Typert Remotes, the browser client consumes the new `dsh-client-store` platform module, and package metadata no longer references the removed `dsh-client-runtime` package.
+
 ## [0.9.1] - 2026-08-28
 
 ### Added

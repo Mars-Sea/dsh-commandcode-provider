@@ -78,20 +78,20 @@ function makeScope(init: {
 function makeApi(init: { store?: Map<string, string> }) {
   const store = init.store ?? new Map<string, string>()
   const credentials = {
-    describe: async ({ refs }: { refs: string[] }) => {
+    describe: async (refs: string[]) => {
       const map: Record<string, { configured: boolean; writable: boolean }> = {}
       for (const ref of refs) {
         map[ref] = { configured: store.has(ref), writable: true }
       }
-      return { result: { ok: true as const, value: { credentials: map } } }
+      return { ok: true as const, value: map }
     },
-    set: async ({ ref, value }: { ref: string; value: string }) => {
+    set: async (ref: string, value: string) => {
       store.set(ref, value)
-      return { result: { ok: true as const, value: {} } }
+      return { ok: true as const, value: undefined }
     },
-    unset: async ({ ref }: { ref: string }) => {
+    unset: async (ref: string) => {
       store.delete(ref)
-      return { result: { ok: true as const, value: {} } }
+      return { ok: true as const, value: undefined }
     },
   }
   return { credentials, store }

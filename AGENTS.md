@@ -30,8 +30,7 @@ src/usage-remote.ts   Host half of the usage Remote: `commandcodeUsage`
 src/client/index.ts   Browser client entry: registers the "Command Code"
                       settings page (settings.section, id `commandcode`) and
                       the Models-page provider card
-                      (settings.models.provider-card, key `llm-commandcode`),
-                      and installs the friendly image-gate error wrapper.
+                      (settings.models.provider-card, key `llm-commandcode`).
 src/client/settings.ts  Settings-page controller (scope + credentials + staged
                       form; React-free so node tests can drive it).
 src/client/usage.ts   Account-card controller (Remote fetch lifecycle +
@@ -56,7 +55,6 @@ src/client/locales.ts   zh/en copy + LocaleNamespaceMap augmentation.
 tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
 tests/accounts.test.ts Account-pool rotation tests.
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
-tests/client.test.ts  sessions-wrapper tests.
 tests/settings.test.ts settings-page controller tests.
 tests/card.test.ts    Models-page provider-card tests (posture logic, key
                       write path, login affordance parity).
@@ -80,10 +78,10 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `react/jsx-runtime`, `@deepseek-ai/cordis`, `@deepseek-ai/dsh-client-ui-slots`,
   `@deepseek-ai/dsh-client-web-react`, `@deepseek-ai/dsh-client-ui-primitives`,
   `@deepseek-ai/dsh-client-schema-form`, `@deepseek-ai/dsh-client-ui-attachment`)
-  and host-shipped client bundles resolvable from the loader's module table
-  (e.g. `@deepseek-ai/dsh-client-runtime/client`). The settings page binds the
+  and host-shipped platform modules resolvable from the loader's module table
+  (e.g. `@deepseek-ai/dsh-client-store`). The settings page binds the
   `llm-commandcode` namespace through `ctx.settingsScope` and writes the API
-  key through `connection.api.credentials` under the `COMMANDCODE_API_KEY`
+  key through `ctx.remote.credentials` under the `COMMANDCODE_API_KEY`
   reference — never through the settings section, so the key literal cannot
   leak into a settings document. `tests/settings.test.ts` pins this contract.
 - **Models-page provider card (`settings.models.provider-card`)**: a keyed
