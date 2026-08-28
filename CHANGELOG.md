@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Compatibility with dsh 0.1.2-alpha.1** — `@deepseek-ai/dsh-llm` renamed its `CallId` brand to `ToolCallId` (upstream commit `a789637db6`). The adapter now imports and uses `ToolCallId`, and the `@deepseek-ai/dsh-llm` peer range is tightened to `^0.1.2-alpha.1`, the only release line that ships the renamed export. Installations on earlier dsh lines (`≤ 0.1.1-rc.2`) should stay on `0.9.1`.
+
 ## [0.9.1] - 2026-08-28
 
 ### Added

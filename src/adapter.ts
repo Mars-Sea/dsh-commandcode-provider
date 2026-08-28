@@ -30,7 +30,7 @@ import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attac
 
 import {
   attributionHeaders,
-  CallId,
+  ToolCallId,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
@@ -1782,11 +1782,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           sawContent = true
           chunks.push(
             { type: 'block-start', index, blockType: 'tool-call' },
-            { type: 'tool-call-delta', index, id: CallId(id), name, argumentsDelta: args },
+            { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args },
             {
               type: 'block-end',
               index,
-              block: { type: 'tool-call', id: CallId(id), name, arguments: args },
+              block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
             },
           )
           break
