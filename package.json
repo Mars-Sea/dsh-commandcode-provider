@@ -28,9 +28,6 @@
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-api-remotes"
       ],
-      "external": [
-        "@deepseek-ai/dsh-client-store"
-      ],
       "platform": "web"
     }
   },
@@ -82,7 +79,6 @@
     "@deepseek-ai/dsh-attachment": "^0.1.2-alpha.1",
     "@deepseek-ai/dsh-client-connection": "^0.1.2-alpha.1",
     "@deepseek-ai/dsh-client-locale": "^0.1.2-alpha.1",
-    "@deepseek-ai/dsh-client-store": "^0.1.2-alpha.1",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.2-alpha.1",
     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.2-alpha.1",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.2-alpha.1",
@@ -98,9 +94,6 @@
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-client-store": {
-      "optional": true
-    },
     "@deepseek-ai/dsh-client-ui-renderer": {
       "optional": true
     }

@@ -8,7 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Adapted the provider to DeepSeek Harness 0.1.2-alpha.1.** Tool-call IDs now use the current branded chunk vocabulary, credential operations use Typert Remotes, the browser client consumes the new `dsh-client-store` platform module, and package metadata no longer references the removed `dsh-client-runtime` package.
+- **Adapted the provider to DeepSeek Harness 0.1.2-alpha.1.** Tool-call IDs now use the current branded chunk vocabulary, credential operations use Typert Remotes, the browser client consumes the new settings/models surfaces, and package metadata no longer references the removed `dsh-client-runtime` package.
+
+### Fixed
+
+- **Restored plugin loadability after the 0.1.2-alpha.1 adaptation.** The adaptation pointed the browser client at the new `@deepseek-ai/dsh-client-store` platform module for its snapshot store, but that package was never published to the registry and the host's client-module table does not materialize it — so every `require("@deepseek-ai/dsh-client-store")` in the built client bundle made the dsh loader reject the plugin at import time ("missed the module table"). The snapshot store is now a tiny vendored utility (`getSnapshot`/`subscribe`/`set`) inlined into the client bundle, so `lib/client.js` no longer references `dsh-client-store` at all and the plugin loads on any host. No `0.9.1` retraction is needed: the published `0.9.1` never referenced `dsh-client-store` (it still used `dsh-client-runtime`); only the unreleased adaptation did.
+- **Prevented the legacy friendly image-session error wrapper from blocking 0.1.2 client startup.** The pre-0.1.2 wrapper assumed `connection.api.sessions`; 0.1.2 replaces that façade with `remote.session`, so the optional copy rewrite now safely skips itself when the legacy sessions face is absent instead of failing the whole plugin with `Cannot read properties of undefined (reading 'sessions')`. Legacy hosts still receive the localized rewrite.
 
 ## [0.9.1] - 2026-08-28
 

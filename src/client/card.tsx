@@ -56,27 +56,27 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** The provider directory row as the Models page dispatches it. */
 export interface ProviderDirectoryRow {
   /** The provider route id (`commandcode` for this plugin). */
-  provider: string
+  readonly provider: string
   /** The row's display name. */
-  displayName: string
+  readonly displayName: string
   /** The settings namespace the row configures (the slot's dispatch key). */
-  settingsNs: string
+  readonly settingsNs: string
   /** The settings path the row's profile lives at. */
-  settingsPath: readonly string[]
+  readonly settingsPath: readonly string[]
   /** Whether the provider route is live. */
-  active: boolean
+  readonly active: boolean
   /** Whether the adapter declares the route as shipped. */
-  declared?: boolean
+  readonly declared?: boolean
 }
 
 /** Owner share of one provider-card extension occurrence (upstream's shape). */
 export interface ProviderCardExtrasOwnerProps {
   /** The card's directory row. */
-  provider: ProviderDirectoryRow
+  readonly provider: ProviderDirectoryRow
   /** Whether any layer configures this provider (its profile resolves). */
-  configured: boolean
+  readonly configured: boolean
   /** The row's referenced api-key credential, confirmed configured by the page's join. */
-  keyConfigured: boolean
+  readonly keyConfigured: boolean
 }
 
 /** Owner share of the footer area (the section supplies nothing). */

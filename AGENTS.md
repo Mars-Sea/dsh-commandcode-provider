@@ -79,7 +79,17 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `@deepseek-ai/dsh-client-web-react`, `@deepseek-ai/dsh-client-ui-primitives`,
   `@deepseek-ai/dsh-client-schema-form`, `@deepseek-ai/dsh-client-ui-attachment`)
   and host-shipped platform modules resolvable from the loader's module table
-  (e.g. `@deepseek-ai/dsh-client-store`). The settings page binds the
+  (e.g. `@deepseek-ai/dsh-client-ui-primitives`, which is published on npm).
+  The 0.1.2 adapter originally imported `createSnapshotStore` from the
+  `@deepseek-ai/dsh-client-store` platform module, but that package was never
+  published and the host's module table does not materialize it — so any
+  `require("@deepseek-ai/dsh-client-store")` in `lib/client.js` makes the dsh
+  loader reject the whole plugin at import time. The store is therefore
+  **vendored** at `src/client/snapshot-store.ts` (a tiny
+  `getSnapshot`/`subscribe`/`set` triple); the client bundle has no
+  `dsh-client-store` require, so it loads on any host. Flip back to importing
+  it from the platform module only once upstream actually ships the package.
+  The settings page binds the
   `llm-commandcode` namespace through `ctx.settingsScope` and writes the API
   key through `ctx.remote.credentials` under the `COMMANDCODE_API_KEY`
   reference — never through the settings section, so the key literal cannot

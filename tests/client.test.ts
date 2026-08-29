@@ -15,7 +15,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { withFriendlyImageError, isImageSessionRejection } from '../src/client/sessions.ts'
+import { installFriendlyImageError, withFriendlyImageError, isImageSessionRejection } from '../src/client/sessions.ts'
 import { PLUGIN_VERSION } from '../src/client/version.ts'
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,22 @@ test('withFriendlyImageError() preserves success results', async () => {
   const wrapped = withFriendlyImageError(sessionsReturning(original) as never, () => 'zh')
   const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'claude-sonnet-5' })
   assert.deepEqual(result, original)
+})
+
+test('installFriendlyImageError() skips the 0.1.2 connection shape without throwing', () => {
+  // dsh 0.1.2 replaces the legacy `connection.api.sessions` façade with a
+  // transport/generation handle; selectModel now lives on `remote.session`.
+  // The optional copy-rewrite must not keep this plugin fiber pending or fail.
+  assert.equal(installFriendlyImageError({} as never, () => 'zh'), false)
+  assert.equal(installFriendlyImageError({ api: {} } as never, () => 'zh'), false)
+})
+
+test('installFriendlyImageError() still wraps a legacy connection sessions face', async () => {
+  const connection = { api: { sessions: sessionsReturning(imageGateError('x')) } }
+  assert.equal(installFriendlyImageError(connection as never, () => 'en'), true)
+  const result = await connection.api.sessions.selectModel({ sessionId: 's', provider: 'commandcode', model: 'x' })
+  assert.equal(result.result.ok, false)
+  assert.match(result.result.error.message, /session already contains images/i)
 })
 
 // ---------------------------------------------------------------------------

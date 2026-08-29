@@ -189,6 +189,7 @@ test('the shared descriptor targets the commandcodeUsage service endpoint', () =
 
 test('host and client contributions carry the same descriptor object', () => {
   assert.equal(USAGE_HOST_CONTRIBUTION.face, 'host')
+  assert.deepEqual(USAGE_HOST_CONTRIBUTION.model, { services: [], events: [], objects: [] })
   assert.equal(USAGE_HOST_CONTRIBUTION.invocations[0], USAGE_REPORT_DESCRIPTOR)
   assert.equal(USAGE_REMOTE_CONTRIBUTION.descriptors[0], USAGE_REPORT_DESCRIPTOR)
   assert.equal(USAGE_HOST_CONTRIBUTION.package, USAGE_REMOTE_CONTRIBUTION.package)

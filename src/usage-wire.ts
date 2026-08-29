@@ -219,6 +219,11 @@ export const USAGE_HOST_CONTRIBUTION = {
   package: USAGE_REMOTE_PACKAGE,
   face: 'host' as const,
   schemas: [],
+  // 0.1.2's Typert registry requires every Host contribution to carry its
+  // reflection model. This hand-written Remote deliberately has no generated
+  // reflection exports, so use the official empty-model form rather than a
+  // cast that leaves registry inspection with `model: undefined`.
+  model: { services: [], events: [], objects: [] },
   invocations: [USAGE_REPORT_DESCRIPTOR],
 }
 

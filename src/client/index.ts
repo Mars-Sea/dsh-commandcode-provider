@@ -21,7 +21,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore } from './snapshot-store.ts'
 // Type-only imports that pull in the client-service augmentations
 // (`slots`/`remote`/`locale` on Context) and the `settings.section` SlotMap
 // entry (`settingsScope` arrives through dsh-client-ui-settings).
@@ -175,9 +175,10 @@ export function apply(ctx: Context): void {
   if (connection !== undefined) {
     // The wrapper is reached from a non-React path that has no `t` in scope;
     // it reads the active client locale at call time, so a language switch
-    // immediately applies to the next selectModel failure. The wrapper
-    // refuses to fall back to any other source — the user's web-locale
-    // preference is the only sensible signal on a browser surface.
+    // immediately applies to the next selectModel failure. On legacy builds
+    // it wraps `connection.api.sessions`; 0.1.2 replaced that façade with
+    // `remote.session`, so the helper safely skips this UX-only rewrite there
+    // instead of preventing the whole plugin from activating.
     installFriendlyImageError(connection, () => ctx.locale.getLocale().active)
   }
 

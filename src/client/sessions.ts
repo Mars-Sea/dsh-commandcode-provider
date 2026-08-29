@@ -110,15 +110,30 @@ export function withFriendlyImageError(
   }
 }
 
-/** The connection handle shape we read `api.sessions` from. */
+/**
+ * The pre-0.1.2 connection handle that exposed the shared session API under
+ * `connection.api.sessions`. In 0.1.2 the connection service became a
+ * transport/generation handle and model selection moved to `remote.session`,
+ * so this legacy field is deliberately optional.
+ */
 export interface ConnectionLike {
-  api: { sessions: SessionsLike }
+  api?: { sessions?: SessionsLike }
 }
 
-/** Install the wrapper on a connection's shared sessions face. */
+/**
+ * Install the friendly-error wrapper when a legacy sessions face is present.
+ *
+ * @returns whether the wrapper was installed. The rewrite is only UX polish;
+ * a 0.1.2 connection has no `api.sessions`, and its absence must never block
+ * the plugin from mounting its settings, credential, or usage surfaces.
+ */
 export function installFriendlyImageError(
   connection: ConnectionLike,
   getLocale: () => LocaleId,
-): void {
-  connection.api.sessions = withFriendlyImageError(connection.api.sessions, getLocale)
+): boolean {
+  const api = connection.api
+  const sessions = api?.sessions
+  if (api === undefined || sessions === undefined || typeof sessions.selectModel !== 'function') return false
+  api.sessions = withFriendlyImageError(sessions, getLocale)
+  return true
 }
