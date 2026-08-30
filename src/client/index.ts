@@ -32,7 +32,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { installFriendlyImageError } from './sessions.ts'
 import type { ConnectionLike } from './sessions.ts'
 import { CommandCodeSettingsController, COMMANDCODE_NS, type SettingsPageState } from './settings.ts'
-import type { SettingsPageApi } from './settings.ts'
+import type { HostDescriptionSource, SettingsPageApi } from './settings.ts'
+import { adaptLegacyCredentials, type LegacyCredentialsApi } from './legacy-credentials.ts'
 import { CommandCodeUsageController, type UsagePageState, type UsageRemote } from './usage.ts'
 import { CommandCodeLoginController, type LoginPageState, type LoginRemote } from './login.ts'
 import { USAGE_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
@@ -162,16 +163,22 @@ function injectPageCss(): void {
   document.head.appendChild(tag)
 }
 
+/** Connection fields retained by pre-0.1.2 clients and absent from the current transport handle. */
+interface LegacyConnectionLike extends ConnectionLike {
+  api?: ConnectionLike['api'] & { credentials?: LegacyCredentialsApi }
+  hostDescription?: HostDescriptionSource
+}
+
 /**
- * Client plugin body. Gates on the services the settings page needs
- * (`slots`, `locale`, `connection`, `remote`, `remote.credentials`,
- * `settingsScope`) — the same inject list the harness's own settings-surface
- * plugins declare, plus the credential Remote that 0.1.2 introduces.
+ * Client plugin body. Gates on the services shared by both client generations
+ * (`slots`, `locale`, `connection`, `remote`, `settingsScope`). Current clients
+ * mount the page after `remote.credentials` appears; legacy clients mount it
+ * from the connection ApiProxy credential face.
  */
 export function apply(ctx: Context): void {
   injectPageCss()
 
-  const connection = ctx.get('connection') as ConnectionLike | undefined
+  const connection = ctx.get('connection') as LegacyConnectionLike | undefined
   if (connection !== undefined) {
     // The wrapper is reached from a non-React path that has no `t` in scope;
     // it reads the active client locale at call time, so a language switch
@@ -188,13 +195,31 @@ export function apply(ctx: Context): void {
   // `slots.inject` waits for the declaration).
   ctx.effect(() => ctx.locale.register('settings.commandcode', { zh, en }), 'dsh-commandcode-provider: page copy')
 
+  const legacyApi = adaptLegacyCredentials(connection?.api?.credentials)
+  if (legacyApi !== undefined) {
+    applyClientSurfaces(ctx, legacyApi, connection?.hostDescription)
+    return
+  }
+
+  // DSH 0.1.2 exposes credentials through a Typert Remote namespace. Keep it
+  // optional at the root so a legacy client without `remote.credentials` can
+  // still activate through the ApiProxy branch above.
+  ctx.inject(['remote.credentials'], (remoteCtx) => {
+    const credentials = (remoteCtx.remote as unknown as {
+      credentials: SettingsPageApi['credentials']
+    }).credentials
+    applyClientSurfaces(remoteCtx, { credentials })
+  })
+}
+
+/** Mount the one shared UI implementation over either credential transport. */
+function applyClientSurfaces(
+  ctx: Context,
+  api: SettingsPageApi,
+  hostDescription?: HostDescriptionSource,
+): void {
   const scope = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: COMMANDCODE_NS })
-  const credentialRemote = (ctx.remote as unknown as { credentials: SettingsPageApi['credentials'] }).credentials
-  // Preserve hostDescription (cwd placeholder) when the Host still exposes it;
-  // 0.1.2 may no longer provide it, so the field is optional and the page
-  // degrades to no placeholder.
-  const hostDescription = (ctx.get('connection') as unknown as { hostDescription?: { getSnapshot(): { cwd?: string } | undefined; subscribe(fn: () => void): () => void } } | undefined)?.hostDescription
-  const controller = new CommandCodeSettingsController(scope, { credentials: credentialRemote }, hostDescription)
+  const controller = new CommandCodeSettingsController(scope, api, hostDescription)
   ctx.effect(() => () => controller.dispose(), 'dsh-commandcode-provider: settings controller')
   const store = createSnapshotStore<SettingsPageState>(controller.state())
   controller.subscribe(() => store.set(controller.state()))
@@ -364,6 +389,5 @@ export const inject: readonly string[] = [
   'locale',
   'connection',
   'remote',
-  'remote.credentials',
   'settingsScope',
 ]

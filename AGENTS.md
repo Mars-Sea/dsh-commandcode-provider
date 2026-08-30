@@ -33,6 +33,7 @@ src/client/index.ts   Browser client entry: registers the "Command Code"
                       (settings.models.provider-card, key `llm-commandcode`).
 src/client/settings.ts  Settings-page controller (scope + credentials + staged
                       form; React-free so node tests can drive it).
+src/client/legacy-credentials.ts  Pre-0.1.2 ApiProxy-to-current credential face adapter.
 src/client/usage.ts   Account-card controller (Remote fetch lifecycle +
                       formatting; React-free) + the TypertRemoteMap merge
                       declaration for `commandcode/report`.
@@ -58,6 +59,8 @@ tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/settings.test.ts settings-page controller tests.
 tests/card.test.ts    Models-page provider-card tests (posture logic, key
                       write path, login affordance parity).
+tests/legacy-credentials.test.ts  Legacy credential-envelope adapter tests.
+tests/snapshot-store.test.ts  Snapshot-store notification and disposal tests.
 tests/update.test.ts  update-hint tests (semver compare, payload parse,
                       throttle cache, failure semantics).
 tests/usage-wire.test.ts usage-Remote schema + descriptor tests.
@@ -79,21 +82,20 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `@deepseek-ai/dsh-client-web-react`, `@deepseek-ai/dsh-client-ui-primitives`,
   `@deepseek-ai/dsh-client-schema-form`, `@deepseek-ai/dsh-client-ui-attachment`)
   and host-shipped platform modules resolvable from the loader's module table
-  (e.g. `@deepseek-ai/dsh-client-ui-primitives`, which is published on npm).
-  The 0.1.2 adapter originally imported `createSnapshotStore` from the
-  `@deepseek-ai/dsh-client-store` platform module, but that package was never
-  published and the host's module table does not materialize it — so any
-  `require("@deepseek-ai/dsh-client-store")` in `lib/client.js` makes the dsh
-  loader reject the whole plugin at import time. The store is therefore
-  **vendored** at `src/client/snapshot-store.ts` (a tiny
-  `getSnapshot`/`subscribe`/`set` triple); the client bundle has no
-  `dsh-client-store` require, so it loads on any host. Flip back to importing
-  it from the platform module only once upstream actually ships the package.
-  The settings page binds the
+  (e.g. `@deepseek-ai/dsh-client-ui-primitives`). The 0.1.2 Web shell also
+  seeds `@deepseek-ai/dsh-client-store`, but older supported installations do
+  not, and that package is not yet published independently on npm. The client
+  therefore keeps the small `getSnapshot`/`subscribe`/`set` subset it needs in
+  `src/client/snapshot-store.ts`; the bundle issues no version-specific store
+  request and remains loadable on legacy shells. The settings page binds the
   `llm-commandcode` namespace through `ctx.settingsScope` and writes the API
-  key through `ctx.remote.credentials` under the `COMMANDCODE_API_KEY`
-  reference — never through the settings section, so the key literal cannot
-  leak into a settings document. `tests/settings.test.ts` pins this contract.
+  key through `ctx.remote.credentials` on 0.1.2 or the normalized
+  `connection.api.credentials` face on older clients, under the
+  `COMMANDCODE_API_KEY` reference — never through the settings section, so
+  the key literal cannot leak into a settings document. The root plugin keeps
+  `remote.credentials` optional and activates the same page implementation
+  through whichever credential transport exists. `tests/settings.test.ts`
+  and `tests/legacy-credentials.test.ts` pin this contract.
 - **Models-page provider card (`settings.models.provider-card`)**: a keyed
   SlotMap seat ui-settings-models declares as of dsh 0.1.2-alpha.1 — it
   dispatches with `entryKey = settingsNs` on every provider card of an adapter
