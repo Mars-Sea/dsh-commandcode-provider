@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **dsh 0.1.2-alpha.2 compatibility (host side).** The host entry now loads on the current `@alpha` runtime while staying backward-compatible with the rc channel: the tool-call id brand is resolved at runtime (`ToolCallId` on alpha, `CallId` on rc), and the settings section registers through `SettingsProvider.installSection` (`ctx.inject(['settings'])`, plain-string namespace) when the runtime ships it, falling back to the removed `installSettingsSection`/`settingsNamespace` helpers otherwise.
+
+### Removed
+
+- **Client bundle manifest entry (temporary).** The web client still targets the rc.2-era module table (`@deepseek-ai/dsh-client-runtime/client`, `@deepseek-ai/dsh-client-ui-primitives`), which no longer exists in the alpha.2 runtime — loading it aborts the whole client bootstrap (white page). The `dsh.client` manifest entry is removed so the plugin installs cleanly on alpha.2 with its host-side features; `src/client/` is kept for a future re-port against the current client-modules table.
+
 ## [0.9.1] - 2026-08-28
 
 ### Added

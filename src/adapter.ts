@@ -28,9 +28,9 @@ import { randomUUID } from 'node:crypto'
 
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
+import * as dshLlm from '@deepseek-ai/dsh-llm'
 import {
   attributionHeaders,
-  CallId,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
@@ -47,6 +47,11 @@ import {
   type StreamChunk,
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
+
+// dsh-llm 0.1.2-alpha.2 renamed the CallId brand function to ToolCallId. Pick
+// whichever the runtime provides so the adapter loads on both the rc and alpha
+// channels (the peer range admits both).
+const brandCallId = (dshLlm as any).ToolCallId ?? (dshLlm as any).CallId
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 // ---------------------------------------------------------------------------
@@ -1782,11 +1787,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           sawContent = true
           chunks.push(
             { type: 'block-start', index, blockType: 'tool-call' },
-            { type: 'tool-call-delta', index, id: CallId(id), name, argumentsDelta: args },
+            { type: 'tool-call-delta', index, id: brandCallId(id), name, argumentsDelta: args },
             {
               type: 'block-end',
               index,
-              block: { type: 'tool-call', id: CallId(id), name, arguments: args },
+              block: { type: 'tool-call', id: brandCallId(id), name, arguments: args },
             },
           )
           break

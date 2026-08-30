@@ -35,7 +35,7 @@ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import * as dshSettings from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
@@ -118,7 +118,11 @@ export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccou
 export const name = 'llm-commandcode'
 export const inject = ['llm']
 
-const NS = settingsNamespace('llm-commandcode')
+// dsh-settings 0.1.2-alpha.2 replaced the installSettingsSection/settingsNamespace
+// helpers with a SettingsProvider service; keep the old helpers when the runtime
+// still ships them so the plugin loads on both the rc and alpha channels.
+const { installSettingsSection, settingsNamespace } = dshSettings as any
+const NS = settingsNamespace === undefined ? 'llm-commandcode' : settingsNamespace('llm-commandcode')
 const DEFAULT_API_KEY_ENV = 'COMMANDCODE_API_KEY'
 
 /** The single provider route this plugin owns. */
@@ -435,12 +439,19 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => loginFlow.dispose(), 'dsh-commandcode-provider: login flow')
   applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow })
 
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => {
+  const settingsHooks = {
+    setSource: (source: () => Config) => {
       current = source
     },
     // Everything the adapter reads is resolved per request, so a settings
     // change needs no registration-level action.
     onChange: () => {},
-  })
+  }
+  if (installSettingsSection !== undefined) {
+    installSettingsSection(ctx, NS, Config, config, settingsHooks)
+  } else {
+    (ctx as any).inject(['settings'], (settingsCtx: any) => {
+      settingsCtx.settings.installSection(ctx, NS, Config, config, settingsHooks)
+    })
+  }
 }
