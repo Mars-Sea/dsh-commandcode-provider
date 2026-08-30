@@ -35,6 +35,8 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
+Fresh pnpm 10 marketplace generations are supported directly. Do not add a separate `@deepseek-ai/dsh-invariants` dependency; the plugin declares it as a Host peer so the active dsh profile remains the owner of Harness packages.
+
 ## Updating
 
 ```sh

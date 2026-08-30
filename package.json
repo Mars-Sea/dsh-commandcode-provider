@@ -43,6 +43,7 @@
   "scripts": {
     "build": "tsdown",
     "prepare": "tsdown",
+    "test:install": "node scripts/verify-isolated-install.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/**/*.test.ts"
   },
@@ -83,6 +84,7 @@
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1",
     "@deepseek-ai/dsh-commands": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1",
     "@deepseek-ai/dsh-credentials": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1",
     "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1",
@@ -102,6 +104,7 @@
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-credentials": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",

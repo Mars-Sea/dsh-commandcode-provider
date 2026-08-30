@@ -69,6 +69,7 @@ tests/login.test.ts   browser-login flow integration tests (real loopback
                       server driven with fetch; every failure reason).
 tests/login-wire.test.ts login descriptor uniformity + status parser.
 tests/login-client.test.ts login-panel controller poll lifecycle.
+scripts/verify-isolated-install.mjs  pnpm 10 marketplace-generation tarball install smoke.
 cordis.patch.yml      Bundle patch layer (inserts the llm-commandcode row).
 tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 ```
@@ -96,6 +97,14 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `remote.credentials` optional and activates the same page implementation
   through whichever credential transport exists. `tests/settings.test.ts`
   and `tests/legacy-credentials.test.ts` pin this contract.
+- **Isolated package install**: pnpm 10 auto-installs the package's DSH peers
+  when a desktop marketplace prepares a fresh generation. Keep
+  `@deepseek-ai/dsh-invariants` as an explicit peer with the same supported
+  0.1.0/0.1.1/0.1.2 branches; otherwise pnpm reaches it only through
+  `dsh-llm`, rewrites the prerelease range to an unsatisfiable stable range,
+  and aborts with `ERR_PNPM_NO_MATCHING_VERSION`. Do not move it to
+  `dependencies`: the active profile owns Harness packages. Run
+  `npm run test:install` after changing DSH peer metadata.
 - **Models-page provider card (`settings.models.provider-card`)**: a keyed
   SlotMap seat ui-settings-models declares as of dsh 0.1.2-alpha.1 — it
   dispatches with `entryKey = settingsNs` on every provider card of an adapter
@@ -173,6 +182,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 npm install             # devDeps incl. tsdown, tsx, typescript
 npm run typecheck       # tsc --noEmit
 npm test                # node --import tsx --test tests/**/*.test.ts
+npm run test:install    # pack + install in a fresh pnpm 10.34.5 generation
 npm run build           # tsdown -> lib/ (also runs via `prepare` on publish/git install)
 npm pack --dry-run      # verify publish contents (must include lib/, cordis.patch.yml, README*, CHANGELOG, LICENSE)
 ```

@@ -33,6 +33,8 @@
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
+插件可直接在 pnpm 10 的全新插件市场 generation 中安装。不要另行添加 `@deepseek-ai/dsh-invariants` dependency；插件已将其声明为 Host peer，Harness 包仍由当前 dsh profile 统一管理。
+
 ## 更新
 
 ```sh

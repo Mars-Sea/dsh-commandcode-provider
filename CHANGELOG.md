@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Restored fresh plugin-marketplace installs under pnpm 10.** The package now declares the published `@deepseek-ai/dsh-invariants` line as an explicit Host peer, so pnpm does not reinterpret `dsh-llm`'s transitive prerelease peer as the unsatisfiable `>=0.1.1 <0.2.0-0` range. The peer keeps the existing 0.1.0/0.1.1/0.1.2 compatibility branches instead of bundling an RC copy into the plugin; a pnpm 10.34.5 tarball-install smoke test pins the isolated-generation path.
 - **Kept snapshot state self-contained across DSH generations.** DSH 0.1.2 seeds `@deepseek-ai/dsh-client-store`, but older Web shells do not and the package is not yet available independently from the public npm registry. The client therefore inlines only the `getSnapshot`/`subscribe`/`set` subset it consumes, now with per-subscriber failure isolation, so one faulty UI subscriber cannot suppress the remaining updates.
 - **Prevented the legacy friendly image-session error wrapper from blocking 0.1.2 client startup.** The pre-0.1.2 wrapper assumed `connection.api.sessions`; 0.1.2 replaces that façade with `remote.session`, so the optional copy rewrite now safely skips itself when the legacy sessions face is absent instead of failing the whole plugin with `Cannot read properties of undefined (reading 'sessions')`. Legacy hosts still receive the localized rewrite.
 
