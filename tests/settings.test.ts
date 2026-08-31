@@ -705,3 +705,84 @@ test('a failed unset keeps the staged clear and reports the failure', async () =
   assert.equal(store.has(DEFAULT_API_KEY_REF), true)
   assert.equal(controller.state().savedCount, 0)
 })
+
+// ---------------------------------------------------------------------------
+// Model → account routing rules
+// ---------------------------------------------------------------------------
+
+test('starts with the stored routing rules and stays clean', () => {
+  const scope = makeScope({
+    value: { modelAccountRules: [{ model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' }] },
+    user: { modelAccountRules: [{ model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' }] },
+  })
+  const { controller } = makeController({ scope })
+  const rules = controller.state().rules
+  assert.equal(rules.length, 1)
+  assert.equal(rules[0]?.model, 'deepseek/')
+  assert.equal(rules[0]?.account, 'COMMANDCODE_API_KEY_2')
+  assert.equal(rules[0]?.added, false)
+  assert.equal(controller.state().dirty, false)
+})
+
+test('addRule stages a new rule with the default account target', () => {
+  const { controller } = makeController()
+  controller.addRule()
+  const rules = controller.state().rules
+  assert.equal(rules.length, 1)
+  assert.equal(rules[0]?.added, true)
+  assert.equal(rules[0]?.model, '')
+  assert.equal(rules[0]?.account, 'default')
+  assert.equal(controller.state().dirty, true)
+})
+
+test('saving a staged rule writes modelAccountRules through the scope', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  controller.addRule()
+  controller.editRuleModel('new-0', 'deepseek/')
+  controller.editRuleAccount('new-0', 'COMMANDCODE_API_KEY_2')
+  await controller.save()
+  assert.deepEqual(scope.state.value.modelAccountRules, [
+    { model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' },
+  ])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('editing a stored rule is dirty until saved', async () => {
+  const scope = makeScope({
+    value: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
+    user: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
+  })
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().dirty, false)
+  controller.editRuleAccount('rule-0', 'COMMANDCODE_API_KEY_2')
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.deepEqual(scope.state.value.modelAccountRules, [
+    { model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' },
+  ])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('removing a stored rule persists the shorter list', async () => {
+  const scope = makeScope({
+    value: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
+    user: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
+  })
+  const { controller } = makeController({ scope })
+  controller.removeRule('rule-0')
+  assert.deepEqual(controller.state().rules, [])
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.deepEqual(scope.state.value.modelAccountRules, [])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('discard clears staged rule edits', () => {
+  const { controller } = makeController()
+  controller.addRule()
+  controller.editRuleModel('new-0', 'deepseek/')
+  controller.discard()
+  assert.deepEqual(controller.state().rules, [])
+  assert.equal(controller.state().dirty, false)
+})

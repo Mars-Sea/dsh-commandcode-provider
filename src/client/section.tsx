@@ -22,7 +22,7 @@ import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
-import type { AccountItemState, SettingsPageState, StagedField } from './settings.ts'
+import type { AccountItemState, RuleItemState, SettingsPageState, StagedField } from './settings.ts'
 import type { CommandCodeLoginFailureReason } from '../login-wire.ts'
 import type { LoginPageState } from './login.ts'
 import type { UsagePageState } from './usage.ts'
@@ -48,6 +48,10 @@ export interface CommandCodeSettingsProps {
   editAccountLabel(id: string, text: string): void
   editAccountKey(id: string, text: string): void
   toggleKeyClear(id: string): void
+  addRule(): void
+  removeRule(id: string): void
+  editRuleModel(id: string, text: string): void
+  editRuleAccount(id: string, text: string): void
 }
 
 /** The section fields folded into the collapsible Advanced card. */
@@ -849,6 +853,92 @@ function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onT
   )
 }
 
+/** One model → account routing rule row. */
+function RuleRow({ rule, accounts, disabled, t, onModel, onAccount, onRemove }: {
+  rule: RuleItemState
+  accounts: AccountItemState[]
+  disabled: boolean
+  t: Translate<SettingsCommandCodeKey>
+  onModel(text: string): void
+  onAccount(text: string): void
+  onRemove(): void
+}) {
+  const targets = [
+    { value: 'default', label: t('accountDefault') },
+    ...accounts.filter((account) => !account.added).map((account) => ({ value: account.ref, label: account.label })),
+  ]
+  return (
+    <div className="cc-field">
+      <div className="cc-fieldHead">
+        <label className="cc-label" htmlFor={`cc-rule-model-${rule.id}`}>{t('ruleModel')}</label>
+        <span className="cc-badges">
+          {rule.added ? <span className="cc-badge">{t('unsaved')}</span> : null}
+          <button type="button" className="cc-reset" disabled={disabled} onClick={onRemove}>{t('ruleRemove')}</button>
+        </span>
+      </div>
+      <input
+        id={`cc-rule-model-${rule.id}`}
+        className="cc-input"
+        type="text"
+        placeholder={t('ruleModelPlaceholder')}
+        value={rule.model}
+        disabled={disabled}
+        onChange={(event) => onModel(event.target.value)}
+      />
+      <select
+        id={`cc-rule-account-${rule.id}`}
+        className="cc-input"
+        value={rule.account}
+        disabled={disabled}
+        onChange={(event) => onAccount(event.target.value)}
+      >
+        {targets.map((target) => (
+          <option key={target.value} value={target.value}>{target.label}</option>
+        ))}
+      </select>
+      <p className="cc-hint">{t('ruleHint')}</p>
+    </div>
+  )
+}
+
+/** The model → account routing card: rules in list order (first match wins). */
+function RulesCard({ t, state, disabled, onAdd, onRemove, onModel, onAccount }: {
+  t: Translate<SettingsCommandCodeKey>
+  state: SettingsPageState
+  disabled: boolean
+  onAdd(): void
+  onRemove(id: string): void
+  onModel(id: string, text: string): void
+  onAccount(id: string, text: string): void
+}) {
+  return (
+    <div className="cc-card" aria-label={t('rulesTitle')}>
+      <div className="cc-field">
+        <div className="cc-fieldHead">
+          <label className="cc-label">{t('rulesTitle')}</label>
+          <span className="cc-badges">
+            <button type="button" className="cc-reset" disabled={disabled} onClick={onAdd}>{t('ruleAdd')}</button>
+          </span>
+        </div>
+        <p className="cc-hint">{t('rulesHint')}</p>
+      </div>
+      {state.rules.map((rule) => (
+        <RuleRow
+          key={rule.id}
+          rule={rule}
+          accounts={state.accounts}
+          disabled={disabled}
+          t={t}
+          onModel={(text) => onModel(rule.id, text)}
+          onAccount={(text) => onAccount(rule.id, text)}
+          onRemove={() => onRemove(rule.id)}
+        />
+      ))}
+      {state.rules.length === 0 ? <p className="cc-hint">{t('rulesEmpty')}</p> : null}
+    </div>
+  )
+}
+
 /**
  * Show the "Saved ✓" affordance for a short window after each accepted save.
  * The controller only counts saves (`savedCount`); the flash timing lives
@@ -927,6 +1017,15 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onToggleClear={(id) => props.toggleKeyClear(id)}
         onActive={(text) => props.edit('activeAccount', text)}
         onActiveReset={() => props.resetField('activeAccount')}
+      />
+      <RulesCard
+        t={t}
+        state={state}
+        disabled={disabled}
+        onAdd={props.addRule}
+        onRemove={props.removeRule}
+        onModel={props.editRuleModel}
+        onAccount={props.editRuleAccount}
       />
       <div className="cc-card">
         <SecretKeyField

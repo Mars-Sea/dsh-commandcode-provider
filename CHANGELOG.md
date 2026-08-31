@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Route models to accounts (`modelAccountRules`).** A new settings card (and matching `Config.modelAccountRules` YAML) pins a model id or slash-prefix (e.g. `deepseek/`) to an account slot; requests whose model matches a rule serve from that account while it is usable, falling back to the normal rotation when the routed account is exhausted or invalid. First matching rule wins. Pairs naturally with the existing multi-account rotation — e.g. keep cheap Go-tier models on the Go account and route GOAT-only models to the GOAT account.
+
 ## [0.10.0-alpha.1] - 2026-09-01
 
 > **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.

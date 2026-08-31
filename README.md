@@ -93,6 +93,7 @@ With several Command Code subscriptions, the plugin **switches to the next accou
 
 - **Setup** — use the **Account rotation** card at Settings → **Command Code** to add accounts with a label and API key; the top-level key always serves first as the `default` account.
 - **Manual switching** — the **Active account** dropdown pins a preferred account; if it is exhausted, requests fall back to other accounts and return once its window resets.
+- **Route models to accounts** — the **Route models to accounts** card pins a model (or a slash-prefix, e.g. `deepseek/`) to an account. A request whose model matches a rule serves from that account while it is usable; an exhausted or invalid routed account falls back to the normal rotation. Rules match in list order — the first hit wins.
 - **Status** — the **Account usage** card and `/commandcode` report per-account state.
 
 The equivalent YAML (`$DSH_HOME/settings.yaml` or composition config):
@@ -106,6 +107,11 @@ llm-commandcode:
       apiKeyEnv: COMMANDCODE_API_KEY_2
     - label: Go #3
       apiKeyEnv: COMMANDCODE_API_KEY_3
+  modelAccountRules:                     # optional: route models to accounts (first match wins)
+    - model: deepseek/                   # a slash-prefix matches every deepseek/* model
+      account: COMMANDCODE_API_KEY_2
+    - model: tencent/hy4-preview         # an exact catalog id
+      account: default
 ```
 
 ## Configure

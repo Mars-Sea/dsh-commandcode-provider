@@ -7,9 +7,11 @@
  * This module owns that rotation:
  *
  *   - {@link CommandCodeAccountPool.resolveKey} hands out the first account
- *     whose key is not currently marked exhausted, resolving each slot's key
- *     lazily (literal config key → credential seam → launch environment → the
- *     official CLI auth file for the default slot only).
+ *     whose key is not currently marked exhausted — or, when the request's
+ *     model matches a {@link CommandCodeModelAccountRule} and that account is
+ *     usable, the routed account — resolving each slot's key lazily (literal
+ *     config key → credential seam → launch environment → the official CLI
+ *     auth file for the default slot only).
  *   - {@link CommandCodeAccountPool.markRejected} records a 429 (rate limit,
  *     window unknown) or 401 (invalid key, disabled until the config changes)
  *     against the exact API key, so several slots sharing one key share one
@@ -113,6 +115,28 @@ export interface CommandCodeAccountPoolDeps {
    * account falls back to the first usable slot.
    */
   preferredId?(): string | undefined
+  /**
+   * Model → account routing rules, re-read per resolution so settings changes
+   * apply live. Each rule pins one catalog model id (or a glob-ish prefix,
+   * see {@link CommandCodeModelAccountRule}) to an account slot id. When the
+   * request's model matches a rule and that account is usable, it serves
+   * before the preferred/rotation selection; an unusable routed account falls
+   * back to the normal selection (the router is a hint, never a hard gate).
+   */
+  modelAccountRules?(): readonly CommandCodeModelAccountRule[]
+}
+
+/**
+ * One "route this model to that account" rule. `model` is a catalog id
+ * (`deepseek/deepseek-v4-pro`, …) or a prefix (`deepseek/`) matched against
+ * the request's model id; `account` is a slot id (`default` or an extra
+ * account's credential reference). The first matching rule in list order wins.
+ */
+export interface CommandCodeModelAccountRule {
+  /** Model id or slash-prefix to match against the request's model. */
+  model: string
+  /** Account slot id to prefer for matching models. */
+  account: string
 }
 
 /** A labeled, human-readable clock reading for error messages. */
@@ -148,6 +172,44 @@ export function selectActiveAccount(
     if (preferred !== undefined) return preferred
   }
   return usable[0]
+}
+
+/**
+ * The first routing rule whose model pattern matches the request's model id.
+ * A rule matches when its `model` is a prefix of the request model (the whole
+ * pattern when it ends in `/`, else an exact id). Undefined when no rule
+ * matches.
+ */
+export function matchModelRule(
+  model: string,
+  rules: readonly CommandCodeModelAccountRule[] | undefined,
+): CommandCodeModelAccountRule | undefined {
+  if (model === '' || rules === undefined || rules.length === 0) return undefined
+  for (const rule of rules) {
+    if (rule.model === '') continue
+    if (rule.model.endsWith('/')) {
+      if (model.startsWith(rule.model)) return rule
+    } else if (model === rule.model) {
+      return rule
+    }
+  }
+  return undefined
+}
+
+/**
+ * The routed account for a request's model: the first usable account whose
+ * slot id matches the first matching rule's target. Undefined when no rule
+ * matches or the routed account is not usable (the caller then falls back to
+ * the normal preferred/rotation selection).
+ */
+export function selectAccountForModel(
+  accounts: readonly ResolvedAccount[],
+  model: string,
+  rules: readonly CommandCodeModelAccountRule[] | undefined,
+): ResolvedAccount | undefined {
+  const rule = matchModelRule(model, rules)
+  if (rule === undefined) return undefined
+  return accounts.find((account) => account.slot.id === rule.account && accountUsable(account.state))
 }
 
 /**
@@ -194,22 +256,29 @@ export class CommandCodeAccountPool {
   }
 
   /**
-   * Hand out the first usable account's key (the manually preferred account
-   * when usable, else rotation order). Returns `undefined` when no account
-   * resolves any key at all (the caller then reports the missing credential).
-   * Throws `RATE_LIMIT` — naming the earliest window reset — or
+   * Hand out the key for a request: the model-routed account when the
+   * request's model matches a rule (and that account is usable), else the
+   * manually preferred account when usable, else the first usable account in
+   * rotation order. Returns `undefined` when no account resolves any key at
+   * all (the caller then reports the missing credential). Throws
+   * `RATE_LIMIT` — naming the earliest window reset — or
    * `INVALID_CREDENTIAL` when accounts exist but none can serve.
+   *
+   * `options.model` is the request's model id; routing rules re-read per
+   * resolution, so a settings change applies live.
    *
    * `options.exclude` skips one key during the probe-revival pass: the
    * rotation hook excludes the just-rejected key so a probe that clears its
    * window cannot re-offer the same key within the same request (the adapter
    * refuses already-tried keys; the next request picks the revived key up).
    */
-  async resolveKey(options?: { exclude?: string }): Promise<{ key: string; slot: CommandCodeAccountSlot } | undefined> {
+  async resolveKey(options?: { exclude?: string; model?: string }): Promise<{ key: string; slot: CommandCodeAccountSlot } | undefined> {
     const accounts = await this.resolvedAccounts()
     if (accounts.length === 0) {
       return undefined
     }
+    const routed = selectAccountForModel(accounts, options?.model ?? '', this.deps.modelAccountRules?.())
+    if (routed !== undefined) return this.pick(routed)
     const chosen = selectActiveAccount(accounts, this.deps.preferredId?.())
     if (chosen !== undefined) return this.pick(chosen)
 

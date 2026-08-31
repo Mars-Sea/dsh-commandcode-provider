@@ -91,6 +91,7 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 
 - **配置**：在 **设置 → Command Code** 的「多账户轮换」卡片添加账户并填写备注名与 API key；顶层 key 始终是第一顺位的 `default` 账户。
 - **手动切换**：卡片上的「当前使用账户」下拉框可指定优先账户；所选账户耗尽时自动回落到其他账户，窗口重置后自动恢复。
+- **按模型切换账户**：在「按模型切换账户」卡片把模型（或斜杠前缀，如 `deepseek/`）固定到某个账户。请求的模型命中规则且该账户可用时使用该账户；账户耗尽或密钥失效时自动回落到常规轮换。规则按列表顺序匹配，第一条命中生效。
 - **状态展示**：「账户用量」卡片与 `/commandcode` 均按账户分别显示状态。
 
 等价的 YAML（`$DSH_HOME/settings.yaml` 或组合配置）：
@@ -104,6 +105,11 @@ llm-commandcode:
       apiKeyEnv: COMMANDCODE_API_KEY_2
     - label: Go #3
       apiKeyEnv: COMMANDCODE_API_KEY_3
+  modelAccountRules:                     # 可选：按模型路由到账户（第一条命中生效）
+    - model: deepseek/                   # 斜杠前缀匹配所有 deepseek/* 模型
+      account: COMMANDCODE_API_KEY_2
+    - model: tencent/hy4-preview         # 精确的目录模型 id
+      account: default
 ```
 
 ## 配置

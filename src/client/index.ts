@@ -344,6 +344,10 @@ function applyClientSurfaces(
     editAccountLabel: (id: string, text: string) => controller.editAccountLabel(id, text),
     editAccountKey: (id: string, text: string) => controller.editAccountKey(id, text),
     toggleKeyClear: (id: string) => controller.toggleKeyClear(id),
+    addRule: () => controller.addRule(),
+    removeRule: (id: string) => controller.removeRule(id),
+    editRuleModel: (id: string, text: string) => controller.editRuleModel(id, text),
+    editRuleAccount: (id: string, text: string) => controller.editRuleAccount(id, text),
   })
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({

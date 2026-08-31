@@ -119,6 +119,18 @@ export interface AccountItemState {
   clearStaged: boolean
 }
 
+/** One model → account routing rule row's staged state. */
+export interface RuleItemState {
+  /** Stable row id (`rule-N` for stored rows, `new-N` for staged adds). */
+  id: string
+  /** Model id or slash-prefix the rule matches against. */
+  model: string
+  /** Account slot id the rule routes matching models to. */
+  account: string
+  /** Staged for addition (not yet saved). */
+  added: boolean
+}
+
 /** The page's full state face, projected from the scope + drafts + credential. */
 export interface SettingsPageState {
   /** Whether the namespace snapshot is ready. */
@@ -164,6 +176,8 @@ export interface SettingsPageState {
   accounts: AccountItemState[]
   /** Refs of stored accounts staged for removal (the usage card hides them). */
   accountsRemoving: string[]
+  /** Model → account routing rules, in list order (first match wins). */
+  rules: RuleItemState[]
   /** Whether any staged edit differs from the stored section. */
   dirty: boolean
   /** Whether a staged numeric field fails to parse (save blocked). */
@@ -302,6 +316,12 @@ export class CommandCodeSettingsController {
   private readonly keyDrafts = new Map<string, string>()
   /** Credential references staged for removal on the next save. */
   private readonly keyClears = new Set<string>()
+  /** Staged model→account routing rules (not yet saved). */
+  private addedRules: Array<{ model: string; account: string }> = []
+  /** Staged edits to stored routing rules, by stored row id. */
+  private readonly ruleDrafts = new Map<string, { model: string; account: string }>()
+  /** Stored routing rule rows staged for removal. */
+  private readonly removedRuleIds = new Set<string>()
   private saving = false
   private failed = false
   private savedCount = 0
@@ -399,7 +419,8 @@ export class CommandCodeSettingsController {
       activeAccount: this.field('activeAccount'),
       accounts,
       accountsRemoving: [...this.removedRefs],
-      dirty: plan.length > 0 || this.accountsDirty(),
+      rules: this.effectiveRules(),
+      dirty: plan.length > 0 || this.accountsDirty() || this.rulesDirty(),
       invalid: plan.some((item) => item.run === undefined),
       saving: this.saving,
       failed: this.failed,
@@ -485,6 +506,47 @@ export class CommandCodeSettingsController {
     this.publish()
   }
 
+  /** Stage a new model → account routing rule (saved on the next `save()`). */
+  addRule(): void {
+    this.addedRules.push({ model: '', account: 'default' })
+    this.failed = false
+    this.publish()
+  }
+
+  /** Stage one routing rule's removal (or drop an unsaved addition). */
+  removeRule(id: string): void {
+    const addedIndex = this.addedRules.findIndex((_, index) => `new-${index}` === id)
+    if (addedIndex >= 0) this.addedRules.splice(addedIndex, 1)
+    else this.removedRuleIds.add(id)
+    this.ruleDrafts.delete(id)
+    this.failed = false
+    this.publish()
+  }
+
+  /** Stage one routing rule's model pattern draft. */
+  editRuleModel(id: string, text: string): void {
+    this.stageRuleField(id, 'model', text)
+  }
+
+  /** Stage one routing rule's target account draft. */
+  editRuleAccount(id: string, text: string): void {
+    this.stageRuleField(id, 'account', text)
+  }
+
+  /** Stage one routing rule field; added rows edit in place, stored rows draft. */
+  private stageRuleField(id: string, field: 'model' | 'account', text: string): void {
+    const addedIndex = this.addedRules.findIndex((_, index) => `new-${index}` === id)
+    if (addedIndex >= 0) {
+      const row = this.addedRules[addedIndex]!
+      this.addedRules[addedIndex] = field === 'model' ? { ...row, model: text } : { ...row, account: text }
+    } else {
+      const current = this.ruleDrafts.get(id) ?? this.storedRules().find((rule) => rule.id === id) ?? { model: '', account: 'default' }
+      this.ruleDrafts.set(id, field === 'model' ? { ...current, model: text } : { ...current, account: text })
+    }
+    this.failed = false
+    this.publish()
+  }
+
   /** Stage one field's draft text. */
   edit(field: string, text: string): void {
     this.staged.set(field, { text, clear: false })
@@ -510,9 +572,10 @@ export class CommandCodeSettingsController {
 
   /** Discard every staged edit. */
   discard(): void {
-    if (this.staged.size === 0 && !this.accountsStaged() && !this.failed) return
+    if (this.staged.size === 0 && !this.accountsStaged() && !this.rulesStaged() && !this.failed) return
     this.staged.clear()
     this.clearAccountStaging()
+    this.clearRuleStaging()
     this.failed = false
     this.publish()
   }
@@ -530,7 +593,8 @@ export class CommandCodeSettingsController {
   async save(): Promise<void> {
     const plan = this.plan()
     const accountRuns = this.accountPlan()
-    if ((plan.length === 0 && accountRuns.length === 0) || this.saving) return
+    const ruleRuns = this.rulesPlan()
+    if ((plan.length === 0 && accountRuns.length === 0 && ruleRuns.length === 0) || this.saving) return
     const runs: Array<() => Promise<boolean>> = []
     for (const item of plan) {
       if (item.run === undefined) return
@@ -544,7 +608,7 @@ export class CommandCodeSettingsController {
     // write failed silently; the accounts list itself writes last. Stop at
     // the first failure: running later writes after a failed one would
     // persist a partial state the staged drafts no longer describe.
-    for (const run of [...runs, ...accountRuns]) {
+    for (const run of [...runs, ...accountRuns, ...ruleRuns]) {
       if (!(await run())) {
         landed = false
         break
@@ -556,12 +620,14 @@ export class CommandCodeSettingsController {
       this.savedCount += 1
       this.staged.clear()
       this.clearAccountStaging()
+      this.clearRuleStaging()
     } else {
       // A failed save may still have landed earlier writes (e.g. the accounts
       // list made it while a key write did not). Reconcile the staging with
       // the stored section so a landed account is not simultaneously stored
       // AND staged-for-addition (which a retry would persist twice).
       this.reconcileAccountStaging()
+      this.reconcileRuleStaging()
     }
     this.publish()
   }
@@ -856,6 +922,118 @@ export class CommandCodeSettingsController {
     const after = this.storedExtras()
     return after.length === list.length
       && list.every((item, index) => after[index]?.ref === item.apiKeyEnv)
+  }
+
+  // -----------------------------------------------------------------------
+  // Model → account routing-rule staging
+  // -----------------------------------------------------------------------
+
+  /** The stored routing rules from the settings section (`modelAccountRules`). */
+  private storedRules(): Array<{ id: string; model: string; account: string }> {
+    const raw = this.scope.getSnapshot().value?.modelAccountRules
+    if (!Array.isArray(raw)) return []
+    const out: Array<{ id: string; model: string; account: string }> = []
+    for (const [index, entry] of raw.entries()) {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+      const record = entry as Record<string, unknown>
+      const model = record.model
+      const account = record.account
+      if (typeof model !== 'string' || model === '') continue
+      out.push({
+        id: `rule-${index}`,
+        model,
+        account: typeof account === 'string' && account !== '' ? account : 'default',
+      })
+    }
+    return out
+  }
+
+  /** Every routing rule row: stored (minus staged removals, with drafts) + staged adds. */
+  private effectiveRules(): RuleItemState[] {
+    const stored = this.storedRules()
+      .filter((rule) => !this.removedRuleIds.has(rule.id))
+      .map((rule) => {
+        const draft = this.ruleDrafts.get(rule.id)
+        return {
+          id: rule.id,
+          model: draft?.model ?? rule.model,
+          account: draft?.account ?? rule.account,
+          added: false,
+        }
+      })
+    const added = this.addedRules.map((rule, index) => ({
+      id: `new-${index}`,
+      model: rule.model,
+      account: rule.account,
+      added: true,
+    }))
+    return [...stored, ...added]
+  }
+
+  /** Whether any routing-rule staging (add/remove/edit) exists. */
+  private rulesStaged(): boolean {
+    return this.addedRules.length > 0 || this.removedRuleIds.size > 0 || this.ruleDrafts.size > 0
+  }
+
+  /** Whether the staged routing rules differ from the stored section. */
+  private rulesDirty(): boolean {
+    if (this.addedRules.length > 0 || this.removedRuleIds.size > 0) return true
+    for (const [id, draft] of this.ruleDrafts) {
+      const base = this.storedRules().find((rule) => rule.id === id)
+      if (base === undefined) continue
+      if (draft.model.trim() !== '' && draft.model !== base.model) return true
+      if (draft.account !== base.account) return true
+    }
+    return false
+  }
+
+  /** Reset every routing-rule staged edit. */
+  private clearRuleStaging(): void {
+    this.addedRules = []
+    this.ruleDrafts.clear()
+    this.removedRuleIds.clear()
+  }
+
+  /** Drop rule staging the stored section already reflects (partial-save retry). */
+  private reconcileRuleStaging(): void {
+    const storedIds = new Set(this.storedRules().map((rule) => rule.id))
+    this.removedRuleIds.clear()
+    for (const id of [...this.removedRuleIds]) {
+      if (!storedIds.has(id)) this.removedRuleIds.delete(id)
+    }
+    // Drafts on rows that no longer exist (a failed save that landed the
+    // removal) are stale; drop them so a retry does not resurrect the row.
+    for (const id of [...this.ruleDrafts.keys()]) {
+      if (!storedIds.has(id)) this.ruleDrafts.delete(id)
+    }
+  }
+
+  /** The routing-rule writes a save performs (empty when nothing staged). */
+  private rulesPlan(): Array<() => Promise<boolean>> {
+    if (!this.rulesDirty()) return []
+    return [() => this.writeRules()]
+  }
+
+  /** Persist the staged routing rules into the settings section. */
+  private async writeRules(): Promise<boolean> {
+    const base = this.storedRules().filter((rule) => !this.removedRuleIds.has(rule.id))
+    const list = [
+      ...base.map((rule) => {
+        const draft = this.ruleDrafts.get(rule.id)
+        return {
+          model: draft?.model.trim() !== '' && draft !== undefined ? draft.model.trim() : rule.model,
+          account: draft?.account !== undefined && draft.account !== '' ? draft.account : rule.account,
+        }
+      }),
+      ...this.addedRules.map((rule) => ({
+        model: rule.model.trim(),
+        account: rule.account,
+      })),
+    ].filter((rule) => rule.model !== '')
+    await this.scope.set('modelAccountRules', list)
+    const after = this.storedRules()
+    return after.length === list.length
+      && list.every((item, index) => after[index]?.model === item.model && after[index]?.account === item.account)
   }
 
   private publish(): void {

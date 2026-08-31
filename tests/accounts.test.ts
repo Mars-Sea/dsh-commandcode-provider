@@ -11,8 +11,8 @@ import assert from 'node:assert/strict'
 
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { LlmError } from '@deepseek-ai/dsh-llm'
-import { CommandCodeAccountPool, accountUsable } from '../src/accounts.ts'
-import type { CommandCodeAccountSlot, FiveHourWindowProbe } from '../src/accounts.ts'
+import { CommandCodeAccountPool, accountUsable, matchModelRule, selectAccountForModel } from '../src/accounts.ts'
+import type { CommandCodeAccountSlot, CommandCodeModelAccountRule, FiveHourWindowProbe } from '../src/accounts.ts'
 
 /** The implicit first account, as the plugin entry builds it. */
 function defaultSlot(over: Partial<CommandCodeAccountSlot> = {}): CommandCodeAccountSlot {
@@ -46,6 +46,8 @@ interface PoolFixture {
   probes?: Record<string, FiveHourWindowProbe | undefined>
   /** The manually preferred slot id. */
   preferredId?: string
+  /** Model → account routing rules. */
+  rules?: CommandCodeModelAccountRule[]
 }
 
 /** A pool whose seams each test scripts; probe calls are recorded. */
@@ -60,6 +62,7 @@ function makePool(fixture: PoolFixture): { pool: CommandCodeAccountPool; probeCa
       return fixture.probes?.[apiKey]
     },
     preferredId: () => fixture.preferredId,
+    modelAccountRules: () => fixture.rules ?? [],
   })
   return { pool, probeCalls }
 }
@@ -349,4 +352,93 @@ test('describeAccounts reports slots sharing one credential individually', async
   const described = await pool.describeAccounts()
   assert.equal(described.length, 2)
   assert.ok(described.every((account) => account.key === 'key-1'))
+})
+
+// ---------------------------------------------------------------------------
+// Model → account routing rules
+// ---------------------------------------------------------------------------
+
+test('matchModelRule matches an exact model id', () => {
+  const rule = matchModelRule('deepseek/deepseek-v4-pro', [
+    { model: 'deepseek/deepseek-v4-pro', account: 'default' },
+  ])
+  assert.equal(rule?.account, 'default')
+})
+
+test('matchModelRule matches a slash-prefix, first rule wins', () => {
+  const rules = [
+    { model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' },
+    { model: 'deepseek/deepseek-v4-flash-vision-exp', account: 'default' },
+  ]
+  assert.equal(matchModelRule('deepseek/deepseek-v4-flash-vision-exp', rules)?.account, 'COMMANDCODE_API_KEY_2')
+  // A non-matching model gets no rule.
+  assert.equal(matchModelRule('tencent/hy4-preview', rules), undefined)
+})
+
+test('matchModelRule ignores empty patterns and returns undefined without rules', () => {
+  assert.equal(matchModelRule('anything', undefined), undefined)
+  assert.equal(matchModelRule('anything', []), undefined)
+  assert.equal(matchModelRule('anything', [{ model: '', account: 'default' }]), undefined)
+})
+
+test('selectAccountForModel picks the routed account when usable', () => {
+  const accounts = [
+    { slot: defaultSlot(), key: 'key-1', state: undefined },
+    { slot: extraSlot(2), key: 'key-2', state: undefined },
+  ]
+  const picked = selectAccountForModel(accounts, 'deepseek/deepseek-v4-pro', [
+    { model: 'deepseek/', account: 'account-2' },
+  ])
+  assert.equal(picked?.slot.id, 'account-2')
+})
+
+test('selectAccountForModel ignores a routed account that is not usable', () => {
+  const accounts = [
+    { slot: defaultSlot(), key: 'key-1', state: undefined },
+    { slot: extraSlot(2), key: 'key-2', state: { kind: 'disabled', reason: '401', until: 0 } },
+  ]
+  const picked = selectAccountForModel(accounts, 'deepseek/deepseek-v4-pro', [
+    { model: 'deepseek/', account: 'account-2' },
+  ])
+  assert.equal(picked, undefined)
+})
+
+test('resolveKey routes by model before the preferred/rotation selection', async () => {
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    preferredId: 'default',
+    rules: [{ model: 'deepseek/', account: 'account-2' }],
+  })
+  // Without a model the preferred account serves…
+  assert.equal((await pool.resolveKey())?.slot.id, 'default')
+  // …with a matching model the routed account serves instead.
+  const routed = await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro' })
+  assert.equal(routed?.slot.id, 'account-2')
+  assert.equal(routed?.key, 'key-2')
+})
+
+test('resolveKey falls back to rotation when the routed account is exhausted', async () => {
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    rules: [{ model: 'deepseek/', account: 'account-2' }],
+  })
+  pool.markRejected('key-2', 'rate-limit')
+  // The routed account is marked; the fallback serves the first usable account.
+  const routed = await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro' })
+  assert.equal(routed?.slot.id, 'default')
+  assert.equal(routed?.key, 'key-1')
+})
+
+test('resolveKey routes through the rotation hook after a rejection', async () => {
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    rules: [{ model: 'deepseek/', account: 'default' }],
+  })
+  // First request for the model uses the routed default account.
+  assert.equal((await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro' }))?.key, 'key-1')
+  // It is rejected; the next resolution for the same model excludes it and
+  // serves the fallback account.
+  pool.markRejected('key-1', 'rate-limit')
+  const next = await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro', exclude: 'key-1' })
+  assert.equal(next?.key, 'key-2')
 })

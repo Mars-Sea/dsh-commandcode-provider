@@ -40,7 +40,7 @@ import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './a
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
 import { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
-import type { CommandCodeAccountConfig, CommandCodeAccountSlot } from './accounts.ts'
+import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModelAccountRule } from './accounts.ts'
 import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
 import type { CommandCodeAccountsReport } from './usage-wire.ts'
@@ -112,8 +112,8 @@ export type {
   CommandCodeLoginFlowDeps,
   ApiKeyValidation,
 } from './login.ts'
-export { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
-export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState } from './accounts.ts'
+export { CommandCodeAccountPool, accountUsable, selectActiveAccount, matchModelRule, selectAccountForModel } from './accounts.ts'
+export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState, CommandCodeModelAccountRule } from './accounts.ts'
 
 export const name = 'llm-commandcode'
 export const inject = ['llm']
@@ -174,6 +174,16 @@ export interface Config {
    */
   activeAccount?: string
   /**
+   * Model → account routing rules. Each rule pins a catalog model id (or a
+   * slash-prefix, e.g. `deepseek/`) to an account slot id (`default`, or an
+   * extra account's credential reference). When a request's model matches a
+   * rule and the routed account is usable, that account serves — before the
+   * manual {@link activeAccount} and the passive rotation order. A routed
+   * account that is exhausted or invalid falls back to the normal selection,
+   * so the router is a hint, never a hard gate. The first matching rule wins.
+   */
+  modelAccountRules?: CommandCodeModelAccountRule[]
+  /**
    * Language override for the `/commandcode` Host-side command's user-facing
    * copy. Host commands cannot read the client's `ctx.locale`, so this is
    * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
@@ -202,6 +212,10 @@ export const Config: z<Config> = z.object({
     apiKey: z.string(),
   })),
   activeAccount: z.string(),
+  modelAccountRules: z.array(z.object({
+    model: z.string(),
+    account: z.string(),
+  })),
   lang: z.string().pattern(/^(zh|en)$/).default('zh' as const),
 })
 
@@ -309,10 +323,13 @@ export function apply(ctx: Context, config: Config): void {
     // request time, never during plugin startup.
     probeWindow: (apiKey: string) => adapter.probeFiveHourWindow(apiKey),
     preferredId,
+    // Model → account routing rules, re-read per resolution like every
+    // settings-backed fact.
+    modelAccountRules: (): readonly CommandCodeModelAccountRule[] => current().modelAccountRules ?? [],
   })
 
-  const resolveApiKey = async (connection: ResolvedCommandCodeOptions): Promise<string> => {
-    const resolved = await pool.resolveKey()
+  const resolveApiKey = async (connection: ResolvedCommandCodeOptions, model?: string): Promise<string> => {
+    const resolved = await pool.resolveKey(model === undefined ? {} : { model })
     if (resolved !== undefined) {
       return assertUsableApiKey(resolved.key, 'llm-commandcode', resolved.slot.ref ?? `${resolved.slot.label} (config.apiKey)`)
     }
@@ -333,12 +350,16 @@ export function apply(ctx: Context, config: Config): void {
     // account's key. When every account is exhausted the pool throws the
     // RATE_LIMIT/INVALID_CREDENTIAL error that names the earliest reset —
     // that error, not the raw 429, is what the caller sees.
-    rotateApiKey: async (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential'): Promise<string | undefined> => {
+    rotateApiKey: async (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential', _connection: ResolvedCommandCodeOptions, model?: string): Promise<string | undefined> => {
       pool.markRejected(rejectedKey, rejection)
       // Exclude the just-rejected key from probe-revival: a probe clearing its
       // window must not re-offer the same key within this request (the
       // adapter refuses already-tried keys); the next request picks it up.
-      const resolved = await pool.resolveKey({ exclude: rejectedKey })
+      // The model rides along so model-routing rules pick the next account
+      // for the same model.
+      const resolved = await pool.resolveKey(
+        model === undefined ? { exclude: rejectedKey } : { exclude: rejectedKey, model },
+      )
       // Normalize like the initial resolution does: the pool keys its state
       // by the resolved key, so the adapter must send (and report back) the
       // same normalized form or the marks would miss.

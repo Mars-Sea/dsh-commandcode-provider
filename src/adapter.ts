@@ -960,8 +960,12 @@ export type ResolveAttachments = () => AttachmentStore | undefined
 export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
   /** Resolve the current connection facts (fresh per request, settings-aware). */
   options: () => C
-  /** Resolve a usable API key for the given connection facts, or throw `MISSING_CREDENTIAL`. */
-  resolveApiKey: (connection: C) => Promise<string>
+  /**
+   * Resolve a usable API key for the given connection facts and the request's
+   * model id, or throw `MISSING_CREDENTIAL`. The model is optional: hosts
+   * without model-aware routing ignore it.
+   */
+  resolveApiKey: (connection: C, model?: string) => Promise<string>
   /**
    * Multi-account rotation hook: the request sent with `rejectedKey` was
    * refused with 429 (`rate-limit`) or 401 (`invalid-credential`) before
@@ -970,7 +974,7 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
    * Only pre-stream rejections rotate — a mid-stream failure never replays a
    * partially consumed generation against another account.
    */
-  rotateApiKey?: (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential', connection: C) => Promise<string | undefined>
+  rotateApiKey?: (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential', connection: C, model?: string) => Promise<string | undefined>
   /** HTTP transport override (tests); defaults to the global `fetch`. */
   fetchImpl?: typeof fetch
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
@@ -1490,7 +1494,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
 
     const connection = this.deps.options()
-    let apiKey = await this.deps.resolveApiKey(connection)
+    // The model id reaches key resolution so hosts with model→account routing
+    // rules can pick the account that covers this model.
+    let apiKey = await this.deps.resolveApiKey(connection, options.model)
     const entry = this.catalog.find((m) => m.id === options.model)
     const modelMax = entry?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
     const maxTokens = Math.min(
@@ -1666,7 +1672,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         && options.signal?.aborted !== true
         && tried.size < MAX_ACCOUNT_ROTATIONS
       ) {
-        const next = await rotate(apiKey, attempt.status === 429 ? 'rate-limit' : 'invalid-credential', connection)
+        const next = await rotate(apiKey, attempt.status === 429 ? 'rate-limit' : 'invalid-credential', connection, options.model)
         if (next !== undefined && !tried.has(next)) {
           apiKey = next
           continue
