@@ -17,7 +17,8 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
@@ -868,15 +869,6 @@ function RuleRow({ rule, accounts, catalog, disabled, t, onModels, onAccount, on
     { value: 'default', label: t('accountDefault') },
     ...accounts.filter((account) => !account.added).map((account) => ({ value: account.ref, label: account.label })),
   ]
-  // The catalog is sorted for picking; selected ids the catalog no longer
-  // carries (removed upstream) still render so a saved rule never silently
-  // loses a selection.
-  const options = [
-    ...catalog.map((model) => ({ value: model.id, label: model.name })),
-    ...rule.models
-      .filter((id) => !catalog.some((model) => model.id === id))
-      .map((id) => ({ value: id, label: id })),
-  ]
   return (
     <div className="cc-field">
       <div className="cc-fieldHead">
@@ -886,22 +878,14 @@ function RuleRow({ rule, accounts, catalog, disabled, t, onModels, onAccount, on
           <button type="button" className="cc-reset" disabled={disabled} onClick={onRemove}>{t('ruleRemove')}</button>
         </span>
       </div>
-      <select
+      <ModelMultiSelect
         id={`cc-rule-model-${rule.id}`}
-        className="cc-input"
-        multiple
-        size={Math.min(6, Math.max(2, options.length))}
-        value={rule.models}
-        disabled={disabled || catalog.length === 0}
-        onChange={(event) => {
-          const selected = Array.from(event.target.selectedOptions, (option) => option.value)
-          onModels(selected)
-        }}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
+        selected={rule.models}
+        catalog={catalog}
+        disabled={disabled}
+        t={t}
+        onSelect={onModels}
+      />
       <select
         id={`cc-rule-account-${rule.id}`}
         className="cc-input"
@@ -915,6 +899,76 @@ function RuleRow({ rule, accounts, catalog, disabled, t, onModels, onAccount, on
       </select>
       <p className="cc-hint">{t('ruleHint')}</p>
     </div>
+  )
+}
+
+/**
+ * A checkbox multi-select dropdown for routing-rule models. The trigger shows
+ * the selection count; the anchored Menu lists every catalog model with a
+ * checkbox, toggled by clicking the row. Selected ids the catalog no longer
+ * carries still render so a saved rule never silently loses a selection.
+ */
+function ModelMultiSelect({ id, selected, catalog, disabled, t, onSelect }: {
+  id: string
+  selected: string[]
+  catalog: CatalogModelOption[]
+  disabled: boolean
+  t: Translate<SettingsCommandCodeKey>
+  onSelect(ids: string[]): void
+}) {
+  const [open, setOpen] = useState(false)
+  // The catalog is sorted for picking; append any selected ids the catalog no
+  // longer carries (removed upstream) so the current rule stays visible.
+  const options = [
+    ...catalog.map((model) => ({ value: model.id, label: model.name })),
+    ...selected
+      .filter((id) => !catalog.some((model) => model.id === id))
+      .map((id) => ({ value: id, label: id })),
+  ]
+  const selectedSet = new Set(selected)
+  const items: MenuEntry[] = options.map((option) => ({
+    id: option.value,
+    label: (
+      <span className="cc-checkRow">
+        <input
+          type="checkbox"
+          className="cc-check"
+          checked={selectedSet.has(option.value)}
+          readOnly
+          tabIndex={-1}
+        />
+        <span className="cc-checkName">{option.label}</span>
+      </span>
+    ),
+  }))
+  return (
+    <Menu
+      open={open}
+      onClose={() => setOpen(false)}
+      onSelect={(modelId) => {
+        // Toggle one model in the selection.
+        onSelect(selectedSet.has(modelId)
+          ? selected.filter((value) => value !== modelId)
+          : [...selected, modelId])
+      }}
+      selectedIds={selected}
+      items={items}
+      portal
+      anchor={
+        <button
+          id={id}
+          type="button"
+          className="cc-input cc-ruleTrigger"
+          disabled={disabled || catalog.length === 0}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className="cc-ruleTriggerText">
+            {selected.length === 0 ? t('ruleModelPick') : t('ruleModelCount', { count: selected.length })}
+          </span>
+          <span className="cc-ruleCaret" aria-hidden="true" />
+        </button>
+      }
+    />
   )
 }
 

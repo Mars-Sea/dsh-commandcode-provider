@@ -56,6 +56,8 @@ export type SettingsCommandCodeKey =
   | 'ruleAdd'
   | 'ruleRemove'
   | 'ruleModel'
+  | 'ruleModelPick'
+  | 'ruleModelCount'
   | 'ruleAccount'
   | 'ruleHint'
   | 'overridden'
@@ -177,8 +179,10 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   ruleAdd: '添加规则',
   ruleRemove: '移除',
   ruleModel: '模型',
+  ruleModelPick: '选择模型…',
+  ruleModelCount: '已选 {count} 个模型',
   ruleAccount: '目标账户',
-  ruleHint: '从列表中选择要路由的模型（可多选），再选择目标账户。',
+  ruleHint: '从下拉列表勾选要路由的模型（可多选），再选择目标账户。',
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
@@ -310,8 +314,10 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   ruleAdd: 'Add rule',
   ruleRemove: 'Remove',
   ruleModel: 'Models',
+  ruleModelPick: 'Select models…',
+  ruleModelCount: '{count} model(s) selected',
   ruleAccount: 'Target account',
-  ruleHint: 'Select the models to route (multi-select), then pick the target account.',
+  ruleHint: 'Check the models to route from the dropdown (multi-select), then pick the target account.',
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',

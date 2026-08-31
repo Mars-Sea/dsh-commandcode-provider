@@ -65,6 +65,19 @@ const PAGE_CSS = `
 .cc-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:0 12px;font-size:13px;line-height:1.5}
 .cc-input:focus-visible{border-color:var(--dsw-alias-brand-primary);outline:none}
 .cc-input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
+/* The routing-rule model multi-select: a button trigger that opens an
+ * anchored Menu of checkbox rows. The trigger mirrors .cc-input sizing so it
+ * sits flush with the sibling account select. */
+.cc-ruleTrigger{align-items:center;gap:8px;display:flex;width:100%;text-align:left;cursor:pointer}
+.cc-ruleTrigger:disabled{cursor:default}
+.cc-ruleTriggerText{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cc-ruleCaret{flex-shrink:0;border-right:1.5px solid var(--dsw-alias-label-tertiary);border-bottom:1.5px solid var(--dsw-alias-label-tertiary);width:6px;height:6px;margin-right:4px;margin-bottom:2px;transform:rotate(45deg)}
+.cc-checkRow{align-items:center;gap:8px;display:inline-flex;min-width:0}
+.cc-checkRow:hover{cursor:pointer}
+.cc-check{appearance:none;flex-shrink:0;width:15px;height:15px;margin:0;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:var(--dsw-alias-bg-layer-1);position:relative}
+.cc-check:checked{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
+.cc-check:checked::after{content:'';position:absolute;top:2px;left:5px;width:3px;height:7px;border:solid #fff;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.cc-checkName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Selects need their own treatment to sit flush with the text inputs:
  * the UA stylesheet renders <select> border-box (34px total vs the inputs'
  * 36px) and forces its own menulist text metrics, so drop the native
