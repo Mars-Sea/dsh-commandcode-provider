@@ -8,7 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Route models to accounts (`modelAccountRules`).** A new settings card (and matching `Config.modelAccountRules` YAML) pins a model id or slash-prefix (e.g. `deepseek/`) to an account slot; requests whose model matches a rule serve from that account while it is usable, falling back to the normal rotation when the routed account is exhausted or invalid. First matching rule wins. Pairs naturally with the existing multi-account rotation — e.g. keep cheap Go-tier models on the Go account and route GOAT-only models to the GOAT account.
+- **Route models to accounts (`modelAccountRules`).** A new settings card (and matching `Config.modelAccountRules` YAML) routes catalog models — picked via **multi-select from the live model catalog** (fetched Host-side through a new `commandcode/models` Remote) — to an account slot. Requests whose model is in a rule serve from that account while it is usable, falling back to the normal rotation when the routed account is exhausted or invalid. First matching rule wins. Pairs naturally with the existing multi-account rotation — e.g. keep cheap Go-tier models on the Go account and route GOAT-only models to the GOAT account.
+
+### Changed
+
+- **Synced with the official command-code@1.38.2 CLI** (2026-08-28: 1.38.0 added "Let custom agents pin a reasoning effort next to their model" + "Add reasoning effort support for Tencent Hy4 Preview"; 1.38.1/1.38.2 are same-day hotfixes). `COMMAND_CODE_CLI_VERSION` is now `1.38.2`.
+- **Tencent Hy4 Preview now offers selectable reasoning efforts (`low`/`medium`/`high`).** The model gained official effort levels in command-code@1.38.0, so the picker can now offer a reasoning-effort selector for it; it is no longer listed as an auto-thinking model.
+- **Gemini 3.7 Flash's 50% off deal was retired** from the official pricing page's `#deals` section; the snapshot no longer advertises it, so the picker shows the model at full price.
+- **Closed two catalog-coverage gaps**: the hidden free variant `tencent/Hy3` and the deprecated `inclusionai/ling-3.0-flash-free` (its free promo ended 2026-08-03) are now in the Go tier snapshot. Plan tiers read 42/46/59/64.
 
 ## [0.10.0-alpha.1] - 2026-09-01
 

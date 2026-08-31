@@ -13,7 +13,7 @@
  * @module dsh-commandcode-provider/client/usage
  */
 
-import type { CommandCodeAccountsReport } from '../usage-wire.ts'
+import type { CommandCodeAccountsReport, CommandCodeCatalog } from '../usage-wire.ts'
 import type { CommandCodeLoginStatus } from '../login-wire.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -23,16 +23,19 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
  * typert.remote-client files use), so `ctx.remote.commandcode.*()` is typed
  * once each contribution is mounted. The `commandcode` namespace member is
  * declared exactly once (interface merging forbids duplicate members), so
- * this one declaration carries the usage report AND the login endpoints —
- * the endpoint-level declarations live beside their controllers.
+ * this one declaration carries the usage report, the model catalog, AND the
+ * login endpoints — the endpoint-level declarations live beside their
+ * controllers.
  */
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteMap {
     'commandcode/report': () => Promise<RemoteResult<CommandCodeAccountsReport>>
+    'commandcode/models': () => Promise<RemoteResult<CommandCodeCatalog>>
   }
   interface TypertRemoteNamespaceMap {
     commandcode: {
       report: () => Promise<RemoteResult<CommandCodeAccountsReport>>
+      models: () => Promise<RemoteResult<CommandCodeCatalog>>
       loginBegin: () => Promise<RemoteResult<CommandCodeLoginStatus>>
       loginStatus: () => Promise<RemoteResult<CommandCodeLoginStatus>>
       loginCancel: () => Promise<RemoteResult<CommandCodeLoginStatus>>
@@ -44,6 +47,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 export interface UsageRemote {
   report(): Promise<
     | { ok: true; value: CommandCodeAccountsReport }
+    | { ok: false; error: { message: string } }
+  >
+  models(): Promise<
+    | { ok: true; value: CommandCodeCatalog }
     | { ok: false; error: { message: string } }
   >
 }

@@ -71,6 +71,12 @@ export interface SettingsPageApi {
     set(ref: string, value: string): Promise<RemoteResult<void>>
     unset(ref: string): Promise<RemoteResult<void>>
   }
+  /**
+   * The model catalog for the routing-rule editor (Host-side). Absent on
+   * legacy transports without the Remote mount — the editor degrades to the
+   * empty-catalog state.
+   */
+  models?(): Promise<RemoteResult<{ models: CatalogModelOption[] }>>
 }
 
 /** The Host-description observable the page reads the process cwd from. */
@@ -123,12 +129,18 @@ export interface AccountItemState {
 export interface RuleItemState {
   /** Stable row id (`rule-N` for stored rows, `new-N` for staged adds). */
   id: string
-  /** Model id or slash-prefix the rule matches against. */
-  model: string
+  /** Model ids the rule routes to the account (multi-select). */
+  models: string[]
   /** Account slot id the rule routes matching models to. */
   account: string
   /** Staged for addition (not yet saved). */
   added: boolean
+}
+
+/** One selectable catalog model in the routing-rule editor. */
+export interface CatalogModelOption {
+  id: string
+  name: string
 }
 
 /** The page's full state face, projected from the scope + drafts + credential. */
@@ -178,6 +190,10 @@ export interface SettingsPageState {
   accountsRemoving: string[]
   /** Model → account routing rules, in list order (first match wins). */
   rules: RuleItemState[]
+  /** The catalog the rule editor offers (Host-side, empty until loaded). */
+  catalogModels: CatalogModelOption[]
+  /** Whether the catalog fetch failed (rule editor falls back to typing). */
+  catalogFailed: boolean
   /** Whether any staged edit differs from the stored section. */
   dirty: boolean
   /** Whether a staged numeric field fails to parse (save blocked). */
@@ -288,6 +304,13 @@ const SECTION_FIELDS: FieldSpec[] = [
   textField('activeAccount'),
 ]
 
+/** Whether two model-id lists are equal as sets (order-insensitive). */
+function sameModels(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const set = new Set(a)
+  return b.every((id) => set.has(id))
+}
+
 /**
  * Controller bridging the `llm-commandcode` scope and the credentials domain
  * onto the page. Public API mirrors the harness's CardForm actions, so the
@@ -317,11 +340,14 @@ export class CommandCodeSettingsController {
   /** Credential references staged for removal on the next save. */
   private readonly keyClears = new Set<string>()
   /** Staged model→account routing rules (not yet saved). */
-  private addedRules: Array<{ model: string; account: string }> = []
+  private addedRules: Array<{ models: string[]; account: string }> = []
   /** Staged edits to stored routing rules, by stored row id. */
-  private readonly ruleDrafts = new Map<string, { model: string; account: string }>()
+  private readonly ruleDrafts = new Map<string, { models: string[]; account: string }>()
   /** Stored routing rule rows staged for removal. */
   private readonly removedRuleIds = new Set<string>()
+  /** The catalog the rule editor offers (Host-side). */
+  private catalogModels: CatalogModelOption[] = []
+  private catalogFailed = false
   private saving = false
   private failed = false
   private savedCount = 0
@@ -357,6 +383,7 @@ export class CommandCodeSettingsController {
     }
     this.recomputeCredentialRef()
     void this.describeAll()
+    void this.loadCatalog()
   }
 
   /** Release every subscription held on external sources. Idempotent. */
@@ -420,6 +447,8 @@ export class CommandCodeSettingsController {
       accounts,
       accountsRemoving: [...this.removedRefs],
       rules: this.effectiveRules(),
+      catalogModels: this.catalogModels,
+      catalogFailed: this.catalogFailed,
       dirty: plan.length > 0 || this.accountsDirty() || this.rulesDirty(),
       invalid: plan.some((item) => item.run === undefined),
       saving: this.saving,
@@ -508,7 +537,7 @@ export class CommandCodeSettingsController {
 
   /** Stage a new model → account routing rule (saved on the next `save()`). */
   addRule(): void {
-    this.addedRules.push({ model: '', account: 'default' })
+    this.addedRules.push({ models: [], account: 'default' })
     this.failed = false
     this.publish()
   }
@@ -523,25 +552,27 @@ export class CommandCodeSettingsController {
     this.publish()
   }
 
-  /** Stage one routing rule's model pattern draft. */
-  editRuleModel(id: string, text: string): void {
-    this.stageRuleField(id, 'model', text)
+  /** Stage one routing rule's selected model ids (multi-select). */
+  editRuleModels(id: string, models: string[]): void {
+    const addedIndex = this.addedRules.findIndex((_, index) => `new-${index}` === id)
+    if (addedIndex >= 0) {
+      this.addedRules[addedIndex] = { ...this.addedRules[addedIndex]!, models }
+    } else {
+      const current = this.ruleDrafts.get(id) ?? this.storedRules().find((rule) => rule.id === id) ?? { models: [], account: 'default' }
+      this.ruleDrafts.set(id, { ...current, models })
+    }
+    this.failed = false
+    this.publish()
   }
 
   /** Stage one routing rule's target account draft. */
   editRuleAccount(id: string, text: string): void {
-    this.stageRuleField(id, 'account', text)
-  }
-
-  /** Stage one routing rule field; added rows edit in place, stored rows draft. */
-  private stageRuleField(id: string, field: 'model' | 'account', text: string): void {
     const addedIndex = this.addedRules.findIndex((_, index) => `new-${index}` === id)
     if (addedIndex >= 0) {
-      const row = this.addedRules[addedIndex]!
-      this.addedRules[addedIndex] = field === 'model' ? { ...row, model: text } : { ...row, account: text }
+      this.addedRules[addedIndex] = { ...this.addedRules[addedIndex]!, account: text }
     } else {
-      const current = this.ruleDrafts.get(id) ?? this.storedRules().find((rule) => rule.id === id) ?? { model: '', account: 'default' }
-      this.ruleDrafts.set(id, field === 'model' ? { ...current, model: text } : { ...current, account: text })
+      const current = this.ruleDrafts.get(id) ?? this.storedRules().find((rule) => rule.id === id) ?? { models: [], account: 'default' }
+      this.ruleDrafts.set(id, { ...current, account: text })
     }
     this.failed = false
     this.publish()
@@ -797,6 +828,32 @@ export class CommandCodeSettingsController {
     if (changed) this.publish()
   }
 
+  /**
+   * Fetch the model catalog for the routing-rule editor through the Host
+   * Remote. One fetch per controller lifetime; a failure marks the state so
+   * the editor degrades gracefully (rules can still be saved as-is).
+   */
+  private async loadCatalog(): Promise<void> {
+    const models = this.api.models
+    if (models === undefined) {
+      this.catalogFailed = true
+      return
+    }
+    try {
+      const response = await models()
+      if (!response.ok) {
+        this.catalogFailed = true
+      } else if (Array.isArray(response.value?.models)) {
+        this.catalogModels = response.value.models
+      } else {
+        this.catalogFailed = true
+      }
+    } catch {
+      this.catalogFailed = true
+    }
+    this.publish()
+  }
+
   // -----------------------------------------------------------------------
   // Multi-account staging
   // -----------------------------------------------------------------------
@@ -929,19 +986,22 @@ export class CommandCodeSettingsController {
   // -----------------------------------------------------------------------
 
   /** The stored routing rules from the settings section (`modelAccountRules`). */
-  private storedRules(): Array<{ id: string; model: string; account: string }> {
+  private storedRules(): Array<{ id: string; models: string[]; account: string }> {
     const raw = this.scope.getSnapshot().value?.modelAccountRules
     if (!Array.isArray(raw)) return []
-    const out: Array<{ id: string; model: string; account: string }> = []
+    const out: Array<{ id: string; models: string[]; account: string }> = []
     for (const [index, entry] of raw.entries()) {
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
       const record = entry as Record<string, unknown>
-      const model = record.model
+      const models = record.models
       const account = record.account
-      if (typeof model !== 'string' || model === '') continue
+      const modelsList = Array.isArray(models) && models.every((m) => typeof m === 'string')
+        ? (models as string[]).filter((m) => m !== '')
+        : []
+      if (modelsList.length === 0) continue
       out.push({
         id: `rule-${index}`,
-        model,
+        models: modelsList,
         account: typeof account === 'string' && account !== '' ? account : 'default',
       })
     }
@@ -956,14 +1016,14 @@ export class CommandCodeSettingsController {
         const draft = this.ruleDrafts.get(rule.id)
         return {
           id: rule.id,
-          model: draft?.model ?? rule.model,
+          models: draft?.models ?? rule.models,
           account: draft?.account ?? rule.account,
           added: false,
         }
       })
     const added = this.addedRules.map((rule, index) => ({
       id: `new-${index}`,
-      model: rule.model,
+      models: rule.models,
       account: rule.account,
       added: true,
     }))
@@ -981,7 +1041,7 @@ export class CommandCodeSettingsController {
     for (const [id, draft] of this.ruleDrafts) {
       const base = this.storedRules().find((rule) => rule.id === id)
       if (base === undefined) continue
-      if (draft.model.trim() !== '' && draft.model !== base.model) return true
+      if (draft.models.length > 0 && !sameModels(draft.models, base.models)) return true
       if (draft.account !== base.account) return true
     }
     return false
@@ -997,7 +1057,6 @@ export class CommandCodeSettingsController {
   /** Drop rule staging the stored section already reflects (partial-save retry). */
   private reconcileRuleStaging(): void {
     const storedIds = new Set(this.storedRules().map((rule) => rule.id))
-    this.removedRuleIds.clear()
     for (const id of [...this.removedRuleIds]) {
       if (!storedIds.has(id)) this.removedRuleIds.delete(id)
     }
@@ -1021,19 +1080,22 @@ export class CommandCodeSettingsController {
       ...base.map((rule) => {
         const draft = this.ruleDrafts.get(rule.id)
         return {
-          model: draft?.model.trim() !== '' && draft !== undefined ? draft.model.trim() : rule.model,
+          models: draft !== undefined && draft.models.length > 0 ? draft.models : rule.models,
           account: draft?.account !== undefined && draft.account !== '' ? draft.account : rule.account,
         }
       }),
       ...this.addedRules.map((rule) => ({
-        model: rule.model.trim(),
+        models: rule.models,
         account: rule.account,
       })),
-    ].filter((rule) => rule.model !== '')
+    ].filter((rule) => rule.models.length > 0)
     await this.scope.set('modelAccountRules', list)
     const after = this.storedRules()
     return after.length === list.length
-      && list.every((item, index) => after[index]?.model === item.model && after[index]?.account === item.account)
+      && list.every((item, index) =>
+        after[index] !== undefined
+        && sameModels(after[index].models, item.models)
+        && after[index].account === item.account)
   }
 
   private publish(): void {

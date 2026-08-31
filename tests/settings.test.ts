@@ -72,7 +72,7 @@ function makeScope(init: {
 type Scope = ReturnType<typeof makeScope>
 
 /** The credentials-domain slice the page writes through. */
-function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string>; failSet?: boolean; failUnset?: boolean }) {
+function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string>; failSet?: boolean; failUnset?: boolean; models?: SettingsPageApi['models'] }) {
   const store = init.store ?? new Map<string, string>()
   const configured = init.configured ?? store.has(DEFAULT_API_KEY_REF)
   const writable = init.writable ?? true
@@ -99,10 +99,8 @@ function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<s
       return { ok: true as const, value: undefined }
     },
   }
-  return { credential, credentials, store }
-}
-
-/** Build a controller wired to a fresh scope + api. */
+  return { credential, credentials, store, models: init.models }
+}/** Build a controller wired to a fresh scope + api. */
 function makeController(opts?: {
   scope?: ReturnType<typeof makeScope>
   api?: ReturnType<typeof makeApi>
@@ -712,13 +710,13 @@ test('a failed unset keeps the staged clear and reports the failure', async () =
 
 test('starts with the stored routing rules and stays clean', () => {
   const scope = makeScope({
-    value: { modelAccountRules: [{ model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' }] },
-    user: { modelAccountRules: [{ model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' }] },
+    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'COMMANDCODE_API_KEY_2' }] },
+    user: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'COMMANDCODE_API_KEY_2' }] },
   })
   const { controller } = makeController({ scope })
   const rules = controller.state().rules
   assert.equal(rules.length, 1)
-  assert.equal(rules[0]?.model, 'deepseek/')
+  assert.deepEqual(rules[0]?.models, ['deepseek/deepseek-v4-pro'])
   assert.equal(rules[0]?.account, 'COMMANDCODE_API_KEY_2')
   assert.equal(rules[0]?.added, false)
   assert.equal(controller.state().dirty, false)
@@ -730,7 +728,7 @@ test('addRule stages a new rule with the default account target', () => {
   const rules = controller.state().rules
   assert.equal(rules.length, 1)
   assert.equal(rules[0]?.added, true)
-  assert.equal(rules[0]?.model, '')
+  assert.deepEqual(rules[0]?.models, [])
   assert.equal(rules[0]?.account, 'default')
   assert.equal(controller.state().dirty, true)
 })
@@ -739,35 +737,35 @@ test('saving a staged rule writes modelAccountRules through the scope', async ()
   const scope = makeScope({})
   const { controller } = makeController({ scope })
   controller.addRule()
-  controller.editRuleModel('new-0', 'deepseek/')
+  controller.editRuleModels('new-0', ['deepseek/deepseek-v4-pro'])
   controller.editRuleAccount('new-0', 'COMMANDCODE_API_KEY_2')
   await controller.save()
   assert.deepEqual(scope.state.value.modelAccountRules, [
-    { model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' },
+    { models: ['deepseek/deepseek-v4-pro'], account: 'COMMANDCODE_API_KEY_2' },
   ])
   assert.equal(controller.state().dirty, false)
 })
 
 test('editing a stored rule is dirty until saved', async () => {
   const scope = makeScope({
-    value: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
-    user: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
+    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
+    user: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
   })
   const { controller } = makeController({ scope })
   assert.equal(controller.state().dirty, false)
-  controller.editRuleAccount('rule-0', 'COMMANDCODE_API_KEY_2')
+  controller.editRuleModels('rule-0', ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash-vision-exp'])
   assert.equal(controller.state().dirty, true)
   await controller.save()
   assert.deepEqual(scope.state.value.modelAccountRules, [
-    { model: 'deepseek/', account: 'COMMANDCODE_API_KEY_2' },
+    { models: ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash-vision-exp'], account: 'default' },
   ])
   assert.equal(controller.state().dirty, false)
 })
 
 test('removing a stored rule persists the shorter list', async () => {
   const scope = makeScope({
-    value: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
-    user: { modelAccountRules: [{ model: 'deepseek/', account: 'default' }] },
+    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
+    user: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
   })
   const { controller } = makeController({ scope })
   controller.removeRule('rule-0')
@@ -781,8 +779,31 @@ test('removing a stored rule persists the shorter list', async () => {
 test('discard clears staged rule edits', () => {
   const { controller } = makeController()
   controller.addRule()
-  controller.editRuleModel('new-0', 'deepseek/')
+  controller.editRuleModels('new-0', ['deepseek/deepseek-v4-pro'])
   controller.discard()
   assert.deepEqual(controller.state().rules, [])
   assert.equal(controller.state().dirty, false)
+})
+
+test('loads the model catalog through the api models seam', async () => {
+  const api = makeApi({
+    models: async () => ({
+      ok: true as const,
+      value: { models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] },
+    }),
+  })
+  const { controller } = makeController({ api })
+  await flush()
+  assert.deepEqual(controller.state().catalogModels, [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }])
+  assert.equal(controller.state().catalogFailed, false)
+})
+
+test('a failed catalog fetch marks catalogFailed without breaking the page', async () => {
+  const api = makeApi({
+    models: async () => ({ ok: false as const, error: { message: 'remote down' } }),
+  })
+  const { controller } = makeController({ api })
+  await flush()
+  assert.equal(controller.state().catalogFailed, true)
+  assert.deepEqual(controller.state().catalogModels, [])
 })

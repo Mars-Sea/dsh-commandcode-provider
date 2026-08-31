@@ -43,7 +43,7 @@ import { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './ac
 import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModelAccountRule } from './accounts.ts'
 import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
-import type { CommandCodeAccountsReport } from './usage-wire.ts'
+import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire.ts'
 import { CommandCodeLoginFlow } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
@@ -174,13 +174,13 @@ export interface Config {
    */
   activeAccount?: string
   /**
-   * Model → account routing rules. Each rule pins a catalog model id (or a
-   * slash-prefix, e.g. `deepseek/`) to an account slot id (`default`, or an
-   * extra account's credential reference). When a request's model matches a
-   * rule and the routed account is usable, that account serves — before the
-   * manual {@link activeAccount} and the passive rotation order. A routed
-   * account that is exhausted or invalid falls back to the normal selection,
-   * so the router is a hint, never a hard gate. The first matching rule wins.
+   * Model → account routing rules. Each rule lists catalog model ids to an
+   * account slot id (`default`, or an extra account's credential reference).
+   * When a request's model is in a rule's list and the routed account is
+   * usable, that account serves — before the manual {@link activeAccount} and
+   * the passive rotation order. A routed account that is exhausted or invalid
+   * falls back to the normal selection, so the router is a hint, never a hard
+   * gate. The first matching rule wins.
    */
   modelAccountRules?: CommandCodeModelAccountRule[]
   /**
@@ -213,7 +213,7 @@ export const Config: z<Config> = z.object({
   })),
   activeAccount: z.string(),
   modelAccountRules: z.array(z.object({
-    model: z.string(),
+    models: z.array(z.string()),
     account: z.string(),
   })),
   lang: z.string().pattern(/^(zh|en)$/).default('zh' as const),
@@ -454,7 +454,16 @@ export function apply(ctx: Context, config: Config): void {
     },
   })
   ctx.effect(() => () => loginFlow.dispose(), 'dsh-commandcode-provider: login flow')
-  applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow })
+  // The catalog for the settings page's routing-rule editor: served Host-side
+  // from the adapter's cached/fetched catalog (sorted for picking), so the
+  // browser never calls the Command Code API directly.
+  const catalogForRules = async (): Promise<CommandCodeCatalog> => {
+    const models = await adapter.listModels(PROVIDER)
+    return {
+      models: models.map((model) => ({ id: model.id, name: model.name.replace(/\s*\(CC\)$/, '') })),
+    }
+  }
+  applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow, listModels: catalogForRules })
 
   // Settings became an optional service in dsh 0.1.2. Register the section
   // through its provider when present; profiles without settings continue to

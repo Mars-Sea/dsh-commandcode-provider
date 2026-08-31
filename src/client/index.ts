@@ -36,7 +36,7 @@ import type { HostDescriptionSource, SettingsPageApi } from './settings.ts'
 import { adaptLegacyCredentials, type LegacyCredentialsApi } from './legacy-credentials.ts'
 import { CommandCodeUsageController, type UsagePageState, type UsageRemote } from './usage.ts'
 import { CommandCodeLoginController, type LoginPageState, type LoginRemote } from './login.ts'
-import { USAGE_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
+import { USAGE_REMOTE_CONTRIBUTION, MODELS_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
 import { LOGIN_REMOTE_CONTRIBUTION } from '../login-wire.ts'
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { CommandCodeSettingsPage } from './section.tsx'
@@ -244,7 +244,11 @@ function applyClientSurfaces(
   let usageMountError: string | undefined
   const contribution: TypertRemoteContribution = {
     package: USAGE_REMOTE_CONTRIBUTION.package,
-    descriptors: [...USAGE_REMOTE_CONTRIBUTION.descriptors, ...LOGIN_REMOTE_CONTRIBUTION.descriptors],
+    descriptors: [
+      ...USAGE_REMOTE_CONTRIBUTION.descriptors,
+      ...MODELS_REMOTE_CONTRIBUTION.descriptors,
+      ...LOGIN_REMOTE_CONTRIBUTION.descriptors,
+    ],
   }
   ctx.effect(() => {
     let cancelled = false
@@ -279,6 +283,13 @@ function applyClientSurfaces(
         return { ok: false, error: { message: usageMountError ?? 'commandcode/report remote is not mounted' } }
       }
       return namespace.report()
+    },
+    models: async () => {
+      const namespace = usageNamespace
+      if (namespace === undefined) {
+        return { ok: false, error: { message: usageMountError ?? 'commandcode/models remote is not mounted' } }
+      }
+      return namespace.models()
     },
   }
   const usageController = new CommandCodeUsageController(usageRemote)
@@ -346,7 +357,7 @@ function applyClientSurfaces(
     toggleKeyClear: (id: string) => controller.toggleKeyClear(id),
     addRule: () => controller.addRule(),
     removeRule: (id: string) => controller.removeRule(id),
-    editRuleModel: (id: string, text: string) => controller.editRuleModel(id, text),
+    editRuleModels: (id: string, ids: string[]) => controller.editRuleModels(id, ids),
     editRuleAccount: (id: string, text: string) => controller.editRuleAccount(id, text),
   })
 

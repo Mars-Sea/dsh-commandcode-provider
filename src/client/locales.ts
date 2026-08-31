@@ -52,10 +52,10 @@ export type SettingsCommandCodeKey =
   | 'rulesTitle'
   | 'rulesHint'
   | 'rulesEmpty'
+  | 'rulesCatalogFailed'
   | 'ruleAdd'
   | 'ruleRemove'
   | 'ruleModel'
-  | 'ruleModelPlaceholder'
   | 'ruleAccount'
   | 'ruleHint'
   | 'overridden'
@@ -171,14 +171,14 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   activeAccountAuto: '自动（第一个可用账户）',
   activeAccountHint: '手动指定优先使用的账户，保存后下次请求即生效；所选账户耗尽时仍会自动切换到其他可用账户。',
   rulesTitle: '按模型切换账户',
-  rulesHint: '把指定模型（或前缀，如 deepseek/）路由到某个账户。命中规则且该账户可用时优先使用；账户耗尽或密钥失效时仍自动回落到其他账户。规则按列表顺序匹配，第一条命中生效。',
+  rulesHint: '选择模型并路由到某个账户（可多选）。命中规则的模型且该账户可用时优先使用；账户耗尽或密钥失效时仍自动回落到其他账户。规则按列表顺序匹配，第一条命中生效。',
   rulesEmpty: '尚未配置规则。',
+  rulesCatalogFailed: '模型目录获取失败，暂时无法选择模型；已保存的规则仍会生效。',
   ruleAdd: '添加规则',
   ruleRemove: '移除',
   ruleModel: '模型',
-  ruleModelPlaceholder: '例如 deepseek/deepseek-v4-pro 或 deepseek/',
   ruleAccount: '目标账户',
-  ruleHint: '模型匹配目标账户：输入模型 id（如 deepseek/deepseek-v4-pro）或以 / 结尾的前缀（如 deepseek/），在下方选择目标账户。',
+  ruleHint: '从列表中选择要路由的模型（可多选），再选择目标账户。',
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
@@ -301,18 +301,17 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   activeAccountHint: 'Pin the preferred account; applies to the next request after saving.'
     + ' If the selected account is exhausted, requests still rotate to another usable account.',
   rulesTitle: 'Route models to accounts',
-  rulesHint: 'Pin a model (or prefix, e.g. deepseek/) to an account. When the'
-    + ' request’s model matches a rule and that account is usable, it serves;'
+  rulesHint: 'Pick models (multi-select) and route them to an account. When the'
+    + ' request’s model is in a rule and that account is usable, it serves;'
     + ' an exhausted or invalid routed account falls back to the normal rotation.'
     + ' Rules match in list order — the first hit wins.',
   rulesEmpty: 'No rules yet.',
+  rulesCatalogFailed: 'Could not load the model catalog — selecting models is unavailable; saved rules still apply.',
   ruleAdd: 'Add rule',
   ruleRemove: 'Remove',
-  ruleModel: 'Model',
-  ruleModelPlaceholder: 'e.g. deepseek/deepseek-v4-pro or deepseek/',
+  ruleModel: 'Models',
   ruleAccount: 'Target account',
-  ruleHint: 'Enter a model id (e.g. deepseek/deepseek-v4-pro) or a slash-ending'
-    + ' prefix (e.g. deepseek/), then pick the target account below.',
+  ruleHint: 'Select the models to route (multi-select), then pick the target account.',
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',

@@ -22,7 +22,7 @@ import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
-import type { AccountItemState, RuleItemState, SettingsPageState, StagedField } from './settings.ts'
+import type { AccountItemState, CatalogModelOption, RuleItemState, SettingsPageState, StagedField } from './settings.ts'
 import type { CommandCodeLoginFailureReason } from '../login-wire.ts'
 import type { LoginPageState } from './login.ts'
 import type { UsagePageState } from './usage.ts'
@@ -50,7 +50,7 @@ export interface CommandCodeSettingsProps {
   toggleKeyClear(id: string): void
   addRule(): void
   removeRule(id: string): void
-  editRuleModel(id: string, text: string): void
+  editRuleModels(id: string, ids: string[]): void
   editRuleAccount(id: string, text: string): void
 }
 
@@ -854,18 +854,28 @@ function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onT
 }
 
 /** One model → account routing rule row. */
-function RuleRow({ rule, accounts, disabled, t, onModel, onAccount, onRemove }: {
+function RuleRow({ rule, accounts, catalog, disabled, t, onModels, onAccount, onRemove }: {
   rule: RuleItemState
   accounts: AccountItemState[]
+  catalog: CatalogModelOption[]
   disabled: boolean
   t: Translate<SettingsCommandCodeKey>
-  onModel(text: string): void
+  onModels(ids: string[]): void
   onAccount(text: string): void
   onRemove(): void
 }) {
   const targets = [
     { value: 'default', label: t('accountDefault') },
     ...accounts.filter((account) => !account.added).map((account) => ({ value: account.ref, label: account.label })),
+  ]
+  // The catalog is sorted for picking; selected ids the catalog no longer
+  // carries (removed upstream) still render so a saved rule never silently
+  // loses a selection.
+  const options = [
+    ...catalog.map((model) => ({ value: model.id, label: model.name })),
+    ...rule.models
+      .filter((id) => !catalog.some((model) => model.id === id))
+      .map((id) => ({ value: id, label: id })),
   ]
   return (
     <div className="cc-field">
@@ -876,15 +886,22 @@ function RuleRow({ rule, accounts, disabled, t, onModel, onAccount, onRemove }: 
           <button type="button" className="cc-reset" disabled={disabled} onClick={onRemove}>{t('ruleRemove')}</button>
         </span>
       </div>
-      <input
+      <select
         id={`cc-rule-model-${rule.id}`}
         className="cc-input"
-        type="text"
-        placeholder={t('ruleModelPlaceholder')}
-        value={rule.model}
-        disabled={disabled}
-        onChange={(event) => onModel(event.target.value)}
-      />
+        multiple
+        size={Math.min(6, Math.max(2, options.length))}
+        value={rule.models}
+        disabled={disabled || catalog.length === 0}
+        onChange={(event) => {
+          const selected = Array.from(event.target.selectedOptions, (option) => option.value)
+          onModels(selected)
+        }}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
       <select
         id={`cc-rule-account-${rule.id}`}
         className="cc-input"
@@ -902,13 +919,13 @@ function RuleRow({ rule, accounts, disabled, t, onModel, onAccount, onRemove }: 
 }
 
 /** The model → account routing card: rules in list order (first match wins). */
-function RulesCard({ t, state, disabled, onAdd, onRemove, onModel, onAccount }: {
+function RulesCard({ t, state, disabled, onAdd, onRemove, onModels, onAccount }: {
   t: Translate<SettingsCommandCodeKey>
   state: SettingsPageState
   disabled: boolean
   onAdd(): void
   onRemove(id: string): void
-  onModel(id: string, text: string): void
+  onModels(id: string, ids: string[]): void
   onAccount(id: string, text: string): void
 }) {
   return (
@@ -921,15 +938,17 @@ function RulesCard({ t, state, disabled, onAdd, onRemove, onModel, onAccount }: 
           </span>
         </div>
         <p className="cc-hint">{t('rulesHint')}</p>
+        {state.catalogFailed ? <p className="cc-invalid">{t('rulesCatalogFailed')}</p> : null}
       </div>
       {state.rules.map((rule) => (
         <RuleRow
           key={rule.id}
           rule={rule}
           accounts={state.accounts}
+          catalog={state.catalogModels}
           disabled={disabled}
           t={t}
-          onModel={(text) => onModel(rule.id, text)}
+          onModels={(ids) => onModels(rule.id, ids)}
           onAccount={(text) => onAccount(rule.id, text)}
           onRemove={() => onRemove(rule.id)}
         />
@@ -1024,7 +1043,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         disabled={disabled}
         onAdd={props.addRule}
         onRemove={props.removeRule}
-        onModel={props.editRuleModel}
+        onModels={props.editRuleModels}
         onAccount={props.editRuleAccount}
       />
       <div className="cc-card">

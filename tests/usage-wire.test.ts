@@ -194,3 +194,31 @@ test('host and client contributions carry the same descriptor object', () => {
   assert.equal(USAGE_REMOTE_CONTRIBUTION.descriptors[0], USAGE_REPORT_DESCRIPTOR)
   assert.equal(USAGE_HOST_CONTRIBUTION.package, USAGE_REMOTE_CONTRIBUTION.package)
 })
+
+// ---------------------------------------------------------------------------
+// Model-catalog Remote (`commandcode/models`)
+// ---------------------------------------------------------------------------
+
+import { MODELS_DESCRIPTOR, MODELS_ENDPOINT, modelsSchema } from '../src/usage-wire.ts'
+
+test('models schema accepts a catalog of models', () => {
+  const parsed = modelsSchema.parse({ models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] })
+  assert.deepEqual(parsed, { models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] })
+})
+
+test('models schema accepts an empty catalog', () => {
+  assert.deepEqual(modelsSchema.parse({ models: [] }), { models: [] })
+})
+
+test('models schema rejects a malformed catalog', () => {
+  assert.throws(() => modelsSchema.parse({}), /models/)
+  assert.throws(() => modelsSchema.parse({ models: 'two' }), /models/)
+  assert.throws(() => modelsSchema.parse({ models: [{ id: 42, name: 'x' }] }), /model\.id/)
+})
+
+test('models descriptor targets the commandcodeUsage service and models method', () => {
+  assert.equal(MODELS_DESCRIPTOR.id, `@mars-sea/dsh-commandcode-provider#${MODELS_ENDPOINT}`)
+  assert.equal(MODELS_DESCRIPTOR.service, 'commandcodeUsage')
+  assert.equal(MODELS_DESCRIPTOR.namespace, 'commandcode')
+  assert.equal(MODELS_DESCRIPTOR.method, 'models')
+})

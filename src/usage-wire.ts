@@ -232,3 +232,69 @@ export const USAGE_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
   package: USAGE_REMOTE_PACKAGE,
   descriptors: [USAGE_REPORT_DESCRIPTOR],
 }
+
+// ---------------------------------------------------------------------------
+// Model catalog Remote (`commandcode/models`)
+// ---------------------------------------------------------------------------
+
+/** One catalog entry the settings page's routing-rule editor offers. */
+export interface CommandCodeCatalogModel {
+  /** Catalog model id (e.g. `deepseek/deepseek-v4-pro`). */
+  id: string
+  /** Display name from the catalog. */
+  name: string
+}
+
+/** The model-catalog Remote result: the full catalog, sorted for picking. */
+export interface CommandCodeCatalog {
+  models: CommandCodeCatalogModel[]
+}
+
+/** Canonical `<namespace>/<method>` endpoint of the model-catalog Remote. */
+export const MODELS_ENDPOINT = 'commandcode/models'
+
+/** Parse one untrusted boundary value into a {@link CommandCodeCatalogModel}. */
+function parseCatalogModel(value: unknown): CommandCodeCatalogModel {
+  const source = record(value, 'model')
+  return {
+    id: stringField(source, 'id', 'model.id'),
+    name: stringField(source, 'name', 'model.name'),
+  }
+}
+
+/** Parse the wire result into a {@link CommandCodeCatalog}. */
+function parseCatalog(value: unknown): CommandCodeCatalog {
+  const source = record(value, 'result')
+  const models = source.models
+  if (!Array.isArray(models)) reject('models')
+  return { models: models.map(parseCatalogModel) }
+}
+
+/** The strict result codec for the model-catalog Remote. */
+export const modelsSchema: TypertSchema<CommandCodeCatalog> = {
+  parse: parseCatalog,
+}
+
+/**
+ * The model-catalog invocation descriptor, sharing the same `commandcodeUsage`
+ * service and `commandcode` namespace as the usage report.
+ */
+export const MODELS_DESCRIPTOR: InvocationDescriptor = {
+  id: `${USAGE_REMOTE_PACKAGE}#${MODELS_ENDPOINT}`,
+  service: 'commandcodeUsage',
+  namespace: 'commandcode',
+  method: 'models',
+  invocation: { kind: 'direct' },
+  parameters: [],
+  result: {
+    mode: 'strict',
+    typeSymbol: `${USAGE_REMOTE_PACKAGE}#CommandCodeCatalog`,
+    schema: modelsSchema,
+  },
+}
+
+/** The Client-face contribution for the model-catalog endpoint. */
+export const MODELS_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
+  package: USAGE_REMOTE_PACKAGE,
+  descriptors: [MODELS_DESCRIPTOR],
+}

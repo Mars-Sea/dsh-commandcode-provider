@@ -117,8 +117,8 @@ export interface CommandCodeAccountPoolDeps {
   preferredId?(): string | undefined
   /**
    * Model → account routing rules, re-read per resolution so settings changes
-   * apply live. Each rule pins one catalog model id (or a glob-ish prefix,
-   * see {@link CommandCodeModelAccountRule}) to an account slot id. When the
+   * apply live. Each rule lists catalog model ids (see
+   * {@link CommandCodeModelAccountRule}) to an account slot id. When the
    * request's model matches a rule and that account is usable, it serves
    * before the preferred/rotation selection; an unusable routed account falls
    * back to the normal selection (the router is a hint, never a hard gate).
@@ -127,14 +127,14 @@ export interface CommandCodeAccountPoolDeps {
 }
 
 /**
- * One "route this model to that account" rule. `model` is a catalog id
- * (`deepseek/deepseek-v4-pro`, …) or a prefix (`deepseek/`) matched against
- * the request's model id; `account` is a slot id (`default` or an extra
- * account's credential reference). The first matching rule in list order wins.
+ * One "route these models to that account" rule. `models` lists catalog ids
+ * (`deepseek/deepseek-v4-pro`, …); `account` is a slot id (`default` or an
+ * extra account's credential reference). A request whose model id is in the
+ * list routes to that account. The first matching rule in list order wins.
  */
 export interface CommandCodeModelAccountRule {
-  /** Model id or slash-prefix to match against the request's model. */
-  model: string
+  /** Catalog model ids to match against the request's model. */
+  models: string[]
   /** Account slot id to prefer for matching models. */
   account: string
 }
@@ -175,10 +175,8 @@ export function selectActiveAccount(
 }
 
 /**
- * The first routing rule whose model pattern matches the request's model id.
- * A rule matches when its `model` is a prefix of the request model (the whole
- * pattern when it ends in `/`, else an exact id). Undefined when no rule
- * matches.
+ * The first routing rule whose model list contains the request's model id.
+ * Undefined when no rule matches.
  */
 export function matchModelRule(
   model: string,
@@ -186,12 +184,7 @@ export function matchModelRule(
 ): CommandCodeModelAccountRule | undefined {
   if (model === '' || rules === undefined || rules.length === 0) return undefined
   for (const rule of rules) {
-    if (rule.model === '') continue
-    if (rule.model.endsWith('/')) {
-      if (model.startsWith(rule.model)) return rule
-    } else if (model === rule.model) {
-      return rule
-    }
+    if (rule.models.includes(model)) return rule
   }
   return undefined
 }

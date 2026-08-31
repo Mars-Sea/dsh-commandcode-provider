@@ -19,7 +19,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { CommandCodeAdapter, CommandCodeConnectionOptions } from './adapter.ts'
 import { USAGE_HOST_CONTRIBUTION } from './usage-wire.ts'
-import type { CommandCodeAccountsReport } from './usage-wire.ts'
+import { MODELS_DESCRIPTOR } from './usage-wire.ts'
+import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire.ts'
 import { LOGIN_DESCRIPTORS } from './login-wire.ts'
 import type { CommandCodeLoginStatus } from './login-wire.ts'
 
@@ -48,6 +49,12 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
    * entry around `adapter.getUsage()`.
    */
   reports?: () => Promise<CommandCodeAccountsReport>
+  /**
+   * Model-catalog source for the routing-rule editor (wired by the plugin
+   * entry). Absent, the `models` endpoint answers an empty list — the page's
+   * rule editor degrades to the empty state.
+   */
+  listModels?: () => Promise<CommandCodeCatalog>
   /**
    * The browser-login flow (wired by the plugin entry). Absent means the
    * login endpoints answer `idle` / reject with a plain message — the page's
@@ -106,6 +113,16 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
   }
 
   /**
+   * The model catalog for the settings page's routing-rule editor. The
+   * browser never calls the Command Code API directly — the Host serves the
+   * catalog (already fetched/cached by the adapter) so rules can be picked
+   * from the live model list instead of typed by hand.
+   */
+  async models(): Promise<CommandCodeCatalog> {
+    return this.deps.listModels?.() ?? { models: [] }
+  }
+
+  /**
    * Start (or rejoin) a browser-login attempt and return its fresh status —
    * `waiting` carrying the Studio URL. Rejects when the flow cannot start
    * (no free loopback port, disposed plugin); the Gateway folds the throw
@@ -148,12 +165,13 @@ export function applyUsageRemote<C extends CommandCodeConnectionOptions>(
   ctx.inject(['typert'], (remoteCtx) => {
     new CommandCodeUsageService(remoteCtx, deps)
     const registry = remoteCtx.typert as unknown as TypertContributionRegistry
-    // One registration carries the report endpoint and the login endpoints:
-    // the descriptors are unique per endpoint, and a single contribution
-    // keeps the Host's registry bookkeeping (and the Client mount) 1:1.
+    // One registration carries the report endpoint, the models endpoint, and
+    // the login endpoints: the descriptors are unique per endpoint, and a
+    // single contribution keeps the Host's registry bookkeeping (and the
+    // Client mount) 1:1.
     const unregister = registry.register({
       ...USAGE_HOST_CONTRIBUTION,
-      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, ...LOGIN_DESCRIPTORS],
+      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, MODELS_DESCRIPTOR, ...LOGIN_DESCRIPTORS],
     })
     // The registry's own effect would outlive this fiber; withdraw the
     // contribution when the plugin unloads.
