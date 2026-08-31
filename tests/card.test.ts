@@ -1,12 +1,15 @@
 /**
  * Models-page provider-card tests (node:test, zero deps). Run with `npm test`.
  *
- * These pin the "Command Code" card rendered inside the harness Models page
+ * These pin the "Command Code" panel rendered inside the harness Models page
  * through the `settings.models.provider-card` keyed slot (dsh 0.1.2-alpha.2):
  *
- *   - the card's posture logic (`cardMode`): which body renders for the
+ *   - the panel's posture logic (`cardMode`): which body renders for the
  *     registration / not-ready / not-configured / configured states;
- *   - the credential fact: the card reports the SHARED controller's
+ *   - the sibling lookup (`adjacentEditorCard`) that finds the official
+ *     editor next to the slot outlet while it is open — the trigger that
+ *     swaps the settings.yaml shell for the real controls;
+ *   - the credential fact: the panel reports the SHARED controller's
  *     `apiKeyConfigured` (same controller the dedicated settings page uses),
  *     with the owner's `keyConfigured` only as a fallback;
  *   - the save path: a pasted key lands under the plugin's credential
@@ -28,7 +31,12 @@ import {
   type SettingsPageApi,
 } from '../src/client/settings.ts'
 import { CommandCodeLoginController } from '../src/client/login.ts'
-import { cardMode, type CommandCodeCardProps, type ProviderCardOwnerProps } from '../src/client/card.tsx'
+import {
+  adjacentEditorCard,
+  cardMode,
+  type CommandCodeCardProps,
+  type ProviderCardOwnerProps,
+} from '../src/client/card.tsx'
 import type { SettingsPageState } from '../src/client/settings.ts'
 import type { LoginPageState } from '../src/client/login.ts'
 import type { CommandCodeLoginFailureReason } from '../src/login-wire.ts'
@@ -159,6 +167,7 @@ function makeCardProps(opts?: {
     useCommandCodeLogin: <T,>(selector: (state: LoginPageState) => T) => selector(loginSnapshot),
     edit: (field, text) => controller.edit(field, text),
     save: () => void controller.save(),
+    discard: () => controller.discard(),
     beginLogin: () => void loginController.begin(),
     cancelLogin: () => void loginController.cancel(),
   }
@@ -272,4 +281,46 @@ test('a Host-reported failed status carries the same failure reasons', async () 
   assert.equal(loginController.state().phase, 'failed')
   assert.equal(loginController.state().reason, 'timeout')
   loginController.dispose()
+})
+
+// ---------------------------------------------------------------------------
+// adjacentEditorCard: locating the official editor beside the slot outlet
+// ---------------------------------------------------------------------------
+
+test('adjacentEditorCard finds the editor after the outlet in an edited row', () => {
+  // Row posture: [rowHead, outlet, editor?] — the 编辑 toggle's target.
+  const wrapper = {
+    previousElementSibling: { className: 'zGbnIq_rowHead' },
+    nextElementSibling: { className: 'zGbnIq_editor' },
+  }
+  assert.equal(adjacentEditorCard(wrapper)?.className, 'zGbnIq_editor')
+})
+
+test('adjacentEditorCard returns null while the row editor is closed', () => {
+  const wrapper = {
+    previousElementSibling: { className: 'zGbnIq_rowHead' },
+    nextElementSibling: null,
+  }
+  assert.equal(adjacentEditorCard(wrapper), null)
+})
+
+test('adjacentEditorCard finds the always-open editor before the outlet', () => {
+  // Setup/add postures render [.., editor, outlet] — the editor precedes.
+  const wrapper = {
+    previousElementSibling: { className: 'zGbnIq_editor' },
+    nextElementSibling: null,
+  }
+  assert.equal(adjacentEditorCard(wrapper)?.className, 'zGbnIq_editor')
+})
+
+test('adjacentEditorCard ignores neighbors without the editor class stem', () => {
+  const wrapper = {
+    previousElementSibling: { className: 'zGbnIq_field' },
+    nextElementSibling: { className: 'zGbnIq_rowHead' },
+  }
+  assert.equal(adjacentEditorCard(wrapper), null)
+})
+
+test('adjacentEditorCard tolerates a missing outlet anchor', () => {
+  assert.equal(adjacentEditorCard(null), null)
 })

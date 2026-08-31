@@ -1,9 +1,20 @@
 /**
- * The Command Code provider card inside the harness Models settings page
+ * The Command Code configuration panel inside the harness Models settings page
  * (browser half). Rendered through the `settings.models.provider-card` keyed
  * slot available in dsh 0.1.2-alpha.2, registered with
  * `entryKey = 'llm-commandcode'` (the plugin's settings namespace, the key the
  * Models page dispatches for every Command Code provider row).
+ *
+ * The official Models page opens one editor card per provider row through its
+ * own 编辑 button. For a namespace the page does not curate a layout for
+ * (`llm-commandcode`), that editor is a bare shell — a pointer to
+ * `settings.yaml` above a permanently disabled apply button. This panel takes
+ * its place: the slot outlet renders right beside the official editor inside
+ * the same row card, so the component watches the outlet's siblings and, while
+ * the official editor is open, hides the useless shell and shows the real
+ * controls in its slot — the credential/route badges, the API-key field,
+ * official sign-in, and the discard/save footer. Closed, it renders nothing
+ * and the row looks exactly like any other provider row.
  *
  * The slot's owner props (`configured`, `keyConfigured`) mirror what the
  * Models page already knows; the authoritative credential facts still come
@@ -11,22 +22,15 @@
  * settings page, so the two surfaces can never disagree about whether a key
  * is stored.
  *
- * Not configured: an "Unconfigured" badge, a paste-a-key field, and the
- * official sign-in button — the whole flow a first-run user needs, inline.
- * Configured: a green "Configured" badge plus a pointer to the full
- * Command Code settings page for rotation, usage, and connection facts.
- *
- * The card renders nothing until the shared controller's first snapshot is
- * ready (`available`), which also keeps the stale-facts window of the older
- * join from ever being visible. A controller-less render (card mounted before
- * the section registered its inject face — the composition runs one apply)
- * degrades to the stateless registration-notice form.
+ * A controller-less render (panel mounted before the section registered its
+ * inject face — the composition runs one apply) degrades to the stateless
+ * registration notice inside the opened panel.
  *
  * Styles ride the page stylesheet the client entry injects once (`cc-`
  * prefixed classes); the card adds no CSS of its own.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsCommandCodeKey } from './locales.ts'
 import type { SettingsPageState, StagedField } from './settings.ts'
@@ -84,6 +88,42 @@ export interface ModelsFooterOwnerProps {
 /** Owner props the Models page supplies at its dispatch sites. */
 export type ProviderCardOwnerProps = ProviderCardExtrasOwnerProps
 
+/**
+ * The slot whose outlet anchors this panel inside the Models row — the
+ * renderer's own `data-slot` attribute value, stable across builds (unlike
+ * CSS-module class hashes).
+ */
+export const CARD_SLOT_KEY = 'settings.models.provider-card'
+
+/** The DOM facts the sibling lookup reads (satisfied by real Elements). */
+export interface SlotWrapperSiblings {
+  previousElementSibling: { className: string } | null
+  nextElementSibling: { className: string } | null
+}
+
+/**
+ * Find the official editor card among the slot outlet's siblings, or null
+ * while it is closed. The Models page renders the editor as an immediate
+ * sibling of the outlet wrapper — after it in a provider row (the target of
+ * the row's 编辑 toggle), before it in the first-run setup card and the
+ * add-provider card, where it is always open. The editor is the only such
+ * sibling whose CSS module class carries the `editor` stem
+ * (`<hash>_editor`); the row header and the add card's provider select
+ * never do, so the lookup needs no hash knowledge.
+ */
+export function adjacentEditorCard(wrapper: SlotWrapperSiblings | null): { className: string } | null {
+  if (wrapper === null) return null
+  for (const sibling of [wrapper.previousElementSibling, wrapper.nextElementSibling]) {
+    if (sibling !== null && typeof sibling.className === 'string' && sibling.className.includes('editor')) {
+      return sibling
+    }
+  }
+  return null
+}
+
+/** The closed-panel style: the outlet stays mounted as the detection anchor. */
+const HIDDEN_STYLE = { display: 'none' } as const
+
 /** Injected face the card's slot registration supplies. */
 export interface CommandCodeCardProps {
   t: Translate<SettingsCommandCodeKey>
@@ -91,6 +131,7 @@ export interface CommandCodeCardProps {
   useCommandCodeLogin<T>(selector: (state: LoginPageState) => T): T
   edit(field: string, text: string): void
   save(): void
+  discard(): void
   beginLogin(): void
   cancelLogin(): void
 }
@@ -219,15 +260,16 @@ function CardKeyField({ state, disabled, t, onEdit }: {
  * the Models page (saved row, first-run setup posture, and add-provider
  * draft).
  *
- * Collapsed by default: the title, the provider id, and the status badges —
- * nothing else, so a page full of providers stays compact. An "Edit" button
- * expands the inline form (API-key field + sign-in + save/cancel), which is
- * the same flow for a first-run setup and for swapping/re-signing-in an
- * already-configured key. Cancel collapses the form without saving.
+ * Closed (the official 编辑 toggle off) the panel renders nothing: the row
+ * head the Models page owns already names the provider and shows the
+ * credential dot, so a page full of providers stays compact. Opening the
+ * official editor mounts the editor shell as the outlet's sibling; the panel
+ * watches for it, hides the shell (it carries only the settings.yaml hint and
+ * a disabled apply for this namespace), and shows the real controls — badges,
+ * API-key field, sign-in, discard/save.
  */
 export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCardOwnerProps) {
   const { t } = props
-  const [editing, setEditing] = useState(false)
   const mode = cardMode(props)
   const state = props.useCommandCodeSettings !== undefined
     ? props.useCommandCodeSettings((snapshot) => snapshot)
@@ -243,35 +285,62 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
   const configured = mode.kind === 'live' && mode.ready ? mode.controllerConfigured : props.keyConfigured
   const disabled = mode.kind === 'live' && (!mode.writable || (state !== undefined && !mode.apiKeyWritable))
   const showBody = mode.kind === 'live' && mode.ready && state !== undefined
-  // A landed save collapses the form back to the compact card; a failed save
-  // keeps it open so the error stays visible for correction.
+  // The official editor's open state lives in the Models page's own component
+  // state and never reaches this slot's props; the outlet wrapper is the
+  // stable neighbor, so watch its siblings for the editor's mount/unmount.
+  // The outlet stays mounted either way — it is the observation anchor — so
+  // the closed panel hides its own root instead of unmounting.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
   useEffect(() => {
-    if (editing && state !== undefined && state.savedCount > 0 && !state.failed) setEditing(false)
-  }, [editing, state])
+    const root = rootRef.current
+    if (root === null || typeof MutationObserver === 'undefined') return
+    const wrapper = root.closest(`[data-slot="${CARD_SLOT_KEY}"]`) ?? root.parentElement
+    if (wrapper === null) return
+    const row = wrapper.parentElement
+    if (row === null) return
+    let hiddenEditor: HTMLElement | null = null
+    const sync = () => {
+      const editor = adjacentEditorCard(wrapper) as HTMLElement | null
+      setEditorOpen(editor !== null)
+      if (editor !== null) {
+        // React pins no inline style on the editor shell, so this survives
+        // the shell's own re-renders; a shell that unmounts and remounts is
+        // re-hidden by the next observation.
+        editor.style.display = 'none'
+        hiddenEditor = editor
+      }
+    }
+    sync()
+    const observer = new MutationObserver(sync)
+    observer.observe(row, { childList: true })
+    return () => {
+      observer.disconnect()
+      // If the shell outlives the panel (plugin reload), give it back: the
+      // settings.yaml hint is the honest fallback face again.
+      if (hiddenEditor !== null) hiddenEditor.style.display = ''
+    }
+  }, [])
   return (
-    <div className="cc-providerCard" data-cc-models-card="true">
-      <div className="cc-field">
-        <div className="cc-fieldHead">
-          <span className="cc-label">{t('cardTitle')}</span>
-          <span className="cc-badges">
-            <StatusBadge ok={configured} okLabel={t('apiKeySet')} pendingLabel={t('apiKeyUnset')} />
-            {props.provider.active ? <span className="cc-badge">{t('cardRouteActive')}</span> : null}
-            <button
-              type="button"
-              className="cc-reset"
-              disabled={disabled}
-              onClick={() => setEditing((value) => !value)}
-            >
-              {t('cardEdit')}
-            </button>
-          </span>
-        </div>
-        <p className="cc-providerId">{props.provider.provider}</p>
-        {mode.kind === 'registration' ? <p className="cc-hint">{t('cardRegistrationHint')}</p> : null}
-        {mode.kind === 'live' && !mode.ready ? <p className="cc-hint">{t('cardLoadingHint')}</p> : null}
-      </div>
-      {showBody && editing ? (
+    <div
+      ref={rootRef}
+      className="cc-providerCard"
+      data-cc-models-card="true"
+      style={editorOpen ? undefined : HIDDEN_STYLE}
+    >
+      {editorOpen && mode.kind === 'registration' ? <p className="cc-hint">{t('cardRegistrationHint')}</p> : null}
+      {editorOpen && mode.kind === 'live' && !mode.ready ? <p className="cc-hint">{t('cardLoadingHint')}</p> : null}
+      {editorOpen && showBody ? (
         <>
+          <div className="cc-field">
+            <div className="cc-fieldHead">
+              <span className="cc-label">{t('cardTitle')}</span>
+              <span className="cc-badges">
+                <StatusBadge ok={configured} okLabel={t('apiKeySet')} pendingLabel={t('apiKeyUnset')} />
+                {props.provider.active ? <span className="cc-badge">{t('cardRouteActive')}</span> : null}
+              </span>
+            </div>
+          </div>
           <CardKeyField
             state={state.apiKey}
             disabled={disabled}
@@ -292,10 +361,10 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
             <button
               type="button"
               className="cc-reset"
-              disabled={saving}
-              onClick={() => setEditing(false)}
+              disabled={!dirty || saving}
+              onClick={props.discard}
             >
-              {t('cancel')}
+              {t('discard')}
             </button>
             <button
               type="button"

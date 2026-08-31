@@ -98,7 +98,6 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-advancedBody{flex-direction:column;display:flex}
 .cc-advancedBody>.cc-field:first-of-type{border-top:1px solid var(--dsw-alias-border-l2)}
 .cc-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
-.cc-providerId{color:var(--dsw-alias-label-tertiary);margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5}
 .cc-footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}
 .cc-toggleRow{align-items:center;gap:8px;cursor:pointer;display:flex}
 .cc-toggleRow:has(.cc-toggle:disabled){cursor:default}
@@ -399,11 +398,14 @@ function applyClientSurfaces(
     inject: injected,
   }, CommandCodeSettingsPage))
 
-  // The Models-page provider card (dsh 0.1.2-alpha.2): a keyed slot the
+  // The Models-page provider panel (dsh 0.1.2-alpha.2): a keyed slot the
   // Models section dispatches with `entryKey = settingsNs` on every provider
-  // card of an adapter family. Registering under `llm-commandcode` renders
-  // the card's extension area on every Command Code row — including the
-  // first-run setup posture, exactly where a user without a key lands.
+  // card of an adapter family. Registering under `llm-commandcode` mounts the
+  // panel beside the official editor on every Command Code row — including
+  // the first-run setup posture, exactly where a user without a key lands.
+  // While the official 编辑 toggle is open, the panel hides the official
+  // editor shell (for this namespace it holds only the settings.yaml hint
+  // over a disabled apply) and shows the real controls; see card.tsx.
   // The registration carries its own inject face (store hooks + actions)
   // because the declaring entry is ui-settings-models', not ours; the `t`
   // seat comes from the registration's own `locale` namespace.
@@ -422,6 +424,7 @@ function applyClientSurfaces(
         const settled = controller.state()
         if (!settled.failed && settled.anyAccountConfigured) void usageController.refresh()
       }),
+      discard: () => controller.discard(),
       beginLogin: () => void loginController.begin(),
       cancelLogin: () => void loginController.cancel(),
     }),

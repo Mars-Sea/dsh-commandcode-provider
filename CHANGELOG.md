@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **The Models page now configures Command Code entirely through the official 编辑 button.** The plugin card no longer adds its own header, badges, and edit toggle under the row: with the editor closed the row looks like any other provider, and opening 编辑 replaces the old "其余字段在 settings.yaml 中" placeholder (which offered nothing but a disabled apply button) with the real controls — key/route status, the API-key field, official sign-in, and discard/save.
 - **Synced with the official command-code@1.38.2 CLI** (2026-08-28: 1.38.0 added "Let custom agents pin a reasoning effort next to their model" + "Add reasoning effort support for Tencent Hy4 Preview"; 1.38.1/1.38.2 are same-day hotfixes). `COMMAND_CODE_CLI_VERSION` is now `1.38.2`.
 - **Tencent Hy4 Preview now offers selectable reasoning efforts (`low`/`medium`/`high`).** The model gained official effort levels in command-code@1.38.0, so the picker can now offer a reasoning-effort selector for it; it is no longer listed as an auto-thinking model.
 - **Gemini 3.7 Flash's 50% off deal was retired** from the official pricing page's `#deals` section; the snapshot no longer advertises it, so the picker shows the model at full price.

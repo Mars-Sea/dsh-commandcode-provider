@@ -109,11 +109,20 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   (the directory row's settings namespace), carrying its own inject face
   (store hooks + actions) because the declaring entry is ui-settings-models',
   not ours; the `t` seat comes from the registration's own `locale`
-  namespace. The card (src/client/card.tsx) shows key status + paste field +
-  sign-in when unconfigured, a "configured" pointer to the dedicated page
-  when set; the authoritative credential fact is the SHARED settings
-  controller's `apiKeyConfigured` (the owner's `keyConfigured` is fallback
-  only). The SlotMap merge for the two seats lives in card.tsx and must stay
+  namespace. The card (src/client/card.tsx) is the row's configuration panel
+  driven by the OFFICIAL 编辑 toggle: closed it renders nothing (the row looks
+  like any other provider row); open, it hides the official editor shell —
+  for `llm-commandcode` the page's `layoutOf` returns "unknown", so that shell
+  is only the settings.yaml hint over a permanently disabled apply — and shows
+  the real controls (key status + route badges, paste field, sign-in,
+  discard/save) wired to the SHARED settings controller (the authoritative
+  credential fact is `apiKeyConfigured`; the owner's `keyConfigured` is
+  fallback only). The shell is found as an immediate sibling of the renderer's
+  stable `data-slot="settings.models.provider-card"` outlet wrapper (after it
+  in a row, before it in the setup/add cards) by its CSS-module `editor` class
+  stem — no hashed class is hardcoded — via a MutationObserver on the parent;
+  if dsh restructures, detection fails benign and the stock shell reappears.
+  The SlotMap merge for the two seats lives in card.tsx and must stay
   structurally identical to upstream's declaration (compile-time duplicate
   merge would fail once a peer ships it). On dsh builds without the slot the
   declaration never exists and `slots.inject` never fires — the registration
