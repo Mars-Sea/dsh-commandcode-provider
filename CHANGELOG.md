@@ -6,16 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0-alpha.1] - 2026-09-01
+
+> **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
+
 ### Changed
 
-- **Adapted the provider to DeepSeek Harness 0.1.2-alpha.1.** Tool-call IDs now use the current branded chunk vocabulary, credential operations use Typert Remotes, the browser client consumes the new settings/models surfaces, and package metadata no longer references the removed `dsh-client-runtime` package.
-- **Preserved the pre-0.1.2 client path while adopting current Remotes.** The settings, usage, login, and Models surfaces remain one implementation: 0.1.2 activates it through `remote.credentials`, while older clients normalize `connection.api.credentials` into the same internal face. Peer ranges continue to admit the previous RC generations instead of forcing existing installations onto the new client stack.
+- **Raised the minimum supported DeepSeek Harness version to 0.1.2-alpha.2.** Every Harness peer and development package now starts at the alpha.2 line; earlier RC/alpha builds use incompatible Host and browser APIs and are no longer advertised as supported.
+- **Adapted the provider to the 0.1.2-alpha.2 Host and browser contracts.** Tool-call IDs use `ToolCallId`, settings register through the optional `SettingsProvider` service, credential operations use Typert Remotes, and the browser client consumes the current settings/models surfaces without the removed `dsh-client-runtime` package.
 
 ### Fixed
 
-- **Restored fresh plugin-marketplace installs under pnpm 10.** The package now declares the published `@deepseek-ai/dsh-invariants` line as an explicit Host peer, so pnpm does not reinterpret `dsh-llm`'s transitive prerelease peer as the unsatisfiable `>=0.1.1 <0.2.0-0` range. The peer keeps the existing 0.1.0/0.1.1/0.1.2 compatibility branches instead of bundling an RC copy into the plugin; a pnpm 10.34.5 tarball-install smoke test pins the isolated-generation path.
-- **Kept snapshot state self-contained across DSH generations.** DSH 0.1.2 seeds `@deepseek-ai/dsh-client-store`, but older Web shells do not and the package is not yet available independently from the public npm registry. The client therefore inlines only the `getSnapshot`/`subscribe`/`set` subset it consumes, now with per-subscriber failure isolation, so one faulty UI subscriber cannot suppress the remaining updates.
-- **Prevented the legacy friendly image-session error wrapper from blocking 0.1.2 client startup.** The pre-0.1.2 wrapper assumed `connection.api.sessions`; 0.1.2 replaces that façade with `remote.session`, so the optional copy rewrite now safely skips itself when the legacy sessions face is absent instead of failing the whole plugin with `Cannot read properties of undefined (reading 'sessions')`. Legacy hosts still receive the localized rewrite.
+- **Restored fresh plugin-marketplace installs under pnpm 10.** The package declares `@deepseek-ai/dsh-invariants` as an explicit alpha.2 Host peer instead of bundling a second Harness core package; a pnpm 10.34.5 tarball-install smoke test pins the isolated-generation path.
+- **Kept the Web client enabled on alpha.2.** The client no longer requests the removed `dsh-client-runtime/client` module, while its React, slot, store, and primitive dependencies match the official alpha.2 platform module table; settings and Models pages therefore remain available instead of disabling the entire client bundle.
+- **Isolated snapshot subscriber failures.** The client-local `getSnapshot`/`subscribe`/`set` store now continues notifying remaining UI consumers when one subscriber throws.
+- **Prevented the friendly image-session error wrapper from blocking alpha.2 client startup.** Alpha.2 no longer exposes `connection.api.sessions`, so the optional copy rewrite safely skips itself when that legacy façade is absent.
 
 ## [0.9.1] - 2026-08-28
 

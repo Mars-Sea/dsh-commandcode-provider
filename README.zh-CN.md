@@ -18,7 +18,7 @@
 
 - **插件包**：一条 `dsh plugin add` 命令安装到任意 dsh 配置，注册 `commandcode` provider 路由，带实时模型目录。
 - **专属设置页**：API key 输入、连接参数、实时「账户用量」卡片和「隐藏套餐外模型」开关。
-- **Models 页快捷卡片**：在 dsh 0.1.2-alpha.1 及以上版本，**设置 → Models → Command Code** 卡片内直接显示 key 状态、粘贴输入框和登录按钮；旧版 dsh 上该卡片不出现，一切照旧走专属设置页。
+- **Models 页快捷卡片**：**设置 → Models → Command Code** 卡片内直接显示 key 状态、粘贴输入框和登录按钮。
 - **浏览器内登录获取 key**：设置页一键发起官方授权（与 `cmd login` 同一流程），完成后密钥自动写入本机凭据服务，无需手动创建或粘贴；不可用时随时退回手动粘贴。
 - **多账户轮换**：一个账户用量打满后，请求自动切换到下一个账户。详见[多账户轮换](#多账户轮换)。
 - **key 配置灵活**：设置页填写、环境变量或官方 CLI 登录文件均可。
@@ -29,16 +29,31 @@
 
 ## 安装
 
-```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
-```
+按你的 DeepSeek Harness 版本选择对应的发布线：
+
+- **dsh 0.1.2-alpha.2 或更高版本**（当前 alpha 线）——使用配套的 alpha 插件版本，显式用 `alpha` tag 安装：
+
+  ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@alpha
+  ```
+
+- **更早的 dsh 版本**（0.5.0 线及更早，使用 rc 时代的 Host/浏览器 API）——0.9.1 插件在这些版本上继续可用，并保持在 `latest` tag：
+
+  ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
+  ```
+
+> `alpha` tag 永远不会移动 `latest`：普通的 `@latest` 安装始终为旧版 dsh 拿到最新的稳定版，升级到 alpha 线永远是显式选择。
 
 插件可直接在 pnpm 10 的全新插件市场 generation 中安装。不要另行添加 `@deepseek-ai/dsh-invariants` dependency；插件已将其声明为 Host peer，Harness 包仍由当前 dsh profile 统一管理。
 
 ## 更新
 
+用与安装时相同的 tag 更新：
+
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@alpha      # dsh 0.1.2-alpha.2 及以上
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # 更早的 dsh（0.5.0 线）
 ```
 
 然后重启 Web 应用。

@@ -83,30 +83,27 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `@deepseek-ai/dsh-client-web-react`, `@deepseek-ai/dsh-client-ui-primitives`,
   `@deepseek-ai/dsh-client-schema-form`, `@deepseek-ai/dsh-client-ui-attachment`)
   and host-shipped platform modules resolvable from the loader's module table
-  (e.g. `@deepseek-ai/dsh-client-ui-primitives`). The 0.1.2 Web shell also
-  seeds `@deepseek-ai/dsh-client-store`, but older supported installations do
-  not, and that package is not yet published independently on npm. The client
-  therefore keeps the small `getSnapshot`/`subscribe`/`set` subset it needs in
-  `src/client/snapshot-store.ts`; the bundle issues no version-specific store
-  request and remains loadable on legacy shells. The settings page binds the
+  (e.g. `@deepseek-ai/dsh-client-ui-primitives`). The 0.1.2-alpha.2 Web shell
+  seeds `@deepseek-ai/dsh-client-store`; this client keeps the smaller local
+  `getSnapshot`/`subscribe`/`set` subset in `src/client/snapshot-store.ts`, so
+  it issues no extra module-table request. The settings page binds the
   `llm-commandcode` namespace through `ctx.settingsScope` and writes the API
-  key through `ctx.remote.credentials` on 0.1.2 or the normalized
-  `connection.api.credentials` face on older clients, under the
-  `COMMANDCODE_API_KEY` reference — never through the settings section, so
-  the key literal cannot leak into a settings document. The root plugin keeps
-  `remote.credentials` optional and activates the same page implementation
-  through whichever credential transport exists. `tests/settings.test.ts`
-  and `tests/legacy-credentials.test.ts` pin this contract.
+  key through `ctx.remote.credentials` under the `COMMANDCODE_API_KEY`
+  reference — never through the settings section, so the key literal cannot
+  leak into a settings document. The retained legacy credential adapter is
+  defensive only; the published peer contract starts at 0.1.2-alpha.2.
+  `tests/settings.test.ts` and `tests/legacy-credentials.test.ts` pin these
+  internal faces.
 - **Isolated package install**: pnpm 10 auto-installs the package's DSH peers
   when a desktop marketplace prepares a fresh generation. Keep
-  `@deepseek-ai/dsh-invariants` as an explicit peer with the same supported
-  0.1.0/0.1.1/0.1.2 branches; otherwise pnpm reaches it only through
+  `@deepseek-ai/dsh-invariants` as an explicit `^0.1.2-alpha.2` peer matching
+  the other Harness packages; otherwise pnpm reaches it only through
   `dsh-llm`, rewrites the prerelease range to an unsatisfiable stable range,
   and aborts with `ERR_PNPM_NO_MATCHING_VERSION`. Do not move it to
   `dependencies`: the active profile owns Harness packages. Run
   `npm run test:install` after changing DSH peer metadata.
 - **Models-page provider card (`settings.models.provider-card`)**: a keyed
-  SlotMap seat ui-settings-models declares as of dsh 0.1.2-alpha.1 — it
+  SlotMap seat ui-settings-models declares in dsh 0.1.2-alpha.2 — it
   dispatches with `entryKey = settingsNs` on every provider card of an adapter
   family. The client entry registers a cell with `key: 'llm-commandcode'`
   (the directory row's settings namespace), carrying its own inject face

@@ -35,7 +35,7 @@ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
@@ -118,7 +118,7 @@ export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccou
 export const name = 'llm-commandcode'
 export const inject = ['llm']
 
-const NS = settingsNamespace('llm-commandcode')
+const NS = 'llm-commandcode'
 const DEFAULT_API_KEY_ENV = 'COMMANDCODE_API_KEY'
 
 /** The single provider route this plugin owns. */
@@ -435,12 +435,17 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => loginFlow.dispose(), 'dsh-commandcode-provider: login flow')
   applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow })
 
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => {
-      current = source
-    },
-    // Everything the adapter reads is resolved per request, so a settings
-    // change needs no registration-level action.
-    onChange: () => {},
+  // Settings became an optional service in dsh 0.1.2. Register the section
+  // through its provider when present; profiles without settings continue to
+  // use the composition entry captured by `current` above.
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, NS, Config, config, {
+      setSource: (source) => {
+        current = source
+      },
+      // Everything the adapter reads is resolved per request, so a settings
+      // change needs no registration-level action.
+      onChange: () => {},
+    })
   })
 }

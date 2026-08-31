@@ -33,6 +33,7 @@ import {
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
+  ToolCallId,
   errorChain,
   resolveRetryPolicy,
   type ResolvedRetryPolicy,
@@ -47,11 +48,6 @@ import {
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
-
-/** Brand a provider-issued tool-call id through the active harness chunk vocabulary. */
-function toolCallId(id: string): Extract<StreamChunk, { type: 'tool-call-delta' }>['id'] {
-  return id as Extract<StreamChunk, { type: 'tool-call-delta' }>['id']
-}
 
 // ---------------------------------------------------------------------------
 // Static capability snapshot (from the official command-code@1.37.0 bundled
@@ -1786,11 +1782,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           sawContent = true
           chunks.push(
             { type: 'block-start', index, blockType: 'tool-call' },
-            { type: 'tool-call-delta', index, id: toolCallId(id), name, argumentsDelta: args },
+            { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args },
             {
               type: 'block-end',
               index,
-              block: { type: 'tool-call', id: toolCallId(id), name, arguments: args },
+              block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
             },
           )
           break

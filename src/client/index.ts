@@ -186,7 +186,7 @@ export function apply(ctx: Context): void {
     // it wraps `connection.api.sessions`; 0.1.2 replaced that façade with
     // `remote.session`, so the helper safely skips this UX-only rewrite there
     // instead of preventing the whole plugin from activating.
-    installFriendlyImageError(connection, () => ctx.locale.getLocale().active)
+    installFriendlyImageError(connection, () => ctx.locale.getLocale().active === 'zh' ? 'zh' : 'en')
   }
 
   // The "Command Code" settings page: register the section once the
@@ -249,7 +249,7 @@ function applyClientSurfaces(
   ctx.effect(() => {
     let cancelled = false
     let unmount: (() => Promise<void>) | undefined
-    void ctx.remote.$mount(contribution).then((dispose) => {
+    void ctx.remote.$mount(contribution).then((dispose: () => Promise<void>) => {
       if (cancelled) {
         void dispose()
         return
@@ -355,7 +355,7 @@ function applyClientSurfaces(
     inject: injected,
   }, CommandCodeSettingsPage))
 
-  // The Models-page provider card (dsh 0.1.2-alpha.1): a keyed slot the
+  // The Models-page provider card (dsh 0.1.2-alpha.2): a keyed slot the
   // Models section dispatches with `entryKey = settingsNs` on every provider
   // card of an adapter family. Registering under `llm-commandcode` renders
   // the card's extension area on every Command Code row — including the

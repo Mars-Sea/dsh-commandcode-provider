@@ -18,7 +18,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 
 - **Plugin bundle** — install into any dsh profile with `dsh plugin add`; registers a `commandcode` provider route with a live model catalog.
 - **Dedicated settings page** — API key, connection options, a live account-usage card, and a "Hide out-of-plan models" toggle.
-- **Models-page key card** — on dsh 0.1.2-alpha.1 and later, the **Settings → Models → Command Code** card carries the key status, a paste field, and the sign-in button inline; on older dsh builds it is simply absent and the dedicated page remains the surface.
+- **Models-page key card** — the **Settings → Models → Command Code** card carries the key status, a paste field, and the sign-in button inline.
 - **In-browser sign-in for keys** — start the official authorization flow (the same one `cmd login` runs) from the settings page; the approved key lands in the local credential service automatically. Manual paste remains the fallback.
 - **Multi-account rotation** — when one account hits its usage limit, requests switch to the next account automatically. See [Account rotation](#account-rotation).
 - **Flexible API key setup** — via the settings page, an environment variable, or the official CLI login file.
@@ -31,16 +31,31 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
-```
+Pick the release line that matches your DeepSeek Harness version:
+
+- **dsh 0.1.2-alpha.2 or later** (the current alpha line) — use the matching alpha plugin release. Install explicitly with the `alpha` tag:
+
+  ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@alpha
+  ```
+
+- **Older dsh releases** (the 0.5.0 line and earlier, which use the rc-era Host/browser APIs) — the 0.9.1 plugin keeps working there and stays on the `latest` tag:
+
+  ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
+  ```
+
+> The `alpha` tag never moves `latest`: a plain `@latest` install always gets the newest stable release for older Harness versions, and upgrading to the alpha line is always an explicit opt-in.
 
 Fresh pnpm 10 marketplace generations are supported directly. Do not add a separate `@deepseek-ai/dsh-invariants` dependency; the plugin declares it as a Host peer so the active dsh profile remains the owner of Harness packages.
 
 ## Updating
 
+Update with the same tag you installed with:
+
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@alpha      # dsh 0.1.2-alpha.2+
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # older dsh (0.5.0 line)
 ```
 
 Then restart the web app.

@@ -1,7 +1,7 @@
 /**
  * The Command Code provider card inside the harness Models settings page
  * (browser half). Rendered through the `settings.models.provider-card` keyed
- * slot introduced in dsh 0.1.2-alpha.1, registered with
+ * slot available in dsh 0.1.2-alpha.2, registered with
  * `entryKey = 'llm-commandcode'` (the plugin's settings namespace, the key the
  * Models page dispatches for every Command Code provider row).
  *
@@ -35,14 +35,10 @@ import type { CommandCodeLoginFailureReason } from '../login-wire.ts'
 
 /**
  * The Models-page extension slots, merged into the SlotMap with the exact
- * declarations dsh 0.1.2-alpha.1's ui-settings-models ships. On that build
- * (and later) the type-only import of this module makes the registration at
- * the client entry compile-time checked against the real contract; on older
- * builds this merge adds keys the runtime has not declared, which the slot
- * kit treats as absent — `slots.inject` never fires and the registration
- * silently does not happen. The merge must stay structurally identical to
- * upstream's (kind/scope/owner), or a future dsh carrying its own declaration
- * would fail the duplicate-merge check at compile time.
+ * declarations dsh 0.1.2-alpha.2's ui-settings-models ships. The merge must
+ * stay structurally identical to upstream's (kind/scope/owner), or a future
+ * dsh carrying its own declaration would fail the duplicate-merge check at
+ * compile time.
  */
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
