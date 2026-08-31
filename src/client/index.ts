@@ -98,6 +98,7 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-advancedBody{flex-direction:column;display:flex}
 .cc-advancedBody>.cc-field:first-of-type{border-top:1px solid var(--dsw-alias-border-l2)}
 .cc-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
+.cc-providerId{color:var(--dsw-alias-label-tertiary);margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5}
 .cc-footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}
 .cc-toggleRow{align-items:center;gap:8px;cursor:pointer;display:flex}
 .cc-toggleRow:has(.cc-toggle:disabled){cursor:default}

@@ -252,11 +252,11 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   loginStoreFailed: '密钥无法写入本机凭据服务，请手动粘贴。',
   loginCancelled: '登录已取消。',
   loginFailedGeneric: '登录失败，请重试或手动粘贴密钥。',
-  cardTitle: 'Command Code 连接',
+  cardTitle: 'Command Code',
   cardRouteActive: '已启用',
   cardLoadingHint: '正在读取 Command Code 配置…',
   cardRegistrationHint: '此卡片随 Command Code 插件注册，需要较新版本的 DeepSeek Harness 才会显示完整内容。',
-  cardConfiguredHint: 'API 密钥已就绪。如需更换密钥、添加多账户轮换、查看用量或修改 API 地址，请前往设置中的「Command Code」页。',
+  cardConfiguredHint: '其余字段在 settings.yaml 中，请直接编辑对应段 (llm-commandcode)。',
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
@@ -387,9 +387,9 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   loginStoreFailed: 'The key could not be stored in the local credential service; paste it manually.',
   loginCancelled: 'Sign-in cancelled.',
   loginFailedGeneric: 'Sign-in failed; try again or paste the key manually.',
-  cardTitle: 'Command Code connection',
+  cardTitle: 'Command Code',
   cardRouteActive: 'Active',
   cardLoadingHint: 'Loading the Command Code configuration…',
   cardRegistrationHint: 'This card is contributed by the Command Code plugin; a newer DeepSeek Harness is needed to show the full controls.',
-  cardConfiguredHint: 'The API key is ready. To replace it, add account rotation, review usage, or change the API base, open the "Command Code" page in Settings.',
+  cardConfiguredHint: 'Other fields live in settings.yaml — edit the (llm-commandcode) section directly.',
 }

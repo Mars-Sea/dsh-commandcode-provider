@@ -214,7 +214,7 @@ function CardKeyField({ state, disabled, t, onEdit }: {
   )
 }
 
-/** One "Configured" badge + pointer to the full settings page (footer area). */
+/** One "Configured" badge + the yaml-editing pointer (footer area). */
 function CardConfiguredBody({ t }: { t: Translate<SettingsCommandCodeKey> }) {
   return (
     <div className="cc-field">
@@ -227,6 +227,13 @@ function CardConfiguredBody({ t }: { t: Translate<SettingsCommandCodeKey> }) {
  * The slot component body. Dispatched on every Command Code provider card of
  * the Models page (saved row, first-run setup posture, and add-provider
  * draft).
+ *
+ * The form (key field + sign-in + save) renders whenever the controller is
+ * ready, configured or not — a configured account can swap its key or
+ * re-sign-in inline, matching the unconfigured flow. A configured card adds
+ * the provider id and a pointer to the settings.yaml section for the
+ * remaining fields, keeping the card as compact as the official provider
+ * rows.
  */
 export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCardOwnerProps) {
   const { t } = props
@@ -255,10 +262,11 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
             {props.provider.active ? <span className="cc-badge">{t('cardRouteActive')}</span> : null}
           </span>
         </div>
+        <p className="cc-providerId">{props.provider.provider}</p>
         {mode.kind === 'registration' ? <p className="cc-hint">{t('cardRegistrationHint')}</p> : null}
         {mode.kind === 'live' && !mode.ready ? <p className="cc-hint">{t('cardLoadingHint')}</p> : null}
       </div>
-      {showBody && !configured ? (
+      {showBody ? (
         <>
           <CardKeyField
             state={state.apiKey}
@@ -286,9 +294,9 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
               {t(saving ? 'saving' : 'save')}
             </button>
           </div>
+          {configured ? <CardConfiguredBody t={t} /> : null}
         </>
       ) : null}
-      {showBody && configured ? <CardConfiguredBody t={t} /> : null}
     </div>
   )
 }
