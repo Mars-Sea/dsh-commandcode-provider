@@ -807,3 +807,26 @@ test('a failed catalog fetch marks catalogFailed without breaking the page', asy
   assert.equal(controller.state().catalogFailed, true)
   assert.deepEqual(controller.state().catalogModels, [])
 })
+
+test('refreshCatalog recovers after the Remote mount lands', async () => {
+  // The controller is constructed before the Remote mount; the first fetch
+  // fails (not mounted). Once the mount lands, refreshCatalog() re-fetches
+  // and clears the failure flag — the rule editor must recover without a
+  // page reload.
+  let mounted = false
+  const api = makeApi({
+    models: async () => mounted
+      ? { ok: true as const, value: { models: [{ id: 'tencent/hy4-preview', name: 'Tencent Hy4 Preview' }] } }
+      : { ok: false as const, error: { message: 'commandcode/models remote is not mounted' } },
+  })
+  const { controller } = makeController({ api })
+  await flush()
+  assert.equal(controller.state().catalogFailed, true)
+  assert.deepEqual(controller.state().catalogModels, [])
+  // The mount lands; the client entry calls refreshCatalog().
+  mounted = true
+  controller.refreshCatalog()
+  await flush()
+  assert.equal(controller.state().catalogFailed, false)
+  assert.deepEqual(controller.state().catalogModels, [{ id: 'tencent/hy4-preview', name: 'Tencent Hy4 Preview' }])
+})

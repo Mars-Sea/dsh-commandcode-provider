@@ -383,7 +383,7 @@ export class CommandCodeSettingsController {
     }
     this.recomputeCredentialRef()
     void this.describeAll()
-    void this.loadCatalog()
+    this.refreshCatalog()
   }
 
   /** Release every subscription held on external sources. Idempotent. */
@@ -830,28 +830,27 @@ export class CommandCodeSettingsController {
 
   /**
    * Fetch the model catalog for the routing-rule editor through the Host
-   * Remote. One fetch per controller lifetime; a failure marks the state so
-   * the editor degrades gracefully (rules can still be saved as-is).
+   * Remote. Runs once at construction; call again (e.g. from the client entry
+   * once the Remote mount lands) to (re)try — a later success clears a prior
+   * failure flag so the editor recovers without a page reload.
    */
-  private async loadCatalog(): Promise<void> {
+  refreshCatalog(): void {
     const models = this.api.models
     if (models === undefined) {
       this.catalogFailed = true
+      this.publish()
       return
     }
-    try {
-      const response = await models()
-      if (!response.ok) {
-        this.catalogFailed = true
-      } else if (Array.isArray(response.value?.models)) {
+    void models().then((response) => {
+      if (response.ok && Array.isArray(response.value?.models)) {
         this.catalogModels = response.value.models
+        this.catalogFailed = false
       } else {
         this.catalogFailed = true
       }
-    } catch {
+    }, () => {
       this.catalogFailed = true
-    }
-    this.publish()
+    }).then(() => this.publish())
   }
 
   // -----------------------------------------------------------------------

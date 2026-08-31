@@ -219,7 +219,17 @@ function applyClientSurfaces(
   hostDescription?: HostDescriptionSource,
 ): void {
   const scope = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: COMMANDCODE_NS })
-  const controller = new CommandCodeSettingsController(scope, api, hostDescription)
+  // The model catalog for the routing-rule editor is served by the
+  // `commandcode/models` Remote below; the controller reads it through this
+  // mutable seam so the Remote mount (which happens after the controller is
+  // constructed) still reaches the catalog fetch. Unset until the mount
+  // lands — the controller degrades to the empty-catalog state meanwhile.
+  let modelsRemote: NonNullable<SettingsPageApi['models']> | undefined
+  const controller = new CommandCodeSettingsController(
+    scope,
+    { ...api, models: () => modelsRemote?.() ?? Promise.resolve({ ok: false, error: { message: 'commandcode/models remote is not mounted' } }) },
+    hostDescription,
+  )
   ctx.effect(() => () => controller.dispose(), 'dsh-commandcode-provider: settings controller')
   const store = createSnapshotStore<SettingsPageState>(controller.state())
   controller.subscribe(() => store.set(controller.state()))
@@ -261,6 +271,8 @@ function applyClientSurfaces(
       unmount = dispose
       ctx.inject(['remote.commandcode'], (namespaceCtx) => {
         usageNamespace = namespaceCtx.remote.commandcode
+        // The catalog Remote is live now; (re)fetch it for the rule editor.
+        controller.refreshCatalog()
         namespaceCtx.effect(() => () => {
           usageNamespace = undefined
         }, 'dsh-commandcode-provider: usage namespace')
@@ -292,6 +304,9 @@ function applyClientSurfaces(
       return namespace.models()
     },
   }
+  // Wire the catalog Remote into the settings controller's models seam so the
+  // routing-rule editor can fetch the catalog once the mount lands.
+  modelsRemote = () => usageRemote.models()
   const usageController = new CommandCodeUsageController(usageRemote)
   ctx.effect(() => () => usageController.dispose(), 'dsh-commandcode-provider: usage controller')
   const usageStore = createSnapshotStore<UsagePageState>(usageController.state())
