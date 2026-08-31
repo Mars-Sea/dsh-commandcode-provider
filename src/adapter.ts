@@ -1759,8 +1759,18 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       if (!isRecord(event)) return chunks
 
       switch (event.type) {
+        case 'text-start':
+          // Commands Code emits explicit text-start/text-end to delimit the text block.
+          // Open the text block here (rather than lazily on the first text-delta) so
+          // block indexing matches the stream, and keep any still-open reasoning block
+          // intact — a text block and a reasoning block may coexist (BlockAssembler is
+          // index-scoped, so ordering is preserved by index).
+          if (textIndex < 0) {
+            textIndex = nextIndex++
+            chunks.push({ type: 'block-start', index: textIndex, blockType: 'text' })
+          }
+          break
         case 'text-delta': {
-          chunks.push(...closeReasoning())
           if (textIndex < 0) {
             textIndex = nextIndex++
             chunks.push({ type: 'block-start', index: textIndex, blockType: 'text' })
@@ -1771,8 +1781,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           chunks.push({ type: 'text-delta', index: textIndex, text: delta })
           break
         }
-        case 'reasoning-delta': {
+        case 'text-end':
           chunks.push(...closeText())
+          break
+        case 'reasoning-start':
+          chunks.push(...closeText())
+          break
+        case 'reasoning-delta': {
           if (reasoningIndex < 0) {
             reasoningIndex = nextIndex++
             chunks.push({ type: 'block-start', index: reasoningIndex, blockType: 'reasoning' })
@@ -1782,9 +1797,6 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           chunks.push({ type: 'reasoning-delta', index: reasoningIndex, text: delta })
           break
         }
-        case 'reasoning-start':
-          chunks.push(...closeText())
-          break
         case 'reasoning-end':
           chunks.push(...closeReasoning())
           break
