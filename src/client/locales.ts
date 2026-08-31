@@ -131,9 +131,9 @@ export type SettingsCommandCodeKey =
   | 'loginFailedGeneric'
   | 'cardTitle'
   | 'cardRouteActive'
+  | 'cardEdit'
   | 'cardLoadingHint'
   | 'cardRegistrationHint'
-  | 'cardConfiguredHint'
 
 export const zh: Record<SettingsCommandCodeKey, string> = {
   nav: 'Command Code',
@@ -254,9 +254,9 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   loginFailedGeneric: '登录失败，请重试或手动粘贴密钥。',
   cardTitle: 'Command Code',
   cardRouteActive: '已启用',
+  cardEdit: '编辑',
   cardLoadingHint: '正在读取 Command Code 配置…',
   cardRegistrationHint: '此卡片随 Command Code 插件注册，需要较新版本的 DeepSeek Harness 才会显示完整内容。',
-  cardConfiguredHint: '其余字段在 settings.yaml 中，请直接编辑对应段 (llm-commandcode)。',
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
@@ -389,7 +389,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   loginFailedGeneric: 'Sign-in failed; try again or paste the key manually.',
   cardTitle: 'Command Code',
   cardRouteActive: 'Active',
+  cardEdit: 'Edit',
   cardLoadingHint: 'Loading the Command Code configuration…',
   cardRegistrationHint: 'This card is contributed by the Command Code plugin; a newer DeepSeek Harness is needed to show the full controls.',
-  cardConfiguredHint: 'Other fields live in settings.yaml — edit the (llm-commandcode) section directly.',
 }

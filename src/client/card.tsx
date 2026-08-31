@@ -26,7 +26,7 @@
  * prefixed classes); the card adds no CSS of its own.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsCommandCodeKey } from './locales.ts'
 import type { SettingsPageState, StagedField } from './settings.ts'
@@ -214,29 +214,20 @@ function CardKeyField({ state, disabled, t, onEdit }: {
   )
 }
 
-/** One "Configured" badge + the yaml-editing pointer (footer area). */
-function CardConfiguredBody({ t }: { t: Translate<SettingsCommandCodeKey> }) {
-  return (
-    <div className="cc-field">
-      <p className="cc-hint">{t('cardConfiguredHint')}</p>
-    </div>
-  )
-}
-
 /**
  * The slot component body. Dispatched on every Command Code provider card of
  * the Models page (saved row, first-run setup posture, and add-provider
  * draft).
  *
- * The form (key field + sign-in + save) renders whenever the controller is
- * ready, configured or not — a configured account can swap its key or
- * re-sign-in inline, matching the unconfigured flow. A configured card adds
- * the provider id and a pointer to the settings.yaml section for the
- * remaining fields, keeping the card as compact as the official provider
- * rows.
+ * Collapsed by default: the title, the provider id, and the status badges —
+ * nothing else, so a page full of providers stays compact. An "Edit" button
+ * expands the inline form (API-key field + sign-in + save/cancel), which is
+ * the same flow for a first-run setup and for swapping/re-signing-in an
+ * already-configured key. Cancel collapses the form without saving.
  */
 export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCardOwnerProps) {
   const { t } = props
+  const [editing, setEditing] = useState(false)
   const mode = cardMode(props)
   const state = props.useCommandCodeSettings !== undefined
     ? props.useCommandCodeSettings((snapshot) => snapshot)
@@ -252,6 +243,11 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
   const configured = mode.kind === 'live' && mode.ready ? mode.controllerConfigured : props.keyConfigured
   const disabled = mode.kind === 'live' && (!mode.writable || (state !== undefined && !mode.apiKeyWritable))
   const showBody = mode.kind === 'live' && mode.ready && state !== undefined
+  // A landed save collapses the form back to the compact card; a failed save
+  // keeps it open so the error stays visible for correction.
+  useEffect(() => {
+    if (editing && state !== undefined && state.savedCount > 0 && !state.failed) setEditing(false)
+  }, [editing, state])
   return (
     <div className="cc-providerCard" data-cc-models-card="true">
       <div className="cc-field">
@@ -260,13 +256,21 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
           <span className="cc-badges">
             <StatusBadge ok={configured} okLabel={t('apiKeySet')} pendingLabel={t('apiKeyUnset')} />
             {props.provider.active ? <span className="cc-badge">{t('cardRouteActive')}</span> : null}
+            <button
+              type="button"
+              className="cc-reset"
+              disabled={disabled}
+              onClick={() => setEditing((value) => !value)}
+            >
+              {t('cardEdit')}
+            </button>
           </span>
         </div>
         <p className="cc-providerId">{props.provider.provider}</p>
         {mode.kind === 'registration' ? <p className="cc-hint">{t('cardRegistrationHint')}</p> : null}
         {mode.kind === 'live' && !mode.ready ? <p className="cc-hint">{t('cardLoadingHint')}</p> : null}
       </div>
-      {showBody ? (
+      {showBody && editing ? (
         <>
           <CardKeyField
             state={state.apiKey}
@@ -288,13 +292,20 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
             <button
               type="button"
               className="cc-reset"
+              disabled={saving}
+              onClick={() => setEditing(false)}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="button"
+              className="cc-reset"
               disabled={savingBlocked || saving}
               onClick={props.save}
             >
               {t(saving ? 'saving' : 'save')}
             </button>
           </div>
-          {configured ? <CardConfiguredBody t={t} /> : null}
         </>
       ) : null}
     </div>
