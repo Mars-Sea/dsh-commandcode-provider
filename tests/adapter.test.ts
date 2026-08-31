@@ -1015,8 +1015,8 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flash'], ['low', 'high', 'max'])
   // stealth/ox-alpha left the catalog in 1.34.0 when its preview ended.
   assert.ok(!KNOWN_EFFORTS['stealth/ox-alpha'])
-  // Synced from the official command-code@1.37.0 model table (re-verified
-  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0 and 1.36.0 along the way):
+  // Synced from the official command-code@1.38.2 model table (re-verified
+  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0 and 1.37.0 along the way):
   // models that ship with effort levels must be present, and absent ones must
   // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
   // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
@@ -1029,7 +1029,9 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'])
   assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid'])
   assert.ok(!KNOWN_EFFORTS['tencent/Hy3'])
-  assert.ok(!KNOWN_EFFORTS['tencent/hy4-preview'])
+  // tencent/hy4-preview gained selectable ['low','medium','high'] efforts in
+  // command-code@1.38.0 (it previously reasoned automatically with none).
+  assert.deepEqual(KNOWN_EFFORTS['tencent/hy4-preview'], ['low', 'medium', 'high'])
   assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3']) // no official effort levels
   assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K3'])
 })
@@ -1047,12 +1049,14 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   // entirely in 1.34.0 when its preview ended. It belongs to neither set now.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
   // Re-verified against the command-code@1.28.4 ZA table (2026-08-18),
-  // re-confirmed against 1.30.1 (2026-08-21) and 1.37.0 (2026-08-28): these
-  // think automatically (reasoning:!0, no efforts) and belong in the set.
-  // command-code@1.37.0 added tencent/hy4-preview (OpenRouter-routed, 1M, no efforts).
+  // re-confirmed against 1.30.1 (2026-08-21), 1.37.0 (2026-08-28) and 1.38.2:
+  // these think automatically (reasoning:!0, no efforts) and belong in the set.
+  // tencent/hy4-preview joined in command-code@1.37.0 (OpenRouter-routed, 1M,
+  // no efforts) but gained selectable ['low','medium','high'] efforts in
+  // 1.38.0 and moved to KNOWN_EFFORTS.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
-  assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy4-preview'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('tencent/hy4-preview'))
   assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
   // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (ZA reasoning:false, docs
   // "Text input" only) — the 0.2.0 snapshot wrongly included them.
@@ -1111,6 +1115,11 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // tencent/hy4-preview (command-code@1.37.0, OpenRouter-routed, 1M) joined Go.
   assert.equal(KNOWN_PLANS['tencent/hy4-preview'], 'go')
   assert.equal(KNOWN_PLANS['stealth/ox-alpha'], undefined)
+  // Tencent Hy3 (the hidden free variant, distinct from tencent/hy3-paid) is
+  // a Go-tier open model; ling-3.0-flash-free (deprecated, free promo ended
+  // 2026-08-03) is also on Go. Both closed coverage gaps in the 1.38.2 sync.
+  assert.equal(KNOWN_PLANS['tencent/Hy3'], 'go')
+  assert.equal(KNOWN_PLANS['inclusionai/ling-3.0-flash-free'], 'go')
   // MiniMax M3/M2.7 Free variants (command-code@1.33.0) are promo rows of the
   // Go-tier open models — same tier as their paid siblings.
   assert.equal(KNOWN_PLANS['minimax/minimax-m3-free'], 'go')
@@ -1152,16 +1161,18 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'].expiresAt, '2026-09-05T23:59:59Z')
   assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'].free, true)
   assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'].expiresAt, '2026-09-05T23:59:59Z')
-  // Gemini 3.7 Flash 50% off through 2026-12-31.
-  assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].label, '50% off')
-  assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'].expiresAt, '2026-12-31T23:59:59Z')
+  // Gemini 3.7 Flash's 50% off deal was retired from the pricing page in the
+  // command-code@1.38.2 sync; the model now shows at full price.
+  assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'], undefined)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
-  // Before expiry: shown.
-  assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2026-12-31T12:00:00Z')), '50% off')
-  // At/after expiry: hidden (the snapshot has gone stale).
-  assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2027-01-01T00:00:00Z')), undefined)
+  // A lapsed time-limited deal is hidden even if the snapshot kept it (the
+  // MiniMax free promos end 2026-09-05; here a stale-snapshot time proves the
+  // expiry guard, independent of the current date).
+  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-05T12:00:00Z')), 'FREE')
+  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
+  assert.equal(dealLabel('minimax/minimax-m2.7-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
   // Permanent deals are unaffected by any time.
   assert.equal(dealLabel('MiniMaxAI/MiniMax-M3', Date.parse('2030-01-01T00:00:00Z')), '50% off')
   // DeepSeek V4 Pro's deal was removed from the snapshot after it lapsed; the
@@ -1169,13 +1180,10 @@ test('dealLabel() hides a deal after its expiry date', () => {
   assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
-  // MiniMax free variants lapse after September 5, 2026: shown before, hidden
-  // after — an un-updated plugin must never advertise a dead promo.
-  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-05T12:00:00Z')), 'FREE')
-  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
-  assert.equal(dealLabel('minimax/minimax-m2.7-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
   // No deal -> undefined.
   assert.equal(dealLabel('claude-sonnet-5'), undefined)
+  // Gemini 3.7 Flash's deal was retired in the 1.38.2 sync: no label at any time.
+  assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2026-12-31T12:00:00Z')), undefined)
 })
 
 test('formatContext() renders compact human sizes', () => {
@@ -1256,11 +1264,11 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.37.0 (2026-08-28): "Add Tencent Hy4 Preview, routed through
-  // OpenRouter" — the version rides every request as x-command-code-version.
-  // The 1.33.0 → 1.36.0 sync also added z-ai/glm-5.3-flash and retired
-  // stealth/ox-alpha; 1.36.0 → 1.37.0 adds tencent/hy4-preview to Go.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.37.0')
+  // command-code@1.38.2 (2026-08-28): 1.38.0 added reasoning-effort support
+  // for Tencent Hy4 Preview ("Let custom agents pin a reasoning effort next to
+  // their model"); 1.38.1/1.38.2 are same-day hotfixes. The version rides
+  // every request as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.38.2')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
