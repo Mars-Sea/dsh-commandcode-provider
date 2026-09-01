@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0-alpha.4] - 2026-09-01
+
+> **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
+
+### Added
+
+- **Command Code web search through the dsh `web_search` tool.** When the profile mounts the web stack (`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`), this plugin now registers a `commandcode` search provider on `ctx.web` that calls the Command Code Provider API's `/alpha/web-search` endpoint. It reuses the **same API key and base URL as chat**, so dsh's web search needs no separate search key, endpoint, or model configuration — the existing `COMMANDCODE_API_KEY` (or the CLI auth file) works as-is. Results map to the dsh `WebSearchSource` shape; `numResults` clamps to the Command Code range (1–10, default 5). The provider is registered only when the web service is present, so this remains a chat-only plugin in profiles without it.
+- **A "Serve dsh web search with Command Code" toggle in the settings page (`webSearch`, default on).** The Command Code settings page now lets you choose whether the model-facing `web_search` tool is backed by Command Code or by dsh's shipped DeepSeek search. The toggle writes the web seam's selected search provider at boot and on every settings change, so it takes effect on the next search — no restart, no hand-editing `cordis.patch.yml`. Turning it off falls back to the DeepSeek backend.
+
 ## [0.10.0-alpha.3] - 2026-09-01
 
 > **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.

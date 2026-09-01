@@ -56,13 +56,14 @@ export interface CommandCodeSettingsProps {
 }
 
 /** The section fields folded into the collapsible Advanced card. */
-type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'filterModelsByPlan'
+type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'filterModelsByPlan' | 'webSearch'
 const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'apiBase',
   'workingDir',
   'requestTimeoutMs',
   'streamIdleTimeoutMs',
   'filterModelsByPlan',
+  'webSearch',
 ]
 
 /** One labelled field row in the page body. */
@@ -218,6 +219,17 @@ function AdvancedSection({
             defaultChecked
             onEdit={(text) => onEdit('filterModelsByPlan', text)}
             onReset={() => onReset('filterModelsByPlan')}
+            t={t}
+          />
+          <ToggleField
+            id="cc-web-search"
+            label={t('webSearch')}
+            hint={t('webSearchHint')}
+            state={state.webSearch}
+            disabled={disabled}
+            defaultChecked
+            onEdit={(text) => onEdit('webSearch', text)}
+            onReset={() => onReset('webSearch')}
             t={t}
           />
         </div>

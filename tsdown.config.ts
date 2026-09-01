@@ -31,6 +31,7 @@ const lib = defineConfig({
     '@deepseek-ai/dsh-launch-environment',
     '@deepseek-ai/dsh-settings',
     '@deepseek-ai/dsh-typert-protocol',
+    '@deepseek-ai/dsh-web',
   ],
 })
 

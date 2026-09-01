@@ -38,6 +38,8 @@ export type SettingsCommandCodeKey =
   | 'advancedInvalid'
   | 'filterModelsByPlan'
   | 'filterModelsByPlanHint'
+  | 'webSearch'
+  | 'webSearchHint'
   | 'accountsTitle'
   | 'accountsHint'
   | 'accountAdd'
@@ -160,6 +162,8 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   advancedInvalid: '高级设置中有未填好的数字，请展开修正后再保存。',
   filterModelsByPlan: '隐藏套餐外模型',
   filterModelsByPlanHint: '开启后，模型选择器只列出当前套餐可用的模型；账户持有按需余额时会显示全部。',
+  webSearch: '用 Command Code 承载联网搜索',
+  webSearchHint: '开启后，dsh 的 web_search 工具由 Command Code 承担（复用同一个 API key 与地址）；关闭则回退到 dsh 自带的 DeepSeek 搜索。',
   accountsTitle: '多账户轮换',
   accountsHint: '当前账户达到用量限额（429）或密钥失效（401）时，请求自动切换到下一个账户；全部耗尽时会提示最早的重置时间。',
   accountAdd: '添加账户',
@@ -288,6 +292,9 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   filterModelsByPlan: 'Hide out-of-plan models',
   filterModelsByPlanHint: 'When on, the model picker lists only models your subscription'
     + ' includes; any on-demand credit balance shows the full catalog.',
+  webSearch: 'Serve dsh web search with Command Code',
+  webSearchHint: 'When on, the model-facing web_search tool is backed by Command Code'
+    + ' (same API key and base URL as chat). Off falls back to the shipped DeepSeek search.',
   accountsTitle: 'Account rotation',
   accountsHint: 'When the active account hits its usage limit (429) or its key'
     + ' fails (401), requests switch to the next account; when every account is'

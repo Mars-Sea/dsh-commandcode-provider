@@ -372,6 +372,30 @@ test('an unrecognized boolean draft blocks save', async () => {
   assert.equal(scope.state.value.filterModelsByPlan, undefined)
 })
 
+test('save() writes the webSearch toggle as a real boolean', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().webSearch.text, '')
+  controller.edit('webSearch', 'false')
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.equal(scope.state.value.webSearch, false)
+  assert.equal(controller.state().webSearch.text, 'false')
+})
+
+test('resetField() on webSearch clears it back to the inherited default', async () => {
+  const scope = makeScope({
+    value: { webSearch: true },
+    user: { webSearch: true },
+  })
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().webSearch.text, 'true')
+  controller.resetField('webSearch')
+  await controller.save()
+  assert.equal(scope.state.user?.webSearch, undefined)
+  assert.equal(controller.state().webSearch.text, '')
+})
+
 // ---------------------------------------------------------------------------
 // Failure handling
 // ---------------------------------------------------------------------------

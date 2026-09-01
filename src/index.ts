@@ -30,6 +30,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { WebRuntime } from '@deepseek-ai/dsh-web'
 import z from '@deepseek-ai/schemastery'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
@@ -47,6 +48,7 @@ import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire
 import { CommandCodeLoginFlow } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
+import { CommandCodeSearchProvider, selectCommandCodeSearchProvider } from './web-search.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -114,6 +116,8 @@ export type {
 } from './login.ts'
 export { CommandCodeAccountPool, accountUsable, selectActiveAccount, matchModelRule, selectAccountForModel } from './accounts.ts'
 export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState, CommandCodeModelAccountRule } from './accounts.ts'
+export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, selectCommandCodeSearchProvider } from './web-search.ts'
+export type { CommandCodeSearchProviderDeps } from './web-search.ts'
 
 export const name = 'llm-commandcode'
 export const inject = ['llm']
@@ -184,6 +188,17 @@ export interface Config {
    */
   modelAccountRules?: CommandCodeModelAccountRule[]
   /**
+   * Whether to use Command Code as the backend for dsh's model-facing
+   * `web_search` tool. When enabled, the plugin registers a `commandcode`
+   * search provider on `ctx.web` AND rewrites the web seam's selected
+   * `searchProviderId` to `commandcode` (so it wins over the shipped
+   * `deepseek-official`), using the SAME Command Code API key/base as chat.
+   * The rewrite rides dsh's internal `searchProviderId`, which is read per
+   * search call, so a setting change lands on the next search without a
+   * restart. Defaults to true.
+   */
+  webSearch?: boolean
+  /**
    * Language override for the `/commandcode` Host-side command's user-facing
    * copy. Host commands cannot read the client's `ctx.locale`, so this is
    * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
@@ -206,6 +221,7 @@ export const Config: z<Config> = z.object({
   requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   filterModelsByPlan: z.boolean(),
+  webSearch: z.boolean().default(true),
   accounts: z.array(z.object({
     label: z.string(),
     apiKeyEnv: z.string().role('credential-ref'),
@@ -465,6 +481,37 @@ export function apply(ctx: Context, config: Config): void {
   }
   applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow, listModels: catalogForRules })
 
+  // Web search over the Command Code Provider API, exposed through the web
+  // capability seam (`ctx.web`). Rides the optional `web` service: a child
+  // fiber injects it, so the provider registers whenever the profile mounts
+  // the web stack and the fiber never activates when it does not (profiles
+  // without web remain an LLM-provider-only plugin). It reuses the SAME
+  // credential chain as the model adapter (pool.resolveKey → env → auth file)
+  // and the same apiBase, so DSH's model-facing web_search tool needs no
+  // separate key or endpoint config — a Command Code key works as-is.
+  //
+  // Whether the `commandcode` provider WINS over the shipped `deepseek-official`
+  // is controlled by `Config.webSearch` (default on). The web seam has no
+  // public runtime selector, so the plugin writes its private `searchProviderId`
+  // field (read per call) via `selectCommandCodeSearchProvider`. A settings
+  // change lands on the next search without a restart. See src/web-search.ts
+  // for why this runtime write is safe and what it depends on.
+  let webRuntime: WebRuntime | undefined
+  ctx.inject(['web'], (webCtx) => {
+    webRuntime = webCtx.web
+    webCtx.web.registerSearchProvider(new CommandCodeSearchProvider({
+      resolveKey: async () => {
+        const resolved = await pool.resolveKey()
+        return resolved === undefined ? undefined : resolved.key
+      },
+      apiBase: () => options().apiBase,
+    }))
+    // Apply the selection at boot too, so a profile WITHOUT the manual
+    // `searchProvider: commandcode` cordis patch still routes web search to
+    // Command Code once this plugin loads (default `webSearch` on).
+    selectCommandCodeSearchProvider(webCtx.web, current().webSearch ?? true)
+  })
+
   // Settings became an optional service in dsh 0.1.2. Register the section
   // through its provider when present; profiles without settings continue to
   // use the composition entry captured by `current` above.
@@ -473,9 +520,15 @@ export function apply(ctx: Context, config: Config): void {
       setSource: (source) => {
         current = source
       },
-      // Everything the adapter reads is resolved per request, so a settings
-      // change needs no registration-level action.
-      onChange: () => {},
+      // Re-apply the web search selection on every settings change so the
+      // `webSearch` toggle reaches the web seam's next search without a
+      // restart. The adapter's own facts are resolved per request, so nothing
+      // else needs registration-level action here.
+      onChange: () => {
+        if (webRuntime !== undefined) {
+          selectCommandCodeSearchProvider(webRuntime, current().webSearch ?? true)
+        }
+      },
     })
   })
 }

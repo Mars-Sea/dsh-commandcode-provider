@@ -179,6 +179,12 @@ export interface SettingsPageState {
    */
   filterModelsByPlan: StagedField
   /**
+   * webSearch draft, staged as `'true'`/`'false'`/`''` (unset). The component
+   * renders it as a toggle; `''` means "inherit the default" (on — Command Code
+   * serves the dsh web_search tool).
+   */
+  webSearch: StagedField
+  /**
    * The manually selected active account, staged as a slot id (`default`
    * or an extra account's credential reference); `''` means "auto — first
    * usable account". The component renders it as a select.
@@ -301,6 +307,7 @@ const SECTION_FIELDS: FieldSpec[] = [
   numberField('requestTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
   numberField('streamIdleTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
   booleanField('filterModelsByPlan'),
+  booleanField('webSearch'),
   textField('activeAccount'),
 ]
 
@@ -443,6 +450,7 @@ export class CommandCodeSettingsController {
       requestTimeoutMs: this.field('requestTimeoutMs'),
       streamIdleTimeoutMs: this.field('streamIdleTimeoutMs'),
       filterModelsByPlan: this.field('filterModelsByPlan'),
+      webSearch: this.field('webSearch'),
       activeAccount: this.field('activeAccount'),
       accounts,
       accountsRemoving: [...this.removedRefs],

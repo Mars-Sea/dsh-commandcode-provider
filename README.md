@@ -26,6 +26,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **Plan-aware picker** — models above your subscription tier are hidden by default (toggleable).
 - **Reasoning-effort support** — models with selectable reasoning effort levels expose them in the picker.
 - **Image input** — Vision-capable models accept images.
+- **Web search** — the dsh `web_search` tool is backed by the Command Code Provider API (`/alpha/web-search`) with the same key/endpoint as chat, so no separate search key or base URL is needed. See [Web search](#web-search).
 
 See [Screenshots](#screenshots) below for what the UI looks like.
 
@@ -132,6 +133,18 @@ llm-commandcode:
   requestTimeoutMs: 60000          # default 60s
   streamIdleTimeoutMs: 300000      # default 300s
 ```
+
+## Web search
+
+When your deployment's dsh shell mounts the web capability (`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`), the model's `web_search` tool is served by this plugin's `commandcode` search provider — it calls the Command Code Provider API's `/alpha/web-search` endpoint with the **same API key and base URL** as chat. You do not configure a separate search key, endpoint, or model.
+
+**On by default.** The plugin's **Settings → Command Code** page has a *"Serve dsh web search with Command Code"* toggle (`webSearch`, default on). When on, the plugin selects `commandcode` as the active search backend automatically; turn it off to fall back to dsh's shipped DeepSeek search. The toggle takes effect on the next search — no restart needed.
+
+- The provider registers as `commandcode` on `ctx.web` only when the web service is present; without it this stays a chat-only plugin.
+- The toggle works by selecting `commandcode` in the web seam at boot and on every settings change. If you'd rather pin it durably, set `searchProvider: commandcode` (or `$DSH_WEB_SEARCH_PROVIDER=commandcode`); that remains effective even if this plugin's runtime selection is unavailable.
+- `numResults` from the dsh tool is clamped to the Command Code range (1–10, default 5); results map to the dsh `WebSearchSource` shape (`url`/`title`/`snippet`).
+
+> This reuses the Command Code Provider API directly (like the official CLI's built-in `web_search`), so it is distinct from a DeepSeek-native search backend.
 
 ## Notes & limitations
 
