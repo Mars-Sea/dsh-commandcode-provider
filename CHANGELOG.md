@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0-alpha.3] - 2026-09-01
+
+> **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
+
+### Added
+
+- **New model: DeepSeek V4 Flash Fast (`deepseek/deepseek-v4-flash-fast`, command-code@1.39.0).** A Go-tier 1M-context low-latency DeepSeek V4 Flash deployment: it appears in the picker under the Go tier with `1M` markers, offers selectable reasoning efforts (`low`/`high`/`max`), and carries time-of-day (peak/off-peak) pricing like the rest of the DeepSeek V4 family. It is text-input only, so it stays outside the Vision whitelist.
+
+### Changed
+
+- **Synced with the official command-code@1.39.2 CLI** (2026-09-01: 1.39.0 added DeepSeek V4 Flash Fast; 1.39.1 dropped `medium` effort for it; 1.39.2 retired the MiniMax free models). `COMMAND_CODE_CLI_VERSION` is now `1.39.2`.
+- **The MiniMax M3 / M2.7 FREE promo variants were retired** from the official CLI in command-code@1.39.2 ("Retire MiniMax free models"): the browser hides them from the picker and the pricing page no longer lists them as free. The plugin removes their `FREE`/`free: true` entries rather than letting them lapse on their old 2026-09-05 expiry, so users no longer see a retired discount. The paid MiniMax M3 / M2.7 rows keep their own rates.
+
 ## [0.10.0-alpha.2] - 2026-08-31
 
 > **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.

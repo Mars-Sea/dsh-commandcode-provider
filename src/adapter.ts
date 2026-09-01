@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.38.2 — endpoints, request shape, and
+ * re-verified against command-code@1.39.2 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -50,14 +50,14 @@ import {
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.38.2 bundled
+// Static capability snapshot (from the official command-code@1.39.2 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.38.2 bundled model
+  // Re-verified against the authoritative command-code@1.39.2 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Kimi K3, MiniMax M3, Muse Spark 1.1, Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -80,6 +80,10 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'claude-opus-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-sonnet-4-6': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-sonnet-5': ['low', 'medium', 'high', 'xhigh', 'max'],
+  // `deepseek/deepseek-v4-flash-fast` joined in command-code@1.39.0
+  // ("Add DeepSeek V4 Flash Fast"); 1.39.1 dropped `medium` for it, and
+  // the 1.39.2 table ships ['low', 'high', 'max'].
+  'deepseek/deepseek-v4-flash-fast': ['low', 'high', 'max'],
   'deepseek/deepseek-v4-flash': ['high', 'max'],
   'deepseek/deepseek-v4-flash-vision-exp': ['high', 'max'],
   'deepseek/deepseek-v4-pro': ['high', 'max'],
@@ -166,7 +170,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (command-code@1.38.2) marks
+ * Models the official CLI's model table (command-code@1.39.2) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -174,7 +178,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.38.2 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.39.2 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
  * selectable `['low', 'high', 'max']` efforts; the preview then ended in
@@ -236,6 +240,9 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.8-27B': 'go',
   'Qwen/Qwen3.8-Flash': 'go',
   'Qwen/Qwen3.8-Max': 'go',
+  // command-code@1.39.0 added DeepSeek V4 Flash Fast; it is a Go-tier model
+  // alongside the rest of the DeepSeek V4 family.
+  'deepseek/deepseek-v4-flash-fast': 'go',
   'deepseek/deepseek-v4-flash': 'go',
   'deepseek/deepseek-v4-flash-vision-exp': 'go',
   'deepseek/deepseek-v4-pro': 'go',
@@ -448,11 +455,12 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
   'xiaomi/mimo-v2.5': { label: '98% off' },
-  // Gateway's own free variants of the paid MiniMax M3 / M2.7 (the paid rows
-  // keep their own rates); free through September 5, 2026 per the pricing
-  // page's #deals section.
-  'minimax/minimax-m3-free': { label: 'FREE', free: true, expiresAt: '2026-09-05T23:59:59Z' },
-  'minimax/minimax-m2.7-free': { label: 'FREE', free: true, expiresAt: '2026-09-05T23:59:59Z' },
+  // The MiniMax M3 / M2.7 FREE promo variants were retired in
+  // command-code@1.39.2 ("Retire MiniMax free models"): the official CLI hides
+  // them and the pricing page no longer lists them as free, so the free
+  // entries that shipped through 1.38.2 (with a 2026-09-05 expiry) are removed
+  // here rather than left to lapse on schedule. The paid MiniMax M3 / M2.7
+  // rows keep their own rates.
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
 }
 
@@ -482,6 +490,10 @@ export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
   'deepseek/deepseek-v4-flash-vision-exp',
+  // Added in command-code@1.39.0: DeepSeek V4 Flash Fast shares the V4 Flash
+  // peak windows and peak prices ($0.44 / $1.32 per the pricing page's
+  // off-peak annotation).
+  'deepseek/deepseek-v4-flash-fast',
 ])
 
 /** Peak hours (UTC, hour-of-day range end-exclusive): 01–03 and 06–09. */
@@ -520,7 +532,7 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-export const COMMAND_CODE_CLI_VERSION = '1.38.2'
+export const COMMAND_CODE_CLI_VERSION = '1.39.2'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536

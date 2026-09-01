@@ -1015,7 +1015,10 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flash'], ['low', 'high', 'max'])
   // stealth/ox-alpha left the catalog in 1.34.0 when its preview ended.
   assert.ok(!KNOWN_EFFORTS['stealth/ox-alpha'])
-  // Synced from the official command-code@1.38.2 model table (re-verified
+  // command-code@1.39.0 added DeepSeek V4 Flash Fast; 1.39.1 dropped medium
+  // for it, so the 1.39.2 table ships ['low','high','max'].
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-fast'], ['low', 'high', 'max'])
+  // Synced from the official command-code@1.39.2 model table (re-verified
   // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0 and 1.37.0 along the way):
   // models that ship with effort levels must be present, and absent ones must
   // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
@@ -1103,6 +1106,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash'], 'go')
   // DeepSeek V4 Flash Vision (exp) (command-code@1.32.0) joined the Go plan.
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash-vision-exp'], 'go')
+  // DeepSeek V4 Flash Fast (command-code@1.39.0) is a Go-tier open model.
+  assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash-fast'], 'go')
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.7-Max'], 'go')
   assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
   // Qwen 3.8 27B (command-code@1.28.0) and Qwen 3.8 Flash (1.36.0) are on
@@ -1156,21 +1161,22 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // was retired; its successor z-ai/glm-5.3-flash has no deal (1.35.0).
   assert.equal(KNOWN_DEALS['stealth/ox-alpha'], undefined)
   assert.equal(KNOWN_DEALS['z-ai/glm-5.3-flash'], undefined)
-  // MiniMax M3/M2.7 Free (command-code@1.33.0): free through September 5, 2026.
-  assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'].free, true)
-  assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'].expiresAt, '2026-09-05T23:59:59Z')
-  assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'].free, true)
-  assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'].expiresAt, '2026-09-05T23:59:59Z')
+  // MiniMax M3/M2.7 Free (command-code@1.33.0) were retired in
+  // command-code@1.39.2 ("Retire MiniMax free models"): the CLI hides them and
+  // the pricing page no longer lists them as free, so the FREE entries are
+  // removed from the snapshot rather than left to lapse on their old
+  // 2026-09-05 expiry.
+  assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'], undefined)
+  assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'], undefined)
   // Gemini 3.7 Flash's 50% off deal was retired from the pricing page in the
   // command-code@1.38.2 sync; the model now shows at full price.
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'], undefined)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
-  // A lapsed time-limited deal is hidden even if the snapshot kept it (the
-  // MiniMax free promos end 2026-09-05; here a stale-snapshot time proves the
-  // expiry guard, independent of the current date).
-  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-05T12:00:00Z')), 'FREE')
+  // The MiniMax free promos were retired in command-code@1.39.2 — removed from
+  // the snapshot entirely — so they report no label at any time.
+  assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-05T12:00:00Z')), undefined)
   assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
   assert.equal(dealLabel('minimax/minimax-m2.7-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
   // Permanent deals are unaffected by any time.
@@ -1225,6 +1231,9 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-pro'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-vision-exp'))
+  // DeepSeek V4 Flash Fast (command-code@1.39.0) shares V4 Flash's peak windows
+  // and peak prices per the pricing page's off-peak annotation.
+  assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-fast'))
   // Non-peak-priced models report no state. Qwen 3.8 Max looks annotated when
   // the pricing page is flattened to text, but its hover annotation actually
   // lives in the V4 Flash Vision row above it (each annotation states exactly
@@ -1264,11 +1273,10 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.38.2 (2026-08-28): 1.38.0 added reasoning-effort support
-  // for Tencent Hy4 Preview ("Let custom agents pin a reasoning effort next to
-  // their model"); 1.38.1/1.38.2 are same-day hotfixes. The version rides
-  // every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.38.2')
+  // command-code@1.39.2 (2026-09-01): 1.39.0 added DeepSeek V4 Flash Fast,
+  // 1.39.1 dropped medium effort for it, 1.39.2 retired the MiniMax free
+  // models. The version rides every request as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.39.2')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
