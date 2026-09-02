@@ -18,6 +18,8 @@
 
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { CommandCodeLoginFailureReason, CommandCodeLoginStatus } from '../login-wire.ts'
+import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SettingsCommandCodeKey } from './locales.ts'
 
 /** The endpoint-level Remote surface this controller calls. */
 declare module '@deepseek-ai/dsh-typert-protocol' {
@@ -232,4 +234,75 @@ export class CommandCodeLoginController {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// ---------------------------------------------------------------------------
+// Hint copy for the login panel / card row (JSX-free so node tests drive it)
+// ---------------------------------------------------------------------------
+
+/**
+ * The per-reason copy for a failed login attempt. Shared by the settings
+ * page's login panel and the Models-page card's login row — the same reasons
+ * can surface from either surface.
+ */
+export function loginFailureCopy(
+  reason: CommandCodeLoginFailureReason | undefined,
+  t: Translate<SettingsCommandCodeKey>,
+): string {
+  if (reason === 'denied') return t('loginDenied')
+  if (reason === 'timeout') return t('loginTimeout')
+  if (reason === 'invalid-key') return t('loginInvalidKey')
+  if (reason === 'network') return t('loginNetwork')
+  if (reason === 'unavailable') return t('loginStoreFailed')
+  if (reason === 'cancelled') return t('loginCancelled')
+  return t('loginFailedGeneric')
+}
+
+/** One login panel row's computed hint: text, class stem, and optional title. */
+export interface LoginHint {
+  text: string
+  className: string
+  /** Tooltip shown when the row carries secondary failure detail. */
+  title: string | undefined
+}
+
+/**
+ * The hint text + class for one login panel state, shared by the settings
+ * page's `LoginPanel` and the Models-page card's login row so both surfaces
+ * can never drift apart. Pure: no timers, no state — the components render it.
+ */
+export function loginHint(
+  state: LoginPageState,
+  t: Translate<SettingsCommandCodeKey>,
+): LoginHint {
+  if (state.phase === 'starting' || state.phase === 'waiting') {
+    return {
+      text: t(state.phase === 'starting' ? 'loginStarting' : 'loginWaiting'),
+      className: 'cc-hint',
+      title: undefined,
+    }
+  }
+  if (state.phase === 'success') {
+    const keyName = state.keyName !== undefined && state.keyName !== '' ? ` · ${state.keyName}` : ''
+    return {
+      text: `${t('loginSuccess')} ${state.userName ?? ''}${keyName}`.trim(),
+      className: 'cc-loginDone',
+      title: undefined,
+    }
+  }
+  if (state.phase === 'failed') {
+    return {
+      text: loginFailureCopy(state.reason, t),
+      className: 'cc-loginError',
+      title: state.message,
+    }
+  }
+  if (state.phase === 'unavailable') {
+    return {
+      text: `${t('loginUnavailable')} ${state.message ?? ''}`.trim(),
+      className: 'cc-loginError',
+      title: undefined,
+    }
+  }
+  return { text: t('loginHintIdle'), className: 'cc-hint', title: undefined }
 }

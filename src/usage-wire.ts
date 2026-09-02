@@ -14,7 +14,9 @@
  * (a hand-rolled {@link TypertSchema}, so neither half needs a schema library)
  * and the exact descriptor object, so the endpoint can never drift apart.
  * It is deliberately dependency-free — the client bundle inlines it, and only
- * `import type` edges leave it (erased at build).
+ * `import type` edges leave it (erased at build). The boundary-validator
+ * helpers and the descriptor boilerplate live in `./wire-shared.ts`, shared
+ * with the login wire contract.
  *
  * @module dsh-commandcode-provider/usage-wire
  */
@@ -23,6 +25,11 @@ import type { CommandCodeUsageReport, UsageBlockReason } from './adapter.ts'
 
 export type { CommandCodeUsageReport, UsageBlockReason }
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
+import {
+  makeBoundaryValidator,
+  makeRemoteDescriptor,
+  REMOTE_PACKAGE,
+} from './wire-shared.ts'
 
 /** One account's usage entry in the multi-account report. */
 export interface CommandCodeAccountUsage {
@@ -48,42 +55,18 @@ export interface CommandCodeAccountsReport {
 }
 
 /** The npm package identity both contribution registrations claim. */
-export const USAGE_REMOTE_PACKAGE = '@mars-sea/dsh-commandcode-provider'
+export const USAGE_REMOTE_PACKAGE = REMOTE_PACKAGE
 
 /** Canonical `<namespace>/<method>` endpoint of the usage report Remote. */
 export const USAGE_REPORT_ENDPOINT = 'commandcode/report'
 
-/** Reject one boundary value with a field-naming error. */
-function reject(field: string): never {
-  throw new TypeError(`commandcode/report result: invalid ${field}`)
-}
-
-/** Read one required finite number field (`field` is the dotted error label). */
-function numberField(source: Record<string, unknown>, key: string, field: string): number {
-  const value = source[key]
-  if (typeof value !== 'number' || !Number.isFinite(value)) reject(field)
-  return value
-}
-
-/** Read one required string field (`field` is the dotted error label). */
-function stringField(source: Record<string, unknown>, key: string, field: string): string {
-  const value = source[key]
-  if (typeof value !== 'string') reject(field)
-  return value
-}
-
-/** Read one required boolean field (`field` is the dotted error label). */
-function booleanField(source: Record<string, unknown>, key: string, field: string): boolean {
-  const value = source[key]
-  if (typeof value !== 'boolean') reject(field)
-  return value
-}
-
-/** Narrow an unknown value to a plain record, or reject. */
-function record(value: unknown, field: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) reject(field)
-  return value as Record<string, unknown>
-}
+/**
+ * The shared read/validate helpers, prefixed with the report endpoint so
+ * rejection messages name the offending boundary (the catalog endpoint below
+ * shares this prefix, matching the historical behavior).
+ */
+const { reject, record, stringField, numberField, booleanField } =
+  makeBoundaryValidator('commandcode/report result:')
 
 /** Validate one window-limit block (`fiveHour` / `weekly`). */
 function windowLimit(value: unknown, field: string): { used: number; cap: number; exceeded: boolean; resetAt: number } {
@@ -109,8 +92,14 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
 
   if (source.blocked !== undefined) {
     const blocked = source.blocked
-    if (blocked !== 'invalid-key' && blocked !== 'service-unavailable' && blocked !== 'network') reject('blocked')
-    report.blocked = blocked
+    // Positive check: TS's never-return control-flow analysis only recognizes
+    // function declarations, not the factory's destructured-arrow `reject`, so
+    // narrow `blocked` in the positive branch instead.
+    if (blocked === 'invalid-key' || blocked === 'service-unavailable' || blocked === 'network') {
+      report.blocked = blocked
+    } else {
+      reject('blocked')
+    }
   }
 
   if (source.account !== undefined) {
@@ -182,8 +171,10 @@ function parseAccountUsage(value: unknown): CommandCodeAccountUsage {
 function parseAccountsReport(value: unknown): CommandCodeAccountsReport {
   const source = record(value, 'result')
   const accounts = source.accounts
-  if (!Array.isArray(accounts)) reject('accounts')
-  return { accounts: accounts.map(parseAccountUsage) }
+  if (Array.isArray(accounts)) {
+    return { accounts: accounts.map(parseAccountUsage) }
+  }
+  return reject('accounts')
 }
 
 /**
@@ -200,19 +191,13 @@ export const usageReportSchema: TypertSchema<CommandCodeAccountsReport> = {
  * the Client mount. `service` names the Cordis key the Gateway resolves the
  * receiver from; `namespace`/`method` name the wire endpoint.
  */
-export const USAGE_REPORT_DESCRIPTOR: InvocationDescriptor = {
-  id: `${USAGE_REMOTE_PACKAGE}#${USAGE_REPORT_ENDPOINT}`,
-  service: 'commandcodeUsage',
-  namespace: 'commandcode',
-  method: 'report',
-  invocation: { kind: 'direct' },
-  parameters: [],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${USAGE_REMOTE_PACKAGE}#CommandCodeAccountsReport`,
-    schema: usageReportSchema,
-  },
-}
+export const USAGE_REPORT_DESCRIPTOR: InvocationDescriptor =
+  makeRemoteDescriptor<CommandCodeAccountsReport>(
+    USAGE_REPORT_ENDPOINT,
+    'report',
+    `${USAGE_REMOTE_PACKAGE}#CommandCodeAccountsReport`,
+    usageReportSchema,
+  )
 
 /** The Host-face contribution registered on `ctx.typert`. */
 export const USAGE_HOST_CONTRIBUTION = {
@@ -266,8 +251,10 @@ function parseCatalogModel(value: unknown): CommandCodeCatalogModel {
 function parseCatalog(value: unknown): CommandCodeCatalog {
   const source = record(value, 'result')
   const models = source.models
-  if (!Array.isArray(models)) reject('models')
-  return { models: models.map(parseCatalogModel) }
+  if (Array.isArray(models)) {
+    return { models: models.map(parseCatalogModel) }
+  }
+  return reject('models')
 }
 
 /** The strict result codec for the model-catalog Remote. */
@@ -279,19 +266,13 @@ export const modelsSchema: TypertSchema<CommandCodeCatalog> = {
  * The model-catalog invocation descriptor, sharing the same `commandcodeUsage`
  * service and `commandcode` namespace as the usage report.
  */
-export const MODELS_DESCRIPTOR: InvocationDescriptor = {
-  id: `${USAGE_REMOTE_PACKAGE}#${MODELS_ENDPOINT}`,
-  service: 'commandcodeUsage',
-  namespace: 'commandcode',
-  method: 'models',
-  invocation: { kind: 'direct' },
-  parameters: [],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${USAGE_REMOTE_PACKAGE}#CommandCodeCatalog`,
-    schema: modelsSchema,
-  },
-}
+export const MODELS_DESCRIPTOR: InvocationDescriptor =
+  makeRemoteDescriptor<CommandCodeCatalog>(
+    MODELS_ENDPOINT,
+    'models',
+    `${USAGE_REMOTE_PACKAGE}#CommandCodeCatalog`,
+    modelsSchema,
+  )
 
 /** The Client-face contribution for the model-catalog endpoint. */
 export const MODELS_REMOTE_CONTRIBUTION: TypertRemoteContribution = {

@@ -11,10 +11,13 @@ import assert from 'node:assert/strict'
 
 import {
   CommandCodeLoginController,
+  loginFailureCopy,
+  loginHint,
   type LoginCallResult,
+  type LoginPageState,
   type LoginRemote,
 } from '../src/client/login.ts'
-import type { CommandCodeLoginStatus } from '../src/login-wire.ts'
+import type { CommandCodeLoginFailureReason, CommandCodeLoginStatus } from '../src/login-wire.ts'
 
 const POLL_MS = 5
 
@@ -265,4 +268,70 @@ test('dispose stops polling and detaches listeners', async () => {
   controller.dispose()
   await sleep(POLL_MS * 5)
   assert.ok(remote.calls.length <= calls + 1, 'polling stops after dispose')
+})
+
+// ---------------------------------------------------------------------------
+// loginHint / loginFailureCopy (the shared login-row hint state machine)
+// ---------------------------------------------------------------------------
+
+/** A translate stub that echoes its key, so composed text is predictable. */
+const echoT = ((key: string) => key) as (key: string) => string
+
+function hintFor(phase: LoginPageState['phase'], extra: Partial<LoginPageState> = {}) {
+  return loginHint({ phase, authUrl: undefined, userName: undefined, keyName: undefined, reason: undefined, message: undefined, ...extra }, echoT)
+}
+
+test('loginHint renders every phase with the matching class', () => {
+  assert.deepEqual(hintFor('idle'), { text: 'loginHintIdle', className: 'cc-hint', title: undefined })
+  assert.deepEqual(hintFor('starting'), { text: 'loginStarting', className: 'cc-hint', title: undefined })
+  assert.deepEqual(hintFor('waiting'), { text: 'loginWaiting', className: 'cc-hint', title: undefined })
+})
+
+test('loginHint composes the success line with user and key name', () => {
+  assert.deepEqual(
+    hintFor('success', { userName: 'mars-sea' }),
+    { text: 'loginSuccess mars-sea', className: 'cc-loginDone', title: undefined },
+  )
+  assert.deepEqual(
+    hintFor('success', { userName: 'mars-sea', keyName: 'cli' }),
+    { text: 'loginSuccess mars-sea · cli', className: 'cc-loginDone', title: undefined },
+  )
+})
+
+test('loginFailureCopy maps every documented reason', () => {
+  const reasons: Array<[CommandCodeLoginFailureReason, string]> = [
+    ['denied', 'loginDenied'],
+    ['timeout', 'loginTimeout'],
+    ['invalid-key', 'loginInvalidKey'],
+    ['network', 'loginNetwork'],
+    ['unavailable', 'loginStoreFailed'],
+    ['cancelled', 'loginCancelled'],
+  ]
+  for (const [reason, key] of reasons) {
+    assert.equal(loginFailureCopy(reason, echoT), key)
+  }
+  assert.equal(loginFailureCopy(undefined, echoT), 'loginFailedGeneric')
+  assert.equal(loginFailureCopy('error', echoT), 'loginFailedGeneric')
+})
+
+test('loginHint failed carries the secondary message as title', () => {
+  assert.deepEqual(
+    hintFor('failed', { reason: 'timeout', message: 'too slow' }),
+    { text: 'loginTimeout', className: 'cc-loginError', title: 'too slow' },
+  )
+  assert.deepEqual(
+    hintFor('failed', { reason: 'timeout' }),
+    { text: 'loginTimeout', className: 'cc-loginError', title: undefined },
+  )
+})
+
+test('loginHint unavailable appends the message to the hint text', () => {
+  assert.deepEqual(
+    hintFor('unavailable', { message: 'remote missing' }),
+    { text: 'loginUnavailable remote missing', className: 'cc-loginError', title: undefined },
+  )
+  assert.deepEqual(
+    hintFor('unavailable'),
+    { text: 'loginUnavailable', className: 'cc-loginError', title: undefined },
+  )
 })

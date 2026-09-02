@@ -24,8 +24,8 @@ import type { CommandCodeCredits } from '../adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
 import type { AccountItemState, CatalogModelOption, RuleItemState, SettingsPageState, StagedField } from './settings.ts'
-import type { CommandCodeLoginFailureReason } from '../login-wire.ts'
 import type { LoginPageState } from './login.ts'
+import { LoginRow } from './login-row.tsx'
 import type { UsagePageState } from './usage.ts'
 import { formatMoney, formatMoneyExact, formatResetAt, formatTokensCompact, windowRatio } from './usage.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
@@ -368,69 +368,6 @@ function SecretKeyField({
         onChange={(event) => onEdit(event.target.value)}
       />
       <p className="cc-hint">{hint}</p>
-    </div>
-  )
-}
-
-/** The per-reason copy for a failed login attempt. */
-function loginFailureCopy(reason: CommandCodeLoginFailureReason | undefined, t: Translate<SettingsCommandCodeKey>): string {
-  if (reason === 'denied') return t('loginDenied')
-  if (reason === 'timeout') return t('loginTimeout')
-  if (reason === 'invalid-key') return t('loginInvalidKey')
-  if (reason === 'network') return t('loginNetwork')
-  if (reason === 'unavailable') return t('loginStoreFailed')
-  if (reason === 'cancelled') return t('loginCancelled')
-  return t('loginFailedGeneric')
-}
-
-/**
- * The sign-in alternative to pasting a key: one field row that starts the
- * Host-side browser login, links to the Studio authorization page while the
- * attempt is live, and reports the outcome. The key itself never crosses to
- * the browser — only "who signed in" does.
- */
-function LoginPanel({ state, disabled, t, onBegin, onCancel }: {
-  state: LoginPageState
-  disabled: boolean
-  t: Translate<SettingsCommandCodeKey>
-  onBegin(): void
-  onCancel(): void
-}) {
-  const busy = state.phase === 'starting' || state.phase === 'waiting'
-  let hint = t('loginHintIdle')
-  let hintTitle: string | undefined
-  let hintClass = 'cc-hint'
-  if (state.phase === 'starting' || state.phase === 'waiting') hint = t(state.phase === 'starting' ? 'loginStarting' : 'loginWaiting')
-  else if (state.phase === 'success') {
-    const keyName = state.keyName !== undefined && state.keyName !== '' ? ` · ${state.keyName}` : ''
-    hint = `${t('loginSuccess')} ${state.userName ?? ''}${keyName}`.trim()
-    hintClass = 'cc-loginDone'
-  } else if (state.phase === 'failed') {
-    hint = loginFailureCopy(state.reason, t)
-    hintClass = 'cc-loginError'
-    if (state.message !== undefined) hintTitle = state.message
-  } else if (state.phase === 'unavailable') {
-    hint = `${t('loginUnavailable')} ${state.message ?? ''}`.trim()
-    hintClass = 'cc-loginError'
-  }
-  return (
-    <div className="cc-field">
-      <div className="cc-fieldHead">
-        <label className="cc-label">{t('loginTitle')}</label>
-        <span className="cc-badges">
-          {busy ? (
-            <button type="button" className="cc-reset" onClick={onCancel}>{t('loginCancel')}</button>
-          ) : (
-            <button type="button" className="cc-reset" disabled={disabled} onClick={onBegin}>{t('loginButton')}</button>
-          )}
-        </span>
-      </div>
-      {state.authUrl !== undefined ? (
-        <p className="cc-hint">
-          <a className="cc-loginLink" href={state.authUrl} target="_blank" rel="noreferrer">{t('loginOpenLink')}</a>
-        </p>
-      ) : null}
-      <p className={hintClass} title={hintTitle}>{hint}</p>
     </div>
   )
 }
@@ -1130,7 +1067,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           onEdit={(text) => props.edit('apiKey', text)}
           onToggleClear={() => props.toggleKeyClear('default')}
         />
-        <LoginPanel
+        <LoginRow
           state={login}
           disabled={disabled || keyLocked}
           t={t}

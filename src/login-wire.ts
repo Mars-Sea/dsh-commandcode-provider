@@ -19,7 +19,10 @@
  */
 
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
-import { USAGE_REMOTE_PACKAGE } from './usage-wire.ts'
+import {
+  makeRemoteDescriptor,
+  REMOTE_PACKAGE,
+} from './wire-shared.ts'
 
 /** Why a login attempt ended in `failed` (stable across versions for copy). */
 export type CommandCodeLoginFailureReason =
@@ -67,7 +70,12 @@ const REASONS: readonly CommandCodeLoginFailureReason[] = [
   'denied', 'timeout', 'invalid-key', 'network', 'unavailable', 'cancelled', 'error',
 ]
 
-/** Reject one boundary value with a field-naming error. */
+/** The shared read/validate helpers, prefixed with the login endpoint so
+ * rejection messages name the offending boundary. */
+/** Reject one boundary value with a field-naming error. A module-level
+ * function declaration (not the factory's destructured arrow) so TypeScript's
+ * control-flow analysis recognizes it as never-returning and narrows `state`
+ * after the guard below. */
 function reject(field: string): never {
   throw new TypeError(`commandcode/login result: invalid ${field}`)
 }
@@ -115,19 +123,12 @@ export const loginStatusSchema: TypertSchema<CommandCodeLoginStatus> = {
 
 /** Build one login invocation descriptor (uniform result, no parameters). */
 function loginDescriptor(endpoint: string, method: string): InvocationDescriptor {
-  return {
-    id: `${USAGE_REMOTE_PACKAGE}#${endpoint}`,
-    service: 'commandcodeUsage',
-    namespace: 'commandcode',
+  return makeRemoteDescriptor<CommandCodeLoginStatus>(
+    endpoint,
     method,
-    invocation: { kind: 'direct' },
-    parameters: [],
-    result: {
-      mode: 'strict',
-      typeSymbol: `${USAGE_REMOTE_PACKAGE}#CommandCodeLoginStatus`,
-      schema: loginStatusSchema,
-    },
-  }
+    `${REMOTE_PACKAGE}#CommandCodeLoginStatus`,
+    loginStatusSchema,
+  )
 }
 
 /** The three login descriptors, shared verbatim by Host registration and Client mount. */
@@ -139,7 +140,7 @@ export const LOGIN_DESCRIPTORS: readonly InvocationDescriptor[] = [
 
 /** The Host-face contribution fragment registered on `ctx.typert`. */
 export const LOGIN_HOST_CONTRIBUTION = {
-  package: USAGE_REMOTE_PACKAGE,
+  package: REMOTE_PACKAGE,
   face: 'host' as const,
   schemas: [],
   invocations: LOGIN_DESCRIPTORS,
@@ -147,6 +148,6 @@ export const LOGIN_HOST_CONTRIBUTION = {
 
 /** The Client-face contribution fragment mounted on `ctx.remote`. */
 export const LOGIN_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
-  package: USAGE_REMOTE_PACKAGE,
+  package: REMOTE_PACKAGE,
   descriptors: LOGIN_DESCRIPTORS,
 }
