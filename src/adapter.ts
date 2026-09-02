@@ -33,7 +33,6 @@ import {
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
-  ToolCallId,
   errorChain,
   resolveRetryPolicy,
   type ResolvedRetryPolicy,
@@ -48,6 +47,18 @@ import {
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
+
+/**
+ * Brand a provider-issued tool-call id through the host chunk vocabulary.
+ *
+ * Do not named-import `CallId` / `ToolCallId` from `@deepseek-ai/dsh-llm`.
+ * rc.6 / 0.1.1-rc.1 export `CallId`; 0.1.2-alpha.1 renamed that constructor
+ * to `ToolCallId`. A missing named ESM export fails plugin-tree load before
+ * any adapter code runs (deepseek-ai/deepseek-harness#4827).
+ */
+function toolCallId(id: string): Extract<StreamChunk, { type: 'tool-call-delta' }>['id'] {
+  return id as Extract<StreamChunk, { type: 'tool-call-delta' }>['id']
+}
 
 // ---------------------------------------------------------------------------
 // Static capability snapshot (from the official command-code@1.40.1 bundled
@@ -1816,11 +1827,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           sawContent = true
           chunks.push(
             { type: 'block-start', index, blockType: 'tool-call' },
-            { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args },
+            { type: 'tool-call-delta', index, id: toolCallId(id), name, argumentsDelta: args },
             {
               type: 'block-end',
               index,
-              block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
+              block: { type: 'tool-call', id: toolCallId(id), name, arguments: args },
             },
           )
           break

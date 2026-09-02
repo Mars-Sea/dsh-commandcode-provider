@@ -10,7 +10,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { rmSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import {
   CommandCodeAdapter,
@@ -120,6 +121,18 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[
   for await (const chunk of stream) out.push(chunk)
   return out
 }
+
+// ---------------------------------------------------------------------------
+// Host export compatibility
+// ---------------------------------------------------------------------------
+
+test('adapter does not named-import CallId or ToolCallId from @deepseek-ai/dsh-llm', () => {
+  const src = readFileSync(fileURLToPath(new URL('../src/adapter.ts', import.meta.url)), 'utf8')
+  assert.doesNotMatch(
+    src,
+    /import\s*\{[\s\S]*?\b(?:CallId|ToolCallId)\b[\s\S]*?\}\s*from\s*['"]@deepseek-ai\/dsh-llm['"]/,
+  )
+})
 
 // ---------------------------------------------------------------------------
 // Message conversion (via stream() request capture)
