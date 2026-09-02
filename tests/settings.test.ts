@@ -494,6 +494,17 @@ test('addAccount stages a new account with a free credential reference', async (
   assert.equal(controller.state().dirty, true)
 })
 
+test('addAccount derives new refs from a renamed apiKeyEnv prefix', async () => {
+  const scope = makeScope({ value: { apiKeyEnv: 'MY_CUSTOM_REF' } })
+  const { controller } = makeController({ scope })
+  controller.addAccount()
+  const accounts = controller.state().accounts
+  assert.equal(accounts[0]?.ref, 'MY_CUSTOM_REF_2')
+  assert.equal(accounts[0]?.label, 'Account 2')
+  assert.equal(accounts[0]?.added, true)
+  assert.equal(controller.state().dirty, true)
+})
+
 test('saving an added account writes the key through credentials and the list through the scope', async () => {
   const scope = makeScope({})
   const api = makeApi({})

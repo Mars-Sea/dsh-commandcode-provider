@@ -472,10 +472,14 @@ export class CommandCodeSettingsController {
       ...this.storedExtras().map((extra) => extra.ref),
       ...this.addedAccounts.map((extra) => extra.ref),
     ])
+    // New refs derive from the current credential reference's prefix (the
+    // same one `this.credentialRef` names), so a renamed apiKeyEnv yields
+    // `MY_KEY_2`-style refs consistent with the default slot — never a stray
+    // COMMANDCODE_API_KEY_2 that no longer matches the page's reference.
     let n = 2
-    while (used.has(`COMMANDCODE_API_KEY_${n}`)) n += 1
+    while (used.has(`${this.credentialRef}_${n}`)) n += 1
     const index = this.storedExtras().length + this.addedAccounts.length + 2
-    this.addedAccounts.push({ label: `Account ${index}`, ref: `COMMANDCODE_API_KEY_${n}` })
+    this.addedAccounts.push({ label: `Account ${index}`, ref: `${this.credentialRef}_${n}` })
     this.failed = false
     void this.describeAll()
     this.publish()
