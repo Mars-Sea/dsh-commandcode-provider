@@ -1018,8 +1018,9 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // command-code@1.39.0 added DeepSeek V4 Flash Fast; 1.39.1 dropped medium
   // for it, so the 1.39.2 table ships ['low','high','max'].
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-fast'], ['low', 'high', 'max'])
-  // Synced from the official command-code@1.39.2 model table (re-verified
-  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0 and 1.37.0 along the way):
+  // Synced from the official command-code@1.40.1 model table (re-verified
+  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0, 1.37.0,
+  // 1.39.2 and 1.40.1 along the way):
   // models that ship with effort levels must be present, and absent ones must
   // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
   // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
@@ -1036,13 +1037,14 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // command-code@1.38.0 (it previously reasoned automatically with none).
   assert.deepEqual(KNOWN_EFFORTS['tencent/hy4-preview'], ['low', 'medium', 'high'])
   assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3']) // no official effort levels
-  assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K3'])
+  // moonshotai/Kimi-K3 gained selectable ['low','high','max'] efforts in
+  // command-code@1.39.3 (it previously reasoned automatically with none).
+  assert.deepEqual(KNOWN_EFFORTS['moonshotai/Kimi-K3'], ['low', 'high', 'max'])
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
   assert.ok(KNOWN_THINKING_MODELS.has('MiniMaxAI/MiniMax-M3'))
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
-  assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
   // MiniMax M3 Free (command-code@1.33.0) reasons automatically like its paid
   // sibling — reasoning:!0 with no effort levels in the ZA table.
@@ -1056,10 +1058,12 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   // these think automatically (reasoning:!0, no efforts) and belong in the set.
   // tencent/hy4-preview joined in command-code@1.37.0 (OpenRouter-routed, 1M,
   // no efforts) but gained selectable ['low','medium','high'] efforts in
-  // 1.38.0 and moved to KNOWN_EFFORTS.
+  // 1.38.0 and moved to KNOWN_EFFORTS. moonshotai/Kimi-K3 followed the same
+  // path in command-code@1.39.3 (['low','high','max']).
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
   assert.ok(!KNOWN_THINKING_MODELS.has('tencent/hy4-preview'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
   // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (ZA reasoning:false, docs
   // "Text input" only) — the 0.2.0 snapshot wrongly included them.
@@ -1273,10 +1277,12 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.39.2 (2026-09-01): 1.39.0 added DeepSeek V4 Flash Fast,
+  // command-code@1.40.1 (2026-09-02): 1.39.0 added DeepSeek V4 Flash Fast,
   // 1.39.1 dropped medium effort for it, 1.39.2 retired the MiniMax free
-  // models. The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.39.2')
+  // models, 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1
+  // (Anthropic OAuth route, not the Provider API). The version rides every
+  // request as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.40.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

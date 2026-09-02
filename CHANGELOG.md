@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0-alpha.5] - 2026-09-02
+
+> **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
+
+### Changed
+
+- **Kimi K3 now offers selectable reasoning efforts (`low`/`high`/`max`).** The model gained official effort levels in command-code@1.39.3 ("Add low, high, and max reasoning effort support for Kimi K3"), so the picker can now offer a reasoning-effort selector for it; it is no longer listed as an auto-thinking model.
+- **Synced with the official command-code@1.40.1 CLI** (2026-09-02: 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1 — an Anthropic OAuth-routed model outside the Provider API — and 1.40.1 is a ZDR feature-model filter). `COMMAND_CODE_CLI_VERSION` is now `1.40.1`. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, model catalog, plan tiers, subscription plan maps, deals, and peak/off-peak windows are all identical to 1.39.2.
+
 ## [0.10.0-alpha.4] - 2026-09-01
 
 > **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
