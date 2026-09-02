@@ -133,7 +133,7 @@ test('getUsage reports an empty plan when the subscription has no planId', async
 })
 
 test('subscriptionPlanInfo matches the longest plan-id prefix', async () => {
-  const { subscriptionPlanInfo } = await import('../src/adapter.ts')
+  const { subscriptionPlanInfo } = await import('../src/capabilities.ts')
   assert.deepEqual(subscriptionPlanInfo('individual-pro-v1'), { name: 'Pro', monthlyCredits: 80, tierWeight: 2 })
   assert.deepEqual(subscriptionPlanInfo('individual-provider'), { name: 'Provider', monthlyCredits: 15, tierWeight: 3 })
   assert.deepEqual(subscriptionPlanInfo('INDIVIDUAL_GO'), { name: 'Go', monthlyCredits: 10, tierWeight: 0 })

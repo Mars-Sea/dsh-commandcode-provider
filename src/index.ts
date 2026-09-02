@@ -58,6 +58,11 @@ export {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   CommandCodeAdapter,
+  BILLING_ACCESS_TTL_MS,
+  projectSlugFromPath,
+  resolveAuthFileApiKey,
+} from './adapter.ts'
+export {
   KNOWN_EFFORTS,
   KNOWN_IMAGE_MODELS,
   KNOWN_THINKING_MODELS,
@@ -67,7 +72,6 @@ export {
   KNOWN_PEAK_PRICING,
   PLAN_LABELS,
   PLAN_ORDER,
-  BILLING_ACCESS_TTL_MS,
   capabilityDescription,
   compareByPlan,
   dealLabel,
@@ -76,11 +80,10 @@ export {
   peakPricingLabel,
   peakPricingState,
   planLabel,
-  projectSlugFromPath,
-  resolveAuthFileApiKey,
   subscriptionPlanInfo,
-} from './adapter.ts'
-export type { CommandCodeAdapterDeps, CommandCodeBillingAccess, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
+} from './capabilities.ts'
+export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
+export type { CommandCodeBillingAccess } from './capabilities.ts'
 export { applyCommands, commandDefinition } from './commands.ts'
 export type { CommandCodeCommandDeps } from './commands.ts'
 export { applyUsageRemote, CommandCodeUsageService } from './usage-remote.ts'

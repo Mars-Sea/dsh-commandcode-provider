@@ -16,6 +16,12 @@ import {
   CommandCodeAdapter,
   projectSlugFromPath,
   resolveAuthFileApiKey,
+  COMMAND_CODE_CLI_VERSION,
+  DEFAULT_API_BASE,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+} from '../src/adapter.ts'
+import {
   KNOWN_EFFORTS,
   KNOWN_IMAGE_MODELS,
   KNOWN_THINKING_MODELS,
@@ -29,11 +35,7 @@ import {
   peakPricingLabel,
   peakPricingState,
   compareByPlan,
-  COMMAND_CODE_CLI_VERSION,
-  DEFAULT_API_BASE,
-  DEFAULT_REQUEST_TIMEOUT_MS,
-  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-} from '../src/adapter.ts'
+} from '../src/capabilities.ts'
 import type { CommandCodeAdapterDeps } from '../src/adapter.ts'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -552,7 +554,7 @@ test('listModels() caches the billing access across picker loads', async () => {
 })
 
 test('modelVisibleInPlan() fails open on every uncertainty', async () => {
-  const { modelVisibleInPlan } = await import('../src/adapter.ts')
+  const { modelVisibleInPlan } = await import('../src/capabilities.ts')
   // No billing data at all -> visible.
   assert.equal(modelVisibleInPlan('claude-opus-4-8', undefined), true)
   // Positive on-demand balance -> visible regardless of tier.
@@ -1003,6 +1005,9 @@ test('projectSlugFromPath is not vulnerable to ReDoS on long separator runs', ()
 test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
+  // claude-fable-5-1 (Claude Fable 5.1, command-code@1.40.0) carries the same
+  // five-level effort set as claude-fable-5 in the Provider-API table.
+  assert.deepEqual(KNOWN_EFFORTS['claude-fable-5-1'], ['low', 'medium', 'high', 'xhigh', 'max'])
   // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
   // all three Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
   // Qwen 3.8 Flash joined in command-code@1.36.0.
@@ -1082,6 +1087,9 @@ test('known image models snapshot has stable anchor entries', () => {
   // model (the latter is deliberately absent).
   assert.ok(KNOWN_IMAGE_MODELS.has('claude-sonnet-5'))
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
+  // claude-fable-5-1 (command-code@1.40.0) is Vision per the official registry
+  // ("Text input, Vision, Reasoning"), like its claude-fable-5 predecessor.
+  assert.ok(KNOWN_IMAGE_MODELS.has('claude-fable-5-1'))
   // stealth/ox-alpha (command-code@1.31.0) was Vision; the model left the
   // catalog in 1.34.0 when its preview ended, so it is no longer whitelisted.
   assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/ox-alpha'))
@@ -1146,6 +1154,12 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // Provider/Max: Claude Opus/Fable and Fugu Ultra are not on lower plans.
   assert.equal(KNOWN_PLANS['claude-opus-5'], 'provider')
   assert.equal(KNOWN_PLANS['claude-fable-5'], 'provider')
+  // claude-fable-5-1 (Claude Fable 5.1, command-code@1.40.0) is Provider/Max
+  // exactly like claude-fable-5 — official plan pages grant it only
+  // individual-provider/max/ultra + teams-pro, and the CLI blocks it on
+  // Go/GOAT/Pro. It must be mapped so the picker's plan filter does not fail
+  // open and show a Provider/Max model to every subscription.
+  assert.equal(KNOWN_PLANS['claude-fable-5-1'], 'provider')
   assert.equal(KNOWN_PLANS['sakana/fugu-ultra'], 'provider')
   // Labels match the official tier names.
   assert.equal(planLabel('MiniMaxAI/MiniMax-M3'), 'Go')
@@ -1279,8 +1293,8 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 test('CLI version and API base constants are stable', () => {
   // command-code@1.40.1 (2026-09-02): 1.39.0 added DeepSeek V4 Flash Fast,
   // 1.39.1 dropped medium effort for it, 1.39.2 retired the MiniMax free
-  // models, 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1
-  // (Anthropic OAuth route, not the Provider API). The version rides every
+  // models, 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1 (a
+  // Provider-API model on the Provider/Max tier). The version rides every
   // request as x-command-code-version.
   assert.equal(COMMAND_CODE_CLI_VERSION, '1.40.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
