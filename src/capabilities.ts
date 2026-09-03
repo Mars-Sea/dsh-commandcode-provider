@@ -20,14 +20,14 @@
  * and split out so upstream syncs stay reviewable.
  */
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.40.1 bundled
+// Static capability snapshot (from the official command-code@1.44.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.40.1 bundled model
+  // Re-verified against the authoritative command-code@1.44.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. MiniMax M3, Muse Spark 1.1, Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -46,7 +46,12 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // `claude-fable-5-1` (Claude Fable 5.1, command-code@1.40.0) ships the same
   // five-level effort set as its predecessor `claude-fable-5` and is served
   // by the Provider API (the Provider/Max tier; see KNOWN_PLANS).
+  // command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` and command-code@1.43.0
+  // added `google/gemini-3.8-flash`; both carry effort sets matching their
+  // existing family members. The 1.44.0 table changed no existing model's
+  // effort levels.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
+  'Qwen/Qwen3.8-Max-0902': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Flash': ['low', 'medium', 'xhigh'],
   'claude-fable-5-1': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -79,6 +84,9 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // command-code@1.39.3 ("Add low, high, and max reasoning effort support for
   // Kimi K3"); it previously reasoned automatically with no levels.
   'moonshotai/Kimi-K3': ['low', 'high', 'max'],
+  // command-code@1.43.0 added Gemini 3.8 Flash with the same three-level
+  // effort set as the rest of the Gemini Flash family.
+  'google/gemini-3.8-flash': ['low', 'medium', 'high'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
   'tencent/hy4-preview': ['low', 'medium', 'high'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
@@ -111,6 +119,10 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.8-27B',
   'Qwen/Qwen3.8-Flash',
   'Qwen/Qwen3.8-Max',
+  // command-code@1.41.0 added Qwen 3.8 Max 0902; Vision per the official
+  // registry ("Text input, Vision, Reasoning") and the CLI's
+  // inputModalities:["text","image"].
+  'Qwen/Qwen3.8-Max-0902',
   'claude-fable-5-1',
   'claude-fable-5',
   'claude-haiku-4-5-20251001',
@@ -125,6 +137,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'google/gemini-3.5-flash-lite',
   'google/gemini-3.6-flash',
   'google/gemini-3.7-flash',
+  // command-code@1.43.0 added Gemini 3.8 Flash; Vision per the official
+  // registry and the CLI's inputModalities:["text","image"].
+  'google/gemini-3.8-flash',
   'gpt-5.3-codex',
   'gpt-5.4',
   'gpt-5.4-mini',
@@ -132,9 +147,14 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'gpt-5.6-luna',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
+  // command-code@1.44.0 added Muse Spark 1.3 and its Contributor sibling;
+  // both are Vision per the official registry and the CLI's
+  // inputModalities:["text","image"].
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
   'meta/muse-spark-1.2-contributor',
+  'meta/muse-spark-1.3',
+  'meta/muse-spark-1.3-contributor',
   'minimax/minimax-m3-free',
   'moonshotai/Kimi-K2.5',
   'moonshotai/Kimi-K2.6',
@@ -151,7 +171,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (command-code@1.40.1) marks
+ * Models the official CLI's model table (command-code@1.44.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -159,7 +179,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.40.1 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.44.0 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
  * selectable `['low', 'high', 'max']` efforts; the preview then ended in
@@ -169,7 +189,10 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * `['low', 'medium', 'high']` efforts in command-code@1.38.0 and moved to
  * `KNOWN_EFFORTS`. `moonshotai/Kimi-K3` followed the same path in
  * command-code@1.39.3 — it gained `['low', 'high', 'max']` efforts and moved
- * to `KNOWN_EFFORTS`.)
+ * to `KNOWN_EFFORTS`. command-code@1.42.0 added `meituan/LongCat-2.0:free`
+ * (reasoning:!0, no efforts) and command-code@1.44.0 added both
+ * `meta/muse-spark-1.3` variants — all think automatically with no
+ * selectable levels.)
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
 export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
@@ -189,9 +212,16 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
   'poolside/laguna-s-2.1-free',
+  // LongCat 2.0 (command-code@1.42.0, Meituan's trillion-parameter coding
+  // model, 1M context) is free and text-only, with automatic reasoning.
+  'meituan/LongCat-2.0:free',
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
   'meta/muse-spark-1.2-contributor',
+  // Muse Spark 1.3 / Contributor (command-code@1.44.0) reason automatically
+  // like the rest of the Muse Spark family — no selectable efforts.
+  'meta/muse-spark-1.3',
+  'meta/muse-spark-1.3-contributor',
 ])
 
 /**
@@ -204,6 +234,10 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * Provider/Max-tier exactly like `claude-fable-5` — its availability matrix on
  * the official plan/pricing pages grants individual-provider/max/ultra and
  * teams-pro only, and the CLI's plan-access map blocks it on Go/GOAT/Pro.
+ * command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` (Go) and 1.42.0 added
+ * `meituan/LongCat-2.0:free` (Go, free promo); command-code@1.43.0 added
+ * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
+ * (GOAT) plus its Contributor sibling (Go).
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -214,7 +248,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (43) ---
+  // --- Go (46) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -226,6 +260,8 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.8-27B': 'go',
   'Qwen/Qwen3.8-Flash': 'go',
   'Qwen/Qwen3.8-Max': 'go',
+  // command-code@1.41.0 added Qwen 3.8 Max 0902; it sits on the Go plan page.
+  'Qwen/Qwen3.8-Max-0902': 'go',
   // command-code@1.39.0 added DeepSeek V4 Flash Fast; it is a Go-tier model
   // alongside the rest of the DeepSeek V4 family.
   'deepseek/deepseek-v4-flash-fast': 'go',
@@ -234,7 +270,13 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'deepseek/deepseek-v4-pro': 'go',
   'gpt-5.6-luna': 'go',
   'inclusionai/ling-3.0-flash-free': 'go',
+  // command-code@1.42.0 added Meituan's LongCat 2.0 as a free Go-tier model
+  // ("LongCat 2.0 free model" — 100% off while it lasts, every plan).
+  'meituan/LongCat-2.0:free': 'go',
+  // command-code@1.44.0 added Muse Spark 1.3 Contributor on every plan
+  // including Go, like its 1.2 Contributor sibling.
   'meta/muse-spark-1.2-contributor': 'go',
+  'meta/muse-spark-1.3-contributor': 'go',
   'minimax/minimax-m2.7-free': 'go',
   'minimax/minimax-m3-free': 'go',
   'moonshotai/Kimi-K2.5': 'go',
@@ -260,10 +302,16 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'zai-org/GLM-5.2': 'go',
   'zai-org/GLM-5.2-Fast': 'go',
   'zai-org/GLM-5.3': 'go',
-  // --- GOAT (4 more) ---
+  // --- GOAT (6 more) ---
   'google/gemini-3.7-flash': 'goat',
+  // command-code@1.43.0 added Gemini 3.8 Flash; the pricing page marks it
+  // "Available on GOAT and above", like the rest of the Gemini Flash family.
+  'google/gemini-3.8-flash': 'goat',
   'gpt-5.6-sol': 'goat',
   'meta/muse-spark-1.2': 'goat',
+  // command-code@1.44.0 added Muse Spark 1.3; the pricing page marks it
+  // "Available on GOAT and above", like the 1.2/1.1 models.
+  'meta/muse-spark-1.3': 'goat',
   'xai/grok-4.6': 'goat',
   // --- Pro (13 more) ---
   'claude-haiku-4-5-20251001': 'pro',
@@ -449,6 +497,11 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   // here rather than left to lapse on schedule. The paid MiniMax M3 / M2.7
   // rows keep their own rates.
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
+  // Meituan's LongCat 2.0 (command-code@1.42.0, "LongCat 2.0 free model") is
+  // 100% off while it lasts — a permanent-style deal (no fixed end date; the
+  // pricing page's DEAL block says "Term: while it lasts"). Free requests cost
+  // no credits on every plan, like Laguna S 2.1.
+  'meituan/LongCat-2.0:free': { label: 'FREE', free: true },
 }
 
 /**

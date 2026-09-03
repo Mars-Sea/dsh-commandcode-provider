@@ -1013,6 +1013,12 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // Qwen 3.8 Flash joined in command-code@1.36.0.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Flash'], ['low', 'medium', 'xhigh'])
+  // Qwen 3.8 Max 0902 (command-code@1.41.0) carries the Qwen 3.8 family's
+  // ['low','medium','xhigh'] effort set.
+  assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Max-0902'], ['low', 'medium', 'xhigh'])
+  // Gemini 3.8 Flash (command-code@1.43.0) carries the Gemini Flash family's
+  // three-level effort set.
+  assert.deepEqual(KNOWN_EFFORTS['google/gemini-3.8-flash'], ['low', 'medium', 'high'])
   // command-code@1.32.0 added DeepSeek V4 Flash Vision (exp) with
   // ['high','max']; 1.35.0 added z-ai/glm-5.3-flash (the stealth/ox-alpha
   // successor after the preview ended in 1.34.0) with the same effort set.
@@ -1023,9 +1029,9 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // command-code@1.39.0 added DeepSeek V4 Flash Fast; 1.39.1 dropped medium
   // for it, so the 1.39.2 table ships ['low','high','max'].
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-fast'], ['low', 'high', 'max'])
-  // Synced from the official command-code@1.40.1 model table (re-verified
+  // Synced from the official command-code@1.44.0 model table (re-verified
   // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0, 1.37.0,
-  // 1.39.2 and 1.40.1 along the way):
+  // 1.39.2, 1.40.1 and 1.44.0 along the way):
   // models that ship with effort levels must be present, and absent ones must
   // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
   // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
@@ -1059,17 +1065,27 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   // entirely in 1.34.0 when its preview ended. It belongs to neither set now.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
   // Re-verified against the command-code@1.28.4 ZA table (2026-08-18),
-  // re-confirmed against 1.30.1 (2026-08-21), 1.37.0 (2026-08-28) and 1.38.2:
+  // re-confirmed against 1.30.1 (2026-08-21), 1.37.0 (2026-08-28), 1.38.2,
+  // 1.40.1 and 1.44.0 (2026-09-02):
   // these think automatically (reasoning:!0, no efforts) and belong in the set.
   // tencent/hy4-preview joined in command-code@1.37.0 (OpenRouter-routed, 1M,
   // no efforts) but gained selectable ['low','medium','high'] efforts in
   // 1.38.0 and moved to KNOWN_EFFORTS. moonshotai/Kimi-K3 followed the same
   // path in command-code@1.39.3 (['low','high','max']).
+  // meituan/LongCat-2.0:free (command-code@1.42.0) and the two Muse Spark 1.3
+  // entries (command-code@1.44.0) think automatically with no selectable
+  // levels, so they stay in this set and out of KNOWN_EFFORTS.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
   assert.ok(!KNOWN_THINKING_MODELS.has('tencent/hy4-preview'))
   assert.ok(!KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
+  assert.ok(KNOWN_THINKING_MODELS.has('meituan/LongCat-2.0:free'))
+  assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
+  assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
+  assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0:free'])
+  assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.3'])
+  assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.3-contributor'])
   // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (ZA reasoning:false, docs
   // "Text input" only) — the 0.2.0 snapshot wrongly included them.
   assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5'))
@@ -1110,6 +1126,14 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-pro'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
+  // Qwen 3.8 Max 0902 (command-code@1.41.0), Gemini 3.8 Flash (1.43.0) and the
+  // Muse Spark 1.3 entries (1.44.0) are Vision per the official registry
+  // ("Text input, Vision, Reasoning"). LongCat 2.0 (1.42.0) is text-only.
+  assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-Max-0902'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('google/gemini-3.8-flash'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3-contributor'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('meituan/LongCat-2.0:free'))
 })
 
 test('known plan snapshot tiers models by the official plan pages', () => {
@@ -1141,12 +1165,22 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // Go-tier open models — same tier as their paid siblings.
   assert.equal(KNOWN_PLANS['minimax/minimax-m3-free'], 'go')
   assert.equal(KNOWN_PLANS['minimax/minimax-m2.7-free'], 'go')
+  // Qwen 3.8 Max 0902 (command-code@1.41.0), LongCat 2.0 (1.42.0, free promo)
+  // and Muse Spark 1.3 Contributor (1.44.0, "every plan including Go") are all
+  // Go-tier.
+  assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-Max-0902'], 'go')
+  assert.equal(KNOWN_PLANS['meituan/LongCat-2.0:free'], 'go')
+  assert.equal(KNOWN_PLANS['meta/muse-spark-1.3-contributor'], 'go')
   // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
   // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
   assert.equal(KNOWN_PLANS['xai/grok-4.6'], 'goat')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.2'], 'goat')
   assert.equal(KNOWN_PLANS['gpt-5.6-sol'], 'goat')
+  // Gemini 3.8 Flash (1.43.0) and Muse Spark 1.3 (1.44.0) are "available on
+  // GOAT and above" per the pricing page.
+  assert.equal(KNOWN_PLANS['google/gemini-3.8-flash'], 'goat')
+  assert.equal(KNOWN_PLANS['meta/muse-spark-1.3'], 'goat')
   // Pro adds Claude Sonnet/Haiku, GPT-5.x, Gemini 3.5/3.1.
   assert.equal(KNOWN_PLANS['claude-sonnet-5'], 'pro')
   assert.equal(KNOWN_PLANS['gpt-5.4'], 'pro')
@@ -1189,6 +1223,9 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // Gemini 3.7 Flash's 50% off deal was retired from the pricing page in the
   // command-code@1.38.2 sync; the model now shows at full price.
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'], undefined)
+  // LongCat 2.0 (command-code@1.42.0) is a free model ("Free while it lasts",
+  // permanent-style deal) like Laguna S 2.1.
+  assert.equal(KNOWN_DEALS['meituan/LongCat-2.0:free']?.free, true)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
@@ -1226,6 +1263,8 @@ test('formatContext() renders compact human sizes', () => {
 test('capabilityDescription() composes plan, deal, Image, context', () => {
   // Free model without Vision: no Image marker.
   assert.equal(capabilityDescription('poolside/laguna-s-2.1-free', 256_000), 'Go · FREE · 256K')
+  // LongCat 2.0 (command-code@1.42.0): free Go model, text-only, 1M context.
+  assert.equal(capabilityDescription('meituan/LongCat-2.0:free', 1_048_576), 'Go · FREE · 1M')
   // Discounted Image model with context.
   assert.equal(capabilityDescription('MiniMaxAI/MiniMax-M3', 1_000_000), 'Go · 50% off · Image · 1M')
   // Text-only model: no Image marker. DeepSeek V4 Flash carries time-of-day
@@ -1291,12 +1330,14 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.40.1 (2026-09-02): 1.39.0 added DeepSeek V4 Flash Fast,
+  // command-code@1.44.0 (2026-09-02): 1.39.0 added DeepSeek V4 Flash Fast,
   // 1.39.1 dropped medium effort for it, 1.39.2 retired the MiniMax free
   // models, 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1 (a
-  // Provider-API model on the Provider/Max tier). The version rides every
-  // request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.40.1')
+  // Provider-API model on the Provider/Max tier), 1.41.0 added Qwen 3.8 Max
+  // 0902, 1.42.0 added LongCat 2.0 (free), 1.43.0 added Gemini 3.8 Flash,
+  // and 1.44.0 added Meta Muse Spark 1.3 + Contributor. The version rides
+  // every request as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.44.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

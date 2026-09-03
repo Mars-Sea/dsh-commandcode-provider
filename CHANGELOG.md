@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0-alpha.6] - 2026-09-03
+
+> **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
+
+### Added
+
+- **Synced with the official command-code@1.44.0 CLI** (2026-09-02: 1.41.0 added Qwen 3.8 Max 0902, 1.42.0 added the free LongCat 2.0, 1.43.0 added Gemini 3.8 Flash, and 1.44.0 added Meta Muse Spark 1.3 + Contributor). `COMMAND_CODE_CLI_VERSION` is now `1.44.0`, and the model picker knows the five new models: Qwen 3.8 Max 0902 and LongCat 2.0 show under the Go tier, Gemini 3.8 Flash and Muse Spark 1.3 under GOAT, and Muse Spark 1.3 Contributor under Go. LongCat 2.0 also shows a `FREE` badge (100% off while it lasts, like Laguna S 2.1). Gemini 3.8 Flash, Qwen 3.8 Max 0902 and both Muse Spark 1.3 variants are Vision-capable and appear with the `Image` marker; LongCat 2.0 is text-only.
+
 ### Fixed
 
 - **Claude Fable 5.1 (`claude-fable-5-1`) is now correctly marked as a Provider/Max model.** The model, added upstream in command-code@1.40.0, was mis-synced in 0.10.0-alpha.5 as an Anthropic OAuth-only model outside the Provider API — but it IS served by the Provider API (it shows up in the live model catalog), and because it had no `KNOWN_PLANS` entry the picker's plan filter failed open and listed it for **every** subscription plan. It is now mapped to the Provider/Max tier (matching its official availability matrix and the CLI's plan-access map), so Go/GOAT/Pro accounts no longer see it in the picker; `resolveModel` still serves it and the server remains the final gate (`403 MODEL_NOT_IN_PLAN`). The snapshot now also carries its selectable reasoning efforts (`low`/`medium`/`high`/`xhigh`/`max`, same as `claude-fable-5`) and its Vision capability (official registry: "Text input, Vision, Reasoning").
@@ -17,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Kimi K3 now offers selectable reasoning efforts (`low`/`high`/`max`).** The model gained official effort levels in command-code@1.39.3 ("Add low, high, and max reasoning effort support for Kimi K3"), so the picker can now offer a reasoning-effort selector for it; it is no longer listed as an auto-thinking model.
-- **Synced with the official command-code@1.40.1 CLI** (2026-09-02: 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1, and 1.40.1 is a ZDR feature-model filter). `COMMAND_CODE_CLI_VERSION` is now `1.40.1`. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, model catalog, subscription plan maps, deals, and peak/off-peak windows are all identical to 1.39.2. (Fable 5.1's plan-tier mapping was corrected in a follow-up — see [Unreleased].)
+- **Synced with the official command-code@1.40.1 CLI** (2026-09-02: 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1, and 1.40.1 is a ZDR feature-model filter). `COMMAND_CODE_CLI_VERSION` is now `1.40.1`. Re-verified against the official sources with no other changes: wire protocol, endpoints, auth flow, model catalog, subscription plan maps, deals, and peak/off-peak windows are all identical to 1.39.2. (Fable 5.1's plan-tier mapping was corrected in a follow-up — see [0.10.0-alpha.6].)
 
 ## [0.10.0-alpha.4] - 2026-09-01
 
