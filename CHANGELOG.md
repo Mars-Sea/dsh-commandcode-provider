@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0-alpha.8] - 2026-09-04
+
+> **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
+
+### Changed
+
+- **Synced with the official command-code@1.47.0 CLI** (2026-09-04: marked Grok 4.6 vision-capable). `COMMAND_CODE_CLI_VERSION` is now `1.47.0`. Grok 4.6 now shows the `Image` capability marker in the picker.
+
 ## [0.10.0-alpha.7] - 2026-09-04
 
 > **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.

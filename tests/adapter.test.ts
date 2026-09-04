@@ -1138,6 +1138,9 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3-contributor'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('meituan/LongCat-2.0:free'))
+  // command-code@1.47.0 marked Grok 4.6 vision-capable; it is now in
+  // KNOWN_IMAGE_MODELS and shows the Image marker in the picker.
+  assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
 })
 
 test('known plan snapshot tiers models by the official plan pages', () => {
@@ -1334,11 +1337,11 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.46.0 (2026-09-03): 1.44.0 added Meta Muse Spark 1.3 +
-  // Contributor, 1.45.0 added Muse Spark reasoning levels, 1.46.0 added
-  // browser login and read_file document support. The version rides every
-  // request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.46.0')
+  // command-code@1.47.0 (2026-09-04): 1.45.0 added Muse Spark reasoning
+  // levels, 1.46.0 added browser login and read_file document support,
+  // 1.47.0 marked Grok 4.6 vision-capable. The version rides every request
+  // as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.47.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

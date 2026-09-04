@@ -176,6 +176,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
   'xai/grok-4.5',
+  // command-code@1.47.0 marked Grok 4.6 vision-capable (it was text-only in
+  // 1.46.0); the CLI's inputModalities:["text","image"] confirms it.
+  'xai/grok-4.6',
   'xiaomi/mimo-v2.5',
   'z-ai/glm-5.3-flash',
 ])
