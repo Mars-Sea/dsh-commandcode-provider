@@ -20,17 +20,17 @@
  * and split out so upstream syncs stay reviewable.
  */
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.44.0 bundled
+// Static capability snapshot (from the official command-code@1.46.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.44.0 bundled model
+  // Re-verified against the authoritative command-code@1.46.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
-  // (e.g. MiniMax M3, Muse Spark 1.1, Tencent Hy3, GLM-5/5.1/5.2-Fast)
+  // (e.g. MiniMax M3, Tencent Hy3, GLM-5/5.1/5.2-Fast)
   // think automatically and are absent here - the CLI omits
   // 'reasoning_effort' for them, so the picker must not offer a selector. Do
   // NOT add entries from the OAuth provider tables (anthropic/openai) - only
@@ -48,8 +48,10 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // by the Provider API (the Provider/Max tier; see KNOWN_PLANS).
   // command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` and command-code@1.43.0
   // added `google/gemini-3.8-flash`; both carry effort sets matching their
-  // existing family members. The 1.44.0 table changed no existing model's
-  // effort levels.
+  // existing family members. command-code@1.45.0 added selectable
+  // ['low', 'medium', 'high', 'xhigh'] efforts for the Muse Spark family
+  // (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor); they previously reasoned
+  // automatically with no selectable levels.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Max-0902': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
@@ -94,6 +96,14 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'z-ai/glm-5.3-flash': ['low', 'high', 'max'],
   'zai-org/GLM-5.2': ['high', 'max'],
   'zai-org/GLM-5.3': ['low', 'high', 'max'],
+  // Muse Spark family (command-code@1.45.0: "Reasoning levels for Muse
+  // Spark 1.3") gained selectable ['low', 'medium', 'high', 'xhigh'] efforts
+  // — they previously reasoned automatically with no levels.
+  'meta/muse-spark-1.1': ['low', 'medium', 'high', 'xhigh'],
+  'meta/muse-spark-1.2': ['low', 'medium', 'high', 'xhigh'],
+  'meta/muse-spark-1.2-contributor': ['low', 'medium', 'high', 'xhigh'],
+  'meta/muse-spark-1.3': ['low', 'medium', 'high', 'xhigh'],
+  'meta/muse-spark-1.3-contributor': ['low', 'medium', 'high', 'xhigh'],
 }
 
 /**
@@ -171,7 +181,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Models the official CLI's model table (command-code@1.44.0) marks
+ * Models the official CLI's model table (command-code@1.46.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -179,7 +189,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.44.0 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.46.0 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
  * selectable `['low', 'high', 'max']` efforts; the preview then ended in
@@ -190,9 +200,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * `KNOWN_EFFORTS`. `moonshotai/Kimi-K3` followed the same path in
  * command-code@1.39.3 — it gained `['low', 'high', 'max']` efforts and moved
  * to `KNOWN_EFFORTS`. command-code@1.42.0 added `meituan/LongCat-2.0:free`
- * (reasoning:!0, no efforts) and command-code@1.44.0 added both
- * `meta/muse-spark-1.3` variants — all think automatically with no
- * selectable levels.)
+ * (reasoning:!0, no efforts). command-code@1.45.0 gave the Muse Spark family
+ * (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) selectable
+ * `['low', 'medium', 'high', 'xhigh']` efforts — they moved to `KNOWN_EFFORTS`.)
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
 export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
@@ -215,13 +225,9 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   // LongCat 2.0 (command-code@1.42.0, Meituan's trillion-parameter coding
   // model, 1M context) is free and text-only, with automatic reasoning.
   'meituan/LongCat-2.0:free',
-  'meta/muse-spark-1.1',
-  'meta/muse-spark-1.2',
-  'meta/muse-spark-1.2-contributor',
-  // Muse Spark 1.3 / Contributor (command-code@1.44.0) reason automatically
-  // like the rest of the Muse Spark family — no selectable efforts.
-  'meta/muse-spark-1.3',
-  'meta/muse-spark-1.3-contributor',
+  // Muse Spark family (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor)
+  // moved to KNOWN_EFFORTS in command-code@1.45.0 — they now have
+  // selectable ['low', 'medium', 'high', 'xhigh'] efforts.
 ])
 
 /**

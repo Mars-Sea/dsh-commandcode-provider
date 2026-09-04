@@ -1041,8 +1041,10 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5-pro'])
   assert.ok(!KNOWN_EFFORTS['claude-haiku-4-5-20251001'])
   assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M2.5'])
-  assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'])
-  assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid'])
+  assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid']) // no official effort levels
+  // Muse Spark family (command-code@1.45.0) gained selectable efforts —
+  // they're now in KNOWN_EFFORTS and out of KNOWN_THINKING_MODELS.
+  assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'], ['low', 'medium', 'high', 'xhigh'])
   assert.ok(!KNOWN_EFFORTS['tencent/Hy3'])
   // tencent/hy4-preview gained selectable ['low','medium','high'] efforts in
   // command-code@1.38.0 (it previously reasoned automatically with none).
@@ -1066,26 +1068,28 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
   // Re-verified against the command-code@1.28.4 ZA table (2026-08-18),
   // re-confirmed against 1.30.1 (2026-08-21), 1.37.0 (2026-08-28), 1.38.2,
-  // 1.40.1 and 1.44.0 (2026-09-02):
+  // 1.40.1, 1.44.0 (2026-09-02) and 1.45.0 (2026-09-03):
   // these think automatically (reasoning:!0, no efforts) and belong in the set.
   // tencent/hy4-preview joined in command-code@1.37.0 (OpenRouter-routed, 1M,
   // no efforts) but gained selectable ['low','medium','high'] efforts in
   // 1.38.0 and moved to KNOWN_EFFORTS. moonshotai/Kimi-K3 followed the same
-  // path in command-code@1.39.3 (['low','high','max']).
-  // meituan/LongCat-2.0:free (command-code@1.42.0) and the two Muse Spark 1.3
-  // entries (command-code@1.44.0) think automatically with no selectable
-  // levels, so they stay in this set and out of KNOWN_EFFORTS.
+  // path in command-code@1.39.3 (['low','high','max']). Muse Spark family
+  // (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) followed in 1.45.0
+  // (['low','medium','high','xhigh']). meituan/LongCat-2.0:free (1.42.0)
+  // thinks automatically with no selectable levels.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
   assert.ok(!KNOWN_THINKING_MODELS.has('tencent/hy4-preview'))
   assert.ok(!KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
-  assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
   assert.ok(KNOWN_THINKING_MODELS.has('meituan/LongCat-2.0:free'))
-  assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
-  assert.ok(KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
+  // Muse Spark family (command-code@1.45.0) now has selectable efforts —
+  // they moved from KNOWN_THINKING_MODELS to KNOWN_EFFORTS.
   assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0:free'])
-  assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.3'])
-  assert.ok(!KNOWN_EFFORTS['meta/muse-spark-1.3-contributor'])
+  assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.3'], ['low', 'medium', 'high', 'xhigh'])
+  assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.3-contributor'], ['low', 'medium', 'high', 'xhigh'])
   // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (ZA reasoning:false, docs
   // "Text input" only) — the 0.2.0 snapshot wrongly included them.
   assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5'))
@@ -1330,14 +1334,11 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.44.0 (2026-09-02): 1.39.0 added DeepSeek V4 Flash Fast,
-  // 1.39.1 dropped medium effort for it, 1.39.2 retired the MiniMax free
-  // models, 1.39.3 added Kimi K3 effort levels, 1.40.0 added Fable 5.1 (a
-  // Provider-API model on the Provider/Max tier), 1.41.0 added Qwen 3.8 Max
-  // 0902, 1.42.0 added LongCat 2.0 (free), 1.43.0 added Gemini 3.8 Flash,
-  // and 1.44.0 added Meta Muse Spark 1.3 + Contributor. The version rides
-  // every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.44.0')
+  // command-code@1.46.0 (2026-09-03): 1.44.0 added Meta Muse Spark 1.3 +
+  // Contributor, 1.45.0 added Muse Spark reasoning levels, 1.46.0 added
+  // browser login and read_file document support. The version rides every
+  // request as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.46.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

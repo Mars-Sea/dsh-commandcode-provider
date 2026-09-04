@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0-alpha.7] - 2026-09-04
+
+> **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
+
+### Added
+
+- **Muse Spark family now offers selectable reasoning efforts.** The official command-code@1.45.0 added `low`/`medium`/`high`/`xhigh` effort levels for all Muse Spark variants (1.1, 1.2, 1.2 Contributor, 1.3, 1.3 Contributor). The picker now shows a reasoning-effort selector for these models; they are no longer listed as auto-thinking models.
+
+### Changed
+
+- **Synced with the official command-code@1.46.0 CLI** (2026-09-03: 1.45.0 added Muse Spark reasoning levels, 1.46.0 added browser sign-in and `read_file` document support). `COMMAND_CODE_CLI_VERSION` is now `1.46.0`. Re-verified against the official sources: wire protocol, endpoints, auth flow, model catalog, subscription plan maps, deals, and peak/off-peak windows are all identical to 1.44.0.
+
 ## [0.10.0-alpha.6] - 2026-09-03
 
 > **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
