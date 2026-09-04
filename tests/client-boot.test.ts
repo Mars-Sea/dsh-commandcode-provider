@@ -2,14 +2,14 @@
  * Client-boot integration tests (node:test). Run with `npm test`.
  *
  * These drive the *real* `apply()` from `src/client/index.ts` against a Cordis
- * context that mirrors the DSH 0.1.2-alpha.2 client assembly, and assert that
+ * context that mirrors the DSH 0.1.2 (rc.1) client assembly, and assert that
  * both browser UI surfaces register:
  *
  *   - the "Command Code" settings page (`settings.section`, id `commandcode`),
  *   - the Models-page provider card (`settings.models.provider-card`,
  *     key `llm-commandcode`).
  *
- * The registration is gated by `remote.credentials`: DSH 0.1.2-alpha.2 exposes
+ * The registration is gated by `remote.credentials`: DSH 0.1.2 (rc.1) exposes
  * credentials through a Typert Remote namespace, and the plugin waits on
  * `ctx.inject(['remote.credentials'], ...)` before mounting the surfaces. This
  * is exactly the suspicion raised in GitHub issue #15 (that alpha2 "does not
@@ -77,7 +77,7 @@ function makeScope() {
 
 /**
  * Boot the real plugin `apply()` on a fresh Cordis root provisioned with the
- * DSH 0.1.2-alpha.2 service set: `remote` (mounting the `credentials` and
+ * DSH 0.1.2 (rc.1) service set: `remote` (mounting the `credentials` and
  * `commandcode` namespaces), `slots`, `locale`, `settingsScope`, `connection`.
  *
  * @param options - whether to mount the `credentials` remote namespace. When

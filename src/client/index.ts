@@ -398,7 +398,7 @@ function applyClientSurfaces(
     inject: injected,
   }, CommandCodeSettingsPage))
 
-  // The Models-page provider panel (dsh 0.1.2-alpha.2): a keyed slot the
+  // The Models-page provider panel (dsh 0.1.2, rc.1): a keyed slot the
   // Models section dispatches with `entryKey = settingsNs` on every provider
   // card of an adapter family. Registering under `llm-commandcode` mounts the
   // panel beside the official editor on every Command Code row — including

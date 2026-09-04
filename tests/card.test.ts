@@ -2,7 +2,7 @@
  * Models-page provider-card tests (node:test, zero deps). Run with `npm test`.
  *
  * These pin the "Command Code" panel rendered inside the harness Models page
- * through the `settings.models.provider-card` keyed slot (dsh 0.1.2-alpha.2):
+ * through the `settings.models.provider-card` keyed slot (dsh 0.1.2, rc.1):
  *
  *   - the panel's posture logic (`cardMode`): which body renders for the
  *     registration / not-ready / not-configured / configured states;

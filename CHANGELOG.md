@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-04
+
+> **First stable release for the dsh 0.1.2 line.** This release requires **dsh 0.1.2-rc.1 or later** and is published on the `latest` npm tag. It graduates the 0.10.0-alpha.x line (command-code syncs up to 1.47.0) to stable. The previous stable line — 0.9.1 for older Harness releases (the 0.5.0 era) — is no longer under active maintenance; it stays on npm for existing users but receives no further updates.
+
+### Changed
+
+- **Raised the minimum supported DeepSeek Harness version to 0.1.2-rc.1.** Every Harness peer and development package now starts at the rc.1 line — the version `@latest` installs today. Source APIs, the Remote wire, and the Web slot surfaces are unchanged between alpha.2 and rc.1, so this is a metadata-only bump with no code changes.
+
 ## [0.10.0-alpha.8] - 2026-09-04
 
 > **Alpha channel for dsh 0.1.2-alpha.2.** This release requires **dsh 0.1.2-alpha.2 or later** and is published under the `alpha` npm tag, so `@latest` stays on 0.9.1 for older Harness releases. Install it explicitly with `@alpha`.
