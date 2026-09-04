@@ -70,6 +70,14 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
 export const MODELS_TIMEOUT_MS = 10_000
 /** How long the picker's plan-filter billing facts stay cached before refetching. */
 export const BILLING_ACCESS_TTL_MS = 5 * 60_000
+/**
+ * How long a learned CLI-only protocol preference stays cached per account.
+ * After this TTL a request may probe Provider API again, so an upgraded Go
+ * account can recover without a restart.
+ */
+export const PROTOCOL_CACHE_TTL_MS = 15 * 60_000
+/** Endpoint protocol selected for one generate call. */
+type CommandCodeProtocol = 'cli' | 'openai'
 
 /**
  * Subscription statuses the CLI treats as live (`Mr` in command-code's
@@ -263,9 +271,13 @@ async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): 
 
 // ---------------------------------------------------------------------------
 // Message conversion: harness Message[] -> Command Code wire messages.
-// Reasoning blocks are intentionally NOT replayed (matches the pi plugin and
-// the official CLI: prior private reasoning must not leak into later turns).
-// Only tool calls with a paired tool result are replayed.
+// The legacy /alpha/generate transport intentionally does NOT replay reasoning
+// blocks (matches the pi plugin and the official CLI of that era; prior
+// private reasoning must not leak into later turns). The documented
+// /provider/v1/chat/completions transport DOES replay them as
+// `reasoning_content`, because DeepSeek's thinking-mode contract requires it
+// when tools are in play. Only tool calls with a paired tool result are
+// replayed on both transports.
 // ---------------------------------------------------------------------------
 
 /**
@@ -406,6 +418,118 @@ async function messagesToCC(
   return out
 }
 
+/**
+ * Convert one image reference to the OpenAI Chat Completions wire format:
+ * `{ type: 'image_url', image_url: { url: 'data:...;base64,...' } }`.
+ */
+async function imageToOpenAI(
+  ref: ImageAttachmentRef,
+  readImage: (ref: ImageAttachmentRef) => Promise<Uint8Array>,
+): Promise<{ type: 'image_url'; image_url: { url: string } }> {
+  const data = await readImage(ref)
+  return {
+    type: 'image_url',
+    image_url: {
+      url: `data:${ref.mediaType};base64,${Buffer.from(data).toString('base64')}`,
+    },
+  }
+}
+
+/**
+ * Convert harness messages to the OpenAI Chat Completions request shape.
+ *
+ * Unlike the Command Code CLI transport, this transport is the documented
+ * Provider API surface. DeepSeek's thinking-mode contract requires historical
+ * `reasoning_content` to be passed back whenever tools are in play, so this
+ * converter intentionally DOES replay reasoning blocks as `reasoning_content`
+ * on assistant messages. Only tool calls with a paired tool result are
+ * replayed (same policy as the CLI path).
+ */
+async function messagesToOpenAI(
+  messages: readonly Message[],
+  readImage?: (ref: ImageAttachmentRef) => Promise<Uint8Array>,
+): Promise<unknown[]> {
+  const out: unknown[] = []
+  const { ids: paired } = pairedToolCalls(messages)
+
+  for (const message of messages) {
+    // System messages are folded into the single top-level system message by
+    // the caller, matching the existing adapter's conversation folding.
+    if (message.role === 'system') continue
+
+    if (message.role === 'user' && message.source.kind !== 'tool') {
+      const parts: unknown[] = []
+      for (const block of message.content) {
+        if (block.type === 'text') parts.push({ type: 'text', text: block.text })
+        if (block.type === 'image') {
+          if (!readImage) {
+            throw new LlmError(
+              'Image input requires the durable attachment service',
+              'UNSUPPORTED_CONTENT',
+            )
+          }
+          parts.push(await imageToOpenAI(block.attachment, readImage))
+        }
+      }
+      if (parts.length === 0) continue
+      const hasImage = parts.some((part) => (part as { type?: string }).type === 'image_url')
+      if (!hasImage && parts.length === 1) {
+        out.push({ role: 'user', content: (parts[0] as { text: string }).text })
+      } else {
+        // Preserve separate text/image parts rather than silently joining
+        // text blocks together.
+        out.push({ role: 'user', content: parts })
+      }
+      continue
+    }
+
+    if (message.role === 'assistant') {
+      const text = message.content
+        .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
+        .map((block) => block.text)
+        .join('')
+      const reasoning = message.content
+        .filter((block): block is Extract<ContentBlock, { type: 'reasoning' }> => block.type === 'reasoning')
+        .map((block) => block.text)
+        .join('')
+      const toolCalls = message.content
+        .filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> => block.type === 'tool-call' && paired.has(block.id))
+        .map((block) => ({
+          id: block.id,
+          type: 'function' as const,
+          function: {
+            name: block.name,
+            arguments: block.arguments,
+          },
+        }))
+
+      if (text === '' && reasoning === '' && toolCalls.length === 0) continue
+      const assistant: Record<string, unknown> = {
+        role: 'assistant',
+        content: text === '' ? null : text,
+      }
+      // Chat Completions / DeepSeek thinking mode: replay historical reasoning
+      // so tool-calling loops can continue from the previous chain of thought.
+      if (reasoning !== '') assistant.reasoning_content = reasoning
+      if (toolCalls.length > 0) assistant.tool_calls = toolCalls
+      out.push(assistant)
+      continue
+    }
+
+    // tool-result message (user role, single tool-result block)
+    if (message.role === 'user' && message.source.kind === 'tool') {
+      const block = message.content[0]
+      if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
+      out.push({
+        role: 'tool',
+        tool_call_id: block.toolCallId,
+        content: toolResultText(block),
+      })
+    }
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
@@ -432,6 +556,13 @@ export interface CommandCodeConnectionOptions {
    * keep the full catalog visible. Set false to always list every model.
    */
   filterModelsByPlan?: boolean
+  /**
+   * Optional protocol override. `'auto'` (default) uses billing/cache plus
+   * Provider API fallback; `'cli'` forces `/alpha/generate`; `'openai'` forces
+   * `/provider/v1/chat/completions`. This is a connection-level test/operator
+   * seam and is intentionally not part of the plugin's user settings schema.
+   */
+  protocol?: 'auto' | CommandCodeProtocol
 }
 
 /**
@@ -547,6 +678,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   // the resolved API key (process-local only, never logged).
   private readonly billingAccess = new Map<string, { value: CommandCodeBillingAccess | undefined; at: number }>()
   private readonly billingAccessInflight = new Map<string, Promise<CommandCodeBillingAccess | undefined>>()
+  // Protocol preference is per account: the Go plan is the only plan without
+  // Provider API access, and that fact is independent of model. A negative
+  // result (provider API rejected this key with upgrade_required) is cached so
+  // every request does not pay the double TTFT of probing then falling back.
+  private readonly protocolCache = new Map<string, { useCli: boolean; at: number }>()
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
     super()
@@ -778,6 +914,42 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
   }
 
+  /** Fresh cached billing tier weight for a key, or undefined when not known. */
+  private cachedBillingTierWeight(apiKey: string): number | undefined {
+    const hit = this.billingAccess.get(apiKey)
+    if (hit === undefined || Date.now() - hit.at >= BILLING_ACCESS_TTL_MS) return undefined
+    return hit.value?.tierWeight
+  }
+
+  /** Cached protocol decision for a key, or undefined when expired/unknown. */
+  private cachedProtocolUseCli(apiKey: string): boolean | undefined {
+    const hit = this.protocolCache.get(apiKey)
+    if (hit === undefined || Date.now() - hit.at >= PROTOCOL_CACHE_TTL_MS) return undefined
+    return hit.useCli
+  }
+
+  private rememberProtocol(apiKey: string, useCli: boolean): void {
+    this.protocolCache.set(apiKey, { useCli, at: Date.now() })
+  }
+
+  /**
+   * Choose the initial protocol for one request. A fresh protocol cache entry
+   * wins; otherwise a cached (not network-fetched) billing tier of Go is
+   * treated as CLI-only. Unknown accounts default to Provider API and fall
+   * back only after an `upgrade_required` rejection.
+   */
+  private resolveProtocol(apiKey: string): CommandCodeProtocol {
+    const forced = this.deps.options().protocol
+    if (forced === 'cli' || forced === 'openai') return forced
+    const cached = this.cachedProtocolUseCli(apiKey)
+    if (cached !== undefined) return cached ? 'cli' : 'openai'
+    if (this.cachedBillingTierWeight(apiKey) === 0) {
+      this.rememberProtocol(apiKey, true)
+      return 'cli'
+    }
+    return 'openai'
+  }
+
   /**
    * Fetch account, usage, credit, and subscription state from the Command
    * Code account endpoints (`/alpha/whoami`, `/alpha/usage/summary`,
@@ -1004,38 +1176,67 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       .filter(Boolean)
       .join('\n\n')
 
-    const body = {
-      config: {
-        workingDir: connection.workingDir,
-        date: new Date().toISOString().split('T')[0],
-        environment: `${process.platform}-${process.arch}, Node.js ${process.version}`,
-        structure: [],
-        isGitRepo: false,
-        currentBranch: '',
-        mainBranch: '',
-        gitStatus: '',
-        recentCommits: [],
-      },
-      memory: null,
-      taste: null,
-      skills: null,
-      params: {
-        model: options.model,
-        messages: await messagesToCC(options.messages, readImage),
-        tools: (options.tools ?? []).map((tool) => ({
-          type: 'function',
+    // Endpoint protocol: billing/cache may know Go plan -> CLI; unknown
+    // accounts default to the documented Provider Chat Completions surface.
+    let protocol: CommandCodeProtocol = this.resolveProtocol(apiKey)
+    const buildBody = async (target: CommandCodeProtocol): Promise<Record<string, unknown>> => {
+      if (target === 'cli') {
+        return {
+          config: {
+            workingDir: connection.workingDir,
+            date: new Date().toISOString().split('T')[0],
+            environment: `${process.platform}-${process.arch}, Node.js ${process.version}`,
+            structure: [],
+            isGitRepo: false,
+            currentBranch: '',
+            mainBranch: '',
+            gitStatus: '',
+            recentCommits: [],
+          },
+          memory: null,
+          taste: null,
+          skills: null,
+          params: {
+            model: options.model,
+            messages: await messagesToCC(options.messages, readImage),
+            tools: (options.tools ?? []).map((tool) => ({
+              type: 'function',
+              name: tool.name,
+              description: tool.description,
+              input_schema: tool.parameters,
+            })),
+            system: systemText,
+            max_tokens: maxTokens,
+            temperature: options.temperature ?? 0.3,
+            stream: true,
+            ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+          },
+          threadId: randomUUID(),
+        }
+      }
+      const openAiMessages = [
+        ...(systemText ? [{ role: 'system', content: systemText }] : []),
+        ...(await messagesToOpenAI(options.messages, readImage)),
+      ]
+      const openAiTools = (options.tools ?? []).map((tool) => ({
+        type: 'function',
+        function: {
           name: tool.name,
           description: tool.description,
-          input_schema: tool.parameters,
-        })),
-        system: systemText,
+          parameters: tool.parameters,
+        },
+      }))
+      return {
+        model: options.model,
+        messages: openAiMessages,
+        ...(openAiTools.length > 0 ? { tools: openAiTools } : {}),
         max_tokens: maxTokens,
         temperature: options.temperature ?? 0.3,
         stream: true,
         ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-      },
-      threadId: randomUUID(),
+      }
     }
+    let body: Record<string, unknown> = await buildBody(protocol)
 
     // requestTimeoutMs must only bound the wait for response headers.
     // Passing AbortSignal.timeout() straight into fetch() also aborts a healthy
@@ -1052,11 +1253,14 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     ): Promise<{ response: Response; cleanup: () => void } | { status: number; errText: string; retryAfterMs?: number }> => {
       const connectAbort = new AbortController()
       let connectTimedOut = false
+      const endpoint = protocol === 'cli'
+        ? `${connection.apiBase}/alpha/generate`
+        : `${connection.apiBase}/provider/v1/chat/completions`
       const connectTimer = setTimeout(() => {
         connectTimedOut = true
         connectAbort.abort(
           new DOMException(
-            `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`,
+            `Command Code API request to ${endpoint} did not respond within ${connection.requestTimeoutMs}ms`,
             'TimeoutError',
           ),
         )
@@ -1082,10 +1286,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       }
 
       let response: Response
-      try {
-        response = await this.fetchImpl(`${connection.apiBase}/alpha/generate`, {
-          method: 'POST',
-          headers: {
+      const headers = protocol === 'cli'
+        ? {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${key}`,
             'x-command-code-version': COMMAND_CODE_CLI_VERSION,
@@ -1094,7 +1296,17 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
             'x-taste-learning': 'true',
             'x-co-flag': 'false',
             ...attributionHeaders(),
-          },
+          }
+        : {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+            Accept: 'text/event-stream',
+            ...attributionHeaders(),
+          }
+      try {
+        response = await this.fetchImpl(endpoint, {
+          method: 'POST',
+          headers,
           body: JSON.stringify(body),
           signal: connectAbort.signal,
         })
@@ -1106,7 +1318,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         }
         if (connectTimedOut || (error instanceof DOMException && error.name === 'TimeoutError')) {
           throw new LlmError(
-            `Command Code API request to ${connection.apiBase}/alpha/generate did not respond within ${connection.requestTimeoutMs}ms`
+            `Command Code API request to ${endpoint} did not respond within ${connection.requestTimeoutMs}ms`
             + `: ${errorChain(error)}`
             + `；Command Code API 请求在 ${connection.requestTimeoutMs} 毫秒内未收到响应——通常是网络或代理问题，请检查后重试`,
             'TIMEOUT',
@@ -1119,7 +1331,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         // shown in the web UI (which renders only the message, not `cause`)
         // names the real root cause instead of a generic wrapper.
         throw new LlmError(
-          `Command Code API request to ${connection.apiBase}/alpha/generate failed: ${errorChain(error)}`
+          `Command Code API request to ${endpoint} failed: ${errorChain(error)}`
           + '；Command Code API 请求连接失败——通常是网络或代理问题，请检查网络或代理设置后重试',
           'TRANSPORT',
           { cause: error },
@@ -1149,6 +1361,19 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       if ('response' in attempt) {
         connected = attempt
         break
+      }
+      // Provider API is the preferred surface for non-Go accounts. If the
+      // gateway says the key is on the Go plan (the only plan without API
+      // access), remember that and retry the same key through /alpha/generate
+      // without burning the double TTFT on every later request.
+      if (
+        protocol === 'openai'
+        && isUpgradeRequiredError(attempt.status, attempt.errText)
+      ) {
+        protocol = 'cli'
+        this.rememberProtocol(apiKey, true)
+        body = await buildBody('cli')
+        continue
       }
       const rotate = this.deps.rotateApiKey
       if (
@@ -1230,7 +1455,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       reasoningContent = ''
     }
 
-    const handleEvent = (event: unknown): StreamChunk[] => {
+    const handleCliEvent = (event: unknown): StreamChunk[] => {
       const chunks: StreamChunk[] = []
       if (!isRecord(event)) return chunks
 
@@ -1340,6 +1565,106 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       return chunks
     }
 
+    // OpenAI Chat Completions streams are standard SSE chunks. Reasoning is
+    // delivered in either `reasoning_content` (DeepSeek-style) or the Command
+    // Code Provider API's `reasoning` field; both map to harness reasoning.
+    const openAiToolCalls: Array<{ index: number; id?: string; name: string; arguments: string }> = []
+    const emitOpenAiToolCalls = function* (): Generator<StreamChunk> {
+      for (const call of openAiToolCalls) {
+        const id = call.id ?? randomUUID()
+        const name = call.name ?? ''
+        const args = call.arguments || '{}'
+        const index = nextIndex++
+        sawContent = true
+        yield { type: 'block-start', index, blockType: 'tool-call' }
+        yield { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args }
+        yield {
+          type: 'block-end',
+          index,
+          block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
+        }
+      }
+      openAiToolCalls.length = 0
+    }
+    const handleOpenAIEvent = (event: unknown): StreamChunk[] => {
+      const chunks: StreamChunk[] = []
+      if (!isRecord(event)) return chunks
+      const choices = event.choices
+      if (!Array.isArray(choices) || choices.length === 0) {
+        // A standalone usage chunk (some OpenAI-compatible servers send it
+        // before [DONE]) still carries usage.
+        if (event.usage !== undefined) {
+          chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
+        }
+        return chunks
+      }
+      const choice = isRecord(choices[0]) ? choices[0] : {}
+      const delta = isRecord(choice.delta) ? choice.delta : {}
+
+      const reasoningDelta = stringValue(delta.reasoning) ?? stringValue(delta.reasoning_content) ?? ''
+      if (reasoningDelta !== '') {
+        chunks.push(...closeText())
+        if (reasoningIndex < 0) {
+          reasoningIndex = nextIndex++
+          chunks.push({ type: 'block-start', index: reasoningIndex, blockType: 'reasoning' })
+        }
+        reasoningContent += reasoningDelta
+        chunks.push({ type: 'reasoning-delta', index: reasoningIndex, text: reasoningDelta })
+      }
+
+      const contentDelta = stringValue(delta.content) ?? ''
+      if (contentDelta !== '') {
+        chunks.push(...closeReasoning())
+        if (textIndex < 0) {
+          textIndex = nextIndex++
+          chunks.push({ type: 'block-start', index: textIndex, blockType: 'text' })
+        }
+        textContent += contentDelta
+        sawContent = true
+        chunks.push({ type: 'text-delta', index: textIndex, text: contentDelta })
+      }
+
+      if (Array.isArray(delta.tool_calls)) {
+        sawContent = true
+        for (const rawCall of delta.tool_calls) {
+          if (!isRecord(rawCall)) continue
+          const callIndex = numberValue(rawCall.index) ?? 0
+          let existing = openAiToolCalls.find((call) => call.index === callIndex)
+          const fn = isRecord(rawCall.function) ? rawCall.function : undefined
+          const id = stringValue(rawCall.id)
+          const name = fn === undefined ? undefined : stringValue(fn.name)
+          const argDelta = fn === undefined
+            ? undefined
+            : (stringValue(fn.arguments) ?? (fn.arguments === undefined ? '' : JSON.stringify(fn.arguments)))
+          if (!existing) {
+            existing = {
+              index: callIndex,
+              name: name ?? '',
+              arguments: argDelta ?? '',
+            }
+            if (id !== undefined) existing.id = id
+            openAiToolCalls.push(existing)
+          } else {
+            if (id !== undefined && existing.id === undefined) existing.id = id
+            if (name !== undefined && existing.name === '') existing.name = name
+            if (argDelta !== undefined) existing.arguments += argDelta
+          }
+        }
+      }
+
+      if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
+        chunks.push(...closeText(), ...closeReasoning(), ...emitOpenAiToolCalls())
+        if (event.usage !== undefined) {
+          chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
+        }
+        chunks.push({ type: 'finish', reason: mapOpenAIFinishReason(choice.finish_reason) })
+      }
+      return chunks
+    }
+
+    const handleEvent = (event: unknown): StreamChunk[] =>
+      protocol === 'openai' ? handleOpenAIEvent(event) : handleCliEvent(event)
+
     try {
       let finished = false
       for (;;) {
@@ -1393,6 +1718,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         // terminate according to the adapter contract (usage, then finish).
         yield* closeText()
         yield* closeReasoning()
+        if (protocol === 'openai') yield* emitOpenAiToolCalls()
         if (!sawContent) {
           throw new LlmError('Command Code returned an empty response；Command Code 返回了空响应，重试通常可恢复', 'EMPTY_RESPONSE')
         }
@@ -1488,4 +1814,67 @@ function mapFinishReason(reason: unknown): FinishReason {
     return { kind: 'max-tokens' }
   }
   return { kind: 'stop' }
+}
+
+function mapOpenAIFinishReason(reason: unknown): FinishReason {
+  if (reason === 'tool_calls' || reason === 'tool-calls') return { kind: 'tool-calls' }
+  if (
+    reason === 'length' ||
+    reason === 'max_tokens' ||
+    reason === 'max-tokens' ||
+    reason === 'max_output_tokens'
+  ) {
+    return { kind: 'max-tokens' }
+  }
+  return { kind: 'stop' }
+}
+
+/**
+ * True when a Provider API pre-stream rejection is Command Code's Go-plan
+ * gate (`upgrade_required`). Only this exact class of rejection should fall
+ * back to the CLI /alpha/generate transport; other 4xx/5xx must surface as
+ * ordinary errors so real account/model problems are not masked.
+ */
+function isUpgradeRequiredError(status: number, errText: string): boolean {
+  if (status !== 403) return false
+  const lower = errText.toLowerCase()
+  if (lower.includes('upgrade_required')) return true
+  if (lower.includes('go plan') && lower.includes('api access')) return true
+  if (lower.includes('only plan without api access')) return true
+  if (lower.includes('upgrade to goat or higher')) return true
+  try {
+    const parsed: unknown = JSON.parse(errText)
+    if (isRecord(parsed)) {
+      const error = isRecord(parsed.error) ? parsed.error : parsed
+      const code = stringValue(error.code) ?? stringValue(error.type)
+      if (code?.toLowerCase() === 'upgrade_required') return true
+      const message = stringValue(error.message) ?? ''
+      if (message.toLowerCase().includes('go plan') && message.toLowerCase().includes('api access')) return true
+    }
+  } catch {
+    // Already handled via the plain-text substring checks above.
+  }
+  return false
+}
+
+/** Map an OpenAI Chat Completions usage payload to harness disjoint counts. */
+function mapOpenAIUsage(usage: unknown): TokenUsage {
+  const source = isRecord(usage) ? usage : {}
+  const promptTokens = numberValue(source.prompt_tokens) ?? 0
+  const outputTokens = numberValue(source.completion_tokens) ?? 0
+  const totalTokens = numberValue(source.total_tokens)
+  const promptDetails = isRecord(source.prompt_tokens_details) ? source.prompt_tokens_details : undefined
+  const cacheRead = numberValue(promptDetails?.cached_tokens) ?? 0
+  const cacheWrite = numberValue(promptDetails?.cache_creation_input_tokens) ?? 0
+  const completionDetails = isRecord(source.completion_tokens_details) ? source.completion_tokens_details : undefined
+  const reasoningTokens = numberValue(completionDetails?.reasoning_tokens)
+  const usageOut: TokenUsage = {
+    inputTokens: Math.max(0, promptTokens - cacheRead - cacheWrite),
+    outputTokens,
+    cacheReadTokens: cacheRead,
+  }
+  if (cacheWrite > 0) usageOut.cacheWriteTokens = cacheWrite
+  if (reasoningTokens !== undefined) usageOut.reasoningTokens = reasoningTokens
+  if (totalTokens !== undefined) usageOut.totalTokens = totalTokens
+  return usageOut
 }

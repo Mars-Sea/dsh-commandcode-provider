@@ -151,7 +151,7 @@ When your deployment's dsh shell mounts the web capability (`@deepseek-ai/dsh-we
 - **Image input is model-gated** — only Vision models accept images; text-only models refuse them.
 - Switching to a text-only model in an image-bearing session is rejected by dsh — pick a model marked *`Image`* or remove the images first.
 - **No `stop` sequences** — requests carrying one fail.
-- Reasoning blocks are not replayed into later turns; only tool calls with a paired tool result are replayed.
+- On the legacy `/alpha/generate` transport, reasoning blocks are not replayed into later turns; on the `/provider/v1/chat/completions` transport, historical reasoning is passed back as `reasoning_content` so tool-calling loops can keep their chain of thought. Only tool calls with a paired tool result are replayed on both transports.
 - The model catalog is browsable without a key; chat requests need one.
 
 ## Permissions & privacy

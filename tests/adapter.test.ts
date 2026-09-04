@@ -64,14 +64,18 @@ function fetchReturning(
 }
 
 function makeAdapter(overrides: Partial<CommandCodeAdapterDeps> = {}): CommandCodeAdapter {
+  const options = overrides.options
   return new CommandCodeAdapter({
-    options: () => ({
+    options: options ?? (() => ({
       apiBase: 'https://api.commandcode.ai',
       workingDir: '/tmp/project',
       modelsCachePath: '/tmp/cc-models-cache.json',
       requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
       streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-    }),
+      // Existing adapter tests pin the legacy CLI transport; Provider API
+      // tests opt in by overriding options.protocol.
+      protocol: 'cli' as const,
+    })),
     resolveApiKey: async () => 'user_test_key',
     ...overrides,
   })
@@ -682,6 +686,208 @@ test('stream() maps max-tokens finish reason', async () => {
 })
 
 // ---------------------------------------------------------------------------
+// OpenAI Chat Completions protocol
+// ---------------------------------------------------------------------------
+
+test('openai protocol sends flat body and replays reasoning_content in history', async () => {
+  let capturedUrl: string | undefined
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl = String(input)
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl,
+  })
+  const callId = 'call-1'
+  const messages: Message[] = [
+    userMessage('weather?'),
+    {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'I will look it up.' },
+        { type: 'reasoning', text: 'I need the weather tool.' },
+        { type: 'tool-call', id: callId as never, name: 'get_weather', arguments: '{}' },
+      ],
+      source: { kind: 'model', provider: 'commandcode', model: 'm' },
+    },
+    {
+      role: 'user',
+      content: [{ type: 'tool-result', toolCallId: callId as never, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
+      source: { kind: 'tool', callId: callId as never },
+    },
+  ]
+  await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash', messages }))
+
+  assert.equal(capturedUrl, 'https://api.commandcode.ai/provider/v1/chat/completions')
+  assert.ok(capturedBody)
+  assert.equal(capturedBody.model, 'deepseek/deepseek-v4-flash')
+  const wireMessages = capturedBody.messages as Record<string, unknown>[]
+  const assistant = wireMessages.find((m) => m.role === 'assistant')!
+  assert.equal(assistant.reasoning_content, 'I need the weather tool.')
+  assert.equal(assistant.content, 'I will look it up.')
+  const toolCalls = assistant.tool_calls as { id: string; type: string; function: { name: string; arguments: string } }[]
+  assert.equal(toolCalls.length, 1)
+  assert.equal(toolCalls[0]!.id, callId)
+  assert.equal(toolCalls[0]!.function.name, 'get_weather')
+  assert.equal(toolCalls[0]!.function.arguments, '{}')
+  const tool = wireMessages.find((m) => m.role === 'tool') as { tool_call_id: string; content: string }
+  assert.equal(tool.tool_call_id, callId)
+  assert.equal(tool.content, 'sunny')
+})
+
+test('openai protocol parses reasoning + content SSE into separate blocks', async () => {
+  const sse = [
+    'data: {"choices":[{"delta":{"reasoning":"think"}}]}',
+    'data: {"choices":[{"delta":{"content":"Answer"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":2},"completion_tokens_details":{"reasoning_tokens":3}}}',
+    'data: [DONE]',
+    '',
+  ].join('\n')
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: fetchReturning(200, sse, { 'content-type': 'text/event-stream' }),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+  const reasoningBlocks = chunks.filter((c) => c.type === 'block-start' && (c as { blockType: string }).blockType === 'reasoning')
+  const textBlocks = chunks.filter((c) => c.type === 'block-start' && (c as { blockType: string }).blockType === 'text')
+  assert.equal(reasoningBlocks.length, 1)
+  assert.equal(textBlocks.length, 1)
+  const reasoning = chunks.find((c) => c.type === 'reasoning-delta') as { text: string }
+  assert.equal(reasoning.text, 'think')
+  const text = chunks.find((c) => c.type === 'text-delta') as { text: string }
+  assert.equal(text.text, 'Answer')
+  const usage = chunks.find((c) => c.type === 'usage') as { usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; reasoningTokens?: number } }
+  assert.equal(usage.usage.inputTokens, 8)
+  assert.equal(usage.usage.outputTokens, 5)
+  assert.equal(usage.usage.cacheReadTokens, 2)
+  assert.equal(usage.usage.reasoningTokens, 3)
+  const finish = chunks.find((c) => c.type === 'finish') as { reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'stop')
+})
+
+test('openai protocol assembles streamed tool-call fragments', async () => {
+  const sse = [
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":""}}]}}]}',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\":"}}]}}]}',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"ls\\"}"}}]}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+    'data: [DONE]',
+    '',
+  ].join('\n')
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: fetchReturning(200, sse, { 'content-type': 'text/event-stream' }),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+  const finish = chunks.find((c) => c.type === 'finish') as { reason: { kind: string } }
+  assert.equal(finish.reason.kind, 'tool-calls')
+  const call = chunks.find((c) => c.type === 'block-end' && (c as { block: { type: string } }).block.type === 'tool-call') as {
+    block: { id: string; name: string; arguments: string }
+  }
+  assert.ok(call)
+  assert.equal(call.block.id, 'call_1')
+  assert.equal(call.block.name, 'bash')
+  assert.deepEqual(JSON.parse(call.block.arguments), { command: 'ls' })
+})
+
+test('openai protocol accepts reasoning_content as the reasoning field', async () => {
+  const sse = [
+    'data: {"choices":[{"delta":{"reasoning_content":"standard thinking"}}]}',
+    'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+    'data: [DONE]',
+    '',
+  ].join('\n')
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: fetchReturning(200, sse, { 'content-type': 'text/event-stream' }),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+  const reasoningBlocks = chunks.filter((c) => c.type === 'block-start' && (c as { blockType: string }).blockType === 'reasoning')
+  assert.equal(reasoningBlocks.length, 1)
+  const reasoning = chunks.find((c) => c.type === 'reasoning-delta') as { text: string }
+  assert.equal(reasoning.text, 'standard thinking')
+})
+
+test('auto protocol falls back to CLI on 403 upgrade_required and caches per account', async () => {
+  const calls: string[] = []
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    calls.push(url)
+    if (url.includes('/provider/v1/chat/completions')) {
+      return new Response(JSON.stringify({ error: { code: 'upgrade_required', message: 'Go plan has no API access' } }), {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return new Response('data: {"type":"text-delta","text":"hi"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  const options = () => ({
+    apiBase: 'https://api.commandcode.ai',
+    workingDir: '/tmp/project',
+    modelsCachePath: '/tmp/cc-models-cache.json',
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  })
+  const adapter = new CommandCodeAdapter({
+    options,
+    resolveApiKey: async () => 'user_test_key',
+    fetchImpl,
+  })
+
+  const firstChunks = await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash', messages: [userMessage('hi')] }))
+  assert.ok(firstChunks.some((c) => c.type === 'text-delta'))
+  assert.equal(calls.length, 2)
+  assert.ok(calls[0]!.includes('/provider/v1/chat/completions'))
+  assert.ok(calls[1]!.includes('/alpha/generate'))
+
+  // Second request should go straight to /alpha/generate because the key's
+  // Go-plan rejection is remembered for PROTOCOL_CACHE_TTL_MS.
+  const secondChunks = await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash', messages: [userMessage('hi')] }))
+  assert.ok(secondChunks.some((c) => c.type === 'text-delta'))
+  assert.equal(calls.length, 3)
+  assert.ok(calls[2]!.includes('/alpha/generate'))
+})
+
+// ---------------------------------------------------------------------------
 // HTTP error mapping
 // ---------------------------------------------------------------------------
 
@@ -873,6 +1079,7 @@ test('stream() does not abort a healthy body when elapsed time exceeds requestTi
       modelsCachePath: '/tmp/cc-models-cache.json',
       requestTimeoutMs: 20,
       streamIdleTimeoutMs: 10_000,
+      protocol: 'cli' as const,
     }),
     fetchImpl: (async () => new Response(body, { status: 200 })) as unknown as typeof fetch,
   })
