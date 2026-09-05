@@ -34,19 +34,19 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 Pick the release line that matches your DeepSeek Harness version:
 
-- **dsh 0.1.2-alpha.2 or later** (the current alpha line) — use the matching alpha plugin release. Install explicitly with the `alpha` tag:
-
-  ```sh
-  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@alpha
-  ```
-
-- **Older dsh releases** (the 0.5.0 line and earlier, which use the rc-era Host/browser APIs) — the 0.9.1 plugin keeps working there and stays on the `latest` tag:
+- **dsh 0.1.2-rc.1 or later** (the current 0.1.2 line — what `@latest` installs today):
 
   ```sh
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
   ```
 
-> The `alpha` tag never moves `latest`: a plain `@latest` install always gets the newest stable release for older Harness versions, and upgrading to the alpha line is always an explicit opt-in.
+- **Older dsh releases** (the 0.5.0 line and earlier, which use the rc-era Host/browser APIs) — the last plugin version supporting them is 0.9.1, installed by exact version. That line is no longer under active maintenance:
+
+  ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1
+  ```
+
+> The `latest` tag now always points at the current 0.1.2-line plugin release, so a plain `@latest` install gets the newest stable release for dsh 0.1.2+. Users on the old 0.5.0-era Harness line must pin `@0.9.1` explicitly.
 
 Fresh pnpm 10 marketplace generations are supported directly. Do not add a separate `@deepseek-ai/dsh-invariants` dependency; the plugin declares it as a Host peer so the active dsh profile remains the owner of Harness packages.
 
@@ -55,8 +55,8 @@ Fresh pnpm 10 marketplace generations are supported directly. Do not add a separ
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@alpha      # dsh 0.1.2-alpha.2+
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # older dsh (0.5.0 line)
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.2-rc.1+
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
 Then restart the web app.

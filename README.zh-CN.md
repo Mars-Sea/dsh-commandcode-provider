@@ -32,19 +32,19 @@
 
 按你的 DeepSeek Harness 版本选择对应的发布线：
 
-- **dsh 0.1.2-alpha.2 或更高版本**（当前 alpha 线）——使用配套的 alpha 插件版本，显式用 `alpha` tag 安装：
-
-  ```sh
-  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@alpha
-  ```
-
-- **更早的 dsh 版本**（0.5.0 线及更早，使用 rc 时代的 Host/浏览器 API）——0.9.1 插件在这些版本上继续可用，并保持在 `latest` tag：
+- **dsh 0.1.2-rc.1 或更高版本**（当前 0.1.2 线，即 `@latest` 现在安装的版本）：
 
   ```sh
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
   ```
 
-> `alpha` tag 永远不会移动 `latest`：普通的 `@latest` 安装始终为旧版 dsh 拿到最新的稳定版，升级到 alpha 线永远是显式选择。
+- **更早的 dsh 版本**（0.5.0 线及更早，使用 rc 时代的 Host/浏览器 API）——支持它们的最后一个插件版本是 0.9.1，按精确版本安装。该线不再积极维护：
+
+  ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1
+  ```
+
+> `latest` tag 现在始终指向当前 0.1.2 线的插件版本，普通 `@latest` 安装即可获得 dsh 0.1.2+ 的最新稳定版。旧 0.5.0 时代的 Harness 用户必须显式钉住 `@0.9.1`。
 
 插件可直接在 pnpm 10 的全新插件市场 generation 中安装。不要另行添加 `@deepseek-ai/dsh-invariants` dependency；插件已将其声明为 Host peer，Harness 包仍由当前 dsh profile 统一管理。
 
@@ -53,8 +53,8 @@
 用与安装时相同的 tag 更新：
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@alpha      # dsh 0.1.2-alpha.2 及以上
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # 更早的 dsh（0.5.0 线）
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.2-rc.1 及以上
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 更早的 dsh（0.5.0 线，不再维护）
 ```
 
 然后重启 Web 应用。
