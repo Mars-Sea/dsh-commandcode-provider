@@ -16,7 +16,7 @@
  * (see src/client/index.ts) and class-prefixed `cc-` to stay local.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
@@ -99,7 +99,7 @@ function Field({
         <label className="cc-label" htmlFor={id}>{label}</label>
         <span className="cc-badges">
           {state.overridden ? <span className="cc-badge">{t('overridden')}</span> : null}
-          <button type="button" className="cc-reset" disabled={disabled} onClick={onReset}>{t('reset')}</button>
+          <button type="button" className="cc-reset" disabled={disabled} onClick={onReset} aria-label={`${label} — ${t('reset')}`}>{t('reset')}</button>
         </span>
       </div>
       <input
@@ -161,8 +161,13 @@ function AdvancedSection({
         <span className="cc-advancedTitle">{t('advancedSettings')}</span>
         {overridden > 0 ? (
           <span className="cc-badge">
-            {overridden === 1 ? t('advancedOverriddenOne') : t('advancedOverriddenMany').replace('{count}', String(overridden))}
+            {overridden === 1 ? t('advancedOverriddenOne') : t('advancedOverriddenMany', { count: overridden })}
           </span>
+        ) : null}
+        {/* An invalid number blocks save while collapsed with no visible cue
+            — surface it on the header so the blocker is reachable. */}
+        {!expanded && invalid ? (
+          <span className="cc-badge cc-badgeWarn">{t('advancedInvalid')}</span>
         ) : null}
         <span className="cc-advancedSpacer" />
         <span className={expanded ? 'cc-chevron cc-chevronUp' : 'cc-chevron'} aria-hidden="true" />
@@ -274,10 +279,12 @@ function ToggleField({
   return (
     <div className="cc-field">
       <div className="cc-fieldHead">
-        <label className="cc-label" htmlFor={id}>{label}</label>
+        {/* Plain text (not a second label): the toggle input below already
+            has its accessible name from the wrapping label. */}
+        <span className="cc-label" aria-hidden="true">{label}</span>
         <span className="cc-badges">
           {state.overridden ? <span className="cc-badge">{t('overridden')}</span> : null}
-          <button type="button" className="cc-reset" disabled={disabled} onClick={onReset}>{t('reset')}</button>
+          <button type="button" className="cc-reset" disabled={disabled} onClick={onReset} aria-label={`${label} — ${t('reset')}`}>{t('reset')}</button>
         </span>
       </div>
       <label className="cc-toggleRow">
@@ -405,7 +412,7 @@ function UsageWindow({
         {exceeded ? <span className="cc-usageExceeded">{t('usageExceeded')}</span> : null}
         <span className="cc-usageWindowValue">{cap > 0 ? `${formatMoney(used)} / ${formatMoney(cap)}` : formatMoney(used)}</span>
       </div>
-      <div className="cc-usageBar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)}>
+      <div className="cc-usageBar" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)}>
         <div className={exceeded ? 'cc-usageBarFill cc-usageBarFillWarn' : 'cc-usageBarFill'} style={{ width: `${ratio * 100}%` }} />
       </div>
       {reset !== '' ? <p className="cc-usageWindowReset">{t('usageReset')} {reset}</p> : null}
@@ -548,7 +555,8 @@ function AccountTabDot({ entry }: { entry: CommandCodeAccountUsage }) {
     : entry.mark !== '' || entry.cooldownUntil > 0
       ? 'cc-tabDot cc-tabDotWarn'
       : 'cc-tabDot cc-tabDotOk'
-  return <span className={cls} />
+  // Decorative: the tab's text label already carries the account identity.
+  return <span className={cls} aria-hidden="true" />
 }
 
 /**
@@ -636,14 +644,15 @@ function UsageCard({ t, usage, apiKeyConfigured, removingIds, removableIds, canM
         </p>
       ) : null}
 
+      {/* Plain buttons, not tabs: each switches the visible account panel
+          without a tabpanel/keyboard-tab contract to uphold. */}
       {entries.length > 1 ? (
-        <div className="cc-tabs" role="tablist" aria-label={t('accountsTitle')}>
+        <div className="cc-tabs" aria-label={t('accountsTitle')}>
           {entries.map((entry) => (
             <button
               key={entry.id}
               type="button"
-              role="tab"
-              aria-selected={selected?.id === entry.id}
+              aria-pressed={selected?.id === entry.id}
               className={selected?.id === entry.id ? 'cc-tab cc-tabActive' : 'cc-tab'}
               onClick={() => setSelectedId(entry.id)}
             >

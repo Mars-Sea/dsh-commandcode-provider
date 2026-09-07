@@ -18,6 +18,10 @@ export const PLUGIN_VERSION: string = pkg.version
 /**
  * This package's GitHub releases page, derived from the repository field so
  * the update hint's link target can never drift from the published home.
+ * Tolerates both repository shapes (`{ url }` and the plain string form).
  */
-export const PLUGIN_RELEASES_URL: string =
-  `${pkg.repository.url.replace(/^git\+/, '').replace(/\.git$/, '')}/releases`
+export const PLUGIN_RELEASES_URL: string = (() => {
+  const repo: unknown = (pkg as { repository?: unknown }).repository
+  const url = typeof repo === 'string' ? repo : (repo as { url?: unknown } | undefined)?.url
+  return `${typeof url === 'string' ? url.replace(/^git\+/, '').replace(/\.git$/, '') : 'https://github.com/Mars-Sea/dsh-commandcode-provider'}/releases`
+})()

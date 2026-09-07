@@ -20,6 +20,7 @@
 
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
 import {
+  makeBoundaryValidator,
   makeRemoteDescriptor,
   REMOTE_PACKAGE,
 } from './wire-shared.ts'
@@ -72,13 +73,8 @@ const REASONS: readonly CommandCodeLoginFailureReason[] = [
 
 /** The shared read/validate helpers, prefixed with the login endpoint so
  * rejection messages name the offending boundary. */
-/** Reject one boundary value with a field-naming error. A module-level
- * function declaration (not the factory's destructured arrow) so TypeScript's
- * control-flow analysis recognizes it as never-returning and narrows `state`
- * after the guard below. */
-function reject(field: string): never {
-  throw new TypeError(`commandcode/login result: invalid ${field}`)
-}
+const { reject, record, stringField } =
+  makeBoundaryValidator('commandcode/login result:')
 
 /**
  * Parse one untrusted boundary value into a {@link CommandCodeLoginStatus}.
@@ -86,34 +82,35 @@ function reject(field: string): never {
  * instead of leaking into the page.
  */
 export function parseLoginStatus(value: unknown): CommandCodeLoginStatus {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) reject('status')
-  const source = value as Record<string, unknown>
+  const source = record(value, 'status')
   const state = source.state
-  if (state !== 'idle' && state !== 'waiting' && state !== 'success' && state !== 'failed') {
-    reject('state')
+  // The factory's destructured-arrow `reject` is typed never-returning but
+  // TS narrows it only in the positive branch — assign inside the guard.
+  if (state === 'idle' || state === 'waiting' || state === 'success' || state === 'failed') {
+    const status: CommandCodeLoginStatus = { state }
+    if (source.authUrl !== undefined) {
+      status.authUrl = stringField(source, 'authUrl', 'authUrl')
+    }
+    if (source.userName !== undefined) {
+      status.userName = stringField(source, 'userName', 'userName')
+    }
+    if (source.keyName !== undefined) {
+      status.keyName = stringField(source, 'keyName', 'keyName')
+    }
+    if (source.reason !== undefined) {
+      const reason = source.reason
+      if (typeof reason === 'string' && REASONS.includes(reason as CommandCodeLoginFailureReason)) {
+        status.reason = reason as CommandCodeLoginFailureReason
+      } else {
+        reject('reason')
+      }
+    }
+    if (source.message !== undefined) {
+      status.message = stringField(source, 'message', 'message')
+    }
+    return status
   }
-  const status: CommandCodeLoginStatus = { state }
-  if (source.authUrl !== undefined) {
-    if (typeof source.authUrl !== 'string') reject('authUrl')
-    status.authUrl = source.authUrl
-  }
-  if (source.userName !== undefined) {
-    if (typeof source.userName !== 'string') reject('userName')
-    status.userName = source.userName
-  }
-  if (source.keyName !== undefined) {
-    if (typeof source.keyName !== 'string') reject('keyName')
-    status.keyName = source.keyName
-  }
-  if (source.reason !== undefined) {
-    if (!REASONS.includes(source.reason as CommandCodeLoginFailureReason)) reject('reason')
-    status.reason = source.reason as CommandCodeLoginFailureReason
-  }
-  if (source.message !== undefined) {
-    if (typeof source.message !== 'string') reject('message')
-    status.message = source.message
-  }
-  return status
+  return reject('state')
 }
 
 /** The strict result codec shared by all three login endpoints. */

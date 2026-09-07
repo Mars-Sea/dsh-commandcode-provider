@@ -10,10 +10,10 @@
  *
  * The command is Host-side and has no access to the client's `ctx.locale`;
  * the active locale is resolved through `deps.getLocale()` (supplied by the
- * plugin entry from `Config.lang` and the shell's `LC_ALL`/`LANG`). All
- * user-facing copy lives in `./command-locales.ts`; the dictionaries
- * resolve to identical keys, so a missing or unknown locale falls back to
- * `en` rather than dropping text.
+ * plugin entry from `Config.lang` and the shell's `LC_ALL`/`LANG`, defaulting
+ * to `zh`). All user-facing copy lives in `./command-locales.ts`; a missing
+ * key in one dictionary falls back to the `en` copy rather than dropping
+ * text.
  *
  * @module dsh-commandcode-provider/commands
  */

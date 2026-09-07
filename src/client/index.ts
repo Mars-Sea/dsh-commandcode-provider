@@ -139,7 +139,7 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-usageBar{overflow:hidden;background:var(--dsw-alias-bg-layer-1);border-radius:999px;height:6px}
 .cc-usageBarFill{background:var(--dsw-alias-brand-primary);border-radius:999px;height:100%;transition:width .3s ease}
 .cc-usageBarFillWarn{background:var(--dsw-alias-label-error)}
-.cc-usageWindowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
+@media (prefers-reduced-motion:reduce){.cc-chevron,.cc-toggle,.cc-toggle::after,.cc-usageBarFill{transition:none}}.cc-usageWindowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 .cc-usageMeta{align-items:center;gap:8px;display:flex}
 .cc-accountReport{flex-direction:column;gap:12px;display:flex}
 .cc-tabs{flex-wrap:wrap;gap:6px;display:flex}
@@ -156,6 +156,9 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-usageBlockedTitle{color:var(--dsw-alias-label-error);margin:0;font-size:13px;font-weight:600;line-height:1.5}
 .cc-usageBlockedHint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px;line-height:1.5}
 .cc-version{margin:4px 0 0;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
+/* The Models-page provider panel root: unstyled by design — the row card the
+ * Models page owns supplies the surface, the panel only stacks its controls. */
+.cc-providerCard{flex-direction:column;display:flex}
 /* The update hint rides the footer version line: warning-tinted (with a
  * muted fallback for themes without the alias), quiet until hovered. */
 .cc-versionLink{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-secondary));text-decoration:none}
@@ -164,7 +167,6 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
  * authorization link is the only branded element on it. */
 .cc-loginLink{color:var(--dsw-alias-brand-primary);text-decoration:none;font-size:12px;line-height:1.5}
 .cc-loginLink:hover{text-decoration:underline;text-underline-position:under}
-.cc-loginBusy{color:var(--dsw-alias-label-tertiary)}
 .cc-loginDone{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary))}
 .cc-loginError{color:var(--dsw-alias-label-error)}
 .cc-saved{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));margin:0;font-size:12px;font-weight:500;line-height:1.5}

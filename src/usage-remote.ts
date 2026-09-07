@@ -69,9 +69,18 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
  * The registry method surface this module uses. `Context['typert']` is typed
  * as the read-only `TypertRegistryContract`; contribution registration lives
  * on the concrete registry service, so the cast is spelled out once here.
+ * The contribution is the combined one built below (report + models + login
+ * endpoints), so the type is structural rather than tied to the
+ * single-endpoint `USAGE_HOST_CONTRIBUTION` shape.
  */
 interface TypertContributionRegistry {
-  register(contribution: typeof USAGE_HOST_CONTRIBUTION): () => void | Promise<void>
+  register(contribution: {
+    package: string
+    face: 'host'
+    schemas: unknown[]
+    model: { services: unknown[]; events: unknown[]; objects: unknown[] }
+    invocations: unknown[]
+  }): () => void | Promise<void>
 }
 
 /**

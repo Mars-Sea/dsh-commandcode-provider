@@ -332,6 +332,9 @@ export function apply(ctx: Context, config: Config): void {
   const resolveRef = async (ref: ReturnType<typeof credentialRef>): Promise<string | undefined> => {
     const credentials = ctx.get('credentials')
     if (credentials !== undefined) {
+      // The credentials seam layers the process environment, the
+      // provider-managed store, and `.env` files itself — a miss here is
+      // genuinely unconfigured, not "not in the store".
       const hit = await credentials.resolve(ref)
       return hit?.value
     }

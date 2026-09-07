@@ -431,8 +431,10 @@ export class CommandCodeSettingsController {
       ? snapshot.value.apiKeyEnv
       : DEFAULT_API_KEY_REF
     if (named === this.credentialRef) return
+    // Prune the orphaned OLD ref's cached state (renames only move forward;
+    // the new ref re-describes on the next describeAll).
+    this.credentialStates.delete(this.credentialRef)
     this.credentialRef = named
-    this.credentialStates.delete(named)
   }
 
   /** Subscribe to state projections. @returns the disposer. */
@@ -878,10 +880,10 @@ export class CommandCodeSettingsController {
   }
 
   /**
-   * Fetch the model catalog for the routing-rule editor through the Host
-   * Remote. Runs once at construction; call again (e.g. from the client entry
-   * once the Remote mount lands) to (re)try — a later success clears a prior
-   * failure flag so the editor recovers without a page reload.
+   * Fetch the model catalog for the settings page's model editors through
+   * the Host Remote. Runs once at construction; call again (e.g. from the
+   * client entry once the Remote mount lands) to (re)try — a later success
+   * clears a prior failure flag so the editors recover without a page reload.
    */
   refreshCatalog(): void {
     const models = this.api.models

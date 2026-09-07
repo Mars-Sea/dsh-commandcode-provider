@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **The usage report fetches faster.** `getUsage()` still reads whoami first (the subscriptions query needs its org id) but now fetches usage/credits/subscriptions in parallel instead of serially, and the four endpoint parsers plus the total-failure classifier are module-level functions.
+- **`stream()` internals are now module-level.** The CLI/OpenAI body builders, the pre-stream connect attempt, the block assembler, and both transport event handlers take explicit parameters instead of closing over `stream()` locals — same wire behavior, pinned by the existing 80+ adapter tests. (The two message converters stay separate: their wire shapes are irreconcilable by design.)
+
+### Changed
+
 - **The settings page's model catalog is now unfiltered.** The `commandcode/models` Remote serves the full catalog instead of the plan-filtered picker list, so a routing rule can target a model the picker hides (e.g. route a GOAT-only model to the GOAT account from a Go-plan view). The visible-models filter shares the same full-catalog candidate list. Each entry also carries its plan-tier key so the editor dropdowns can group under tier headings.
 
 ## [0.10.1] - 2026-09-07

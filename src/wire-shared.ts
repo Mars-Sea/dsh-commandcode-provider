@@ -40,7 +40,7 @@ export interface BoundaryValidator {
 }
 
 /**
- * Build the validator helpers one endpoint uses Sequence. `prefix` names the
+ * Build the validator helpers one endpoint uses. `prefix` names the
  * endpoint in the rejection message (e.g. `commandcode/report result:`), so
  * each wire file keeps its own diagnostic phrasing while sharing the helper
  * bodies.

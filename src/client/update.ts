@@ -85,7 +85,12 @@ export function isNewerVersion(candidate: string, current: string): boolean {
 
 /** Split a tolerant version string into numeric core + prerelease ids. */
 function splitVersion(value: string): { core: number[]; pre: string[] } {
-  const [coreText = '', preText] = value.trim().replace(/^v/i, '').split('-')
+  // Split on the FIRST dash only: `1.0.0-alpha-1` has prerelease `alpha-1`,
+  // not `alpha` (a split on every dash would drop the `-1`).
+  const cleaned = value.trim().replace(/^v/i, '')
+  const dash = cleaned.indexOf('-')
+  const coreText = dash < 0 ? cleaned : cleaned.slice(0, dash)
+  const preText = dash < 0 ? undefined : cleaned.slice(dash + 1)
   const core = coreText === ''
     ? [0]
     : coreText.split('.').map((part) => {

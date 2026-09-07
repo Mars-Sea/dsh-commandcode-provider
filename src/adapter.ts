@@ -79,6 +79,12 @@ export const PROTOCOL_CACHE_TTL_MS = 15 * 60_000
 /** Endpoint protocol selected for one generate call. */
 type CommandCodeProtocol = 'cli' | 'openai'
 
+/** The entry-plan tier weight (`individual-go` in KNOWN_SUBSCRIPTION_PLANS). */
+const GO_TIER_WEIGHT = 0
+
+/** Hard cap on account rotations within one request (one attempt per distinct key). */
+const MAX_ACCOUNT_ROTATIONS = 16
+
 /**
  * Subscription statuses the CLI treats as live (`Mr` in command-code's
  * cli.mjs): the plan gate applies only under one of these.
@@ -580,7 +586,7 @@ async function messagesToOpenAI(
 // ---------------------------------------------------------------------------
 /** Connection facts resolved fresh per request by the plugin entry. */
 export interface CommandCodeConnectionOptions {
-  /** API base; the Provider API lives under it (`/alpha/generate`, `/provider/v1/models`). */
+  /** API base; the Provider API lives under it (`/alpha/generate`, `/provider/v1/chat/completions`, `/provider/v1/models`). */
   apiBase: string
   /** Working directory reported to the API (project slug, config block). */
   workingDir: string
@@ -609,10 +615,13 @@ export interface CommandCodeConnectionOptions {
    */
   visibleModels?: string[] | undefined
   /**
-   * Optional protocol override. `'auto'` (default) uses billing/cache plus
-   * Provider API fallback; `'cli'` forces `/alpha/generate`; `'openai'` forces
-   * `/provider/v1/chat/completions`. This is a connection-level test/operator
-   * seam and is intentionally not part of the plugin's user settings schema.
+   * Optional protocol hint. `'auto'` (default) uses billing/cache plus
+   * Provider API fallback; `'cli'` forces `/alpha/generate`; `'openai'`
+   * prefers `/provider/v1/chat/completions` but still falls back to the CLI
+   * transport on `upgrade_required` (Go-plan keys have no Provider API
+   * access — failing outright would strand them). This is a
+   * connection-level test/operator seam and is intentionally not part of
+   * the plugin's user settings schema.
    */
   protocol?: 'auto' | CommandCodeProtocol
 }
@@ -721,19 +730,403 @@ export interface CommandCodeUsageReport {
   blocked?: UsageBlockReason
 }
 
+/**
+ * Parse one usage/summary payload into the report's usage section.
+ * Returns undefined when the endpoint answered nothing usable.
+ */
+function parseUsageTotals(usage: Record<string, unknown> | undefined): CommandCodeUsage | undefined {
+  // Note: `getUsage` always answers `usage` (200 with `{}` parses to zeros)
+  // — undefined here means the endpoint failed or answered non-JSON, which
+  // the caller already booked into `failures`.
+  if (usage === undefined) return undefined
+  return {
+    totalCount: numberValue(usage.totalCount) ?? 0,
+    totalCost: numberValue(usage.totalCost) ?? 0,
+    successRate: numberValue(usage.successRate) ?? 0,
+    completedCount: numberValue(usage.completedCount) ?? 0,
+    failedCount: numberValue(usage.failedCount) ?? 0,
+    totalTokensIn: numberValue(usage.totalTokensIn) ?? 0,
+    totalTokensOut: numberValue(usage.totalTokensOut) ?? 0,
+    totalCredits: numberValue(usage.totalCredits) ?? 0,
+    periodBasis: stringValue(usage.periodBasis) ?? 'billing-period',
+  }
+}
+
+/** Parse one window-limit block (`fiveHour` / `weekly`). */
+function parseWindowLimit(value: unknown): CommandCodeCredits['fiveHour'] {
+  const block = isRecord(value) ? value : undefined
+  return {
+    used: numberValue(block?.used) ?? 0,
+    cap: numberValue(block?.cap) ?? 0,
+    exceeded: block?.exceeded === true,
+    resetAt: numberValue(block?.resetAt) ?? 0,
+  }
+}
+
+/**
+ * Parse one billing/credits payload into the report's credits section.
+ * Returns undefined when the endpoint answered nothing usable.
+ */
+function parseCreditLimits(credits: Record<string, unknown> | undefined): CommandCodeCredits | undefined {
+  if (credits === undefined) return undefined
+  const creditsData = isRecord(credits.credits) ? credits.credits : undefined
+  const windowLimits = isRecord(credits.windowLimits) ? credits.windowLimits : undefined
+  const fiveHour = windowLimits !== undefined && isRecord(windowLimits.fiveHour) ? windowLimits.fiveHour : undefined
+  const weekly = windowLimits !== undefined && isRecord(windowLimits.weekly) ? windowLimits.weekly : undefined
+  if (creditsData === undefined && fiveHour === undefined && weekly === undefined) return undefined
+  return {
+    monthlyCredits: numberValue(creditsData?.monthlyCredits) ?? 0,
+    purchasedCredits: numberValue(creditsData?.purchasedCredits) ?? 0,
+    freeCredits: numberValue(creditsData?.freeCredits) ?? 0,
+    fiveHour: parseWindowLimit(fiveHour),
+    weekly: parseWindowLimit(weekly),
+  }
+}
+
+/**
+ * Parse the account identity from whoami plus the plan identity from the
+ * subscriptions/credits payloads. Returns the org id for the subscriptions
+ * query alongside, so getUsage fetches whoami first and the rest in parallel.
+ */
+function parseAccountIdentity(whoami: Record<string, unknown> | undefined): {
+  account: CommandCodeAccount | undefined
+  orgId: string | undefined
+} {
+  const whoamiData = whoami !== undefined && isRecord(whoami.user) ? whoami.user : undefined
+  const orgData = whoami !== undefined && isRecord(whoami.org) ? whoami.org : undefined
+  return {
+    account: whoamiData === undefined ? undefined : {
+      id: stringValue(whoamiData.id) ?? '',
+      name: stringValue(whoamiData.name) ?? '',
+      userName: stringValue(whoamiData.userName) ?? '',
+    },
+    orgId: orgData === undefined ? undefined : stringValue(orgData.id),
+  }
+}
+
+/**
+ * Classify a TOTAL failure: when every endpoint failed with one class of
+ * error, the degraded per-endpoint view would hide the root cause behind
+ * a generic "partial data" note — name it instead.
+ */
+function classifyTotalFailure(
+  failures: readonly string[],
+  failedStatuses: ReadonlyArray<number | undefined>,
+): UsageBlockReason | undefined {
+  // Four endpoints are fetched (whoami, usage/summary, billing/credits,
+  // billing/subscriptions; the last may carry an orgId query, so the
+  // classification counts endpoints, not paths).
+  if (failures.length !== USAGE_ENDPOINT_COUNT) return undefined
+  const codes = failedStatuses.filter((status): status is number => status !== undefined)
+  if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code === 401)) {
+    return 'invalid-key'
+  }
+  if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code >= 500)) {
+    return 'service-unavailable'
+  }
+  if (codes.length === 0) return 'network'
+  return undefined
+}
+
+/**
+ * The shared facts one generate call needs, computed once up front so the
+ * body builders, the connect loop, and the stream pump below all read the
+ * same snapshot instead of closing over `stream()` locals.
+ */
+interface GenerateCallFacts {
+  /** Resolved API key for the first attempt (rotation may replace it). */
+  apiKey: string
+  /** maxTokens cap for the request model (in-memory catalog, else default). */
+  maxTokens: number
+  /** Validated reasoning effort, or undefined when unset/unsupported. */
+  reasoningEffort: string | undefined
+  /** Folded system text (top-level system + system-role messages). */
+  systemText: string
+  /** Per-call image byte resolver; set only when the request carries images. */
+  readImage: ((ref: ImageAttachmentRef) => Promise<Uint8Array>) | undefined
+}
+
+/** Build the legacy CLI (`/alpha/generate`) request body for one call. */
+async function buildCliBody(
+  options: GenerateOptions,
+  connection: CommandCodeConnectionOptions,
+  facts: Pick<GenerateCallFacts, 'maxTokens' | 'reasoningEffort' | 'systemText' | 'readImage'>,
+): Promise<Record<string, unknown>> {
+  return {
+    config: {
+      workingDir: connection.workingDir,
+      date: new Date().toISOString().split('T')[0],
+      environment: `${process.platform}-${process.arch}, Node.js ${process.version}`,
+      structure: [],
+      isGitRepo: false,
+      currentBranch: '',
+      mainBranch: '',
+      gitStatus: '',
+      recentCommits: [],
+    },
+    memory: null,
+    taste: null,
+    skills: null,
+    params: {
+      model: options.model,
+      messages: await messagesToCC(options.messages, facts.readImage),
+      tools: (options.tools ?? []).map((tool) => ({
+        type: 'function',
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.parameters,
+      })),
+      system: facts.systemText,
+      max_tokens: facts.maxTokens,
+      temperature: options.temperature ?? 0.3,
+      stream: true,
+      ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
+    },
+    threadId: randomUUID(),
+  }
+}
+
+/** Build the documented Provider Chat Completions request body for one call. */
+async function buildOpenAIBody(
+  options: GenerateOptions,
+  facts: Pick<GenerateCallFacts, 'maxTokens' | 'reasoningEffort' | 'systemText' | 'readImage'>,
+): Promise<Record<string, unknown>> {
+  const openAiMessages = [
+    ...(facts.systemText ? [{ role: 'system', content: facts.systemText }] : []),
+    ...(await messagesToOpenAI(options.messages, facts.readImage)),
+  ]
+  const openAiTools = (options.tools ?? []).map((tool) => ({
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }))
+  return {
+    model: options.model,
+    messages: openAiMessages,
+    ...(openAiTools.length > 0 ? { tools: openAiTools } : {}),
+    max_tokens: facts.maxTokens,
+    temperature: options.temperature ?? 0.3,
+    stream: true,
+    ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
+  }
+}
+
+/**
+ * One connect attempt's inputs: everything `connectGenerate` needs beyond
+ * the per-attempt key and protocol. Passed explicitly (not closed over) so
+ * the rotation loop's mutation of `protocol`/`body` stays visible at the
+ * call site.
+ */
+interface GenerateConnectDeps {
+  options: GenerateOptions
+  connection: CommandCodeConnectionOptions
+  fetchImpl: typeof fetch
+}
+
+/**
+ * One pre-stream connect attempt: POST the body and wait for response
+ * headers only (`requestTimeoutMs` must never bound the body stream — see
+ * the caller). Returns the live response plus its cleanup, or the rejection
+ * facts for the rotation loop to classify. Every failure path cleans up
+ * before returning or throwing; on success the caller-abort listener
+ * outlives the connect phase (it aborts a stalled body read), so the
+ * streaming tail calls cleanup.
+ */
+async function connectGenerate(
+  deps: GenerateConnectDeps,
+  key: string,
+  protocol: CommandCodeProtocol,
+  body: Record<string, unknown>,
+): Promise<{ response: Response; cleanup: () => void } | { status: number; errText: string; retryAfterMs?: number }> {
+  const { options, connection, fetchImpl } = deps
+  const connectAbort = new AbortController()
+  let connectTimedOut = false
+  const endpoint = protocol === 'cli'
+    ? `${connection.apiBase}/alpha/generate`
+    : `${connection.apiBase}/provider/v1/chat/completions`
+  const connectTimer = setTimeout(() => {
+    connectTimedOut = true
+    connectAbort.abort(
+      new DOMException(
+        `Command Code API request to ${endpoint} did not respond within ${connection.requestTimeoutMs}ms`,
+        'TimeoutError',
+      ),
+    )
+  }, connection.requestTimeoutMs)
+  const onCallerAbort = () => {
+    connectAbort.abort(options.signal?.reason)
+  }
+  if (options.signal) {
+    if (options.signal.aborted) {
+      onCallerAbort()
+    } else {
+      options.signal.addEventListener('abort', onCallerAbort, { once: true })
+    }
+  }
+  const cleanup = () => {
+    clearTimeout(connectTimer)
+    if (options.signal) {
+      options.signal.removeEventListener('abort', onCallerAbort)
+    }
+  }
+
+  let response: Response
+  const headers = protocol === 'cli'
+    ? {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+        'x-command-code-version': COMMAND_CODE_CLI_VERSION,
+        'x-cli-environment': 'production',
+        'x-project-slug': projectSlugFromPath(connection.workingDir),
+        'x-taste-learning': 'true',
+        'x-co-flag': 'false',
+        ...attributionHeaders(),
+      }
+    : {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+        Accept: 'text/event-stream',
+        // Deliberately no x-command-code-version / x-cli-environment:
+        // this is the documented OpenAI-format surface, not the CLI
+        // transport — do not "fix" these in.
+        ...attributionHeaders(),
+      }
+  try {
+    response = await fetchImpl(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: connectAbort.signal,
+    })
+    clearTimeout(connectTimer)
+  } catch (error: unknown) {
+    cleanup()
+    if (options.signal?.aborted) {
+      throw error
+    }
+    if (connectTimedOut || (error instanceof DOMException && error.name === 'TimeoutError')) {
+      throw new LlmError(
+        `Command Code API request to ${endpoint} did not respond within ${connection.requestTimeoutMs}ms`
+        + `: ${errorChain(error)}`
+        + `；Command Code API 请求在 ${connection.requestTimeoutMs} 毫秒内未收到响应——通常是网络或代理问题，请检查后重试`,
+        'TIMEOUT',
+        { cause: error },
+      )
+    }
+    // fetch wraps every transport failure (DNS, refused connection, TLS,
+    // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
+    // detail lives on `cause`. Include the full chain so the failure reason
+    // shown in the web UI (which renders only the message, not `cause`)
+    // names the real root cause instead of a generic wrapper.
+    throw new LlmError(
+      `Command Code API request to ${endpoint} failed: ${errorChain(error)}`
+      + '；Command Code API 请求连接失败——通常是网络或代理问题，请检查网络或代理设置后重试',
+      'TRANSPORT',
+      { cause: error },
+    )
+  }
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '')
+    cleanup()
+    const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
+    // exactOptionalPropertyTypes: the key must be absent, not undefined.
+    return retryAfterMs === undefined
+      ? { status: response.status, errText }
+      : { status: response.status, errText, retryAfterMs }
+  }
+  return { response, cleanup }
+}
+
+/**
+ * The StreamChunk block-assembly state shared by both transport handlers:
+ * at most one text block and one reasoning block are open at a time (same
+ * assumption as the pi plugin).
+ */
+interface BlockAssembler {
+  nextIndex: number
+  textIndex: number
+  textContent: string
+  reasoningIndex: number
+  reasoningContent: string
+  sawContent: boolean
+  /** Buffered OpenAI tool-call fragments, flushed at finish. */
+  openAiToolCalls: Array<{ index: number; id?: string; name: string; arguments: string }>
+}
+
+/** Fresh block-assembly state for one stream. */
+function createBlockAssembler(): BlockAssembler {
+  return {
+    nextIndex: 0,
+    textIndex: -1,
+    textContent: '',
+    reasoningIndex: -1,
+    reasoningContent: '',
+    sawContent: false,
+    openAiToolCalls: [],
+  }
+}
+
+function* closeText(asm: BlockAssembler): Generator<StreamChunk> {
+  if (asm.textIndex < 0) return
+  yield {
+    type: 'block-end',
+    index: asm.textIndex,
+    block: { type: 'text', text: asm.textContent },
+  }
+  asm.textIndex = -1
+  asm.textContent = ''
+}
+
+function* closeReasoning(asm: BlockAssembler): Generator<StreamChunk> {
+  if (asm.reasoningIndex < 0) return
+  yield {
+    type: 'block-end',
+    index: asm.reasoningIndex,
+    block: { type: 'reasoning', text: asm.reasoningContent },
+  }
+  asm.reasoningIndex = -1
+  asm.reasoningContent = ''
+}
+
+function* emitOpenAiToolCalls(asm: BlockAssembler): Generator<StreamChunk> {
+  for (const call of asm.openAiToolCalls) {
+    const id = call.id ?? randomUUID()
+    const name = call.name ?? ''
+    const args = call.arguments || '{}'
+    const index = asm.nextIndex++
+    asm.sawContent = true
+    yield { type: 'block-start', index, blockType: 'tool-call' }
+    yield { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args }
+    yield {
+      type: 'block-end',
+      index,
+      block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
+    }
+  }
+  asm.openAiToolCalls.length = 0
+}
+
 export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private catalog: CommandCodeModel[] = []
   private readonly fetchImpl: typeof fetch
   private readonly resolveAttachments: ResolveAttachments | undefined
   // Billing facts are per account: with a multi-account pool each key has its
   // own subscription tier, so the cache and the in-flight dedupe are keyed by
-  // the resolved API key (process-local only, never logged).
+  // the resolved API key (process-local only, never logged). Entries are
+  // small and bounded by the account count in practice; a changed key simply
+  // starts a fresh entry while the orphaned one goes cold (no eviction —
+  // transience is intentional, persistence would serve stale tiers).
   private readonly billingAccess = new Map<string, { value: CommandCodeBillingAccess | undefined; at: number }>()
   private readonly billingAccessInflight = new Map<string, Promise<CommandCodeBillingAccess | undefined>>()
   // Protocol preference is per account: the Go plan is the only plan without
   // Provider API access, and that fact is independent of model. A negative
   // result (provider API rejected this key with upgrade_required) is cached so
   // every request does not pay the double TTFT of probing then falling back.
+  // Same bounded-by-account-count note as above: no eviction by design.
   private readonly protocolCache = new Map<string, { useCli: boolean; at: number }>()
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
@@ -900,6 +1293,27 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /**
+   * Fetch one account endpoint and parse its JSON body. Returns the HTTP
+   * status alongside the parsed record so each caller applies its own
+   * failure accounting: the billing probe fails open silently, the usage
+   * report books failures per endpoint. Non-2xx and non-record bodies come
+   * back without a record; only a transport throw propagates to the caller.
+   */
+  private async fetchEndpointJson(
+    url: string,
+    headers: Record<string, string>,
+  ): Promise<{ status: number; record?: Record<string, unknown> }> {
+    const response = await this.fetchImpl(url, {
+      headers,
+      // A hung account endpoint must not stall the picker / usage card forever.
+      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+    })
+    if (!response.ok) return { status: response.status }
+    const parsed: unknown = await response.json()
+    return { status: response.status, ...(isRecord(parsed) ? { record: parsed } : {}) }
+  }
+
+  /**
    * The billing facts behind the picker's plan filter, cached for
    * {@link BILLING_ACCESS_TTL_MS} and shared across concurrent callers.
    * `undefined` means "unknown — show everything" (fail-open).
@@ -941,16 +1355,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       const connection = this.deps.options()
       const headers = await this.accountHeaders(apiKey)
       const base = connection.apiBase
-      const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
-        const response = await this.fetchImpl(`${base}${path}`, {
-          headers,
-          // A hung billing connection must not stall the picker forever.
-          signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
-        })
-        if (!response.ok) return undefined
-        const parsed: unknown = await response.json()
-        return isRecord(parsed) ? parsed : undefined
-      }
+      // Billing probe fails open silently: any non-record is "unknown".
+      const getJson = async (path: string): Promise<Record<string, unknown> | undefined> =>
+        (await this.fetchEndpointJson(`${base}${path}`, headers)).record
       const whoami = await getJson('/alpha/whoami')
       const orgData = whoami && isRecord(whoami.org) ? whoami.org : undefined
       const orgId = orgData === undefined ? undefined : stringValue(orgData.id)
@@ -1008,12 +1415,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     if (forced === 'cli' || forced === 'openai') return forced
     const cached = this.cachedProtocolUseCli(apiKey)
     if (cached !== undefined) return cached ? 'cli' : 'openai'
-    if (this.cachedBillingTierWeight(apiKey) === 0) {
+    if (this.cachedBillingTierWeight(apiKey) === GO_TIER_WEIGHT) {
       this.rememberProtocol(apiKey, true)
       return 'cli'
     }
     return 'openai'
   }
+
 
   /**
    * Fetch account, usage, credit, and subscription state from the Command
@@ -1036,19 +1444,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
       try {
-        const response = await this.fetchImpl(`${base}${path}`, {
-          headers,
-          // A hung account endpoint degrades into `failures` instead of
-          // stalling the usage card / command forever.
-          signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
-        })
-        if (!response.ok) {
-          failures.push(`${path}: HTTP ${response.status}`)
-          failedStatuses.push(response.status)
+        const { status, record } = await this.fetchEndpointJson(`${base}${path}`, headers)
+        if (record === undefined) {
+          failures.push(`${path}: HTTP ${status}`)
+          failedStatuses.push(status)
           return undefined
         }
-        const parsed: unknown = await response.json()
-        return isRecord(parsed) ? parsed : undefined
+        return record
       } catch (error: unknown) {
         failures.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
         failedStatuses.push(undefined)
@@ -1058,69 +1460,33 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     const report: CommandCodeUsageReport = { failures }
 
-    // whoami -> account identity (+ org id for the billing endpoints).
+    // whoami first (account identity + the org id the subscriptions query
+    // needs); the other three endpoints are independent once headers exist,
+    // so they run in parallel instead of paying 4x the timeout serially.
     const whoami = await getJson('/alpha/whoami')
-    const whoamiData = whoami && isRecord(whoami.user) ? whoami.user : undefined
-    if (whoamiData) {
-      report.account = {
-        id: stringValue(whoamiData.id) ?? '',
-        name: stringValue(whoamiData.name) ?? '',
-        userName: stringValue(whoamiData.userName) ?? '',
-      }
-    }
-    const orgData = whoami && isRecord(whoami.org) ? whoami.org : undefined
-    const orgId = orgData === undefined ? undefined : stringValue(orgData.id)
+    const { account, orgId } = parseAccountIdentity(whoami)
+    if (account !== undefined) report.account = account
+    const [usage, credits, subscription] = await Promise.all([
+      getJson('/alpha/usage/summary'),
+      getJson('/alpha/billing/credits'),
+      getJson(orgId === undefined
+        ? '/alpha/billing/subscriptions'
+        : `/alpha/billing/subscriptions?orgId=${encodeURIComponent(orgId)}`),
+    ])
 
     // usage/summary -> totals.
-    const usage = await getJson('/alpha/usage/summary')
-    if (usage) {
-      report.usage = {
-        totalCount: numberValue(usage.totalCount) ?? 0,
-        totalCost: numberValue(usage.totalCost) ?? 0,
-        successRate: numberValue(usage.successRate) ?? 0,
-        completedCount: numberValue(usage.completedCount) ?? 0,
-        failedCount: numberValue(usage.failedCount) ?? 0,
-        totalTokensIn: numberValue(usage.totalTokensIn) ?? 0,
-        totalTokensOut: numberValue(usage.totalTokensOut) ?? 0,
-        totalCredits: numberValue(usage.totalCredits) ?? 0,
-        periodBasis: stringValue(usage.periodBasis) ?? 'billing-period',
-      }
-    }
+    const totals = parseUsageTotals(usage)
+    if (totals !== undefined) report.usage = totals
 
     // billing/credits -> credit + window limits.
-    const credits = await getJson('/alpha/billing/credits')
-    const creditsData = credits && isRecord(credits.credits) ? credits.credits : undefined
-    const windowLimits = credits && isRecord(credits.windowLimits) ? credits.windowLimits : undefined
-    const fiveHour = windowLimits && isRecord(windowLimits.fiveHour) ? windowLimits.fiveHour : undefined
-    const weekly = windowLimits && isRecord(windowLimits.weekly) ? windowLimits.weekly : undefined
-    if (creditsData || fiveHour || weekly) {
-      report.credits = {
-        monthlyCredits: numberValue(creditsData?.monthlyCredits) ?? 0,
-        purchasedCredits: numberValue(creditsData?.purchasedCredits) ?? 0,
-        freeCredits: numberValue(creditsData?.freeCredits) ?? 0,
-        fiveHour: {
-          used: numberValue(fiveHour?.used) ?? 0,
-          cap: numberValue(fiveHour?.cap) ?? 0,
-          exceeded: fiveHour?.exceeded === true,
-          resetAt: numberValue(fiveHour?.resetAt) ?? 0,
-        },
-        weekly: {
-          used: numberValue(weekly?.used) ?? 0,
-          cap: numberValue(weekly?.cap) ?? 0,
-          exceeded: weekly?.exceeded === true,
-          resetAt: numberValue(weekly?.resetAt) ?? 0,
-        },
-      }
-    }
+    const limits = parseCreditLimits(credits)
+    if (limits !== undefined) report.credits = limits
 
     // billing/subscriptions -> plan identity + billing period. The credits
     // response may also carry a planId; it is the fallback when the
-    // subscriptions endpoint fails. Mirrors the CLI: orgId rides as a query
-    // param when whoami reported one.
-    const subscription = await getJson(orgId === undefined
-      ? '/alpha/billing/subscriptions'
-      : `/alpha/billing/subscriptions?orgId=${encodeURIComponent(orgId)}`)
-    const subData = subscription && isRecord(subscription.data) ? subscription.data : undefined
+    // subscriptions endpoint fails.
+    const subData = subscription !== undefined && isRecord(subscription.data) ? subscription.data : undefined
+    const creditsData = credits !== undefined && isRecord(credits.credits) ? credits.credits : undefined
     const planId = stringValue(subData?.planId) ?? stringValue(creditsData?.planId)
     if (subData !== undefined || planId !== undefined) {
       const info = planId === undefined ? undefined : subscriptionPlanInfo(planId)
@@ -1133,21 +1499,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       }
     }
 
-    // Classify a TOTAL failure: when every endpoint failed with one class of
-    // error, the degraded per-endpoint view would hide the root cause behind
-    // a generic "partial data" note — name it instead. Four endpoints are
-    // fetched (whoami, usage/summary, billing/credits, billing/subscriptions;
-    // the last may carry an orgId query, so classification counts, not paths).
-    if (failures.length === USAGE_ENDPOINT_COUNT) {
-      const codes = failedStatuses.filter((status): status is number => status !== undefined)
-      if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code === 401)) {
-        report.blocked = 'invalid-key'
-      } else if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code >= 500)) {
-        report.blocked = 'service-unavailable'
-      } else if (codes.length === 0) {
-        report.blocked = 'network'
-      }
-    }
+    const blocked = classifyTotalFailure(failures, failedStatuses)
+    if (blocked !== undefined) report.blocked = blocked
 
     return report
   }
@@ -1219,8 +1572,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // The model id reaches key resolution so hosts with model→account routing
     // rules can pick the account that covers this model.
     let apiKey = await this.deps.resolveApiKey(connection, options.model)
-    const entry = this.catalog.find((m) => m.id === options.model)
-    const modelMax = entry?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+    // Cap maxTokens from the in-memory catalog: it warms via listModels /
+    // resolveModel on picker paths, and a fresh-process catalog must not add
+    // a models fetch (and its failure modes) in front of every generate.
+    const modelMax = this.catalog.find((m) => m.id === options.model)?.maxTokens
+      ?? DEFAULT_MAX_OUTPUT_TOKENS
     const maxTokens = Math.min(
       options.maxTokens ?? modelMax,
       modelMax,
@@ -1244,185 +1600,25 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // Endpoint protocol: billing/cache may know Go plan -> CLI; unknown
     // accounts default to the documented Provider Chat Completions surface.
     let protocol: CommandCodeProtocol = this.resolveProtocol(apiKey)
-    const buildBody = async (target: CommandCodeProtocol): Promise<Record<string, unknown>> => {
-      if (target === 'cli') {
-        return {
-          config: {
-            workingDir: connection.workingDir,
-            date: new Date().toISOString().split('T')[0],
-            environment: `${process.platform}-${process.arch}, Node.js ${process.version}`,
-            structure: [],
-            isGitRepo: false,
-            currentBranch: '',
-            mainBranch: '',
-            gitStatus: '',
-            recentCommits: [],
-          },
-          memory: null,
-          taste: null,
-          skills: null,
-          params: {
-            model: options.model,
-            messages: await messagesToCC(options.messages, readImage),
-            tools: (options.tools ?? []).map((tool) => ({
-              type: 'function',
-              name: tool.name,
-              description: tool.description,
-              input_schema: tool.parameters,
-            })),
-            system: systemText,
-            max_tokens: maxTokens,
-            temperature: options.temperature ?? 0.3,
-            stream: true,
-            ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-          },
-          threadId: randomUUID(),
-        }
-      }
-      const openAiMessages = [
-        ...(systemText ? [{ role: 'system', content: systemText }] : []),
-        ...(await messagesToOpenAI(options.messages, readImage)),
-      ]
-      const openAiTools = (options.tools ?? []).map((tool) => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-        },
-      }))
-      return {
-        model: options.model,
-        messages: openAiMessages,
-        ...(openAiTools.length > 0 ? { tools: openAiTools } : {}),
-        max_tokens: maxTokens,
-        temperature: options.temperature ?? 0.3,
-        stream: true,
-        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-      }
-    }
+    const buildBody = async (target: CommandCodeProtocol): Promise<Record<string, unknown>> =>
+      target === 'cli'
+        ? buildCliBody(options, connection, { maxTokens, reasoningEffort, systemText, readImage })
+        : buildOpenAIBody(options, { maxTokens, reasoningEffort, systemText, readImage })
     let body: Record<string, unknown> = await buildBody(protocol)
 
-    // requestTimeoutMs must only bound the wait for response headers.
-    // Passing AbortSignal.timeout() straight into fetch() also aborts a healthy
-    // body after that duration, which cuts long reasoning/generation mid-stream
-    // and surfaces as "failed while reading: aborted due to timeout". After
-    // headers arrive, only the caller signal and streamIdleTimeoutMs may abort.
-    //
-    // One connect attempt per account key: a pre-stream 429/401 hands the key
-    // to the multi-account rotation hook (when the host wired one) and retries
-    // with the next account — the request body is account-independent and
-    // nothing has streamed yet, so the switch is invisible to the caller.
-    const connect = async (
-      key: string,
-    ): Promise<{ response: Response; cleanup: () => void } | { status: number; errText: string; retryAfterMs?: number }> => {
-      const connectAbort = new AbortController()
-      let connectTimedOut = false
-      const endpoint = protocol === 'cli'
-        ? `${connection.apiBase}/alpha/generate`
-        : `${connection.apiBase}/provider/v1/chat/completions`
-      const connectTimer = setTimeout(() => {
-        connectTimedOut = true
-        connectAbort.abort(
-          new DOMException(
-            `Command Code API request to ${endpoint} did not respond within ${connection.requestTimeoutMs}ms`,
-            'TimeoutError',
-          ),
-        )
-      }, connection.requestTimeoutMs)
-      const onCallerAbort = () => {
-        connectAbort.abort(options.signal?.reason)
-      }
-      if (options.signal) {
-        if (options.signal.aborted) {
-          onCallerAbort()
-        } else {
-          options.signal.addEventListener('abort', onCallerAbort, { once: true })
-        }
-      }
-      // On success the caller-abort listener must outlive the connect phase
-      // (it aborts a stalled body read), so the streaming tail calls cleanup;
-      // every failure path cleans up before returning or throwing.
-      const cleanup = () => {
-        clearTimeout(connectTimer)
-        if (options.signal) {
-          options.signal.removeEventListener('abort', onCallerAbort)
-        }
-      }
-
-      let response: Response
-      const headers = protocol === 'cli'
-        ? {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${key}`,
-            'x-command-code-version': COMMAND_CODE_CLI_VERSION,
-            'x-cli-environment': 'production',
-            'x-project-slug': projectSlugFromPath(connection.workingDir),
-            'x-taste-learning': 'true',
-            'x-co-flag': 'false',
-            ...attributionHeaders(),
-          }
-        : {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${key}`,
-            Accept: 'text/event-stream',
-            ...attributionHeaders(),
-          }
-      try {
-        response = await this.fetchImpl(endpoint, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: connectAbort.signal,
-        })
-        clearTimeout(connectTimer)
-      } catch (error: unknown) {
-        cleanup()
-        if (options.signal?.aborted) {
-          throw error
-        }
-        if (connectTimedOut || (error instanceof DOMException && error.name === 'TimeoutError')) {
-          throw new LlmError(
-            `Command Code API request to ${endpoint} did not respond within ${connection.requestTimeoutMs}ms`
-            + `: ${errorChain(error)}`
-            + `；Command Code API 请求在 ${connection.requestTimeoutMs} 毫秒内未收到响应——通常是网络或代理问题，请检查后重试`,
-            'TIMEOUT',
-            { cause: error },
-          )
-        }
-        // fetch wraps every transport failure (DNS, refused connection, TLS,
-        // proxy, reset) in a bare `TypeError: fetch failed` whose actionable
-        // detail lives on `cause`. Include the full chain so the failure reason
-        // shown in the web UI (which renders only the message, not `cause`)
-        // names the real root cause instead of a generic wrapper.
-        throw new LlmError(
-          `Command Code API request to ${endpoint} failed: ${errorChain(error)}`
-          + '；Command Code API 请求连接失败——通常是网络或代理问题，请检查网络或代理设置后重试',
-          'TRANSPORT',
-          { cause: error },
-        )
-      }
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '')
-        cleanup()
-        const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
-        // exactOptionalPropertyTypes: the key must be absent, not undefined.
-        return retryAfterMs === undefined
-          ? { status: response.status, errText }
-          : { status: response.status, errText, retryAfterMs }
-      }
-      return { response, cleanup }
-    }
 
     // Account rotation loop: the first attempt uses the pool's active key; a
     // pre-stream 429/401 rotates to the next account (at most one attempt per
     // distinct key, hard-capped so a misbehaving hook cannot loop forever).
+    // requestTimeoutMs bounds the headers wait of EACH attempt (see
+    // connectGenerate); the body is account-independent, nothing has
+    // streamed yet, so the switch is invisible to the caller.
     const tried = new Set<string>()
+    const connectDeps: GenerateConnectDeps = { options, connection, fetchImpl: this.fetchImpl }
     let connected: { response: Response; cleanup: () => void } | undefined
     for (;;) {
       tried.add(apiKey)
-      const attempt = await connect(apiKey)
+      const attempt = await connectGenerate(connectDeps, apiKey, protocol, body)
       if ('response' in attempt) {
         connected = attempt
         break
@@ -1454,6 +1650,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         }
       }
       throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs)
+    }
+    if (connected === undefined) {
+      // Unreachable: the loop only exits via `break` (connected set) or
+      // `throw` above. The guard keeps the narrowing explicit.
+      throw new LlmError('Command Code API connection failed without a response', 'TRANSPORT')
     }
     const { response, cleanup } = connected
     if (!response.body) {
@@ -1490,246 +1691,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       }
     }
 
-    // Block assembly state: at most one text block and one reasoning block
-    // are open at a time (same assumption as the pi plugin).
-    let nextIndex = 0
-    let textIndex = -1
-    let textContent = ''
-    let reasoningIndex = -1
-    let reasoningContent = ''
-    let sawContent = false
-
-    const closeText = function* (): Generator<StreamChunk> {
-      if (textIndex < 0) return
-      yield {
-        type: 'block-end',
-        index: textIndex,
-        block: { type: 'text', text: textContent },
-      }
-      textIndex = -1
-      textContent = ''
-    }
-    const closeReasoning = function* (): Generator<StreamChunk> {
-      if (reasoningIndex < 0) return
-      yield {
-        type: 'block-end',
-        index: reasoningIndex,
-        block: { type: 'reasoning', text: reasoningContent },
-      }
-      reasoningIndex = -1
-      reasoningContent = ''
-    }
-
-    const handleCliEvent = (event: unknown): StreamChunk[] => {
-      const chunks: StreamChunk[] = []
-      if (!isRecord(event)) return chunks
-
-      switch (event.type) {
-        case 'text-delta': {
-          chunks.push(...closeReasoning())
-          if (textIndex < 0) {
-            textIndex = nextIndex++
-            chunks.push({ type: 'block-start', index: textIndex, blockType: 'text' })
-          }
-          const delta = stringValue(event.text) ?? ''
-          textContent += delta
-          sawContent = true
-          chunks.push({ type: 'text-delta', index: textIndex, text: delta })
-          break
-        }
-        case 'reasoning-delta': {
-          chunks.push(...closeText())
-          if (reasoningIndex < 0) {
-            reasoningIndex = nextIndex++
-            chunks.push({ type: 'block-start', index: reasoningIndex, blockType: 'reasoning' })
-          }
-          const delta = stringValue(event.text) ?? ''
-          reasoningContent += delta
-          chunks.push({ type: 'reasoning-delta', index: reasoningIndex, text: delta })
-          break
-        }
-        case 'reasoning-start':
-          chunks.push(...closeText())
-          break
-        case 'reasoning-end':
-          chunks.push(...closeReasoning())
-          break
-        case 'tool-call': {
-          chunks.push(...closeText(), ...closeReasoning())
-          const id = stringValue(event.toolCallId) ?? randomUUID()
-          const name = stringValue(event.toolName) ?? ''
-          const args = JSON.stringify(recordOrEmpty(event.input ?? event.args ?? event.arguments))
-          const index = nextIndex++
-          sawContent = true
-          chunks.push(
-            { type: 'block-start', index, blockType: 'tool-call' },
-            { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args },
-            {
-              type: 'block-end',
-              index,
-              block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
-            },
-          )
-          break
-        }
-        case 'finish': {
-          chunks.push(...closeText(), ...closeReasoning())
-          const usage = isRecord(event.totalUsage) ? event.totalUsage : undefined
-          if (usage) {
-            const details = isRecord(usage.inputTokenDetails) ? usage.inputTokenDetails : undefined
-            const totalInput = numberValue(usage.inputTokens) ?? 0
-            const cacheRead = numberValue(details?.cacheReadTokens) ?? 0
-            const cacheWrite = numberValue(details?.cacheWriteTokens) ?? 0
-            // Harness TokenUsage counts are disjoint: uncached input only.
-            const tokenUsage: TokenUsage = {
-              inputTokens:
-                numberValue(details?.noCacheTokens) ?? Math.max(0, totalInput - cacheRead - cacheWrite),
-              outputTokens: numberValue(usage.outputTokens) ?? 0,
-              cacheReadTokens: cacheRead,
-              cacheWriteTokens: cacheWrite,
-            }
-            chunks.push({ type: 'usage', usage: tokenUsage })
-          }
-          chunks.push({ type: 'finish', reason: mapFinishReason(event.finishReason) })
-          break
-        }
-        case 'error': {
-          // Mirror the official CLI's stream-error classification
-          // (readStreamErrorEvent + isStreamErrorRetryable in command-code's
-          // cli.mjs): a stream error that is explicitly non-retryable, carries
-          // a terminal marker (quota/plan/credits), or reports a non-retryable
-          // HTTP status is a hard failure; anything else is a transient
-          // mid-stream drop that the harness's default retry policy should
-          // retry (SERVER is in the default retryable set, PROVIDER_STREAM_ERROR
-          // is not). Without this, a server-side blip that the official CLI
-          // silently recovers from fails the whole turn.
-          const err = isRecord(event.error) ? event.error : undefined
-          const detail = isRecord(event.error)
-            ? (stringValue(event.error.message) ?? JSON.stringify(event.error))
-            : (stringValue(event.error) ?? stringValue(event.message) ?? 'Stream error')
-          const statusCode = err ? numberValue(err.statusCode) : undefined
-          const isRetryable = err ? booleanValue(err.isRetryable) : undefined
-          const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
-          const terminal = hasTerminalStreamMarker(detail)
-          const retryable = isRetryable === true
-            || (statusCode !== undefined ? retryableStatus : (isRetryable !== false && !terminal))
-          if (!retryable) {
-            throw new LlmError(
-              `Command Code stream error: ${detail}`,
-              'PROVIDER_STREAM_ERROR',
-              statusCode !== undefined ? { status: statusCode } : undefined,
-            )
-          }
-          throw new LlmError(
-            `Command Code stream error: ${detail}`,
-            'SERVER',
-            statusCode !== undefined ? { status: statusCode } : undefined,
-          )
-        }
-      }
-      return chunks
-    }
-
-    // OpenAI Chat Completions streams are standard SSE chunks. Reasoning is
-    // delivered in either `reasoning_content` (DeepSeek-style) or the Command
-    // Code Provider API's `reasoning` field; both map to harness reasoning.
-    const openAiToolCalls: Array<{ index: number; id?: string; name: string; arguments: string }> = []
-    const emitOpenAiToolCalls = function* (): Generator<StreamChunk> {
-      for (const call of openAiToolCalls) {
-        const id = call.id ?? randomUUID()
-        const name = call.name ?? ''
-        const args = call.arguments || '{}'
-        const index = nextIndex++
-        sawContent = true
-        yield { type: 'block-start', index, blockType: 'tool-call' }
-        yield { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args }
-        yield {
-          type: 'block-end',
-          index,
-          block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
-        }
-      }
-      openAiToolCalls.length = 0
-    }
-    const handleOpenAIEvent = (event: unknown): StreamChunk[] => {
-      const chunks: StreamChunk[] = []
-      if (!isRecord(event)) return chunks
-      const choices = event.choices
-      if (!Array.isArray(choices) || choices.length === 0) {
-        // A standalone usage chunk (some OpenAI-compatible servers send it
-        // before [DONE]) still carries usage.
-        if (event.usage !== undefined) {
-          chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
-        }
-        return chunks
-      }
-      const choice = isRecord(choices[0]) ? choices[0] : {}
-      const delta = isRecord(choice.delta) ? choice.delta : {}
-
-      const reasoningDelta = stringValue(delta.reasoning) ?? stringValue(delta.reasoning_content) ?? ''
-      if (reasoningDelta !== '') {
-        chunks.push(...closeText())
-        if (reasoningIndex < 0) {
-          reasoningIndex = nextIndex++
-          chunks.push({ type: 'block-start', index: reasoningIndex, blockType: 'reasoning' })
-        }
-        reasoningContent += reasoningDelta
-        chunks.push({ type: 'reasoning-delta', index: reasoningIndex, text: reasoningDelta })
-      }
-
-      const contentDelta = stringValue(delta.content) ?? ''
-      if (contentDelta !== '') {
-        chunks.push(...closeReasoning())
-        if (textIndex < 0) {
-          textIndex = nextIndex++
-          chunks.push({ type: 'block-start', index: textIndex, blockType: 'text' })
-        }
-        textContent += contentDelta
-        sawContent = true
-        chunks.push({ type: 'text-delta', index: textIndex, text: contentDelta })
-      }
-
-      if (Array.isArray(delta.tool_calls)) {
-        sawContent = true
-        for (const rawCall of delta.tool_calls) {
-          if (!isRecord(rawCall)) continue
-          const callIndex = numberValue(rawCall.index) ?? 0
-          let existing = openAiToolCalls.find((call) => call.index === callIndex)
-          const fn = isRecord(rawCall.function) ? rawCall.function : undefined
-          const id = stringValue(rawCall.id)
-          const name = fn === undefined ? undefined : stringValue(fn.name)
-          const argDelta = fn === undefined
-            ? undefined
-            : (stringValue(fn.arguments) ?? (fn.arguments === undefined ? '' : JSON.stringify(fn.arguments)))
-          if (!existing) {
-            existing = {
-              index: callIndex,
-              name: name ?? '',
-              arguments: argDelta ?? '',
-            }
-            if (id !== undefined) existing.id = id
-            openAiToolCalls.push(existing)
-          } else {
-            if (id !== undefined && existing.id === undefined) existing.id = id
-            if (name !== undefined && existing.name === '') existing.name = name
-            if (argDelta !== undefined) existing.arguments += argDelta
-          }
-        }
-      }
-
-      if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
-        chunks.push(...closeText(), ...closeReasoning(), ...emitOpenAiToolCalls())
-        if (event.usage !== undefined) {
-          chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
-        }
-        chunks.push({ type: 'finish', reason: mapOpenAIFinishReason(choice.finish_reason) })
-      }
-      return chunks
-    }
-
-    const handleEvent = (event: unknown): StreamChunk[] =>
-      protocol === 'openai' ? handleOpenAIEvent(event) : handleCliEvent(event)
-
+    const asm = createBlockAssembler()
+    const handle = (event: unknown): StreamChunk[] => handleEvent(asm, protocol, event)
     try {
       let finished = false
       for (;;) {
@@ -1763,14 +1726,22 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
               'TIMEOUT',
             )
           }
-          if (buffer.trim()) for (const chunk of handleEvent(parseStreamEventLine(buffer))) yield chunk
+          if (buffer.trim()) {
+            // The final line may lack its trailing newline: account its
+            // chunks exactly like the line loop (a trailing `finish` must
+            // set `finished`, or the tail below would emit a second one).
+            for (const chunk of handle(parseStreamEventLine(buffer))) {
+              yield chunk
+              if (chunk.type === 'finish') finished = true
+            }
+          }
           break
         }
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
         for (const line of lines) {
-          const chunks = handleEvent(parseStreamEventLine(line))
+          const chunks = handle(parseStreamEventLine(line))
           for (const chunk of chunks) {
             yield chunk
             if (chunk.type === 'finish') finished = true
@@ -1781,10 +1752,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       if (!finished) {
         // Stream ended without a finish event: close open blocks and
         // terminate according to the adapter contract (usage, then finish).
-        yield* closeText()
-        yield* closeReasoning()
-        if (protocol === 'openai') yield* emitOpenAiToolCalls()
-        if (!sawContent) {
+        yield* closeText(asm)
+        yield* closeReasoning(asm)
+        if (protocol === 'openai') yield* emitOpenAiToolCalls(asm)
+        if (!asm.sawContent) {
           throw new LlmError('Command Code returned an empty response；Command Code 返回了空响应，重试通常可恢复', 'EMPTY_RESPONSE')
         }
         yield { type: 'finish', reason: { kind: 'stop' } }
@@ -1797,9 +1768,6 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
   }
 }
-
-/** Hard cap on account rotations within one request (one attempt per distinct key). */
-const MAX_ACCOUNT_ROTATIONS = 16
 
 /**
  * Map a pre-stream generate HTTP failure onto a stable LlmError. Command
@@ -1846,6 +1814,208 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
   )
 }
 
+
+/**
+ * Handle one CLI-transport (`/alpha/generate`) stream event, appending
+ * harness StreamChunks. Pure over the passed assembler — no stream() locals.
+ */
+function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
+  const chunks: StreamChunk[] = []
+  if (!isRecord(event)) return chunks
+
+  switch (event.type) {
+    case 'text-delta': {
+      chunks.push(...closeReasoning(asm))
+      if (asm.textIndex < 0) {
+        asm.textIndex = asm.nextIndex++
+        chunks.push({ type: 'block-start', index: asm.textIndex, blockType: 'text' })
+      }
+      const delta = stringValue(event.text) ?? ''
+      asm.textContent += delta
+      asm.sawContent = true
+      chunks.push({ type: 'text-delta', index: asm.textIndex, text: delta })
+      break
+    }
+    case 'reasoning-delta': {
+      chunks.push(...closeText(asm))
+      if (asm.reasoningIndex < 0) {
+        asm.reasoningIndex = asm.nextIndex++
+        chunks.push({ type: 'block-start', index: asm.reasoningIndex, blockType: 'reasoning' })
+      }
+      const delta = stringValue(event.text) ?? ''
+      asm.reasoningContent += delta
+      chunks.push({ type: 'reasoning-delta', index: asm.reasoningIndex, text: delta })
+      break
+    }
+    case 'reasoning-start':
+      chunks.push(...closeText(asm))
+      break
+    case 'reasoning-end':
+      chunks.push(...closeReasoning(asm))
+      break
+    case 'tool-call': {
+      chunks.push(...closeText(asm), ...closeReasoning(asm))
+      const id = stringValue(event.toolCallId) ?? randomUUID()
+      const name = stringValue(event.toolName) ?? ''
+      const args = JSON.stringify(recordOrEmpty(event.input ?? event.args ?? event.arguments))
+      const index = asm.nextIndex++
+      asm.sawContent = true
+      chunks.push(
+        { type: 'block-start', index, blockType: 'tool-call' },
+        { type: 'tool-call-delta', index, id: ToolCallId(id), name, argumentsDelta: args },
+        {
+          type: 'block-end',
+          index,
+          block: { type: 'tool-call', id: ToolCallId(id), name, arguments: args },
+        },
+      )
+      break
+    }
+    case 'finish': {
+      chunks.push(...closeText(asm), ...closeReasoning(asm))
+      const usage = isRecord(event.totalUsage) ? event.totalUsage : undefined
+      if (usage) {
+        const details = isRecord(usage.inputTokenDetails) ? usage.inputTokenDetails : undefined
+        const totalInput = numberValue(usage.inputTokens) ?? 0
+        const cacheRead = numberValue(details?.cacheReadTokens) ?? 0
+        const cacheWrite = numberValue(details?.cacheWriteTokens) ?? 0
+        // Harness TokenUsage counts are disjoint: uncached input only.
+        const tokenUsage: TokenUsage = {
+          inputTokens:
+            numberValue(details?.noCacheTokens) ?? Math.max(0, totalInput - cacheRead - cacheWrite),
+          outputTokens: numberValue(usage.outputTokens) ?? 0,
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: cacheWrite,
+        }
+        chunks.push({ type: 'usage', usage: tokenUsage })
+      }
+      chunks.push({ type: 'finish', reason: mapFinishReason(event.finishReason) })
+      break
+    }
+    case 'error': {
+      // Mirror the official CLI's stream-error classification
+      // (readStreamErrorEvent + isStreamErrorRetryable in command-code's
+      // cli.mjs): a stream error that is explicitly non-retryable, carries
+      // a terminal marker (quota/plan/credits), or reports a non-retryable
+      // HTTP status is a hard failure; anything else is a transient
+      // mid-stream drop that the harness's default retry policy should
+      // retry (SERVER is in the default retryable set, PROVIDER_STREAM_ERROR
+      // is not). Without this, a server-side blip that the official CLI
+      // silently recovers from fails the whole turn.
+      const err = isRecord(event.error) ? event.error : undefined
+      const detail = isRecord(event.error)
+        ? (stringValue(event.error.message) ?? JSON.stringify(event.error))
+        : (stringValue(event.error) ?? stringValue(event.message) ?? 'Stream error')
+      const statusCode = err ? numberValue(err.statusCode) : undefined
+      const isRetryable = err ? booleanValue(err.isRetryable) : undefined
+      const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
+      const terminal = hasTerminalStreamMarker(detail)
+      const retryable = isRetryable === true
+        || (statusCode !== undefined ? retryableStatus : (isRetryable !== false && !terminal))
+      if (!retryable) {
+        throw new LlmError(
+          `Command Code stream error: ${detail}`,
+          'PROVIDER_STREAM_ERROR',
+          statusCode !== undefined ? { status: statusCode } : undefined,
+        )
+      }
+      throw new LlmError(
+        `Command Code stream error: ${detail}`,
+        'SERVER',
+        statusCode !== undefined ? { status: statusCode } : undefined,
+      )
+    }
+  }
+  return chunks
+}
+
+/**
+ * Handle one OpenAI-transport (`/provider/v1/chat/completions`) SSE event.
+ * Same assembler contract as {@link handleCliEvent}; tool-call fragments
+ * buffer on the assembler and flush at finish.
+ */
+function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
+  const chunks: StreamChunk[] = []
+  if (!isRecord(event)) return chunks
+  const choices = event.choices
+  if (!Array.isArray(choices) || choices.length === 0) {
+    // A standalone usage chunk (some OpenAI-compatible servers send it
+    // before [DONE]) still carries usage.
+    if (event.usage !== undefined) {
+      chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
+    }
+    return chunks
+  }
+  const choice = isRecord(choices[0]) ? choices[0] : {}
+  const delta = isRecord(choice.delta) ? choice.delta : {}
+
+  const reasoningDelta = stringValue(delta.reasoning) ?? stringValue(delta.reasoning_content) ?? ''
+  if (reasoningDelta !== '') {
+    chunks.push(...closeText(asm))
+    if (asm.reasoningIndex < 0) {
+      asm.reasoningIndex = asm.nextIndex++
+      chunks.push({ type: 'block-start', index: asm.reasoningIndex, blockType: 'reasoning' })
+    }
+    asm.reasoningContent += reasoningDelta
+    chunks.push({ type: 'reasoning-delta', index: asm.reasoningIndex, text: reasoningDelta })
+  }
+
+  const contentDelta = stringValue(delta.content) ?? ''
+  if (contentDelta !== '') {
+    chunks.push(...closeReasoning(asm))
+    if (asm.textIndex < 0) {
+      asm.textIndex = asm.nextIndex++
+      chunks.push({ type: 'block-start', index: asm.textIndex, blockType: 'text' })
+    }
+    asm.textContent += contentDelta
+    asm.sawContent = true
+    chunks.push({ type: 'text-delta', index: asm.textIndex, text: contentDelta })
+  }
+
+  if (Array.isArray(delta.tool_calls)) {
+    asm.sawContent = true
+    for (const rawCall of delta.tool_calls) {
+      if (!isRecord(rawCall)) continue
+      const callIndex = numberValue(rawCall.index) ?? 0
+      let existing = asm.openAiToolCalls.find((call) => call.index === callIndex)
+      const fn = isRecord(rawCall.function) ? rawCall.function : undefined
+      const id = stringValue(rawCall.id)
+      const name = fn === undefined ? undefined : stringValue(fn.name)
+      const argDelta = fn === undefined
+        ? undefined
+        : (stringValue(fn.arguments) ?? (fn.arguments === undefined ? '' : JSON.stringify(fn.arguments)))
+      if (!existing) {
+        existing = {
+          index: callIndex,
+          name: name ?? '',
+          arguments: argDelta ?? '',
+        }
+        if (id !== undefined) existing.id = id
+        asm.openAiToolCalls.push(existing)
+      } else {
+        if (id !== undefined && existing.id === undefined) existing.id = id
+        if (name !== undefined && existing.name === '') existing.name = name
+        if (argDelta !== undefined) existing.arguments += argDelta
+      }
+    }
+  }
+
+  if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
+    chunks.push(...closeText(asm), ...closeReasoning(asm), ...emitOpenAiToolCalls(asm))
+    if (event.usage !== undefined) {
+      chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
+    }
+    chunks.push({ type: 'finish', reason: mapFinishReason(choice.finish_reason) })
+  }
+  return chunks
+}
+
+/** Dispatch one parsed stream event to the active transport's handler. */
+function handleEvent(asm: BlockAssembler, protocol: CommandCodeProtocol, event: unknown): StreamChunk[] {
+  return protocol === 'openai' ? handleOpenAIEvent(asm, event) : handleCliEvent(asm, event)
+}
+
+
 /**
  * Parse an HTTP `Retry-After` value (delay-seconds or an HTTP-date) into
  * milliseconds; undefined when absent or unparseable. An HTTP-date in the
@@ -1868,21 +2038,14 @@ function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): 
   return undefined
 }
 
+/**
+ * Map a stream finish reason onto the harness taxonomy. The two transports
+ * spell tool-calls differently (`tool-calls` on the CLI transport,
+ * `tool_calls` on the OpenAI transport) but share every other reason, so
+ * one function serves both — a new reason cannot drift between them.
+ */
 function mapFinishReason(reason: unknown): FinishReason {
-  if (reason === 'tool-calls') return { kind: 'tool-calls' }
-  if (
-    reason === 'length' ||
-    reason === 'max_tokens' ||
-    reason === 'max-tokens' ||
-    reason === 'max_output_tokens'
-  ) {
-    return { kind: 'max-tokens' }
-  }
-  return { kind: 'stop' }
-}
-
-function mapOpenAIFinishReason(reason: unknown): FinishReason {
-  if (reason === 'tool_calls' || reason === 'tool-calls') return { kind: 'tool-calls' }
+  if (reason === 'tool-calls' || reason === 'tool_calls') return { kind: 'tool-calls' }
   if (
     reason === 'length' ||
     reason === 'max_tokens' ||

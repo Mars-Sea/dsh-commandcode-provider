@@ -61,9 +61,8 @@ export const USAGE_REMOTE_PACKAGE = REMOTE_PACKAGE
 export const USAGE_REPORT_ENDPOINT = 'commandcode/report'
 
 /**
- * The shared read/validate helpers, prefixed with the report endpoint so
- * rejection messages name the offending boundary (the catalog endpoint below
- * shares this prefix, matching the historical behavior).
+ * The shared read/validate helpers for the usage report endpoint, prefixed
+ * so rejection messages name the offending boundary.
  */
 const { reject, record, stringField, numberField, booleanField } =
   makeBoundaryValidator('commandcode/report result:')

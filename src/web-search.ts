@@ -55,12 +55,20 @@ interface WebRuntimeSearchField {
  * Point the web seam's search selection at this plugin's provider (`commandcode`).
  * Sets the runtime field; the next search call honours it because `search()`
  * re-reads `searchProviderId` each time. Returns the prior id (or undefined).
+ * Never throws: a hardened/frozen runtime shape must not break the
+ * settings-save path that calls this — the provider simply stays
+ * registered-but-unselected (the boot-time `searchProvider: commandcode`
+ * cordis patch is the durable alternative).
  */
 export function selectCommandCodeSearchProvider(web: WebRuntime, enable: boolean): string | undefined {
-  const field = web as unknown as WebRuntimeSearchField
-  const prior = field.searchProviderId
-  field.searchProviderId = enable ? COMMANDCODE_SEARCH_PROVIDER_ID : DEFAULT_WEB_SEARCH_PROVIDER_ID
-  return prior
+  try {
+    const field = web as unknown as WebRuntimeSearchField
+    const prior = field.searchProviderId
+    field.searchProviderId = enable ? COMMANDCODE_SEARCH_PROVIDER_ID : DEFAULT_WEB_SEARCH_PROVIDER_ID
+    return prior
+  } catch {
+    return undefined
+  }
 }
 
 /** Command Code's lower/upper bound on `numResults` (from the CLI's `web_search` schema). */
@@ -132,7 +140,7 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
 
   constructor(private readonly deps: CommandCodeSearchProviderDeps) {}
 
-  /** Cheap local check; must not make network calls. Presence of a key path + a parseable base is enough. */
+  /** Cheap local check; must not make network calls. Presence of a parseable base is enough. */
   available(): boolean {
     const base = this.deps.apiBase()
     return base.length > 0 && URL.canParse(base)
@@ -196,6 +204,11 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
         }
       } catch (error) {
         if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
+        // Non-JSON error bodies (proxy/gateway HTML): keep a truncated slice
+        // so the status line still says something actionable.
+        const text = await response.text().catch(() => '')
+        const slice = text.trim().slice(0, 200)
+        if (slice !== '') message += `: ${slice}`
       }
       throw new WebError(message, 'WEB_PROVIDER_ERROR')
     }
@@ -205,7 +218,7 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
       payload = await response.json()
     } catch (error) {
       if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
-      throw new WebError('Command Code web search returned an unparseable response body', 'WEB_PROVIDER_ERROR')
+      throw new WebError('Command Code web search returned an unparseable response body', 'WEB_PROVIDER_ERROR', { cause: error })
     }
 
     const results = (payload as { results?: unknown })?.results
