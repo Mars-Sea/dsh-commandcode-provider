@@ -141,10 +141,16 @@ type CardMode =
   | { kind: 'registration' }
   | { kind: 'live'; ready: boolean; controllerConfigured: boolean; writable: boolean; apiKeyWritable: boolean }
 
-/** Decide the card's posture from the injected face and the owner facts. */
-export function cardMode(props: CommandCodeCardProps & ProviderCardOwnerProps): CardMode {
-  if (props.useCommandCodeSettings === undefined) return { kind: 'registration' }
-  const snapshot = props.useCommandCodeSettings((state) => state)
+/**
+ * Decide the card's posture from one settings snapshot. Pure: the component
+ * subscribes once and passes the snapshot in, so hook order never depends
+ * on the registration→live transition. (The owner facts stay on the
+ * component — only the snapshot decides the posture.)
+ */
+export function cardMode(
+  snapshot: SettingsPageState | undefined,
+): CardMode {
+  if (snapshot === undefined) return { kind: 'registration' }
   return {
     kind: 'live',
     ready: snapshot.available,
@@ -211,10 +217,11 @@ function CardKeyField({ state, disabled, t, onEdit }: {
  */
 export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCardOwnerProps) {
   const { t } = props
-  const mode = cardMode(props)
+  // Single subscription: the whole snapshot drives posture + body together.
   const state = props.useCommandCodeSettings !== undefined
     ? props.useCommandCodeSettings((snapshot) => snapshot)
     : undefined
+  const mode = cardMode(state)
   const login = props.useCommandCodeLogin !== undefined
     ? props.useCommandCodeLogin((snapshot) => snapshot)
     : undefined

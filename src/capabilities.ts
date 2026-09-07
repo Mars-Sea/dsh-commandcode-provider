@@ -459,13 +459,14 @@ export interface CommandCodeBillingAccess {
 /**
  * Whether the picker lists `modelId` for an account with the given billing
  * access. Fails open at every uncertainty: no billing data, an unknown plan,
- * or a model outside {@link KNOWN_PLANS} all keep the model visible — the
- * server remains the final gate (`403 MODEL_NOT_IN_PLAN`).
+ * a non-finite weight (corrupt billing fact), or a model outside
+ * {@link KNOWN_PLANS} all keep the model visible — the server remains the
+ * final gate (`403 MODEL_NOT_IN_PLAN`).
  */
 export function modelVisibleInPlan(modelId: string, access: CommandCodeBillingAccess | undefined): boolean {
   if (access === undefined) return true
   if (access.onDemandCredits > 0) return true
-  if (access.tierWeight === undefined) return true
+  if (access.tierWeight === undefined || !Number.isFinite(access.tierWeight)) return true
   const tier = KNOWN_PLANS[modelId]
   if (tier === undefined) return true
   const weight = PLAN_ORDER[tier]
@@ -616,8 +617,8 @@ export function dealLabel(modelId: string, now: number = Date.now()): string | u
 
 /**
  * Compact human-readable context window, e.g. `1_000_000 -> "1M"`,
- * `256_000 -> "256K"`, `262_144 -> "256K"` (floor to the nearest K).
- * Returns undefined for unknown/absent sizes.
+ * `256_000 -> "256K"`, `262_144 -> "262K"` (floor to the nearest K).
+ * Returns undefined for unknown/absent sizes; values under 1K render raw.
  */
 export function formatContext(contextWindow: number | undefined): string | undefined {
   if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0) {
@@ -630,6 +631,7 @@ export function formatContext(contextWindow: number | undefined): string | undef
     const rounded = Math.round(m * 10) / 10
     return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}M`
   }
+  if (contextWindow < 1_000) return String(Math.floor(contextWindow))
   return `${Math.floor(contextWindow / 1_000)}K`
 }
 

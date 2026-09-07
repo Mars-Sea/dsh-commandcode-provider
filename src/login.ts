@@ -334,12 +334,18 @@ export class CommandCodeLoginFlow {
       json(405, { success: false, error: 'Method not allowed. Use POST.' })
       return
     }
+    // The cap is on wire bytes, not JS string length: multibyte bodies
+    // (CJK/emoji) would otherwise pass ~1.5-2x the limit before tripping it.
+    let bodyBytes = 0
     let body = ''
     request.on('data', (chunk: Buffer) => {
+      bodyBytes += chunk.length
       body += chunk.toString()
-      if (body.length > LOGIN_BODY_LIMIT_BYTES) request.destroy()
+      if (bodyBytes > LOGIN_BODY_LIMIT_BYTES) request.destroy()
     })
     request.on('end', () => {
+      // A destroyed (over-limit) request never processes its partial body.
+      if (request.destroyed) return
       let payload: unknown
       try {
         payload = JSON.parse(body)

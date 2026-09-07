@@ -695,6 +695,8 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
   assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: 0, onDemandCredits: 1 }), true)
   // Unknown account tier -> visible.
   assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: undefined, onDemandCredits: 0 }), true)
+  // Non-finite tier weight (corrupt billing fact) -> visible.
+  assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: NaN, onDemandCredits: 0 }), true)
   // Unknown model -> visible.
   assert.equal(modelVisibleInPlan('some-future-model', { tierWeight: 0, onDemandCredits: 0 }), true)
   // Tier comparison itself.
@@ -1306,6 +1308,16 @@ test('stream() throws EMPTY_RESPONSE when the stream ends without content', asyn
   assert.ok(chunks.some((c) => c.type === 'finish'))
 })
 
+test('stream() emits a single finish when the trailing event lacks its newline', async () => {
+  // A final line without a trailing newline is parsed at `done` — a trailing
+  // `finish` there must not produce a second synthetic finish.
+  const adapter = makeAdapter({
+    fetchImpl: fetchReturning(200, 'data: {"type":"text-delta","text":"hi"}\n\ndata: {"type":"finish","finishReason":"stop"}'),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+  assert.equal(chunks.filter((c) => c.type === 'finish').length, 1)
+})
+
 // ---------------------------------------------------------------------------
 // Catalog parsing
 // ---------------------------------------------------------------------------
@@ -1649,6 +1661,7 @@ test('formatContext() renders compact human sizes', () => {
   // Tencent Hy3's actual 262144 tokens display as 262K (matches the pricing page).
   assert.equal(formatContext(262_144), '262K')
   assert.equal(formatContext(200_000), '200K')
+  assert.equal(formatContext(500), '500')
   assert.equal(formatContext(undefined), undefined)
   assert.equal(formatContext(0), undefined)
 })

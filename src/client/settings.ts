@@ -359,11 +359,17 @@ export class CommandCodeSettingsController {
   private addedRules: Array<{ models: string[]; account: string }> = []
   /** Staged edits to stored routing rules, by stored row id. */
   private readonly ruleDrafts = new Map<string, { models: string[]; account: string }>()
-  /** Stored routing rule rows staged for removal. */
-  private readonly removedRuleIds = new Set<string>()
+  /**
+   * Stored routing rule rows staged for removal, by stored row id with a
+   * content snapshot. The snapshot makes reconcile content-based: stored
+   * row ids are positional (`rule-N`) and shift after any write, so an
+   * id-only check would misread a landed removal as pending (and a retry
+   * would delete the wrong row).
+   */
+  private readonly removedRuleIds = new Map<string, { models: string[]; account: string }>()
   /** Staged visible-model allowlist (undefined = no draft). */
   private visibleModelsDraft: string[] | undefined = undefined
-  /** The catalog the rule editor offers (Host-side). */
+  /** The catalog the model editors offer (Host-side). */
   private catalogModels: CatalogModelOption[] = []
   private catalogFailed = false
   private saving = false
@@ -570,7 +576,14 @@ export class CommandCodeSettingsController {
   removeRule(id: string): void {
     const addedIndex = this.addedRules.findIndex((_, index) => `new-${index}` === id)
     if (addedIndex >= 0) this.addedRules.splice(addedIndex, 1)
-    else this.removedRuleIds.add(id)
+    else {
+      // Snapshot the row content: stored ids are positional and shift after
+      // any write, so reconcile must compare content, not ids.
+      const stored = this.storedRules().find((rule) => rule.id === id)
+      this.removedRuleIds.set(id, stored === undefined
+        ? { models: [], account: '' }
+        : { models: [...stored.models], account: stored.account })
+    }
     this.ruleDrafts.delete(id)
     this.failed = false
     this.publish()
@@ -664,9 +677,17 @@ export class CommandCodeSettingsController {
     // Keys land first so a saved accounts list never names a ref whose key
     // write failed silently; the accounts list itself writes last. Stop at
     // the first failure: running later writes after a failed one would
-    // persist a partial state the staged drafts no longer describe.
+    // persist a partial state the staged drafts no longer describe. A
+    // throwing write counts as a failure too (the scope seam may reject)
+    // so the surviving staging is reconciled instead of dropped.
     for (const run of [...runs, ...accountRuns, ...ruleRuns, ...visibleRuns]) {
-      if (!(await run())) {
+      let ok = false
+      try {
+        ok = await run()
+      } catch {
+        ok = false
+      }
+      if (!ok) {
         landed = false
         break
       }
@@ -1094,17 +1115,32 @@ export class CommandCodeSettingsController {
     this.removedRuleIds.clear()
   }
 
-  /** Drop rule staging the stored section already reflects (partial-save retry). */
+  /**
+   * Drop rule staging the stored section already reflects (partial-save
+   * retry). Stored row ids are positional (`rule-N`) and shift after any
+   * write, so every check here is content-based, never id-based:
+   * - landed additions (in `addedRules`, already in stored) are dropped, or
+   *   a retry would persist them twice;
+   * - staged removals whose snapshot row is gone from stored have landed
+   *   (drop them); a removal whose snapshot still matches a stored row is
+   *   still pending (keep it).
+   */
   private reconcileRuleStaging(): void {
-    const storedIds = new Set(this.storedRules().map((rule) => rule.id))
-    for (const id of [...this.removedRuleIds]) {
-      if (!storedIds.has(id)) this.removedRuleIds.delete(id)
+    const stored = this.storedRules()
+    this.addedRules = this.addedRules.filter((added) =>
+      !stored.some((rule) =>
+        sameModels(added.models, rule.models) && added.account === rule.account))
+    for (const [id, snapshot] of [...this.removedRuleIds]) {
+      const landed = !stored.some((rule) =>
+        sameModels(snapshot.models, rule.models) && snapshot.account === rule.account)
+      if (landed) this.removedRuleIds.delete(id)
     }
-    // Drafts on rows that no longer exist (a failed save that landed the
-    // removal) are stale; drop them so a retry does not resurrect the row.
-    for (const id of [...this.ruleDrafts.keys()]) {
-      if (!storedIds.has(id)) this.ruleDrafts.delete(id)
-    }
+    // A failed save may land the rules write (shifting every positional id)
+    // while a later write fails: drafts keyed by the pre-save ids no longer
+    // address the rows they were staged against. Matching them to shifted
+    // rows by content would misattribute edits, so drop them — the user
+    // re-applies the edit and the retry stays honest.
+    this.ruleDrafts.clear()
   }
 
   /** The stored visible-model allowlist (`visibleModels`); empty = show all. */
@@ -1178,7 +1214,14 @@ export class CommandCodeSettingsController {
 
   /** Persist the staged routing rules into the settings section. */
   private async writeRules(): Promise<boolean> {
-    const base = this.storedRules().filter((rule) => !this.removedRuleIds.has(rule.id))
+    const base = this.storedRules().filter((rule) => {
+      const snapshot = this.removedRuleIds.get(rule.id)
+      // Content-based removal: positional ids shift after any write, so a
+      // staged removal only filters the row it snapshotted.
+      return snapshot === undefined
+        || !sameModels(snapshot.models, rule.models)
+        || snapshot.account !== rule.account
+    })
     const list = [
       ...base.map((rule) => {
         const draft = this.ruleDrafts.get(rule.id)
@@ -1192,10 +1235,19 @@ export class CommandCodeSettingsController {
         account: rule.account,
       })),
     ].filter((rule) => rule.models.length > 0)
-    await this.scope.set('modelAccountRules', list)
+    // Defensive dedupe by content: a partially landed earlier save can leave
+    // a rule both stored and staged-for-addition; never persist duplicates.
+    const seen = new Set<string>()
+    const deduped = list.filter((rule) => {
+      const key = `${rule.account}\u0001${[...rule.models].sort().join('\u0001')}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    await this.scope.set('modelAccountRules', deduped)
     const after = this.storedRules()
-    return after.length === list.length
-      && list.every((item, index) =>
+    return after.length === deduped.length
+      && deduped.every((item, index) =>
         after[index] !== undefined
         && sameModels(after[index].models, item.models)
         && after[index].account === item.account)

@@ -272,15 +272,23 @@ export class CommandCodeAccountPool {
     }
     const routed = selectAccountForModel(accounts, options?.model ?? '', this.deps.modelAccountRules?.())
     if (routed !== undefined) return this.pick(routed)
-    const chosen = selectActiveAccount(accounts, this.deps.preferredId?.())
+    const preferred = this.deps.preferredId?.()
+    const chosen = selectActiveAccount(accounts, preferred)
     if (chosen !== undefined) return this.pick(chosen)
 
     // Every key is marked: probe the real windows before giving up. Disabled
-    // (401) keys are not probed — an invalid key stays invalid.
+    // (401) keys are not probed — an invalid key stays invalid. A throwing
+    // probe counts as "unknown" (like a failed probe): it must not turn the
+    // all-exhausted path into a raw rejection instead of RATE_LIMIT.
     await Promise.all(accounts.map(async (account) => {
       if (account.state?.kind === 'disabled') return
       if (options?.exclude !== undefined && account.key === options.exclude) return
-      const probe = await this.deps.probeWindow(account.key)
+      let probe: FiveHourWindowProbe | undefined
+      try {
+        probe = await this.deps.probeWindow(account.key)
+      } catch {
+        return
+      }
       if (probe === undefined) return
       if (!probe.exceeded) {
         this.states.delete(account.key)
@@ -293,10 +301,14 @@ export class CommandCodeAccountPool {
       }
     }))
 
-    const revived = selectActiveAccount(await this.resolvedAccounts(), this.deps.preferredId?.())
+    // Re-resolve once: the probe pass above may have revived keys (fresh
+    // states), and both the revival check and the error classification read
+    // the same post-probe snapshot. (Each resolvedAccounts() re-runs the
+    // async seams, so two calls — not three — is the minimum here.)
+    const latest = await this.resolvedAccounts()
+    const revived = selectActiveAccount(latest, preferred)
     if (revived !== undefined) return this.pick(revived)
 
-    const latest = await this.resolvedAccounts()
     const disabled = latest.filter((account) => account.state?.kind === 'disabled')
     if (disabled.length === latest.length) {
       // Bilingual: the harness UI renders this message verbatim inside its

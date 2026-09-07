@@ -178,16 +178,16 @@ function makeCardProps(opts?: {
 // cardMode: the card's posture
 // ---------------------------------------------------------------------------
 
-test('cardMode falls back to the registration posture without a controller face', () => {
+test('cardMode falls back to the registration posture without a snapshot', () => {
   const { props } = makeCardProps({ withController: false })
-  const mode = cardMode(props)
+  const mode = cardMode(undefined)
   assert.equal(mode.kind, 'registration')
 })
 
 test('cardMode is live and reports the controller credential fact', async () => {
   const { props } = makeCardProps()
   await flush()
-  const mode = cardMode(props)
+  const mode = cardMode(props.useCommandCodeSettings((state) => state))
   assert.equal(mode.kind, 'live')
   assert.equal(mode.kind !== 'registration' ? mode.ready : false, true)
   // No stored key: the card's authoritative fact says unconfigured even
@@ -198,7 +198,7 @@ test('cardMode is live and reports the controller credential fact', async () => 
 test('cardMode reports configured from the controller once a key is stored', async () => {
   const { props } = makeCardProps({ store: new Map([[DEFAULT_API_KEY_REF, 'sk-live']]) })
   await flush()
-  const mode = cardMode(props)
+  const mode = cardMode(props.useCommandCodeSettings((state) => state))
   assert.equal(mode.kind !== 'registration' ? mode.controllerConfigured : false, true)
 })
 

@@ -203,6 +203,23 @@ test('a failed probe keeps the mark and reports no reset time', async () => {
   assert.doesNotMatch(error.message, /resets at/)
 })
 
+test('a throwing probe counts as unknown and still throws RATE_LIMIT', async () => {
+  const pool = new CommandCodeAccountPool({
+    slots: () => [defaultSlot()],
+    resolveRef: async () => 'key-1',
+    authFileKey: () => undefined,
+    probeWindow: async () => { throw new Error('probe transport blew up') },
+    preferredId: () => undefined,
+    modelAccountRules: () => [],
+  })
+  pool.markRejected('key-1', 'rate-limit')
+  const error = await pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as Error & { code?: string },
+  )
+  assert.equal(error.code, 'RATE_LIMIT')
+})
+
 test('throws INVALID_CREDENTIAL when every account was rejected with 401', async () => {
   const { pool, probeCalls } = makePool({
     slots: [defaultSlot(), extraSlot(2)],

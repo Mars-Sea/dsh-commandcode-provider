@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Searchable model-editor dropdowns with tier grouping and stale-id cleanup.** The routing-rule editor and the Visible models filter share one dropdown: a search box filters the 60+ model catalog by id/display-name substring, entries group under plan-tier headings (FREE → Go → GOAT → Pro → Provider/Max, mirroring the picker order), and selected models retired upstream render flagged instead of silently vanishing — the Visible models card offers a one-click cleanup that never auto-drops (an empty catalog from a fetch failure must not wipe the list).
 
+### Fixed
+
+- **A partially landed settings save no longer duplicates routing rules on retry.** When the rules write landed but a later write failed, the retry re-persisted staged additions a second time. Staged removals are now matched by row content (stored ids shift after any write), landed additions are dropped from staging, and the write dedupes by content — mirroring the existing account-staging behavior. A throwing settings write also counts as a failed (not dropped) save.
+- **A stream whose final event lacks its trailing newline no longer emits a duplicate `finish`.**
+- **Corrupt billing facts fail open.** A non-finite plan-tier weight no longer hides models, and sub-1K context windows render raw instead of `"0K"`.
+- **The loopback login's body cap is now measured in wire bytes** (multibyte bodies previously passed ~1.5–2× the limit), and over-limit requests never process their partial body.
+- **The zh `/commandcode` command no longer shows English for empty/error states.**
+
 ### Changed
 
 - **The settings page's model catalog is now unfiltered.** The `commandcode/models` Remote serves the full catalog instead of the plan-filtered picker list, so a routing rule can target a model the picker hides (e.g. route a GOAT-only model to the GOAT account from a Go-plan view). The visible-models filter shares the same full-catalog candidate list. Each entry also carries its plan-tier key so the editor dropdowns can group under tier headings.

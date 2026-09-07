@@ -820,16 +820,91 @@ test('discard clears staged rule edits', () => {
   assert.equal(controller.state().dirty, false)
 })
 
+test('a partially landed save does not duplicate a staged rule on retry', async () => {
+  // Add rule R; the rules write lands but a later write fails. The retry
+  // must not persist R twice — reconcile drops the landed addition.
+  const scope = makeScope({})
+  const realSet = scope.set.bind(scope)
+  let failNext = false
+  scope.set = async (field: string, value: unknown) => {
+    if (failNext && field === 'visibleModels') throw new Error('later write refused')
+    return realSet(field, value)
+  }
+  const { controller } = makeController({ scope })
+  controller.addRule()
+  controller.editRuleModels('new-0', ['deepseek/deepseek-v4-pro'])
+  controller.editVisibleModels(['deepseek/deepseek-v4-pro'])
+  failNext = true
+  await controller.save()
+  assert.equal(controller.state().failed, true)
+  const rules = scope.state.value.modelAccountRules as Array<{ models: string[] }>
+  assert.equal(rules.length, 1)
+  // Retry with the later write fixed: still exactly one rule.
+  failNext = false
+  await controller.save()
+  assert.equal(controller.state().failed, false)
+  assert.equal((scope.state.value.modelAccountRules as unknown[]).length, 1)
+  assert.equal(controller.state().dirty, false)
+})
+
+test('a staged removal still filters its row after stored ids shift', async () => {
+  // Remove rule-1 (of two), then a failed save lands an unrelated change
+  // that shifts positional ids. Reconcile is content-based, so the removal
+  // still addresses the snapshotted row — not the shifted id.
+  const scope = makeScope({
+    value: {
+      modelAccountRules: [
+        { models: ['a-model'], account: 'default' },
+        { models: ['b-model'], account: 'default' },
+      ],
+    },
+    user: {
+      modelAccountRules: [
+        { models: ['a-model'], account: 'default' },
+        { models: ['b-model'], account: 'default' },
+      ],
+    },
+  })
+  const { controller } = makeController({ scope })
+  controller.removeRule('rule-1')
+  assert.deepEqual(controller.state().rules.map((rule) => rule.models), [['a-model']])
+  await controller.save()
+  assert.deepEqual(scope.state.value.modelAccountRules, [{ models: ['a-model'], account: 'default' }])
+})
+
 test('loads the model catalog through the api models seam', async () => {
   const api = makeApi({
     models: async () => ({
       ok: true as const,
-      value: { models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] },
+      value: { models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'go' }] },
     }),
   })
   const { controller } = makeController({ api })
   await flush()
-  assert.deepEqual(controller.state().catalogModels, [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }])
+  assert.deepEqual(controller.state().catalogModels, [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'go' }])
+  assert.equal(controller.state().catalogFailed, false)
+})
+
+test('the catalog keeps entries without a tier (older Hosts) and drops malformed ones', async () => {
+  const api = makeApi({
+    models: async () => ({
+      ok: true as const,
+      value: {
+        models: [
+          { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+          { id: 'tencent/hy4-preview', name: 'Tencent Hy4 Preview', tier: 'goat' },
+          { id: 42, name: 'Broken' },
+          null,
+        ],
+      },
+    }),
+  })
+  const { controller } = makeController({ api })
+  await flush()
+  assert.deepEqual(controller.state().catalogModels, [
+    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+    { id: 'tencent/hy4-preview', name: 'Tencent Hy4 Preview', tier: 'goat' },
+  ])
   assert.equal(controller.state().catalogFailed, false)
 })
 

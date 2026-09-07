@@ -248,7 +248,8 @@ test('command reports endpoint failures instead of crashing', async () => {
   const def = commandDefinition({ adapter })
   const result = await invoke(def, '')
   assert.equal(result.kind, 'success')
-  assert.match(result.text, /no data/)
+  // Default locale is zh.
+  assert.match(result.text, /无数据/)
 })
 
 test('command errors when getUsage throws', async () => {

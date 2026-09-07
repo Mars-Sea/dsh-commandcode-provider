@@ -80,8 +80,8 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
     exceededWarning: '  ⚠️ 超限!',
     resetSuffix: '重置 {when}',
     partialFailures: '⚠️  部分端点失败: {list}',
-    noData: '(no data — check your API key)',
-    errorText: 'Could not fetch Command Code usage: {message}',
+    noData: '（无数据 — 请检查 API 密钥）',
+    errorText: '获取 Command Code 用量失败：{message}',
     imageGate:
       '当前会话已包含图片，而模型 {model} 不支持图片输入；'
       + '请选择支持图片的模型，或先移除会话中的图片。',
