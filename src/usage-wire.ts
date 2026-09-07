@@ -222,12 +222,20 @@ export const USAGE_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
 // Model catalog Remote (`commandcode/models`)
 // ---------------------------------------------------------------------------
 
-/** One catalog entry the settings page's routing-rule editor offers. */
+/** One catalog entry the settings page's model editors offer. */
 export interface CommandCodeCatalogModel {
   /** Catalog model id (e.g. `deepseek/deepseek-v4-pro`). */
   id: string
   /** Display name from the catalog. */
   name: string
+  /**
+   * Minimum plan-tier key for this model (a `KNOWN_PLANS` value: `go`,
+   * `goat`, `pro`, `provider`, `max`), or undefined for models outside the
+   * snapshot. The settings page groups the model-editor dropdowns under
+   * tier headings from this — the browser cannot import the Host's
+   * capability snapshot, so the Host stamps it per entry.
+   */
+  tier?: string
 }
 
 /** The model-catalog Remote result: the full catalog, sorted for picking. */
@@ -238,23 +246,39 @@ export interface CommandCodeCatalog {
 /** Canonical `<namespace>/<method>` endpoint of the model-catalog Remote. */
 export const MODELS_ENDPOINT = 'commandcode/models'
 
+/**
+ * The shared read/validate helpers for the model-catalog endpoint — a
+ * separate instance so catalog boundary errors name `commandcode/models`,
+ * not the report endpoint.
+ */
+const {
+  record: catalogRecord,
+  stringField: catalogString,
+} = makeBoundaryValidator('commandcode/models result:')
+
 /** Parse one untrusted boundary value into a {@link CommandCodeCatalogModel}. */
 function parseCatalogModel(value: unknown): CommandCodeCatalogModel {
-  const source = record(value, 'model')
-  return {
-    id: stringField(source, 'id', 'model.id'),
-    name: stringField(source, 'name', 'model.name'),
+  const source = catalogRecord(value, 'model')
+  const model: CommandCodeCatalogModel = {
+    id: catalogString(source, 'id', 'model.id'),
+    name: catalogString(source, 'name', 'model.name'),
   }
+  // Tier is optional on the wire (older Hosts predate it); a present
+  // non-string is a contract violation, not a silent drop.
+  if (source.tier !== undefined) {
+    model.tier = catalogString(source, 'tier', 'model.tier')
+  }
+  return model
 }
 
 /** Parse the wire result into a {@link CommandCodeCatalog}. */
 function parseCatalog(value: unknown): CommandCodeCatalog {
-  const source = record(value, 'result')
+  const source = catalogRecord(value, 'result')
   const models = source.models
   if (Array.isArray(models)) {
     return { models: models.map(parseCatalogModel) }
   }
-  return reject('models')
+  throw new TypeError('commandcode/models result: invalid models')
 }
 
 /** The strict result codec for the model-catalog Remote. */

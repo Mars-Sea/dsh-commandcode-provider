@@ -206,6 +206,19 @@ test('models schema accepts a catalog of models', () => {
   assert.deepEqual(parsed, { models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] })
 })
 
+test('models schema round-trips the optional tier field', () => {
+  const parsed = modelsSchema.parse({
+    models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'go' }],
+  })
+  assert.deepEqual(parsed, {
+    models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'go' }],
+  })
+  assert.throws(
+    () => modelsSchema.parse({ models: [{ id: 'a', name: 'b', tier: 42 }] }),
+    /model\.tier/,
+  )
+})
+
 test('models schema accepts an empty catalog', () => {
   assert.deepEqual(modelsSchema.parse({ models: [] }), { models: [] })
 })

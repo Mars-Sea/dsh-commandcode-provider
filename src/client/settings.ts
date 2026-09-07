@@ -72,9 +72,10 @@ export interface SettingsPageApi {
     unset(ref: string): Promise<RemoteResult<void>>
   }
   /**
-   * The model catalog for the routing-rule editor (Host-side). Absent on
-   * legacy transports without the Remote mount — the editor degrades to the
-   * empty-catalog state.
+   * The model catalog for the settings page's model editors (the
+   * routing-rule editor and the visible-models filter; Host-side). Absent
+   * on legacy transports without the Remote mount — the editors degrade to
+   * the empty-catalog state.
    */
   models?(): Promise<RemoteResult<{ models: CatalogModelOption[] }>>
 }
@@ -137,10 +138,16 @@ export interface RuleItemState {
   added: boolean
 }
 
-/** One selectable catalog model in the routing-rule editor. */
+/** One selectable catalog model in the settings page's model editors. */
 export interface CatalogModelOption {
   id: string
   name: string
+  /**
+   * Minimum plan-tier key (a Host `KNOWN_PLANS` value), or undefined for
+   * models outside the snapshot / older Hosts. Drives the tier headings in
+   * the editor dropdowns; absent tiers render unheaded.
+   */
+  tier?: string
 }
 
 /** The page's full state face, projected from the scope + drafts + credential. */
@@ -198,9 +205,9 @@ export interface SettingsPageState {
   rules: RuleItemState[]
   /** Effective visible-model allowlist: staged draft or stored value. Empty = show all. */
   visibleModels: string[]
-  /** The catalog the rule editor offers (Host-side, empty until loaded). */
+  /** The catalog the model editors offer (Host-side, empty until loaded). */
   catalogModels: CatalogModelOption[]
-  /** Whether the catalog fetch failed (rule editor falls back to typing). */
+  /** Whether the catalog fetch failed (editors fall back to typing). */
   catalogFailed: boolean
   /** Whether any staged edit differs from the stored section. */
   dirty: boolean
@@ -864,7 +871,20 @@ export class CommandCodeSettingsController {
     }
     void models().then((response) => {
       if (response.ok && Array.isArray(response.value?.models)) {
-        this.catalogModels = response.value.models
+        // Defensive per-entry shaping: the Remote result is untrusted at the
+        // boundary, and an older Host predates the tier field.
+        const shaped: CatalogModelOption[] = []
+        for (const model of response.value.models) {
+          if (typeof model !== 'object' || model === null) continue
+          const entry = model as unknown as Record<string, unknown>
+          if (typeof entry.id !== 'string' || typeof entry.name !== 'string') continue
+          shaped.push({
+            id: entry.id,
+            name: entry.name,
+            ...(typeof entry.tier === 'string' ? { tier: entry.tier } : {}),
+          })
+        }
+        this.catalogModels = shaped
         this.catalogFailed = false
       } else {
         this.catalogFailed = true

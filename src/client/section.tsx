@@ -26,6 +26,7 @@ import type { SettingsCommandCodeKey } from './locales.ts'
 import type { AccountItemState, CatalogModelOption, RuleItemState, SettingsPageState, StagedField } from './settings.ts'
 import type { LoginPageState } from './login.ts'
 import { LoginRow } from './login-row.tsx'
+import { buildModelSelectOptions, groupModelSelectOptions, tierHeadingFor, toggleModelSelection } from './model-select.ts'
 import type { UsagePageState } from './usage.ts'
 import { formatMoney, formatMoneyExact, formatResetAt, formatTokensCompact, windowRatio } from './usage.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
@@ -843,6 +844,7 @@ function RuleRow({ rule, accounts, catalog, disabled, t, onModels, onAccount, on
         value={rule.account}
         disabled={disabled}
         onChange={(event) => onAccount(event.target.value)}
+        aria-label={t('ruleAccount')}
       >
         {targets.map((target) => (
           <option key={target.value} value={target.value}>{target.label}</option>
@@ -854,10 +856,16 @@ function RuleRow({ rule, accounts, catalog, disabled, t, onModels, onAccount, on
 }
 
 /**
- * A checkbox multi-select dropdown for routing-rule models. The trigger shows
- * the selection count; the anchored Menu lists every catalog model with a
- * checkbox, toggled by clicking the row. Selected ids the catalog no longer
- * carries still render so a saved rule never silently loses a selection.
+ * A checkbox multi-select dropdown for picking catalog models (the
+ * routing-rule rows and the visible-models filter share it). The trigger
+ * shows the selection count; the Menu lists every catalog model with a
+ * checkbox, toggled by clicking the row. A search box under the trigger
+ * (inside the Menu anchor, so focusing it never trips the outside-click
+ * close) filters the list by id/display-name substring, and items group
+ * under plan-tier headings in picker order. Selected ids the catalog no
+ * longer carries still render — flagged stale — so a saved selection never
+ * silently loses an entry, and the VisibleModelsCard offers a one-click
+ * cleanup.
  */
 function ModelMultiSelect({ id, selected, catalog, disabled, t, onSelect }: {
   id: string
@@ -868,56 +876,91 @@ function ModelMultiSelect({ id, selected, catalog, disabled, t, onSelect }: {
   onSelect(ids: string[]): void
 }) {
   const [open, setOpen] = useState(false)
-  // The catalog is sorted for picking; append any selected ids the catalog no
-  // longer carries (removed upstream) so the current rule stays visible.
-  const options = [
-    ...catalog.map((model) => ({ value: model.id, label: model.name })),
-    ...selected
-      .filter((id) => !catalog.some((model) => model.id === id))
-      .map((id) => ({ value: id, label: id })),
-  ]
-  const selectedSet = new Set(selected)
-  const items: MenuEntry[] = options.map((option) => ({
-    id: option.value,
-    label: (
-      <span className="cc-checkRow">
-        <input
-          type="checkbox"
-          className="cc-check"
-          checked={selectedSet.has(option.value)}
-          readOnly
-          tabIndex={-1}
-        />
-        <span className="cc-checkName">{option.label}</span>
-      </span>
+  const [query, setQuery] = useState('')
+  // The search box must not inherit a stale query from a previous open.
+  useEffect(() => {
+    if (open) setQuery('')
+  }, [open])
+  // Tier headings come from the catalog entries themselves (the Host stamps
+  // each entry's plan-tier key on the Remote); rebuild only when the catalog
+  // changes.
+  const tiers = useMemo(
+    () => Object.fromEntries(
+      catalog.flatMap((model) => model.tier === undefined ? [] : [[model.id, model.tier] as const]),
     ),
-  }))
+    [catalog],
+  )
+  // The catalog is sorted for picking; append any selected ids the catalog no
+  // longer carries (removed upstream) so the current selection stays visible.
+  const options = buildModelSelectOptions(catalog, selected, query)
+  const groups = groupModelSelectOptions(options, (modelId) => tierHeadingFor(modelId, tiers))
+  const items: MenuEntry[] = groups.flatMap((group) => [
+    ...(group.heading === undefined
+      ? []
+      : [{ type: 'label' as const, id: `cc-tier-${group.heading}`, text: group.heading }]),
+    ...group.options.map((option) => ({
+      id: option.value,
+      label: (
+        <span className="cc-checkRow">
+          <input
+            type="checkbox"
+            className="cc-check"
+            checked={selected.includes(option.value)}
+            readOnly
+            tabIndex={-1}
+          />
+          <span className="cc-checkName">{option.label}</span>
+          {option.stale ? <span className="cc-badge">{t('modelStale')}</span> : null}
+        </span>
+      ),
+    })),
+  ])
+  // The search box lives INSIDE the Menu anchor (which renders in place
+  // inside the Menu's root span): a pointerdown there counts as "inside",
+  // so focusing/typing never trips the Menu's outside-click close. A box
+  // rendered as a sibling would close the Menu on the first click.
   return (
     <Menu
       open={open}
       onClose={() => setOpen(false)}
       onSelect={(modelId) => {
-        // Toggle one model in the selection.
-        onSelect(selectedSet.has(modelId)
-          ? selected.filter((value) => value !== modelId)
-          : [...selected, modelId])
+        onSelect(toggleModelSelection(selected, modelId))
       }}
       selectedIds={selected}
       items={items}
+      footer={options.length === 0 ? [{
+        type: 'label' as const,
+        id: 'cc-model-search-empty',
+        text: t('modelSearchEmpty'),
+      }] : []}
       portal
       anchor={
-        <button
-          id={id}
-          type="button"
-          className="cc-input cc-ruleTrigger"
-          disabled={disabled || catalog.length === 0}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <span className="cc-ruleTriggerText">
-            {selected.length === 0 ? t('ruleModelPick') : t('ruleModelCount', { count: selected.length })}
-          </span>
-          <span className="cc-ruleCaret" aria-hidden="true" />
-        </button>
+        <span className="cc-modelSelectAnchor">
+          <button
+            id={id}
+            type="button"
+            className="cc-input cc-ruleTrigger"
+            disabled={disabled || catalog.length === 0}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <span className="cc-ruleTriggerText">
+              {selected.length === 0 ? t('ruleModelPick') : t('ruleModelCount', { count: selected.length })}
+            </span>
+            <span className="cc-ruleCaret" aria-hidden="true" />
+          </button>
+          {open ? (
+            <input
+              type="search"
+              className="cc-input cc-modelSearch"
+              placeholder={t('modelSearchPlaceholder')}
+              aria-label={t('modelSearchPlaceholder')}
+              value={query}
+              disabled={disabled}
+              autoFocus
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          ) : null}
+        </span>
       }
     />
   )
@@ -977,12 +1020,27 @@ function VisibleModelsCard({ t, state, disabled, onSelect, onClear }: {
     if (key === 'ruleModelCount') return t('visibleModelsCount', params)
     return t(key, params)
   }
+  // Selected ids the live catalog no longer carries (retired upstream):
+  // kept, flagged stale in the dropdown, removable in one click. Never
+  // auto-dropped — an empty catalog (fetch failure) must not wipe the list.
+  const catalogIds = new Set(state.catalogModels.map((model) => model.id))
+  const staleIds = state.visibleModels.filter((id) => !catalogIds.has(id))
   return (
     <div className="cc-card" aria-label={t('visibleModelsTitle')}>
       <div className="cc-field">
         <div className="cc-fieldHead">
           <label className="cc-label">{t('visibleModelsTitle')}</label>
           <span className="cc-badges">
+            {staleIds.length > 0 ? (
+              <button
+                type="button"
+                className="cc-reset"
+                disabled={disabled}
+                onClick={() => onSelect(state.visibleModels.filter((id) => catalogIds.has(id)))}
+              >
+                {t('visibleModelsCleanStale', { count: staleIds.length })}
+              </button>
+            ) : null}
             {count > 0 ? (
               <button type="button" className="cc-reset" disabled={disabled} onClick={onClear}>
                 {t('visibleModelsShowAll')}
@@ -992,6 +1050,9 @@ function VisibleModelsCard({ t, state, disabled, onSelect, onClear }: {
         </div>
         <p className="cc-hint">{t('visibleModelsHint')}</p>
         {state.catalogFailed ? <p className="cc-invalid">{t('rulesCatalogFailed')}</p> : null}
+        {staleIds.length > 0 && !state.catalogFailed ? (
+          <p className="cc-hint">{t('visibleModelsStaleHint', { count: staleIds.length })}</p>
+        ) : null}
         <ModelMultiSelect
           id="cc-visible-models"
           selected={state.visibleModels}

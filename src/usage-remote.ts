@@ -27,8 +27,9 @@ import type { CommandCodeLoginStatus } from './login-wire.ts'
 /**
  * The browser-login face the usage service exposes (`commandcode/login*`).
  * Backed by the Host-half {@link !CommandCodeLoginFlow} when the plugin entry
- * wired one; absent, the methods degrade to a no-op status so an old client
- * against a fresh page still answers instead of hanging.
+ * wired one; absent, `status`/`cancel` degrade to the idle status while
+ * `begin` rejects with a plain message (so the page's manual paste path
+ * stays the fallback instead of hanging).
  */
 export interface LoginFlowFacade {
   /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
@@ -50,9 +51,10 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
    */
   reports?: () => Promise<CommandCodeAccountsReport>
   /**
-   * Model-catalog source for the routing-rule editor (wired by the plugin
+   * Model-catalog source for the settings page's model editors (the
+   * routing-rule editor and the visible-models filter; wired by the plugin
    * entry). Absent, the `models` endpoint answers an empty list — the page's
-   * rule editor degrades to the empty state.
+   * editors degrade to the empty state.
    */
   listModels?: () => Promise<CommandCodeCatalog>
   /**
@@ -113,10 +115,11 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
   }
 
   /**
-   * The model catalog for the settings page's routing-rule editor. The
-   * browser never calls the Command Code API directly — the Host serves the
-   * catalog (already fetched/cached by the adapter) so rules can be picked
-   * from the live model list instead of typed by hand.
+   * The full model catalog for the settings page's model editors (the
+   * routing-rule editor and the visible-models filter). The browser never
+   * calls the Command Code API directly — the Host serves the catalog
+   * (already fetched/cached by the adapter) so models can be picked from
+   * the live list instead of typed by hand.
    */
   async models(): Promise<CommandCodeCatalog> {
     return this.deps.listModels?.() ?? { models: [] }

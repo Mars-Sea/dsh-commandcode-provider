@@ -865,3 +865,70 @@ test('refreshCatalog recovers after the Remote mount lands', async () => {
   assert.equal(controller.state().catalogFailed, false)
   assert.deepEqual(controller.state().catalogModels, [{ id: 'tencent/hy4-preview', name: 'Tencent Hy4 Preview' }])
 })
+
+// ---------------------------------------------------------------------------
+// Visible-model allowlist
+// ---------------------------------------------------------------------------
+
+test('starts with the stored visible models and stays clean', () => {
+  const scope = makeScope({
+    value: { visibleModels: ['deepseek/deepseek-v4-pro', 'tencent/hy4-preview'] },
+    user: { visibleModels: ['deepseek/deepseek-v4-pro', 'tencent/hy4-preview'] },
+  })
+  const { controller } = makeController({ scope })
+  assert.deepEqual(controller.state().visibleModels, ['deepseek/deepseek-v4-pro', 'tencent/hy4-preview'])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('stored visible models ignore non-string and blank entries', () => {
+  const scope = makeScope({
+    value: { visibleModels: ['deepseek/deepseek-v4-pro', '', 42] },
+  })
+  const { controller } = makeController({ scope })
+  assert.deepEqual(controller.state().visibleModels, ['deepseek/deepseek-v4-pro'])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('staging the same selection as stored is not dirty', () => {
+  const scope = makeScope({
+    value: { visibleModels: ['deepseek/deepseek-v4-pro'] },
+    user: { visibleModels: ['deepseek/deepseek-v4-pro'] },
+  })
+  const { controller } = makeController({ scope })
+  controller.editVisibleModels(['deepseek/deepseek-v4-pro'])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('saving a staged allowlist writes visibleModels through the scope', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  controller.editVisibleModels(['deepseek/deepseek-v4-pro', 'tencent/hy4-preview'])
+  assert.deepEqual(controller.state().visibleModels, ['deepseek/deepseek-v4-pro', 'tencent/hy4-preview'])
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.deepEqual(scope.state.value.visibleModels, ['deepseek/deepseek-v4-pro', 'tencent/hy4-preview'])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('clearVisibleModels stages show-all and persists the empty list', async () => {
+  const scope = makeScope({
+    value: { visibleModels: ['deepseek/deepseek-v4-pro'] },
+    user: { visibleModels: ['deepseek/deepseek-v4-pro'] },
+  })
+  const { controller } = makeController({ scope })
+  controller.clearVisibleModels()
+  assert.deepEqual(controller.state().visibleModels, [])
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.deepEqual(scope.state.value.visibleModels, [])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('discard clears a staged visible-model selection', () => {
+  const { controller } = makeController()
+  controller.editVisibleModels(['deepseek/deepseek-v4-pro'])
+  assert.equal(controller.state().dirty, true)
+  controller.discard()
+  assert.deepEqual(controller.state().visibleModels, [])
+  assert.equal(controller.state().dirty, false)
+})

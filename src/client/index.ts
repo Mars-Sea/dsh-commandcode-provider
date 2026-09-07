@@ -78,6 +78,13 @@ const PAGE_CSS = `
 .cc-check:checked{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
 .cc-check:checked::after{content:'';position:absolute;top:2px;left:5px;width:3px;height:7px;border:solid #fff;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
 .cc-checkName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The model multi-select search box: stacked under the trigger while the
+ * dropdown is open, same input sizing so the pair reads as one control. The
+ * box lives inside the Menu anchor (which renders inside the Menu's root
+ * span), so focusing/typing it never trips the Menu's outside-click close. */
+.cc-modelSelectAnchor{flex-direction:column;gap:6px;display:flex;width:100%}
+.cc-modelSearch{width:100%}
+.cc-modelSearch::-webkit-search-cancel-button{cursor:pointer}
 /* Selects need their own treatment to sit flush with the text inputs:
  * the UA stylesheet renders <select> border-box (34px total vs the inputs'
  * 36px) and forces its own menulist text metrics, so drop the native
@@ -232,7 +239,8 @@ function applyClientSurfaces(
   hostDescription?: HostDescriptionSource,
 ): void {
   const scope = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: COMMANDCODE_NS })
-  // The model catalog for the routing-rule editor is served by the
+  // The model catalog for the settings page's model editors (the
+  // routing-rule editor and the visible-models filter) is served by the
   // `commandcode/models` Remote below; the controller reads it through this
   // mutable seam so the Remote mount (which happens after the controller is
   // constructed) still reaches the catalog fetch. Unset until the mount
@@ -284,7 +292,7 @@ function applyClientSurfaces(
       unmount = dispose
       ctx.inject(['remote.commandcode'], (namespaceCtx) => {
         usageNamespace = namespaceCtx.remote.commandcode
-        // The catalog Remote is live now; (re)fetch it for the rule editor.
+        // The catalog Remote is live now; (re)fetch it for the model editors.
         controller.refreshCatalog()
         namespaceCtx.effect(() => () => {
           usageNamespace = undefined
@@ -318,7 +326,7 @@ function applyClientSurfaces(
     },
   }
   // Wire the catalog Remote into the settings controller's models seam so the
-  // routing-rule editor can fetch the catalog once the mount lands.
+  // model editors can fetch the catalog once the mount lands.
   modelsRemote = () => usageRemote.models()
   const usageController = new CommandCodeUsageController(usageRemote)
   ctx.effect(() => () => usageController.dispose(), 'dsh-commandcode-provider: usage controller')

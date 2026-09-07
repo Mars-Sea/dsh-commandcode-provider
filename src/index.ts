@@ -49,6 +49,7 @@ import { CommandCodeLoginFlow } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 import { CommandCodeSearchProvider, selectCommandCodeSearchProvider } from './web-search.ts'
+import { KNOWN_PLANS } from './capabilities.ts'
 
 export {
   COMMAND_CODE_CLI_VERSION,
@@ -483,16 +484,28 @@ export function apply(ctx: Context, config: Config): void {
     },
   })
   ctx.effect(() => () => loginFlow.dispose(), 'dsh-commandcode-provider: login flow')
-  // The catalog for the settings page's routing-rule editor: served Host-side
+  // The full model catalog for the settings page's model editors (the
+  // routing-rule editor and the visible-models filter): served Host-side
   // from the adapter's cached/fetched catalog (sorted for picking), so the
-  // browser never calls the Command Code API directly.
-  const catalogForRules = async (): Promise<CommandCodeCatalog> => {
+  // browser never calls the Command Code API directly. Unfiltered, so an
+  // editor never loses its own options — e.g. a rule can route a GOAT-only
+  // model while the picker (plan-filtered + allowlisted) hides it. Each
+  // entry carries its plan-tier key so the editors can group under tier
+  // headings without importing the Host's capability snapshot.
+  const catalogForEditors = async (): Promise<CommandCodeCatalog> => {
     const models = await adapter.listModels(PROVIDER, { unfiltered: true })
     return {
-      models: models.map((model) => ({ id: model.id, name: model.name.replace(/\s*\(CC\)$/, '') })),
+      models: models.map((model) => {
+        const tier = KNOWN_PLANS[model.id]
+        return {
+          id: model.id,
+          name: model.name.replace(/\s*\(CC\)$/, ''),
+          ...(tier === undefined ? {} : { tier }),
+        }
+      }),
     }
   }
-  applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow, listModels: catalogForRules })
+  applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow, listModels: catalogForEditors })
 
   // Web search over the Command Code Provider API, exposed through the web
   // capability seam (`ctx.web`). Rides the optional `web` service: a child
