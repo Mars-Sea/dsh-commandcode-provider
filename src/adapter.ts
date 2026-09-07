@@ -602,6 +602,13 @@ export interface CommandCodeConnectionOptions {
    */
   filterModelsByPlan?: boolean
   /**
+   * Visible-model allowlist: catalog model ids shown in pickers. Empty or
+   * unset means "show everything"; applies after the subscription-tier filter.
+   * The settings page persists it; the catalog endpoint serves the full
+   * catalog regardless so the page can always offer every model.
+   */
+  visibleModels?: string[] | undefined
+  /**
    * Optional protocol override. `'auto'` (default) uses billing/cache plus
    * Provider API fallback; `'cli'` forces `/alpha/generate`; `'openai'` forces
    * `/provider/v1/chat/completions`. This is a connection-level test/operator
@@ -799,8 +806,26 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     return this.catalog
   }
 
-  override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+  override async listModels(
+    provider: string,
+    opts?: { unfiltered?: boolean },
+  ): Promise<readonly LlmModelInfo[]> {
     const catalog = await this.loadCatalog()
+    const toInfo = (model: (typeof catalog)[number]) => {
+      const vision = KNOWN_IMAGE_MODELS.has(model.id)
+      return {
+        provider,
+        id: model.id,
+        name: `${model.name} (CC)`,
+        // The picker renders `description` under the model name: plan tier,
+        // active deal, Image marker for Vision models, and context window.
+        description: capabilityDescription(model.id, model.contextWindow),
+        inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
+      }
+    }
+    // Unfiltered: the settings page's catalog endpoint serves the full catalog
+    // so the filter editor can always offer every model.
+    if (opts?.unfiltered === true) return catalog.map(toInfo).sort(compareByPlan)
     // Plan filter: hide models above the account's subscription tier. Fails
     // open — a billing-fetch problem, an unknown plan, or a positive
     // on-demand balance all keep the full catalog visible, and the server
@@ -809,20 +834,15 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const access = this.deps.options().filterModelsByPlan === false
       ? undefined
       : await this.loadBillingAccess()
+    // Visible-model allowlist: empty/unset means "show everything".
+    const visible = this.deps.options().visibleModels
+    const allow = Array.isArray(visible) && visible.length > 0
+      ? new Set(visible.filter((id) => typeof id === 'string' && id !== ''))
+      : undefined
     return catalog
       .filter((model) => modelVisibleInPlan(model.id, access))
-      .map((model) => {
-        const vision = KNOWN_IMAGE_MODELS.has(model.id)
-        return {
-          provider,
-          id: model.id,
-          name: `${model.name} (CC)`,
-          // The picker renders `description` under the model name: plan tier,
-          // active deal, Image marker for Vision models, and context window.
-          description: capabilityDescription(model.id, model.contextWindow),
-          inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
-        }
-      })
+      .filter((model) => allow === undefined || allow.has(model.id))
+      .map(toInfo)
       // The picker renders rows in the order returned: sort by plan tier
       // (Go first, … Provider last) so the models a Go-plan user can actually
       // use lead the list, then alphabetically within each tier.

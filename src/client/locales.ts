@@ -62,6 +62,11 @@ export type SettingsCommandCodeKey =
   | 'ruleModelCount'
   | 'ruleAccount'
   | 'ruleHint'
+  | 'visibleModelsTitle'
+  | 'visibleModelsHint'
+  | 'visibleModelsPick'
+  | 'visibleModelsCount'
+  | 'visibleModelsShowAll'
   | 'overridden'
   | 'reset'
   | 'invalidNumber'
@@ -186,6 +191,11 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   ruleModelCount: '已选 {count} 个模型',
   ruleAccount: '目标账户',
   ruleHint: '从下拉列表勾选要路由的模型（可多选），再选择目标账户。',
+  visibleModelsTitle: '显示的模型',
+  visibleModelsHint: '只在模型选择器中显示勾选的模型；不勾选则显示全部。保存后下次打开选择器即生效。',
+  visibleModelsPick: '选择要显示的模型…',
+  visibleModelsCount: '已选 {count} 个模型',
+  visibleModelsShowAll: '显示全部',
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
@@ -323,6 +333,12 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   ruleModelCount: '{count} model(s) selected',
   ruleAccount: 'Target account',
   ruleHint: 'Check the models to route from the dropdown (multi-select), then pick the target account.',
+  visibleModelsTitle: 'Visible models',
+  visibleModelsHint: 'Show only the checked models in model pickers; unchecked shows all.'
+    + ' Applies the next time a picker opens after saving.',
+  visibleModelsPick: 'Select models to show…',
+  visibleModelsCount: '{count} model(s) selected',
+  visibleModelsShowAll: 'Show all',
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',
