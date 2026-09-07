@@ -20,14 +20,14 @@
  * and split out so upstream syncs stay reviewable.
  */
 // ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.46.0 bundled
+// Static capability snapshot (from the official command-code@1.50.0 bundled
 // model catalog, dist/cli.mjs). The Provider API does not expose reasoning
 // metadata; models omitted here let Command Code choose their reasoning
 // depth, matching the official CLI.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.46.0 bundled model
+  // Re-verified against the authoritative command-code@1.50.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. MiniMax M3, Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -51,7 +51,10 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // existing family members. command-code@1.45.0 added selectable
   // ['low', 'medium', 'high', 'xhigh'] efforts for the Muse Spark family
   // (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor); they previously reasoned
-  // automatically with no selectable levels.
+  // automatically with no selectable levels. command-code@1.48.0 added the
+  // `max` effort tier to Muse Spark 1.3 (previously ['low','medium','high',
+  // 'xhigh']); 1.3 and 1.3-contributor now ship different effort sets.
+  // command-code@1.49.0 added `gpt-6-astra` with the five-level effort set.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Max-0902': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
@@ -102,8 +105,12 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'meta/muse-spark-1.1': ['low', 'medium', 'high', 'xhigh'],
   'meta/muse-spark-1.2': ['low', 'medium', 'high', 'xhigh'],
   'meta/muse-spark-1.2-contributor': ['low', 'medium', 'high', 'xhigh'],
-  'meta/muse-spark-1.3': ['low', 'medium', 'high', 'xhigh'],
+  // command-code@1.48.0 added `max` to Muse Spark 1.3; 1.3-contributor keeps
+  // the four-level set.
+  'meta/muse-spark-1.3': ['low', 'medium', 'high', 'xhigh', 'max'],
   'meta/muse-spark-1.3-contributor': ['low', 'medium', 'high', 'xhigh'],
+  // command-code@1.49.0 added GPT-6 Astra with the full five-level effort set.
+  'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
 }
 
 /**
@@ -157,6 +164,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'gpt-5.6-luna',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
+  // command-code@1.49.0 added GPT-6 Astra; Vision per the official registry
+  // and the CLI's inputModalities:["text","image"].
+  'gpt-6-astra',
   // command-code@1.44.0 added Muse Spark 1.3 and its Contributor sibling;
   // both are Vision per the official registry and the CLI's
   // inputModalities:["text","image"].
@@ -165,7 +175,6 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'meta/muse-spark-1.2-contributor',
   'meta/muse-spark-1.3',
   'meta/muse-spark-1.3-contributor',
-  'minimax/minimax-m3-free',
   'moonshotai/Kimi-K2.5',
   'moonshotai/Kimi-K2.6',
   'moonshotai/Kimi-K2.7-Code',
@@ -177,14 +186,15 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'thinkingmachines/inkling-small',
   'xai/grok-4.5',
   // command-code@1.47.0 marked Grok 4.6 vision-capable (it was text-only in
-  // 1.46.0); the CLI's inputModalities:["text","image"] confirms it.
+  // 1.46.0); re-verified present in the 1.50.0 bundle's
+  // inputModalities:["text","image"] entries.
   'xai/grok-4.6',
   'xiaomi/mimo-v2.5',
   'z-ai/glm-5.3-flash',
 ])
 
 /**
- * Models the official CLI's model table (command-code@1.46.0) marks
+ * Models the official CLI's model table (command-code@1.50.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -192,7 +202,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.46.0 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.50.0 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
  * selectable `['low', 'high', 'max']` efforts; the preview then ended in
@@ -215,7 +225,6 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.7-Flash',
   'Qwen/Qwen3.7-Max',
   'Qwen/Qwen3.7-Plus',
-  'minimax/minimax-m3-free',
   'moonshotai/Kimi-K2.7-Code',
   'moonshotai/Kimi-K2.7-Code-Highspeed',
   'stepfun/Step-3.5-Flash',
@@ -228,9 +237,6 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   // LongCat 2.0 (command-code@1.42.0, Meituan's trillion-parameter coding
   // model, 1M context) is free and text-only, with automatic reasoning.
   'meituan/LongCat-2.0:free',
-  // Muse Spark family (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor)
-  // moved to KNOWN_EFFORTS in command-code@1.45.0 — they now have
-  // selectable ['low', 'medium', 'high', 'xhigh'] efforts.
 ])
 
 /**
@@ -278,7 +284,6 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'deepseek/deepseek-v4-flash-vision-exp': 'go',
   'deepseek/deepseek-v4-pro': 'go',
   'gpt-5.6-luna': 'go',
-  'inclusionai/ling-3.0-flash-free': 'go',
   // command-code@1.42.0 added Meituan's LongCat 2.0 as a free Go-tier model
   // ("LongCat 2.0 free model" — 100% off while it lasts, every plan).
   'meituan/LongCat-2.0:free': 'go',
@@ -286,8 +291,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // including Go, like its 1.2 Contributor sibling.
   'meta/muse-spark-1.2-contributor': 'go',
   'meta/muse-spark-1.3-contributor': 'go',
-  'minimax/minimax-m2.7-free': 'go',
-  'minimax/minimax-m3-free': 'go',
+
   'moonshotai/Kimi-K2.5': 'go',
   'moonshotai/Kimi-K2.6': 'go',
   'moonshotai/Kimi-K2.7-Code': 'go',
@@ -297,7 +301,6 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'poolside/laguna-s-2.1-free': 'go',
   'stepfun/Step-3.5-Flash': 'go',
   'stepfun/Step-3.7-Flash': 'go',
-  'tencent/Hy3': 'go',
   'tencent/hy3-paid': 'go',
   'tencent/hy4-preview': 'go',
   'thinkingmachines/inkling': 'go',
@@ -336,12 +339,15 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'gpt-5.5': 'pro',
   'gpt-5.6-terra': 'pro',
   'meta/muse-spark-1.1': 'pro',
-  // --- Provider / Max (6) ---
+  // --- Provider / Max (7) ---
   'claude-fable-5-1': 'provider',
   'claude-fable-5': 'provider',
   'claude-opus-4-7': 'provider',
   'claude-opus-4-8': 'provider',
   'claude-opus-5': 'provider',
+  // command-code@1.49.0 added GPT-6 Astra; per the pricing page it sits on
+  // Max (Provider/Max tier).
+  'gpt-6-astra': 'provider',
   'sakana/fugu-ultra': 'provider',
 }
 
@@ -397,8 +403,8 @@ export function compareByPlan(
 
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (`Nn`/`$n` in command-code@1.31.0 `dist/cli.mjs`, re-verified unchanged
- * against 1.32.2 where they appear as `Zn`/`er`): subscription `planId`
+ * (located by the `"individual-go"` key in command-code@1.50.0 `dist/cli.mjs`,
+ * re-verified unchanged through 1.50.0): subscription `planId`
  * prefix → display name and the plan's monthly credit total. This is the
  * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
  * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.

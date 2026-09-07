@@ -641,7 +641,7 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
 test('compareByPlan() sorts free models first, then plan tier, then name', () => {
   // Free models (KNOWN_DEALS free: true) lead the list regardless of tier.
   assert.ok(compareByPlan(
-    { id: 'minimax/minimax-m3-free', name: 'MiniMax M3 (CC)' },
+    { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
     { id: 'claude-opus-5', name: 'Claude Opus 5 (CC)' },
   ) < 0)
   // A paid Go model still sorts before a higher-tier model...
@@ -657,7 +657,7 @@ test('compareByPlan() sorts free models first, then plan tier, then name', () =>
   // Free models order among themselves by name.
   assert.ok(compareByPlan(
     { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
-    { id: 'minimax/minimax-m2.7-free', name: 'MiniMax M2.7 (CC)' },
+    { id: 'meituan/LongCat-2.0:free', name: 'LongCat 2.0 (CC)' },
   ) < 0)
   // Within a tier, alphabetical by name.
   assert.ok(compareByPlan(
@@ -1330,7 +1330,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // five-level effort set as claude-fable-5 in the Provider-API table.
   assert.deepEqual(KNOWN_EFFORTS['claude-fable-5-1'], ['low', 'medium', 'high', 'xhigh', 'max'])
   // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
-  // all three Qwen 3.8 models carry ['low','medium','xhigh'] in the ZA table.
+  // all three Qwen 3.8 models carry ['low','medium','xhigh'] in the provider table.
   // Qwen 3.8 Flash joined in command-code@1.36.0.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Flash'], ['low', 'medium', 'xhigh'])
@@ -1352,11 +1352,11 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-fast'], ['low', 'high', 'max'])
   // Synced from the official command-code@1.44.0 model table (re-verified
   // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0, 1.37.0,
-  // 1.39.2, 1.40.1 and 1.44.0 along the way):
+  // 1.39.2, 1.40.1, 1.44.0, 1.49.0, 1.49.1 and 1.50.0 along the way):
   // models that ship with effort levels must be present, and absent ones must
   // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
   // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
-  // Hy3, ...) that carry NO reasoningEfforts in the CLI's ZA table.
+  // Hy3, ...) that carry NO reasoningEfforts in the CLI's provider table.
   assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K2.5'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5-pro'])
@@ -1366,7 +1366,6 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // Muse Spark family (command-code@1.45.0) gained selectable efforts —
   // they're now in KNOWN_EFFORTS and out of KNOWN_THINKING_MODELS.
   assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'], ['low', 'medium', 'high', 'xhigh'])
-  assert.ok(!KNOWN_EFFORTS['tencent/Hy3'])
   // tencent/hy4-preview gained selectable ['low','medium','high'] efforts in
   // command-code@1.38.0 (it previously reasoned automatically with none).
   assert.deepEqual(KNOWN_EFFORTS['tencent/hy4-preview'], ['low', 'medium', 'high'])
@@ -1380,16 +1379,16 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('MiniMaxAI/MiniMax-M3'))
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
-  // MiniMax M3 Free (command-code@1.33.0) reasons automatically like its paid
-  // sibling — reasoning:!0 with no effort levels in the ZA table.
-  assert.ok(KNOWN_THINKING_MODELS.has('minimax/minimax-m3-free'))
+  // MiniMax M3/M2.7 Free variants were retired in command-code@1.39.2;
+  // they are no longer in the catalog and thus not in any snapshot.
   // stealth/ox-alpha reasoned automatically until command-code@1.32.1 gave it
   // selectable ['low','high','max'] efforts; the model then left the catalog
   // entirely in 1.34.0 when its preview ended. It belongs to neither set now.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
-  // Re-verified against the command-code@1.28.4 ZA table (2026-08-18),
+  // Re-verified against the command-code@1.28.4 provider table (2026-08-18),
   // re-confirmed against 1.30.1 (2026-08-21), 1.37.0 (2026-08-28), 1.38.2,
-  // 1.40.1, 1.44.0 (2026-09-02) and 1.45.0 (2026-09-03):
+  // 1.40.1, 1.44.0 (2026-09-02), 1.45.0 (2026-09-03), 1.49.0, 1.49.1
+  // (2026-09-05) and 1.50.0 (2026-09-06):
   // these think automatically (reasoning:!0, no efforts) and belong in the set.
   // tencent/hy4-preview joined in command-code@1.37.0 (OpenRouter-routed, 1M,
   // no efforts) but gained selectable ['low','medium','high'] efforts in
@@ -1408,10 +1407,11 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
   // Muse Spark family (command-code@1.45.0) now has selectable efforts —
   // they moved from KNOWN_THINKING_MODELS to KNOWN_EFFORTS.
+  // command-code@1.48.0 added `max` effort to Muse Spark 1.3.
   assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0:free'])
-  assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.3'], ['low', 'medium', 'high', 'xhigh'])
+  assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.3'], ['low', 'medium', 'high', 'xhigh', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.3-contributor'], ['low', 'medium', 'high', 'xhigh'])
-  // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (ZA reasoning:false, docs
+  // GLM-5/5.1/5.2-Fast are NOT reasoning-capable (provider-table reasoning:false, docs
   // "Text input" only) — the 0.2.0 snapshot wrongly included them.
   assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5'))
   assert.ok(!KNOWN_THINKING_MODELS.has('zai-org/GLM-5.1'))
@@ -1444,10 +1444,8 @@ test('known image models snapshot has stable anchor entries', () => {
   // z-ai/glm-5.3-flash (command-code@1.35.0) replaced stealth/ox-alpha as
   // the open-weight 1M-context Vision reasoning model and is Vision.
   assert.ok(KNOWN_IMAGE_MODELS.has('z-ai/glm-5.3-flash'))
-  // MiniMax M3 Free (command-code@1.33.0) is Vision ("Text input, Vision,
-  // Reasoning") like the paid M3; its M2.7 Free sibling stays text-only.
-  assert.ok(KNOWN_IMAGE_MODELS.has('minimax/minimax-m3-free'))
-  assert.ok(!KNOWN_IMAGE_MODELS.has('minimax/minimax-m2.7-free'))
+  // MiniMax M3/M2.7 Free variants were retired in command-code@1.39.2;
+  // they are no longer in the catalog and thus not in any snapshot.
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-pro'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
@@ -1462,6 +1460,9 @@ test('known image models snapshot has stable anchor entries', () => {
   // command-code@1.47.0 marked Grok 4.6 vision-capable; it is now in
   // KNOWN_IMAGE_MODELS and shows the Image marker in the picker.
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
+  // command-code@1.49.0 added GPT-6 Astra; Vision per the official registry
+  // and the CLI's inputModalities:["text","image"].
+  assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6-astra'))
 })
 
 test('known plan snapshot tiers models by the official plan pages', () => {
@@ -1484,15 +1485,13 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // tencent/hy4-preview (command-code@1.37.0, OpenRouter-routed, 1M) joined Go.
   assert.equal(KNOWN_PLANS['tencent/hy4-preview'], 'go')
   assert.equal(KNOWN_PLANS['stealth/ox-alpha'], undefined)
-  // Tencent Hy3 (the hidden free variant, distinct from tencent/hy3-paid) is
-  // a Go-tier open model; ling-3.0-flash-free (deprecated, free promo ended
-  // 2026-08-03) is also on Go. Both closed coverage gaps in the 1.38.2 sync.
-  assert.equal(KNOWN_PLANS['tencent/Hy3'], 'go')
-  assert.equal(KNOWN_PLANS['inclusionai/ling-3.0-flash-free'], 'go')
-  // MiniMax M3/M2.7 Free variants (command-code@1.33.0) are promo rows of the
-  // Go-tier open models — same tier as their paid siblings.
-  assert.equal(KNOWN_PLANS['minimax/minimax-m3-free'], 'go')
-  assert.equal(KNOWN_PLANS['minimax/minimax-m2.7-free'], 'go')
+  // tencent/hy3-paid (the hidden free variant, formerly tencent/Hy3) is a
+  // Go-tier open model; the upstream catalog renamed it to tencent/hy3-paid.
+  assert.equal(KNOWN_PLANS['tencent/hy3-paid'], 'go')
+  assert.equal(KNOWN_PLANS['tencent/Hy3'], undefined)
+  assert.equal(KNOWN_PLANS['inclusionai/ling-3.0-flash-free'], undefined)
+  assert.equal(KNOWN_PLANS['minimax/minimax-m3-free'], undefined)
+  assert.equal(KNOWN_PLANS['minimax/minimax-m2.7-free'], undefined)
   // Qwen 3.8 Max 0902 (command-code@1.41.0), LongCat 2.0 (1.42.0, free promo)
   // and Muse Spark 1.3 Contributor (1.44.0, "every plan including Go") are all
   // Go-tier.
@@ -1658,11 +1657,11 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.47.0 (2026-09-04): 1.45.0 added Muse Spark reasoning
-  // levels, 1.46.0 added browser login and read_file document support,
-  // 1.47.0 marked Grok 4.6 vision-capable. The version rides every request
+  // command-code@1.50.0 (2026-09-06): 1.48.0 added `max` effort to Muse
+  // Spark 1.3, 1.49.0 added GPT-6 Astra, 1.49.1 and 1.50.0 re-verified with
+  // no snapshot changes. The version rides every request
   // as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.47.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.50.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

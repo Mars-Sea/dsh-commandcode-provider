@@ -6,9 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-07
+
+### Added
+
+- **Support the Command Code Provider Chat Completions API** ([#22](https://github.com/Mars-Sea/dsh-commandcode-provider/pull/22)). Accounts with Provider API access now use the documented `POST /provider/v1/chat/completions` transport (a flat OpenAI-compatible request body) instead of the legacy CLI transport. Historical reasoning is replayed as `reasoning_content` for tool-loop continuity, and OpenAI SSE chunks (`reasoning` / `reasoning_content` / `content` / `tool_calls` / `usage`) are parsed into stream output. The legacy `POST /alpha/generate` transport is unchanged (including its no-reasoning-replay behavior) and remains the route for Go-plan accounts plus the automatic fallback when the Provider API answers `upgrade_required`.
+
 ### Fixed
 
 - **Switching to Command Code mid-session no longer fails with `input[N].call_id must be <= 64`** ([#23](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/23)). Tool-call ids issued by another provider can exceed the Command Code gateway's 64-character limit and were replayed verbatim, so the stream was rejected once such history existed. Overlong paired ids are now remapped to short per-request aliases (`cc-1`, `cc-2`, …) on both transports, with each call and its result resolving through the same map so the pair stays correlated; ids within the limit still pass through unchanged.
+
+### Changed
+
+- **Synced with the official command-code@1.50.0 CLI** (2026-09-06: re-verified with no snapshot changes). `COMMAND_CODE_CLI_VERSION` is now `1.50.0`. Re-verified against the official sources: wire protocol (both the `/alpha/generate` CLI transport and the `/provider/v1/chat/completions` Provider transport), endpoints, auth flow, model catalog, subscription plan maps, deals, and peak/off-peak windows are all identical to 1.49.1.
 
 ## [0.10.0] - 2026-09-04
 
