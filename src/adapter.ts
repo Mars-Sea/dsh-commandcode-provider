@@ -306,6 +306,44 @@ function pairedToolCalls(messages: readonly Message[]): {
   return { ids: new Set([...callIds].filter((id) => resultIds.has(id))), names }
 }
 
+/**
+ * The Command Code gateway rejects tool call ids longer than 64 characters
+ * (`input[N].call_id` must be `<= 64`, issue #23). Cross-provider histories
+ * can carry longer ids — e.g. switching to Command Code mid-session after
+ * another provider issued the call — so overlong paired ids are remapped to
+ * short per-request aliases. Correlation only needs to hold within one
+ * request (each call travels with its result in the same body), so a
+ * sequential alias is enough: no durable state, no cross-request stability,
+ * and the harness log keeps the original ids.
+ */
+const MAX_WIRE_TOOL_CALL_ID_LENGTH = 64
+
+/**
+ * Map each paired tool-call id to its wire id: ids within the gateway limit
+ * pass through verbatim, overlong ids get a collision-free `cc-<n>` alias.
+ * Callers must resolve BOTH the tool-call and its paired tool-result through
+ * the returned map so the pair stays correlated.
+ */
+function wireToolCallIds(paired: ReadonlySet<string>): Map<string, string> {
+  const wire = new Map<string, string>()
+  const taken = new Set<string>()
+  for (const id of paired) {
+    if (id.length <= MAX_WIRE_TOOL_CALL_ID_LENGTH) {
+      wire.set(id, id)
+      taken.add(id)
+    }
+  }
+  let seq = 1
+  for (const id of paired) {
+    if (wire.has(id)) continue
+    let alias = `cc-${seq++}`
+    while (taken.has(alias)) alias = `cc-${seq++}`
+    wire.set(id, alias)
+    taken.add(alias)
+  }
+  return wire
+}
+
 function blockText(block: ContentBlock): string {
   return block.type === 'text' || block.type === 'reasoning' ? block.text : ''
 }
@@ -349,6 +387,9 @@ async function messagesToCC(
 ): Promise<unknown[]> {
   const out: unknown[] = []
   const { ids: paired, names: toolNames } = pairedToolCalls(messages)
+  // Remap cross-provider ids the gateway would reject (issue #23); the
+  // result side resolves through the same map so each pair stays correlated.
+  const wireIds = wireToolCallIds(paired)
 
   for (const message of messages) {
     if (message.role === 'system') continue // folded into params.system by the caller
@@ -382,7 +423,7 @@ async function messagesToCC(
         } else if (block.type === 'tool-call' && paired.has(block.id)) {
           parts.push({
             type: 'tool-call',
-            toolCallId: block.id,
+            toolCallId: wireIds.get(block.id) ?? block.id,
             toolName: block.name,
             input: recordOrEmpty(block.arguments),
           })
@@ -402,7 +443,7 @@ async function messagesToCC(
         content: [
           {
             type: 'tool-result',
-            toolCallId: block.toolCallId,
+            toolCallId: wireIds.get(block.toolCallId) ?? block.toolCallId,
             // `paired` guarantees a call with this id exists, so the map
             // always hits; `|| 'unknown'` also guards an empty call name
             // (matches the official CLI's `?? "unknown"` fallback).
@@ -451,6 +492,10 @@ async function messagesToOpenAI(
 ): Promise<unknown[]> {
   const out: unknown[] = []
   const { ids: paired } = pairedToolCalls(messages)
+  // Same overlong-id remap as the CLI transport (issue #23): OpenAI
+  // `tool_call_id` fields accept longer values, but the remap keeps both
+  // transports consistent and correlation only needs to hold per request.
+  const wireIds = wireToolCallIds(paired)
 
   for (const message of messages) {
     // System messages are folded into the single top-level system message by
@@ -495,7 +540,7 @@ async function messagesToOpenAI(
       const toolCalls = message.content
         .filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> => block.type === 'tool-call' && paired.has(block.id))
         .map((block) => ({
-          id: block.id,
+          id: wireIds.get(block.id) ?? block.id,
           type: 'function' as const,
           function: {
             name: block.name,
@@ -522,7 +567,7 @@ async function messagesToOpenAI(
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
       out.push({
         role: 'tool',
-        tool_call_id: block.toolCallId,
+        tool_call_id: wireIds.get(block.toolCallId) ?? block.toolCallId,
         content: toolResultText(block),
       })
     }

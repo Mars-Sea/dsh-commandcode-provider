@@ -222,6 +222,70 @@ test('stream() replays only paired tool calls', async () => {
   assert.equal(resultPart.toolName, 'bash')
 })
 
+test('stream() remaps overlong cross-provider tool-call ids to the gateway limit', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  // Issue #23: switching to Command Code mid-session can replay a tool id
+  // issued by another provider that exceeds the gateway's `call_id <= 64`
+  // limit. The adapter must remap it to a short per-request alias while
+  // keeping each call/result pair correlated.
+  const longId = `opencode-${'x'.repeat(80)}`
+  assert.ok(longId.length > 64)
+  const adapter = makeAdapter({ fetchImpl })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [
+      userMessage('List files'),
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: longId as never, name: 'bash-long', arguments: '{}' },
+          { type: 'tool-call', id: 'cc-1' as never, name: 'bash-alias-clash', arguments: '{}' },
+          { type: 'tool-call', id: 'call-short' as never, name: 'bash-short', arguments: '{}' },
+        ],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: longId as never, isError: false, content: [{ type: 'text', text: 'a' }] }],
+        source: { kind: 'tool', callId: longId as never },
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: 'cc-1' as never, isError: false, content: [{ type: 'text', text: 'b' }] }],
+        source: { kind: 'tool', callId: 'cc-1' as never },
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: 'call-short' as never, isError: false, content: [{ type: 'text', text: 'c' }] }],
+        source: { kind: 'tool', callId: 'call-short' as never },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  const assistant = messages.find((m) => m.role === 'assistant')!
+  const calls = (assistant.content as Record<string, unknown>[]).filter((p) => p.type === 'tool-call')
+  assert.equal(calls.length, 3)
+  const byName = new Map(calls.map((c) => [c.toolName, c.toolCallId] as const))
+  // The overlong id is replaced by a short alias (`cc-1` is already taken by
+  // a real id, so the alias must skip past it), and short ids pass through.
+  assert.equal(byName.get('bash-long'), 'cc-2')
+  assert.equal(byName.get('bash-alias-clash'), 'cc-1')
+  assert.equal(byName.get('bash-short'), 'call-short')
+  // Every wire id fits the gateway limit, and each tool result carries the
+  // same wire id as its call.
+  const results = messages
+    .filter((m) => m.role === 'tool')
+    .map((m) => (m.content as Record<string, unknown>[])[0]!.toolCallId as string)
+  assert.deepEqual([...results].sort(), ['call-short', 'cc-1', 'cc-2'])
+})
+
 test('stream() falls back to "unknown" for an empty tool-call name', async () => {
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -747,6 +811,56 @@ test('openai protocol sends flat body and replays reasoning_content in history',
   const tool = wireMessages.find((m) => m.role === 'tool') as { tool_call_id: string; content: string }
   assert.equal(tool.tool_call_id, callId)
   assert.equal(tool.content, 'sunny')
+})
+
+test('openai protocol remaps overlong cross-provider tool-call ids', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl,
+  })
+  const longId = `opencode-${'y'.repeat(80)}`
+  assert.ok(longId.length > 64)
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [
+      userMessage('weather?'),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: longId as never, name: 'get_weather', arguments: '{}' }],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: longId as never, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
+        source: { kind: 'tool', callId: longId as never },
+      },
+    ],
+  }))
+
+  const wireMessages = capturedBody!.messages as Record<string, unknown>[]
+  const assistant = wireMessages.find((m) => m.role === 'assistant')!
+  const toolCalls = assistant.tool_calls as { id: string }[]
+  assert.equal(toolCalls.length, 1)
+  assert.equal(toolCalls[0]!.id, 'cc-1')
+  const tool = wireMessages.find((m) => m.role === 'tool') as { tool_call_id: string }
+  assert.equal(tool.tool_call_id, 'cc-1')
 })
 
 test('openai protocol parses reasoning + content SSE into separate blocks', async () => {

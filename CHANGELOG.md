@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Switching to Command Code mid-session no longer fails with `input[N].call_id must be <= 64`** ([#23](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/23)). Tool-call ids issued by another provider can exceed the Command Code gateway's 64-character limit and were replayed verbatim, so the stream was rejected once such history existed. Overlong paired ids are now remapped to short per-request aliases (`cc-1`, `cc-2`, …) on both transports, with each call and its result resolving through the same map so the pair stays correlated; ids within the limit still pass through unchanged.
+
 ## [0.10.0] - 2026-09-04
 
 > **First stable release for the dsh 0.1.2 line.** This release requires **dsh 0.1.2-rc.1 or later** and is published on the `latest` npm tag. It graduates the 0.10.0-alpha.x line (command-code syncs up to 1.47.0) to stable. The previous stable line — 0.9.1 for older Harness releases (the 0.5.0 era) — is no longer under active maintenance; it stays on npm for existing users but receives no further updates.
