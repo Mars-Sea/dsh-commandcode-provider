@@ -53,6 +53,8 @@ export interface CommandCodeSettingsProps {
   removeRule(id: string): void
   editRuleModels(id: string, ids: string[]): void
   editRuleAccount(id: string, text: string): void
+  editVisibleModels(ids: string[]): void
+  clearVisibleModels(): void
 }
 
 /** The section fields folded into the collapsible Advanced card. */
@@ -961,6 +963,48 @@ function RulesCard({ t, state, disabled, onAdd, onRemove, onModels, onAccount }:
   )
 }
 
+/** The visible-model filter card: an allowlist over the catalog. Empty = show all. */
+function VisibleModelsCard({ t, state, disabled, onSelect, onClear }: {
+  t: Translate<SettingsCommandCodeKey>
+  state: SettingsPageState
+  disabled: boolean
+  onSelect(ids: string[]): void
+  onClear(): void
+}) {
+  const count = state.visibleModels.length
+  const pickT: Translate<SettingsCommandCodeKey> = (key, params) => {
+    if (key === 'ruleModelPick') return t('visibleModelsPick')
+    if (key === 'ruleModelCount') return t('visibleModelsCount', params)
+    return t(key, params)
+  }
+  return (
+    <div className="cc-card" aria-label={t('visibleModelsTitle')}>
+      <div className="cc-field">
+        <div className="cc-fieldHead">
+          <label className="cc-label">{t('visibleModelsTitle')}</label>
+          <span className="cc-badges">
+            {count > 0 ? (
+              <button type="button" className="cc-reset" disabled={disabled} onClick={onClear}>
+                {t('visibleModelsShowAll')}
+              </button>
+            ) : null}
+          </span>
+        </div>
+        <p className="cc-hint">{t('visibleModelsHint')}</p>
+        {state.catalogFailed ? <p className="cc-invalid">{t('rulesCatalogFailed')}</p> : null}
+        <ModelMultiSelect
+          id="cc-visible-models"
+          selected={state.visibleModels}
+          catalog={state.catalogModels}
+          disabled={disabled}
+          t={pickT}
+          onSelect={onSelect}
+        />
+      </div>
+    </div>
+  )
+}
+
 /**
  * Show the "Saved ✓" affordance for a short window after each accepted save.
  * The controller only counts saves (`savedCount`); the flash timing lives
@@ -1048,6 +1092,13 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onRemove={props.removeRule}
         onModels={props.editRuleModels}
         onAccount={props.editRuleAccount}
+      />
+      <VisibleModelsCard
+        t={t}
+        state={state}
+        disabled={disabled}
+        onSelect={props.editVisibleModels}
+        onClear={props.clearVisibleModels}
       />
       <div className="cc-card">
         <SecretKeyField

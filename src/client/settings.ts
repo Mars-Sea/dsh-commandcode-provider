@@ -196,6 +196,8 @@ export interface SettingsPageState {
   accountsRemoving: string[]
   /** Model → account routing rules, in list order (first match wins). */
   rules: RuleItemState[]
+  /** Effective visible-model allowlist: staged draft or stored value. Empty = show all. */
+  visibleModels: string[]
   /** The catalog the rule editor offers (Host-side, empty until loaded). */
   catalogModels: CatalogModelOption[]
   /** Whether the catalog fetch failed (rule editor falls back to typing). */
@@ -352,6 +354,8 @@ export class CommandCodeSettingsController {
   private readonly ruleDrafts = new Map<string, { models: string[]; account: string }>()
   /** Stored routing rule rows staged for removal. */
   private readonly removedRuleIds = new Set<string>()
+  /** Staged visible-model allowlist (undefined = no draft). */
+  private visibleModelsDraft: string[] | undefined = undefined
   /** The catalog the rule editor offers (Host-side). */
   private catalogModels: CatalogModelOption[] = []
   private catalogFailed = false
@@ -455,9 +459,10 @@ export class CommandCodeSettingsController {
       accounts,
       accountsRemoving: [...this.removedRefs],
       rules: this.effectiveRules(),
+      visibleModels: this.effectiveVisibleModels(),
       catalogModels: this.catalogModels,
       catalogFailed: this.catalogFailed,
-      dirty: plan.length > 0 || this.accountsDirty() || this.rulesDirty(),
+      dirty: plan.length > 0 || this.accountsDirty() || this.rulesDirty() || this.visibleModelsDirty(),
       invalid: plan.some((item) => item.run === undefined),
       saving: this.saving,
       failed: this.failed,
@@ -615,10 +620,11 @@ export class CommandCodeSettingsController {
 
   /** Discard every staged edit. */
   discard(): void {
-    if (this.staged.size === 0 && !this.accountsStaged() && !this.rulesStaged() && !this.failed) return
+    if (this.staged.size === 0 && !this.accountsStaged() && !this.rulesStaged() && !this.visibleModelsStaged() && !this.failed) return
     this.staged.clear()
     this.clearAccountStaging()
     this.clearRuleStaging()
+    this.clearVisibleModelsStaging()
     this.failed = false
     this.publish()
   }
@@ -637,7 +643,8 @@ export class CommandCodeSettingsController {
     const plan = this.plan()
     const accountRuns = this.accountPlan()
     const ruleRuns = this.rulesPlan()
-    if ((plan.length === 0 && accountRuns.length === 0 && ruleRuns.length === 0) || this.saving) return
+    const visibleRuns = this.visibleModelsPlan()
+    if ((plan.length === 0 && accountRuns.length === 0 && ruleRuns.length === 0 && visibleRuns.length === 0) || this.saving) return
     const runs: Array<() => Promise<boolean>> = []
     for (const item of plan) {
       if (item.run === undefined) return
@@ -651,7 +658,7 @@ export class CommandCodeSettingsController {
     // write failed silently; the accounts list itself writes last. Stop at
     // the first failure: running later writes after a failed one would
     // persist a partial state the staged drafts no longer describe.
-    for (const run of [...runs, ...accountRuns, ...ruleRuns]) {
+    for (const run of [...runs, ...accountRuns, ...ruleRuns, ...visibleRuns]) {
       if (!(await run())) {
         landed = false
         break
@@ -664,6 +671,7 @@ export class CommandCodeSettingsController {
       this.staged.clear()
       this.clearAccountStaging()
       this.clearRuleStaging()
+      this.clearVisibleModelsStaging()
     } else {
       // A failed save may still have landed earlier writes (e.g. the accounts
       // list made it while a key write did not). Reconcile the staging with
@@ -671,6 +679,7 @@ export class CommandCodeSettingsController {
       // AND staged-for-addition (which a retry would persist twice).
       this.reconcileAccountStaging()
       this.reconcileRuleStaging()
+      this.reconcileVisibleModelsStaging()
     }
     this.publish()
   }
@@ -1076,6 +1085,69 @@ export class CommandCodeSettingsController {
     for (const id of [...this.ruleDrafts.keys()]) {
       if (!storedIds.has(id)) this.ruleDrafts.delete(id)
     }
+  }
+
+  /** The stored visible-model allowlist (`visibleModels`); empty = show all. */
+  private storedVisibleModels(): string[] {
+    const raw = this.scope.getSnapshot().value?.visibleModels
+    if (!Array.isArray(raw)) return []
+    return raw.filter((m): m is string => typeof m === 'string' && m !== '')
+  }
+
+  /** Effective visible-model allowlist: staged draft or stored value. */
+  private effectiveVisibleModels(): string[] {
+    return this.visibleModelsDraft ?? this.storedVisibleModels()
+  }
+
+  /** Whether the staged visible-model selection differs from stored. */
+  private visibleModelsDirty(): boolean {
+    return this.visibleModelsDraft !== undefined
+      && !sameModels(this.visibleModelsDraft, this.storedVisibleModels())
+  }
+
+  /** Whether any visible-model staging exists. */
+  private visibleModelsStaged(): boolean {
+    return this.visibleModelsDraft !== undefined
+  }
+
+  /** Reset the visible-model staged edit. */
+  private clearVisibleModelsStaging(): void {
+    this.visibleModelsDraft = undefined
+  }
+
+  /** Drop visible-model staging the stored section already reflects. */
+  private reconcileVisibleModelsStaging(): void {
+    if (this.visibleModelsDraft !== undefined
+      && sameModels(this.visibleModelsDraft, this.storedVisibleModels())) {
+      this.visibleModelsDraft = undefined
+    }
+  }
+
+  /** The visible-model writes a save performs (empty when nothing staged). */
+  private visibleModelsPlan(): Array<() => Promise<boolean>> {
+    if (!this.visibleModelsDirty()) return []
+    return [() => this.writeVisibleModels()]
+  }
+
+  /** Persist the staged visible-model allowlist into the settings section. */
+  private async writeVisibleModels(): Promise<boolean> {
+    const list = this.visibleModelsDraft ?? []
+    await this.scope.set('visibleModels', list)
+    return sameModels(this.storedVisibleModels(), list)
+  }
+
+  /** Stage the visible-model allowlist (multi-select). */
+  editVisibleModels(models: string[]): void {
+    this.visibleModelsDraft = [...models]
+    this.failed = false
+    this.publish()
+  }
+
+  /** Stage "show all models" (clears the allowlist). */
+  clearVisibleModels(): void {
+    this.visibleModelsDraft = []
+    this.failed = false
+    this.publish()
   }
 
   /** The routing-rule writes a save performs (empty when nothing staged). */

@@ -387,6 +387,8 @@ function applyClientSurfaces(
     removeRule: (id: string) => controller.removeRule(id),
     editRuleModels: (id: string, ids: string[]) => controller.editRuleModels(id, ids),
     editRuleAccount: (id: string, text: string) => controller.editRuleAccount(id, text),
+    editVisibleModels: (ids: string[]) => controller.editVisibleModels(ids),
+    clearVisibleModels: () => controller.clearVisibleModels(),
   })
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({

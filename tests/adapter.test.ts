@@ -621,6 +621,72 @@ test('listModels() caches the billing access across picker loads', async () => {
   assert.deepEqual(ids.sort(), ['claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model'])
 })
 
+// Visible-model allowlist (listModels narrows the picker; unfiltered serves the page catalog)
+test('listModels() narrows the picker to visibleModels after the plan filter', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    ...subscriptionStubs('individual-go', 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const adapter = makeAdapter({
+    fetchImpl,
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      visibleModels: ['deepseek/deepseek-v4-pro', 'some-future-model', 'not-a-model'],
+    }),
+  })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.deepEqual(ids.sort(), ['deepseek/deepseek-v4-pro', 'some-future-model'])
+})
+
+test('listModels() shows everything when visibleModels is empty or unset', async () => {
+  for (const visibleModels of [undefined, []] as const) {
+    const { fetchImpl } = fetchRouting({
+      '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+      ...subscriptionStubs('individual-go', 'active'),
+      '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+    })
+    const adapter = makeAdapter({
+      fetchImpl,
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai',
+        workingDir: '/tmp/project',
+        modelsCachePath: '/tmp/cc-models-cache.json',
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+        ...(visibleModels === undefined ? {} : { visibleModels: [...visibleModels] }),
+      }),
+    })
+    const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+    assert.deepEqual(ids.sort(), ['deepseek/deepseek-v4-pro', 'some-future-model'])
+  }
+})
+
+test('listModels({ unfiltered: true }) serves the full catalog for the page editor', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    ...subscriptionStubs('individual-go', 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const adapter = makeAdapter({
+    fetchImpl,
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      visibleModels: ['deepseek/deepseek-v4-pro'],
+    }),
+  })
+  const ids = (await adapter.listModels('commandcode', { unfiltered: true })).map((m) => m.id)
+  assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
+})
+
 test('modelVisibleInPlan() fails open on every uncertainty', async () => {
   const { modelVisibleInPlan } = await import('../src/capabilities.ts')
   // No billing data at all -> visible.

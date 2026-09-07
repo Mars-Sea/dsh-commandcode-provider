@@ -163,6 +163,12 @@ export interface Config {
    */
   filterModelsByPlan?: boolean
   /**
+   * Visible-model allowlist: catalog model ids shown in pickers. Empty or
+   * unset means "show everything". Persisted by the settings page's model
+   * filter card; applies after the subscription-tier filter.
+   */
+  visibleModels?: string[]
+  /**
    * Extra accounts for multi-account rotation. The top-level
    * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first
    * (`default`) account; each entry here adds one more. When a request is
@@ -224,6 +230,7 @@ export const Config: z<Config> = z.object({
   requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   filterModelsByPlan: z.boolean(),
+  visibleModels: z.array(z.string()),
   webSearch: z.boolean().default(true),
   accounts: z.array(z.object({
     label: z.string(),
@@ -258,6 +265,9 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     requestTimeoutMs: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     filterModelsByPlan: config.filterModelsByPlan ?? true,
+    visibleModels: Array.isArray(config.visibleModels)
+      ? config.visibleModels.filter((id) => typeof id === 'string' && id !== '')
+      : undefined,
   }
 }
 
@@ -477,7 +487,7 @@ export function apply(ctx: Context, config: Config): void {
   // from the adapter's cached/fetched catalog (sorted for picking), so the
   // browser never calls the Command Code API directly.
   const catalogForRules = async (): Promise<CommandCodeCatalog> => {
-    const models = await adapter.listModels(PROVIDER)
+    const models = await adapter.listModels(PROVIDER, { unfiltered: true })
     return {
       models: models.map((model) => ({ id: model.id, name: model.name.replace(/\s*\(CC\)$/, '') })),
     }
