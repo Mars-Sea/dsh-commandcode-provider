@@ -5,7 +5,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 interface PackageManifest {
-  dsh?: { client?: { platform?: string } }
+  dsh?: {
+    client?: { platform?: string }
+    compatibility?: { dshReleases?: Record<string, string> }
+  }
   peerDependencies?: Record<string, string>
   devDependencies?: Record<string, string>
 }
@@ -23,6 +26,15 @@ test('every Harness peer and direct development package starts at 0.1.2-rc.1', (
   for (const name of harnessPeers) {
     assert.equal(peers[name], '^0.1.2-rc.1', `${name} peer range`)
     assert.equal(dev[name], '^0.1.2-rc.1', `${name} development range`)
+  }
+})
+
+test('per-release DSH compatibility is declared for the latest releases', () => {
+  // DSH STORE only restores a listing from exact per-release records under
+  // dsh.compatibility.dshReleases; a peer range alone is not evidence.
+  const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
+  for (const version of ['0.1.2-rc.1', '0.1.3-alpha.1', '0.1.3-alpha.2']) {
+    assert.equal(releases[version], 'compatible', `dshReleases[${version}]`)
   }
 })
 

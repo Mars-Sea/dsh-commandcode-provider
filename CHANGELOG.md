@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Turning the web-search toggle off no longer silences other search plugins** ([#26](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/26)). Disabling `webSearch` used to force the web seam back to the factory `deepseek-official` backend, so a sibling search plugin (e.g. modsearch) stayed dead even with Command Code search off. The plugin now remembers the backend it displaced when taking over and hands the selection back to it on toggle-off — and on unload, so disabling the plugin no longer leaves a stale `commandcode` pin that fails every search with `WEB_PROVIDER_CONFIGURED_MISSING`.
+
+### Fixed
+
 - **A partially landed settings save no longer duplicates routing rules on retry.** When the rules write landed but a later write failed, the retry re-persisted staged additions a second time. Staged removals are now matched by row content (stored ids shift after any write), landed additions are dropped from staging, and the write dedupes by content — mirroring the existing account-staging behavior. A throwing settings write also counts as a failed (not dropped) save.
 - **A stream whose final event lacks its trailing newline no longer emits a duplicate `finish`.**
 - **Corrupt billing facts fail open.** A non-finite plan-tier weight no longer hides models, and sub-1K context windows render raw instead of `"0K"`.
@@ -26,6 +30,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **The settings page's model catalog is now unfiltered.** The `commandcode/models` Remote serves the full catalog instead of the plan-filtered picker list, so a routing rule can target a model the picker hides (e.g. route a GOAT-only model to the GOAT account from a Go-plan view). The visible-models filter shares the same full-catalog candidate list. Each entry also carries its plan-tier key so the editor dropdowns can group under tier headings.
+
+## [0.10.2] - 2026-09-08
+
+### Fixed
+
+- **DSH STORE relisting.** Declare per-release compatibility for the latest DSH versions (`dsh.compatibility.dshReleases`: 0.1.2-rc.1, 0.1.3-alpha.1, 0.1.3-alpha.2 all `compatible`) so the catalog can restore the listing, and vendor the built runtime files (`lib/index.js`, `lib/index.d.ts`, `lib/client.js`) in git so the store review resolves the package entry points from the fixed commit.
 
 ## [0.10.1] - 2026-09-07
 
