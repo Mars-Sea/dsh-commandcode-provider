@@ -48,7 +48,7 @@ import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire
 import { CommandCodeLoginFlow } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
-import { CommandCodeSearchProvider, selectCommandCodeSearchProvider } from './web-search.ts'
+import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
 import { KNOWN_PLANS } from './capabilities.ts'
 
 export {
@@ -120,7 +120,8 @@ export type {
 } from './login.ts'
 export { CommandCodeAccountPool, accountUsable, selectActiveAccount, matchModelRule, selectAccountForModel } from './accounts.ts'
 export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState, CommandCodeModelAccountRule } from './accounts.ts'
-export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, selectCommandCodeSearchProvider } from './web-search.ts'
+export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, applyCommandCodeSearchSelection, commandCodeSearchSelection, selectCommandCodeSearchProvider } from './web-search.ts'
+export type { CommandCodeSearchSelection } from './web-search.ts'
 export type { CommandCodeSearchProviderDeps } from './web-search.ts'
 
 export const name = 'llm-commandcode'
@@ -200,12 +201,15 @@ export interface Config {
   /**
    * Whether to use Command Code as the backend for dsh's model-facing
    * `web_search` tool. When enabled, the plugin registers a `commandcode`
-   * search provider on `ctx.web` AND rewrites the web seam's selected
-   * `searchProviderId` to `commandcode` (so it wins over the shipped
-   * `deepseek-official`), using the SAME Command Code API key/base as chat.
-   * The rewrite rides dsh's internal `searchProviderId`, which is read per
-   * search call, so a setting change lands on the next search without a
-   * restart. Defaults to true.
+   * search provider on `ctx.web` AND selects `commandcode` in the web seam
+   * (so it wins over the shipped `deepseek-official` or a sibling search
+   * plugin's pin), using the SAME Command Code API key/base as chat. When
+   * disabled, the selection is handed back to whichever backend was there
+   * before — turning it off never forces the factory default, so a sibling
+   * search plugin (e.g. modsearch) keeps working (issue #26). The rewrite
+   * rides dsh's internal `searchProviderId`, which is read per search call,
+   * so a setting change lands on the next search without a restart.
+   * Defaults to true.
    */
   webSearch?: boolean
   /**
@@ -520,11 +524,25 @@ export function apply(ctx: Context, config: Config): void {
   // separate key or endpoint config — a Command Code key works as-is.
   //
   // Whether the `commandcode` provider WINS over the shipped `deepseek-official`
-  // is controlled by `Config.webSearch` (default on). The web seam has no
-  // public runtime selector, so the plugin writes its private `searchProviderId`
-  // field (read per call) via `selectCommandCodeSearchProvider`. A settings
-  // change lands on the next search without a restart. See src/web-search.ts
-  // for why this runtime write is safe and what it depends on.
+  // (or a sibling search plugin's pin, e.g. modsearch) is controlled by
+  // `Config.webSearch` (default on). The web seam has no public runtime
+  // selector, so the plugin writes its private `searchProviderId` field (read
+  // per call) via `applyCommandCodeSearchSelection`. A settings change lands
+  // on the next search without a restart. See src/web-search.ts for why this
+  // runtime write is safe and what it depends on.
+  //
+  // The tracked selection remembers whichever backend was displaced, so
+  // turning the toggle off hands the selection back to it (issue #26) — the
+  // disable path never forces the factory default. Disposing the fiber (the
+  // plugin unloads) restores it the same way: without that, the stale
+  // `commandcode` pin would outlive its unregistered provider and every
+  // search would fail with WEB_PROVIDER_CONFIGURED_MISSING.
+  const searchSelection = commandCodeSearchSelection()
+  const applySearchSelection = (enabled: boolean): void => {
+    if (webRuntime !== undefined) {
+      applyCommandCodeSearchSelection(webRuntime, searchSelection, enabled)
+    }
+  }
   let webRuntime: WebRuntime | undefined
   ctx.inject(['web'], (webCtx) => {
     webRuntime = webCtx.web
@@ -538,7 +556,17 @@ export function apply(ctx: Context, config: Config): void {
     // Apply the selection at boot too, so a profile WITHOUT the manual
     // `searchProvider: commandcode` cordis patch still routes web search to
     // Command Code once this plugin loads (default `webSearch` on).
-    selectCommandCodeSearchProvider(webCtx.web, current().webSearch ?? true)
+    applySearchSelection(current().webSearch ?? true)
+    // The fiber's disposer restores the displaced backend the same way the
+    // toggle-off path does (`webCtx.effect` registers the inner function as
+    // the fiber's teardown; a bare `return` from the inject callback would
+    // not). Without this, the stale `commandcode` pin would outlive its
+    // unregistered provider and every search would fail with
+    // WEB_PROVIDER_CONFIGURED_MISSING.
+    webCtx.effect(() => () => {
+      webRuntime = undefined
+      applyCommandCodeSearchSelection(webCtx.web, searchSelection, false)
+    }, 'dsh-commandcode-provider: web search selection')
   })
 
   // Settings became an optional service in dsh 0.1.2. Register the section
@@ -551,12 +579,12 @@ export function apply(ctx: Context, config: Config): void {
       },
       // Re-apply the web search selection on every settings change so the
       // `webSearch` toggle reaches the web seam's next search without a
-      // restart. The adapter's own facts are resolved per request, so nothing
-      // else needs registration-level action here.
+      // restart. The tracked state remembers the displaced backend (issue
+      // #26), so flipping the toggle is a handoff, not an overwrite. The
+      // adapter's own facts are resolved per request, so nothing else needs
+      // registration-level action here.
       onChange: () => {
-        if (webRuntime !== undefined) {
-          selectCommandCodeSearchProvider(webRuntime, current().webSearch ?? true)
-        }
+        applySearchSelection(current().webSearch ?? true)
       },
     })
   })

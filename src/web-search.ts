@@ -27,9 +27,12 @@ export const COMMANDCODE_SEARCH_PROVIDER_ID = 'commandcode'
 
 /**
  * The factory-declared search provider id dsh ships by default (from
- * `dsh-base`'s cordis patch `web.config.searchProvider`). A plugin that wants
- * its own backend to win rewrites `WebRuntime.searchProviderId` to its own id;
- * disabling that plugin restores this value.
+ * `dsh-base`'s cordis patch `web.config.searchProvider`). Kept as a
+ * documented reference only: disabling this plugin's `webSearch` toggle
+ * restores the previously selected backend (see
+ * {@link applyCommandCodeSearchSelection}) — it never forces this default,
+ * because forcing it is what used to silence sibling search plugins such as
+ * modsearch even with Command Code search turned off (issue #26).
  */
 export const DEFAULT_WEB_SEARCH_PROVIDER_ID = 'deepseek-official'
 
@@ -59,6 +62,11 @@ interface WebRuntimeSearchField {
  * settings-save path that calls this — the provider simply stays
  * registered-but-unselected (the boot-time `searchProvider: commandcode`
  * cordis patch is the durable alternative).
+ *
+ * @deprecated Prefer {@link applyCommandCodeSearchSelection}: this overload
+ * always overwrites the displaced backend with the factory default on
+ * disable, so turning Command Code search off silences whichever provider
+ * was selected before (e.g. modsearch) instead of restoring it (issue #26).
  */
 export function selectCommandCodeSearchProvider(web: WebRuntime, enable: boolean): string | undefined {
   try {
@@ -68,6 +76,78 @@ export function selectCommandCodeSearchProvider(web: WebRuntime, enable: boolean
     return prior
   } catch {
     return undefined
+  }
+}
+
+/**
+ * Tracked web-search selection state for one mounted `WebRuntime`.
+ *
+ * `owner` marks whether this plugin currently owns the selection (i.e. it
+ * wrote `commandcode` and has not given it back yet). `displaced` is the
+ * backend id the plugin displaced when it took over — restored when the
+ * toggle turns off or the plugin unloads. `undefined` means "nothing was
+ * configured, leave auto-select" and must round-trip untouched: writing the
+ * factory default instead would still override a sibling plugin's own
+ * constructor-time pin.
+ */
+export interface CommandCodeSearchSelection {
+  owner: boolean
+  displaced: string | undefined
+}
+
+/** Fresh selection state: the plugin starts out not owning the selection. */
+export function commandCodeSearchSelection(): CommandCodeSearchSelection {
+  return { owner: false, displaced: undefined }
+}
+
+/**
+ * Reach one end of the `webSearch` toggle without trampling sibling search
+ * providers (issue #26).
+ *
+ * - Enabling writes `commandcode` and remembers whatever it displaced. When
+ *   the plugin already owns the selection (e.g. a settings save while still
+ *   on), the original `displaced` value is kept — the field currently holds
+ *   our own id, which must never be mistaken for the user's backend.
+ * - Disabling hands the selection back to the remembered backend. When the
+ *   state holds no memory (a fresh boot straight into `webSearch: false`),
+ *   the field is left alone: the runtime's current value — a sibling's
+ *   cordis pin such as `searchProvider: modsearch`, or unset for
+ *   auto-select — already says what the user wants.
+ * - When the field already reads `commandcode` at first touch (e.g. a
+ *   surviving runtime the plugin did not set, or a manual
+ *   `searchProvider: commandcode` pin), `displaced` stays undefined so the
+ *   later disable is a no-op rather than a guess at the factory default.
+ *
+ * Never throws: like the low-level rewrite, a hardened runtime shape degrades
+ * to registered-but-unselected.
+ */
+export function applyCommandCodeSearchSelection(
+  web: WebRuntime,
+  state: CommandCodeSearchSelection,
+  enable: boolean,
+): void {
+  try {
+    const field = web as unknown as WebRuntimeSearchField
+    if (enable) {
+      if (state.owner) {
+        // Still on across a re-apply: re-assert without forgetting whom we displaced.
+        field.searchProviderId = COMMANDCODE_SEARCH_PROVIDER_ID
+        return
+      }
+      const prior = field.searchProviderId
+      state.displaced = prior === COMMANDCODE_SEARCH_PROVIDER_ID ? undefined : prior
+      field.searchProviderId = COMMANDCODE_SEARCH_PROVIDER_ID
+      state.owner = true
+      return
+    }
+    if (state.owner) {
+      state.owner = false
+      field.searchProviderId = state.displaced
+      return
+    }
+    // Off without ever having taken over: nothing of ours to give back.
+  } catch {
+    // Hardened/frozen runtime: stay registered-but-unselected.
   }
 }
 

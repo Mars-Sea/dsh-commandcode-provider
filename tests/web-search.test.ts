@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { CommandCodeSearchProvider, selectCommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID } from '../src/web-search.ts'
+import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection, selectCommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID } from '../src/web-search.ts'
 import { COMMAND_CODE_CLI_VERSION } from '../src/adapter.ts'
 
 /** A fetch stub that records the request and returns a scripted response. */
@@ -265,7 +265,8 @@ test('selectCommandCodeSearchProvider rewrites the runtime selection field', () 
   assert.equal(prior, 'deepseek-official')
   assert.equal((web as { searchProviderId?: string }).searchProviderId, COMMANDCODE_SEARCH_PROVIDER_ID)
 
-  // Disabling restores the shipped default.
+  // Disabling restores the shipped default (legacy behaviour, kept for
+  // compatibility; new code prefers applyCommandCodeSearchSelection).
   selectCommandCodeSearchProvider(web as never, false)
   assert.equal((web as { searchProviderId?: string }).searchProviderId, DEFAULT_WEB_SEARCH_PROVIDER_ID)
 })
@@ -275,4 +276,140 @@ test('selectCommandCodeSearchProvider keeps an undefined field when prior was un
   const prior = selectCommandCodeSearchProvider(web as never, true)
   assert.equal(prior, undefined)
   assert.equal(web.searchProviderId, COMMANDCODE_SEARCH_PROVIDER_ID)
+})
+
+test('applyCommandCodeSearchSelection restores a sibling pin (e.g. modsearch) on disable', () => {
+  // The issue #26 repro: a sibling plugin pinned `searchProvider: modsearch`
+  // at construction time. Enabling must remember it; disabling must hand the
+  // selection back to it — never to the factory default.
+  const web = { searchProviderId: 'modsearch' } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(web, state, true)
+  assert.equal((web as unknown as { searchProviderId?: string }).searchProviderId, COMMANDCODE_SEARCH_PROVIDER_ID)
+
+  applyCommandCodeSearchSelection(web, state, false)
+  assert.equal((web as unknown as { searchProviderId?: string }).searchProviderId, 'modsearch')
+})
+
+test('applyCommandCodeSearchSelection leaves an unconfigured field alone when never enabled', () => {
+  // A fresh boot straight into `webSearch: false`: nothing displaced, nothing
+  // to restore — the runtime's own value (sibling pin or unset auto-select)
+  // already says what the user wants.
+  const pinned = { searchProviderId: 'modsearch' } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  applyCommandCodeSearchSelection(pinned, commandCodeSearchSelection(), false)
+  assert.equal((pinned as unknown as { searchProviderId?: string }).searchProviderId, 'modsearch')
+
+  const unset = {} as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  applyCommandCodeSearchSelection(unset, commandCodeSearchSelection(), false)
+  assert.equal((unset as unknown as { searchProviderId?: string }).searchProviderId, undefined)
+})
+
+test('applyCommandCodeSearchSelection keeps the displaced backend across re-enables', () => {
+  // Settings saves re-apply while still on: the field currently holds our own
+  // id, which must never overwrite the remembered backend.
+  const web = { searchProviderId: 'modsearch' } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(web, state, true)
+  applyCommandCodeSearchSelection(web, state, true)
+  applyCommandCodeSearchSelection(web, state, false)
+  assert.equal((web as unknown as { searchProviderId?: string }).searchProviderId, 'modsearch')
+})
+
+test('applyCommandCodeSearchSelection treats a pre-set commandcode pin as nothing to restore', () => {
+  // The field already read `commandcode` before we ever touched it (manual
+  // `searchProvider: commandcode` pin or a surviving runtime): disabling is a
+  // no-op rather than a guess at the factory default.
+  const web = { searchProviderId: COMMANDCODE_SEARCH_PROVIDER_ID } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(web, state, true)
+  applyCommandCodeSearchSelection(web, state, false)
+  assert.equal((web as unknown as { searchProviderId?: string }).searchProviderId, undefined)
+})
+
+test('applyCommandCodeSearchSelection never throws on a hardened runtime', () => {
+  const frozen = Object.freeze({}) as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  const state = commandCodeSearchSelection()
+  // In strict-mode ESM assignment to a frozen object throws inside; the
+  // helper must swallow it and degrade to registered-but-unselected.
+  applyCommandCodeSearchSelection(frozen, state, true)
+  applyCommandCodeSearchSelection(frozen, state, false)
+})
+
+test('host apply() hands the selection back to the prior backend when webSearch turns off', async () => {
+  // End-to-end over the real plugin boot: the `web` service starts with a
+  // sibling's pin (`modsearch`, as its own cordis patch would leave it).
+  // Booting with webSearch on displaces it; flipping the toggle off through
+  // the settings seam restores it — the exact issue #26 flow.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { apply } = await import('../src/index.ts')
+  const { WebRuntime } = await import('@deepseek-ai/dsh-web')
+  const { Service } = await import('@deepseek-ai/cordis')
+  const SettingsService = await import('@deepseek-ai/dsh-settings')
+
+  // A minimal concrete SettingsProvider: the abstract base's init only needs
+  // `load()` (published as the document) plus the real
+  // register/installSection/update machinery it ships.
+  class MemorySettings extends SettingsService.SettingsProvider {
+    override readonly writable = true
+    override async load(): Promise<Record<string, unknown>> {
+      return {}
+    }
+    protected override async persist(
+      _ns: unknown,
+      _section: Record<string, unknown>,
+    ): Promise<void> {
+    }
+  }
+
+  const ctx = new Context()
+  ctx.provide('llm', {
+    registerConfigurableProviders: () => {},
+    registerAdapter: () => {},
+  })
+  await ctx.plugin(WebRuntime, { searchProvider: 'modsearch' })
+  await ctx.plugin(MemorySettings, {})
+
+  let settingsNs: string | undefined
+  const seen: string[] = []
+  const settings = ctx.get('settings') as {
+    register: (ns: string, schema: unknown, opts: unknown) => unknown
+    installSection: (
+      owner: unknown,
+      ns: string,
+      schema: unknown,
+      entry: unknown,
+      hooks: { setSource: (s: () => unknown) => void; onChange: () => void },
+    ) => void
+  }
+  const origInstall = settings.installSection.bind(settings)
+  settings.installSection = (owner, ns, schema, entry, hooks) => {
+    settingsNs = ns
+    return origInstall(owner, ns, schema, entry, hooks)
+  }
+  const origRegister = settings.register.bind(settings)
+  settings.register = ((ns: string, schema: unknown, opts: unknown) => {
+    seen.push(ns)
+    return origRegister(ns, schema, opts)
+  }) as typeof settings.register
+
+  await ctx.plugin(apply as never, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
+  assert.equal(seen.includes('llm-commandcode'), true)
+  assert.equal(settingsNs, 'llm-commandcode')
+
+  const web = ctx.get('web') as unknown as { searchProviderId?: string }
+  assert.equal(web.searchProviderId, 'commandcode')
+
+  await (settings as unknown as {
+    update: (ns: string, patch: Record<string, unknown>) => Promise<unknown>
+  }).update('llm-commandcode', { webSearch: false })
+  assert.equal(web.searchProviderId, 'modsearch')
+
+  // And back on: the remembered backend is displaced again.
+  await (settings as unknown as {
+    update: (ns: string, patch: Record<string, unknown>) => Promise<unknown>
+  }).update('llm-commandcode', { webSearch: true })
+  assert.equal(web.searchProviderId, 'commandcode')
 })

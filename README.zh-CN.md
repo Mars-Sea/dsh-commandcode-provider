@@ -140,10 +140,10 @@ llm-commandcode:
 
 当你的 dsh 部署加载了 web 能力（`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`）时，模型所用的 `web_search` 工具会由本插件的 `commandcode` 搜索 provider 承载——它用**与聊天相同的 API key 与 base URL** 调用 Command Code Provider API 的 `/alpha/web-search` 端点。你无需另外配置搜索 key、端点或模型。
 
-**默认开启。** 插件的 **设置 → Command Code** 页里有一个「用 Command Code 承载联网搜索」开关（`webSearch`，默认开）。开启时插件会自动把 `commandcode` 选为当前搜索后端；关闭则回退到 dsh 自带的 DeepSeek 搜索。该开关在**下一次搜索时生效**，无需重启。
+**默认开启。** 插件的 **设置 → Command Code** 页里有一个「用 Command Code 承载联网搜索」开关（`webSearch`，默认开）。开启时插件会自动把 `commandcode` 选为当前搜索后端；关闭则把选择权交还给之前的后端（比如 modsearch 等其他搜索插件可继续工作——不会被强制回退到 dsh 自带的 DeepSeek 搜索）。该开关在**下一次搜索时生效**，无需重启。
 
 - 该 provider 仅在 web 服务存在时以 `commandcode` 注册进 `ctx.web`；没有它，本插件仍是纯聊天插件。
-- 开关通过启动时与每次设置变更时在 web 接缝里选中 `commandcode` 来实现。若你想更稳妥地固定，可设置 `searchProvider: commandcode`（或 `$DSH_WEB_SEARCH_PROVIDER=commandcode`）；即使本插件的运行时选中不可用，该配置仍然生效。
+- 开关通过启动时与每次设置变更时在 web 接缝里选中 `commandcode` 来实现，同时记住被顶掉的后端；关闭开关（或卸载插件）时会恢复那个后端。若你想更稳妥地固定，可设置 `searchProvider: commandcode`（或 `$DSH_WEB_SEARCH_PROVIDER=commandcode`）；即使本插件的运行时选中不可用，该配置仍然生效。
 - dsh 工具的 `numResults` 会被收敛到 Command Code 的取值范围（1–10，默认 5）；结果映射为 dsh 的 `WebSearchSource` 结构（`url`/`title`/`snippet`）。
 
 > 这里直接使用 Command Code Provider API（与官方 CLI 内置的 `web_search` 相同），因此与 DeepSeek 原生搜索后端不同。
