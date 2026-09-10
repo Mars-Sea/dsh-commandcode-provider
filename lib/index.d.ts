@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.50.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.53.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -487,7 +487,7 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
  */
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
- * Models the official CLI's model table (command-code@1.50.0) marks
+ * Models the official CLI's model table (command-code@1.53.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
  * think automatically, with Command Code driving the depth. This is the
  * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
@@ -495,7 +495,7 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * effort levels, and this snapshot is not surfaced in the picker's compact
  * description — it exists for programmatic consumers.
  *
- * Source: the command-code@1.50.0 bundled model table (dist/cli.mjs),
+ * Source: the command-code@1.53.0 bundled model table (dist/cli.mjs),
  * cross-checked with https://commandcode.ai/docs/reference/cli/models.
  * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
  * selectable `['low', 'high', 'max']` efforts; the preview then ended in
@@ -508,7 +508,13 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * to `KNOWN_EFFORTS`. command-code@1.42.0 added `meituan/LongCat-2.0:free`
  * (reasoning:!0, no efforts). command-code@1.45.0 gave the Muse Spark family
  * (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) selectable
- * `['low', 'medium', 'high', 'xhigh']` efforts — they moved to `KNOWN_EFFORTS`.)
+ * `['low', 'medium', 'high', 'xhigh']` efforts — they moved to `KNOWN_EFFORTS`.
+ * command-code@1.51.3 gave `MiniMaxAI/MiniMax-M3` selectable
+ * `['low', 'medium', 'high']` efforts — it moved to `KNOWN_EFFORTS` too.
+ * command-code@1.52.0 added `inclusionai/ling-3.0-flash-sante:free`
+ * (reasoning:!0, no efforts).)
+ * command-code@1.53.0 added `deepseek/deepseek-v4.1-flash` with selectable
+ * ['low', 'high', 'max'] efforts, so it lives in `KNOWN_EFFORTS`, not here.)
  * Keep in sync via the dsh-commandcode-upstream skill.
  */
 declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
@@ -525,7 +531,9 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` (Go) and 1.42.0 added
  * `meituan/LongCat-2.0:free` (Go, free promo); command-code@1.43.0 added
  * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
- * (GOAT) plus its Contributor sibling (Go).
+ * (GOAT) plus its Contributor sibling (Go); command-code@1.52.0 added the
+ * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
+ * added `deepseek/deepseek-v4.1-flash` (Go).
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -557,8 +565,8 @@ declare function compareByPlan(a: {
 }): number;
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (located by the `"individual-go"` key in command-code@1.50.0 `dist/cli.mjs`,
- * re-verified unchanged through 1.50.0): subscription `planId`
+ * (located by the `"individual-go"` key in command-code@1.53.0 `dist/cli.mjs`,
+ * re-verified unchanged through 1.53.0): subscription `planId`
  * prefix → display name and the plan's monthly credit total. This is the
  * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
  * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
@@ -635,29 +643,43 @@ declare const KNOWN_DEALS: Readonly<Record<string, KnownDeal>>;
 /**
  * Models with time-of-day (peak/off-peak) pricing, per the official pricing
  * page (`/docs/resources/pricing-limits`). Since 2026-08-16 16:00 UTC, DeepSeek
- * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h/day,
- * full price); the other 17 hours are off-peak at half price. The V4 Flash
- * Vision (exp) variant (command-code@1.32.0) shares the V4 Flash windows and
- * peak prices ($0.44/$1.32) — each row's hover annotation states exactly 2×
- * that row's displayed off-peak prices. The picker shows the
+ * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h per
+ * weekday, full price) **Monday to Friday only**; the other 17 hours of a
+ * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
+ * The V4 Flash Vision (exp) variant (command-code@1.32.0) shares the V4 Flash
+ * windows and peak prices ($0.44/$1.32) — each row's hover annotation states
+ * exactly 2× that row's displayed off-peak prices. The picker shows the
  * *current* state as a compact
  * label (`Peak`/`Half`) matching the English noun style of the other markers
  * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
  * model right now is cheap or expensive.
  *
- * Extraction caution: in the page's HTML each annotation div sits inside its
- * OWN row's container, immediately before the NEXT row starts — flattening
- * the page to text makes every annotation look like it belongs to the model
- * printed after it. Verify membership against the enclosing row and the 2×
- * price relation, not the flat-text neighbor.
+ * Authoritative extraction: the pricing page embeds a model JSON array whose
+ * hourly-priced entries carry a `timeOfDay` block
+ * (`{ windows: "01–04 & 06–10 UTC, Mon–Fri", peakHoursPerDay: 7,
+ * offPeakHoursPerDay: 17, peak: {...}, offPeak: {...} }`). Exactly four models
+ * carry it: V4 Pro, V4 Flash, V4 Flash Vision (exp), and V4.1 Flash (added in
+ * command-code@1.53.0 at $0.15/$0.60 off-peak, $0.30/$1.20 peak — the same
+ * schedule as the other three).
  *
- * Keep in sync with the official pricing page when the model set or the peak
- * windows change (see the dsh-commandcode-upstream skill).
+ * Extraction caution: the rendered HTML rows are a trap. Each annotation div
+ * sits inside its OWN row's container, immediately before the NEXT row starts,
+ * so flattening the page to text makes every annotation look like it belongs
+ * to the model printed after it — that is how `deepseek/deepseek-v4-flash-fast`
+ * was wrongly added here (its row is flat-priced at $0.28/$0.56/$0.07 and has
+ * no `timeOfDay` block). Trust the embedded JSON's `timeOfDay` membership and
+ * the 2× price relation, never the flat-text neighbor.
+ *
+ * Keep in sync with the official pricing page when the model set, the peak
+ * windows, or the weekday rule change (see the dsh-commandcode-upstream skill).
  */
 declare const KNOWN_PEAK_PRICING: ReadonlySet<string>;
 /**
- * Whether `now` (defaults to `Date.now()`) falls in a peak-pricing hour for
- * time-of-day-priced models. `undefined` for models outside the snapshot.
+ * Whether `now` (defaults to `Date.now()`) falls in a peak-pricing window for
+ * time-of-day-priced models. Peak rates apply Monday–Friday (UTC) only: the
+ * official rule charges Saturday and Sunday completely off-peak for all 24
+ * hours, so a weekend timestamp is off-peak even inside `PEAK_HOUR_RANGES`.
+ * `undefined` for models outside the snapshot.
  */
 declare function peakPricingState(modelId: string, now?: number): 'peak' | 'off-peak' | undefined;
 /**

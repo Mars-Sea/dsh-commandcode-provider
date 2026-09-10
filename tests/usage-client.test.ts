@@ -14,6 +14,7 @@ import {
   formatMoney,
   formatMoneyExact,
   formatResetAt,
+  formatSuccessRate,
   formatTokensCompact,
   windowRatio,
   type UsageRemote,
@@ -146,6 +147,14 @@ test('formatTokensCompact renders K/M/B suffixes', () => {
   assert.equal(formatTokensCompact(1_900_000), '1.9M')
   assert.equal(formatTokensCompact(2_500), '2.5K')
   assert.equal(formatTokensCompact(3_000_000_000), '3.0B')
+})
+
+test('formatSuccessRate caps the precision at two decimals and trims trailing zeros', () => {
+  assert.equal(formatSuccessRate(99.965552876334), '99.97')
+  assert.equal(formatSuccessRate(100), '100')
+  assert.equal(formatSuccessRate(97.6), '97.6')
+  assert.equal(formatSuccessRate(33.333333333333), '33.33')
+  assert.equal(formatSuccessRate(0), '0')
 })
 
 test('windowRatio clamps into [0, 1] and treats cap 0 as empty', () => {

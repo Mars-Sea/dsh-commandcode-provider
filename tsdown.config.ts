@@ -22,17 +22,19 @@ const lib = defineConfig({
   clean: true,
   sourcemap: true,
   dts: true,
-  outExtension: () => ({ js: '.js', dts: '.d.ts' }),
-  external: [
-    '@deepseek-ai/cordis',
-    '@deepseek-ai/schemastery',
-    '@deepseek-ai/dsh-llm',
-    '@deepseek-ai/dsh-credentials',
-    '@deepseek-ai/dsh-launch-environment',
-    '@deepseek-ai/dsh-settings',
-    '@deepseek-ai/dsh-typert-protocol',
-    '@deepseek-ai/dsh-web',
-  ],
+  outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
+  deps: {
+    neverBundle: [
+      '@deepseek-ai/cordis',
+      '@deepseek-ai/schemastery',
+      '@deepseek-ai/dsh-llm',
+      '@deepseek-ai/dsh-credentials',
+      '@deepseek-ai/dsh-launch-environment',
+      '@deepseek-ai/dsh-settings',
+      '@deepseek-ai/dsh-typert-protocol',
+      '@deepseek-ai/dsh-web',
+    ],
+  },
 })
 
 const client = defineConfig({
@@ -47,12 +49,14 @@ const client = defineConfig({
   // Only platform/seed modules and host-shipped client bundles are resolvable
   // from the loader's module table at runtime; anything else must stay
   // external (a cross-plugin value import would be a build error upstream).
-  external: [
-    '@deepseek-ai/cordis',
-    'react',
-    'react/jsx-runtime',
-    '@deepseek-ai/dsh-client-ui-primitives',
-  ],
+  deps: {
+    neverBundle: [
+      '@deepseek-ai/cordis',
+      'react',
+      'react/jsx-runtime',
+      '@deepseek-ai/dsh-client-ui-primitives',
+    ],
+  },
   outputOptions: {
     entryFileNames: 'client.js',
     banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify('@mars-sea/dsh-commandcode-provider')}, factory: (require) => {`,

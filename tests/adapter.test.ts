@@ -1428,9 +1428,15 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // command-code@1.39.0 added DeepSeek V4 Flash Fast; 1.39.1 dropped medium
   // for it, so the 1.39.2 table ships ['low','high','max'].
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-fast'], ['low', 'high', 'max'])
+  // command-code@1.53.0 added DeepSeek V4.1 Flash ("Add new
+  // deepseek/deepseek-v4.1-flash model") with ['low','high','max'] — the same
+  // set as V4 Flash Fast, Kimi K3 and GLM-5.3.
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['low', 'high', 'max'])
+  assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the official command-code@1.44.0 model table (re-verified
   // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0, 1.37.0,
-  // 1.39.2, 1.40.1, 1.44.0, 1.49.0, 1.49.1 and 1.50.0 along the way):
+  // 1.39.2, 1.40.1, 1.44.0, 1.49.0, 1.49.1, 1.50.0, 1.51.2, 1.51.3, 1.52.0
+  // and 1.53.0 along the way):
   // models that ship with effort levels must be present, and absent ones must
   // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
   // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
@@ -1447,14 +1453,22 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // tencent/hy4-preview gained selectable ['low','medium','high'] efforts in
   // command-code@1.38.0 (it previously reasoned automatically with none).
   assert.deepEqual(KNOWN_EFFORTS['tencent/hy4-preview'], ['low', 'medium', 'high'])
-  assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3']) // no official effort levels
+  // MiniMaxAI/MiniMax-M3 gained selectable ['low','medium','high'] efforts in
+  // command-code@1.51.3 (it previously reasoned automatically with none, and
+  // lived in KNOWN_THINKING_MODELS).
+  assert.deepEqual(KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3'], ['low', 'medium', 'high'])
+  // Ling 3.0 Flash Sante (command-code@1.52.0) reasons automatically with no
+  // selectable efforts, so it must stay out of the effort map.
+  assert.ok(!KNOWN_EFFORTS['inclusionai/ling-3.0-flash-sante:free'])
   // moonshotai/Kimi-K3 gained selectable ['low','high','max'] efforts in
   // command-code@1.39.3 (it previously reasoned automatically with none).
   assert.deepEqual(KNOWN_EFFORTS['moonshotai/Kimi-K3'], ['low', 'high', 'max'])
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
-  assert.ok(KNOWN_THINKING_MODELS.has('MiniMaxAI/MiniMax-M3'))
+  // MiniMaxAI/MiniMax-M3 left this set in command-code@1.51.3 when it gained
+  // selectable ['low','medium','high'] efforts (it is in KNOWN_EFFORTS now).
+  assert.ok(!KNOWN_THINKING_MODELS.has('MiniMaxAI/MiniMax-M3'))
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
   // MiniMax M3/M2.7 Free variants were retired in command-code@1.39.2;
@@ -1466,7 +1480,8 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   // Re-verified against the command-code@1.28.4 provider table (2026-08-18),
   // re-confirmed against 1.30.1 (2026-08-21), 1.37.0 (2026-08-28), 1.38.2,
   // 1.40.1, 1.44.0 (2026-09-02), 1.45.0 (2026-09-03), 1.49.0, 1.49.1
-  // (2026-09-05) and 1.50.0 (2026-09-06):
+  // (2026-09-05), 1.50.0 (2026-09-06), 1.51.2, 1.51.3 (2026-09-09), 1.52.0
+  // and 1.53.0 (2026-09-10):
   // these think automatically (reasoning:!0, no efforts) and belong in the set.
   // tencent/hy4-preview joined in command-code@1.37.0 (OpenRouter-routed, 1M,
   // no efforts) but gained selectable ['low','medium','high'] efforts in
@@ -1481,6 +1496,10 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(!KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K3'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
   assert.ok(KNOWN_THINKING_MODELS.has('meituan/LongCat-2.0:free'))
+  // Ling 3.0 Flash Sante (command-code@1.52.0) thinks automatically
+  // (reasoning:!0, no efforts), like its retired ling-3.0-flash-free
+  // predecessor.
+  assert.ok(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
   // Muse Spark family (command-code@1.45.0) now has selectable efforts —
@@ -1535,9 +1554,16 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3-contributor'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('meituan/LongCat-2.0:free'))
+  // Ling 3.0 Flash Sante (command-code@1.52.0) is text-only per the bundled
+  // inputModalities:["text"] and the pricing page's caps.vision:false.
+  assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
   // command-code@1.47.0 marked Grok 4.6 vision-capable; it is now in
   // KNOWN_IMAGE_MODELS and shows the Image marker in the picker.
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
+  // command-code@1.53.0 added DeepSeek V4.1 Flash; Vision per the official
+  // registry ("Text input, Vision, Reasoning") and the CLI's
+  // inputModalities:["text","image"].
+  assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // command-code@1.49.0 added GPT-6 Astra; Vision per the official registry
   // and the CLI's inputModalities:["text","image"].
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6-astra'))
@@ -1575,6 +1601,13 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // Go-tier.
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-Max-0902'], 'go')
   assert.equal(KNOWN_PLANS['meituan/LongCat-2.0:free'], 'go')
+  // Ling 3.0 Flash Sante (command-code@1.52.0) is a free model on every plan
+  // ("Available on Go and above"), so its minimum tier is Go.
+  assert.equal(KNOWN_PLANS['inclusionai/ling-3.0-flash-sante:free'], 'go')
+  // DeepSeek V4.1 Flash (command-code@1.53.0) is available on every plan
+  // including Go — the pricing page's embedded availability grants it
+  // all tiers, and the Go/GOAT/Pro/Max plan pages all list it.
+  assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash'], 'go')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3-contributor'], 'go')
   // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
   // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
@@ -1631,6 +1664,9 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // LongCat 2.0 (command-code@1.42.0) is a free model ("Free while it lasts",
   // permanent-style deal) like Laguna S 2.1.
   assert.equal(KNOWN_DEALS['meituan/LongCat-2.0:free']?.free, true)
+  // Ling 3.0 Flash Sante (command-code@1.52.0) is free "up to 100 requests a
+  // day" while the promo lasts — also a permanent-style deal.
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.0-flash-sante:free']?.free, true)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
@@ -1679,6 +1715,31 @@ test('capabilityDescription() composes plan, deal, Image, context', () => {
     capabilityDescription('deepseek/deepseek-v4-flash', 1_000_000, Date.parse('2026-08-17T17:00:00Z')),
     'Go · Half · 1M',
   )
+  // Peak rates apply Monday–Friday only: 02:30 UTC is `Peak` on a Monday
+  // (2026-08-17) but `Half` on the Saturday before it (2026-08-15).
+  assert.equal(
+    capabilityDescription('deepseek/deepseek-v4-flash', 1_000_000, Date.parse('2026-08-17T02:30:00Z')),
+    'Go · Peak · 1M',
+  )
+  // DeepSeek V4.1 Flash (command-code@1.53.0): Go-tier Image model with the
+  // same hourly schedule — `Peak` at 02:30 UTC on a Monday, `Half` off-peak.
+  assert.equal(
+    capabilityDescription('deepseek/deepseek-v4.1-flash', 1_000_000, Date.parse('2026-08-17T02:30:00Z')),
+    'Go · Peak · Image · 1M',
+  )
+  assert.equal(
+    capabilityDescription('deepseek/deepseek-v4.1-flash', 1_000_000, Date.parse('2026-08-17T17:00:00Z')),
+    'Go · Half · Image · 1M',
+  )
+  assert.equal(
+    capabilityDescription('deepseek/deepseek-v4-flash', 1_000_000, Date.parse('2026-08-15T02:30:00Z')),
+    'Go · Half · 1M',
+  )
+  // V4 Flash Fast is flat-priced: no peak/off-peak marker at any hour.
+  assert.equal(
+    capabilityDescription('deepseek/deepseek-v4-flash-fast', 1_000_000, Date.parse('2026-08-17T02:30:00Z')),
+    'Go · 1M',
+  )
   // Expired deal vanishes from the composition.
   assert.equal(
     capabilityDescription('google/gemini-3.7-flash', 1_000_000, Date.parse('2027-01-01T00:00:00Z')),
@@ -1690,13 +1751,26 @@ test('capabilityDescription() composes plan, deal, Image, context', () => {
 
 test('peakPricingState/Label report the current UTC peak/off-peak window', () => {
   // All DeepSeek hourly-priced models are in the time-of-day pricing snapshot
-  // (the V4 Flash Vision variant shares V4 Flash's windows per the pricing page).
+  // (the V4 Flash Vision variant shares V4 Flash's windows per the pricing page;
+  // command-code@1.53.0 added V4.1 Flash with the same schedule at
+  // $0.15/$0.60 off-peak, $0.30/$1.20 peak).
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-pro'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-vision-exp'))
-  // DeepSeek V4 Flash Fast (command-code@1.39.0) shares V4 Flash's peak windows
-  // and peak prices per the pricing page's off-peak annotation.
-  assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-fast'))
+  assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4.1-flash'))
+  // DeepSeek V4 Flash Fast (command-code@1.39.0) is NOT hourly-priced: the
+  // pricing page's embedded model JSON gives it a flat rate ($0.28/$0.56/$0.07)
+  // and no `timeOfDay` block, so it must carry no Peak/Half marker. (The old
+  // entry here misattributed V4 Flash Vision's neighboring row annotation.)
+  assert.ok(!KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-fast'))
+  assert.equal(
+    peakPricingState('deepseek/deepseek-v4-flash-fast', Date.parse('2026-08-17T02:30:00Z')),
+    undefined,
+  )
+  assert.equal(
+    peakPricingLabel('deepseek/deepseek-v4-flash-fast', Date.parse('2026-08-17T02:30:00Z')),
+    undefined,
+  )
   // Non-peak-priced models report no state. Qwen 3.8 Max looks annotated when
   // the pricing page is flattened to text, but its hover annotation actually
   // lives in the V4 Flash Vision row above it (each annotation states exactly
@@ -1707,7 +1781,8 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
   assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
   assert.equal(peakPricingLabel('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
 
-  // Official windows: peak 01:00–04:00 and 06:00–10:00 UTC, off-peak otherwise.
+  // Official windows: peak 01:00–04:00 and 06:00–10:00 UTC, off-peak
+  // otherwise, Monday–Friday only. 2026-08-17 is a Monday.
   const peak = (h: number) => Date.parse(`2026-08-17T${String(h).padStart(2, '0')}:30:00Z`)
   assert.equal(peakPricingState('deepseek/deepseek-v4-flash', peak(2)), 'peak')
   assert.equal(peakPricingLabel('deepseek/deepseek-v4-flash', peak(2)), 'Peak')
@@ -1727,20 +1802,55 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
     peakPricingState('deepseek/deepseek-v4-pro', Date.parse('2026-08-17T04:00:00Z')),
     'off-peak',
   )
-  // Peak is 7 hours/day total (01-03 + 06-09 = 3 + 4).
-  let peakHours = 0
-  for (let h = 0; h < 24; h++) {
-    if (peakPricingState('deepseek/deepseek-v4-flash', peak(h)) === 'peak') peakHours++
+  // Weekends are charged completely off-peak for all 24 hours: the same peak
+  // hours on a Saturday (2026-08-15) and Sunday (2026-08-16) are `Half`.
+  for (const weekendHour of [2, 8, 17]) {
+    for (const weekendDay of ['2026-08-15', '2026-08-16']) {
+      const at = Date.parse(`${weekendDay}T${String(weekendHour).padStart(2, '0')}:30:00Z`)
+      assert.equal(peakPricingState('deepseek/deepseek-v4-flash', at), 'off-peak')
+      assert.equal(peakPricingLabel('deepseek/deepseek-v4-flash', at), 'Half')
+    }
   }
-  assert.equal(peakHours, 7)
+  // Peak is 7 hours on a weekday (01-03 + 06-09 = 3 + 4) and 0 on a weekend:
+  // 35 hours across a full Monday–Sunday week.
+  let weekdayPeakHours = 0
+  for (let h = 0; h < 24; h++) {
+    if (peakPricingState('deepseek/deepseek-v4-flash', peak(h)) === 'peak') weekdayPeakHours++
+  }
+  assert.equal(weekdayPeakHours, 7)
+  let weekendPeakHours = 0
+  for (const weekendDay of ['2026-08-15', '2026-08-16']) {
+    for (let h = 0; h < 24; h++) {
+      const at = Date.parse(`${weekendDay}T${String(h).padStart(2, '0')}:30:00Z`)
+      if (peakPricingState('deepseek/deepseek-v4-flash', at) === 'peak') weekendPeakHours++
+    }
+  }
+  assert.equal(weekendPeakHours, 0)
+  let weekPeakHours = 0
+  for (const day of ['2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22', '2026-08-23']) {
+    for (let h = 0; h < 24; h++) {
+      const at = Date.parse(`${day}T${String(h).padStart(2, '0')}:30:00Z`)
+      if (peakPricingState('deepseek/deepseek-v4-flash', at) === 'peak') weekPeakHours++
+    }
+  }
+  assert.equal(weekPeakHours, 35)
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.50.0 (2026-09-06): 1.48.0 added `max` effort to Muse
-  // Spark 1.3, 1.49.0 added GPT-6 Astra, 1.49.1 and 1.50.0 re-verified with
-  // no snapshot changes. The version rides every request
-  // as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.50.0')
+  // command-code@1.53.0 (2026-09-10): "Add new deepseek/deepseek-v4.1-flash
+  // model" — Go-tier, Vision, ['low','high','max'] efforts, same hourly
+  // schedule as the other DeepSeek models ($0.15/$0.60 off-peak, $0.30/$1.20
+  // peak). Wire protocol, endpoints, effort map (beyond the addition),
+  // subscription plan maps, every other plan tier, and every deal are
+  // unchanged. (For history: 1.50.1 shipped CLI-local changes — stable
+  // process title, UNIX-socket status; 1.51.0 briefly added DeepSeek V4.1
+  // Flash Beta behind a 2026-09-10 expiry gate; 1.51.2 removed it from the
+  // bundle entirely; 1.51.3 gave MiniMax M3 selectable ['low','medium','high']
+  // efforts; 1.52.0 added the free Ling 3.0 Flash Sante model plus
+  // daily-window CLI guidance. There is no CLI changelog entry for
+  // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
+  // The version rides every request as x-command-code-version.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.53.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

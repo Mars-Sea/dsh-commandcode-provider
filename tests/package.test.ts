@@ -33,7 +33,7 @@ test('per-release DSH compatibility is declared for the latest releases', () => 
   // DSH STORE only restores a listing from exact per-release records under
   // dsh.compatibility.dshReleases; a peer range alone is not evidence.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  for (const version of ['0.1.2-rc.1', '0.1.3-alpha.1', '0.1.3-alpha.2']) {
+  for (const version of ['0.1.2-rc.1', '0.1.3-alpha.1', '0.1.3-alpha.2', '0.1.5-alpha.1']) {
     assert.equal(releases[version], 'compatible', `dshReleases[${version}]`)
   }
 })

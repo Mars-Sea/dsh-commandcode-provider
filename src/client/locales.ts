@@ -199,9 +199,11 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   modelSearchPlaceholder: '搜索模型…',
   modelSearchEmpty: '没有匹配的模型。',
   modelStale: '已下架',
-  visibleModelsTitle: '显示的模型',
-  visibleModelsHint: '只在模型选择器中显示勾选的模型；不勾选则显示全部。保存后下次打开选择器即生效。',
-  visibleModelsPick: '选择要显示的模型…',
+  visibleModelsTitle: '模型白名单',
+  visibleModelsHint:
+    '勾选要保留的模型，模型选择器就只列出这些；一个都不勾选时则显示全部模型。'
+    + '保存后，下次打开模型选择器生效。',
+  visibleModelsPick: '选择要保留的模型…',
   visibleModelsCount: '已选 {count} 个模型',
   visibleModelsShowAll: '显示全部',
   visibleModelsStaleHint: '有 {count} 个已选模型在目录中找不到了（可能已下架），不影响其他模型；可清理或保留。',
@@ -348,10 +350,12 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   modelSearchPlaceholder: 'Search models…',
   modelSearchEmpty: 'No matching models.',
   modelStale: 'Retired',
-  visibleModelsTitle: 'Visible models',
-  visibleModelsHint: 'Show only the checked models in model pickers; unchecked shows all.'
-    + ' Applies the next time a picker opens after saving.',
-  visibleModelsPick: 'Select models to show…',
+  visibleModelsTitle: 'Model allowlist',
+  visibleModelsHint:
+    'Check the models you want to keep, and model pickers will list only those. '
+    + 'If nothing is checked, every model is shown. After saving, the change '
+    + 'applies the next time you open a model picker.',
+  visibleModelsPick: 'Select models to keep…',
   visibleModelsCount: '{count} model(s) selected',
   visibleModelsShowAll: 'Show all',
   visibleModelsStaleHint: '{count} selected model(s) are no longer in the catalog (possibly retired);'

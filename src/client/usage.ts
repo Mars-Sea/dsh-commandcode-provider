@@ -173,6 +173,17 @@ export function formatTokensCompact(value: number): string {
   return String(value)
 }
 
+/**
+ * Format a success-rate percentage (already in percent units, e.g. 99.96):
+ * at most two decimals, trailing zeros trimmed — `100` stays `100`, not
+ * `100.00`, and the raw upstream float `99.965552876334` becomes `99.97`.
+ * The `%` suffix is appended by the caller (the card and the dashboard line
+ * both compose it).
+ */
+export function formatSuccessRate(value: number): string {
+  return String(Number(value.toFixed(2)))
+}
+
 /** One window's fill ratio in [0, 1]; 0 when uncapped. */
 export function windowRatio(used: number, cap: number): number {
   if (cap <= 0) return 0

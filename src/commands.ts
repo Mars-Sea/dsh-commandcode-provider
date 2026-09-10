@@ -69,6 +69,15 @@ function tokensCompact(value: number): string {
   return String(value)
 }
 
+/**
+ * Format a success-rate percentage (already in percent units): at most two
+ * decimals, trailing zeros trimmed — mirrors `formatSuccessRate` in
+ * `./client/usage.ts`, which the settings card uses.
+ */
+function successRateText(value: number): string {
+  return String(Number(value.toFixed(2)))
+}
+
 /** Format a millis timestamp as a local date; `n/a` when unset. */
 function resetLabel(ms: number): string {
   if (ms <= 0) return 'n/a'
@@ -139,7 +148,7 @@ function renderReport(report: CommandCodeUsageReport, locale: LocaleId, title?: 
       commandCopy(locale, 'requestsLine')
         .replace('{n}', String(u.completedCount))
         .replace('{f}', String(u.failedCount))
-        .replace('{r}', String(u.successRate)),
+        .replace('{r}', successRateText(u.successRate)),
       commandCopy(locale, 'costLine')
         .replace('{money}', money(u.totalCost))
         .replace('{credits}', moneyShort(u.totalCredits)),

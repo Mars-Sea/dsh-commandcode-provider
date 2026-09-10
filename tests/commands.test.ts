@@ -204,6 +204,36 @@ test('command renders a full usage report in zh', async () => {
   assert.match(result.text, /█/) // bar chart glyph present
 })
 
+test('command rounds the success rate to two decimals', async () => {
+  const adapter = makeAdapter(makeFetch({
+    '/alpha/whoami': { status: 200, body: { success: true, user: { id: 'u1', name: 'Mars-Sea', userName: 'mars-sea' } } },
+    '/alpha/usage/summary': {
+      status: 200,
+      body: {
+        totalCount: 935, totalCost: 1.3187, successRate: 99.965552876334,
+        completedCount: 935, failedCount: 0,
+        totalTokensIn: 1000, totalTokensOut: 500, totalCredits: 1.3187,
+        periodBasis: 'billing-period',
+      },
+    },
+    '/alpha/billing/credits': {
+      status: 200,
+      body: {
+        credits: { monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0 },
+        windowLimits: {
+          fiveHour: { used: 0.035, cap: 3, exceeded: false, resetAt: 0 },
+          weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
+        },
+      },
+    },
+  }))
+  const def = commandDefinition({ adapter, getLocale: () => 'zh' })
+  const result = await invoke(def, 'status')
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /成功率 99\.97%/)
+  assert.doesNotMatch(result.text, /99\.965552876334/)
+})
+
 test('command renders a full usage report in en', async () => {
   const adapter = makeAdapter(makeFetch({
     '/alpha/whoami': { status: 200, body: { success: true, user: { id: 'u1', name: 'Mars-Sea', userName: 'mars-sea' } } },

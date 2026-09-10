@@ -23,7 +23,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **Multi-account rotation** — when one account hits its usage limit, requests switch to the next account automatically. See [Account rotation](#account-rotation).
 - **Flexible API key setup** — via the settings page, an environment variable, or the official CLI login file.
 - **Model-picker annotations** — minimum plan, active deal or `FREE` badge, peak/off-peak state, image support, and context window; free models listed first.
-- **Plan-aware picker** — models above your subscription tier are hidden by default (toggleable); an optional **Visible models** allowlist keeps only your favorites in the picker.
+- **Plan-aware picker** — models above your subscription tier are hidden by default (toggleable); an optional **Model allowlist** keeps only your favorites in the picker.
 - **Reasoning-effort support** — models with selectable reasoning effort levels expose them in the picker.
 - **Image input** — Vision-capable models accept images.
 - **Web search** — the dsh `web_search` tool is backed by the Command Code Provider API (`/alpha/web-search`) with the same key/endpoint as chat, so no separate search key or base URL is needed. See [Web search](#web-search).
@@ -95,7 +95,7 @@ With several Command Code subscriptions, the plugin **switches to the next accou
 - **Setup** — use the **Account rotation** card at Settings → **Command Code** to add accounts with a label and API key; the top-level key always serves first as the `default` account.
 - **Manual switching** — the **Active account** dropdown pins a preferred account; if it is exhausted, requests fall back to other accounts and return once its window resets.
 - **Route models to accounts** — the **Route models to accounts** card picks catalog models (multi-select, fetched from the live catalog) and routes them to an account. A request whose model is in a rule serves from that account while it is usable; an exhausted or invalid routed account falls back to the normal rotation. Rules match in list order — the first hit wins.
-- **Show only favorite models** — the **Visible models** card keeps only the checked models in the model picker; unchecked shows all (the default).
+- **Show only favorite models** — the **Model allowlist** card keeps only the checked models in the model picker; unchecked shows all (the default).
 - **Status** — the **Account usage** card and `/commandcode` report per-account state.
 
 The equivalent YAML (`$DSH_HOME/settings.yaml` or composition config):
