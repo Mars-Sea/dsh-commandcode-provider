@@ -65,6 +65,12 @@ src/login-wire.ts      Login Remote contract: `commandcode/login*` endpoints'
 src/web-search.ts      CommandCode web-search provider over `ctx.web` (registered
                        only when the profile mounts the web seam; reuses the
                        plugin's apiBase + credential chain for `/alpha/web-search`).
+src/tui-settings.ts    dsh-TUI settings section over the optional
+                       `tuiSettingsSections` seam: declares the Command Code
+                       page (`apiKey` secret field, apiBase, plan filter, model
+                       allowlist, active account, language) with local
+                       structural types, so no dependency on the terminal
+                       front door (issue #28).
 src/client/locales.ts   zh/en copy + LocaleNamespaceMap augmentation.
 src/client/login.ts   Login-panel controller (Remote poll lifecycle; React-free
                       so node tests can drive it).
@@ -93,8 +99,13 @@ tests/client-boot.test.ts client-boot integration tests (real apply() against a
                       DSH 0.1.2 client assembly; settings page + provider card).
 tests/package.test.ts package-metadata contract (Harness peers start at rc.1,
                       no dsh-client-runtime).
+tests/config-schema.test.ts Config credential contract: literal apiKey fields
+                      carry role('secret') and are stripped by redactSecrets.
 tests/web-search.test.ts web-search provider tests (wire body, result mapping,
                       failure taxonomy, selection-field rewrite).
+tests/tui-settings.test.ts dsh-TUI settings-section tests (declared fields,
+                      secret-ref safety, unset-reachable options, effective
+                      boolean defaults, registration lifecycle).
 scripts/verify-isolated-install.mjs  pnpm 10 marketplace-generation tarball install smoke.
 cordis.patch.yml      Bundle patch layer (inserts the llm-commandcode row).
 tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
@@ -165,7 +176,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 - **API key resolution order** (in `src/index.ts`): `config.apiKey` → credential ref `apiKeyEnv` (default `COMMANDCODE_API_KEY`, via the dsh credentials seam) → launch environment → official CLI auth file `~/.commandcode/auth.json`. **pi/OMP auth files are intentionally NOT scanned** — keep it that way.
 - **Multi-account rotation** (`src/accounts.ts` + the adapter's connect loop): the top-level key forms the `default` slot; `Config.accounts` (`[{ label, apiKeyEnv | apiKey }]`) adds more, in rotation order. Rotation is **passive**: a key is marked only on a real pre-stream rejection (429 → `unknown` cooldown, 401 → `disabled`), and the adapter's `rotateApiKey` hook re-sends the same request with the next account's key (safe: nothing streamed, the body is account-independent, `threadId` random per request — mid-stream failures NEVER rotate). When every account is marked, the pool probes `/alpha/billing/credits` per key (`probeFiveHourWindow`) to revive reset windows, else throws `RATE_LIMIT` naming the earliest `resetAt` (all-401 → `INVALID_CREDENTIAL`). State is keyed by API key, not slot — shared credentials share one mark. **Manual selection**: `Config.activeAccount` (a slot id) pins the serving account via the pool's `preferredId` seam + `selectActiveAccount()` (shared with the usage view's active badge); a pinned-but-exhausted or unknown id falls back to rotation order. **Model routing**: `Config.modelAccountRules` (`[{ models: string[], account }]`) lists catalog model ids per account slot; the request's model reaches key resolution (`resolveApiKey(connection, model)`), the pool's `modelAccountRules` seam re-reads rules per resolution, and `matchModelRule()`/`selectAccountForModel()` serve the routed account before preferred/rotation — an unusable routed account falls back, so the router is a hint, never a hard gate. The rules editor's model list comes from a Host-side `commandcode/models` Remote (the FULL adapter catalog via `listModels(…, { unfiltered: true })`, sorted), so the browser never calls the Command Code API; `SettingsPageApi.models` is optional, so legacy transports degrade to the empty-catalog state. Extra-account slot ids are the credential reference itself (`COMMANDCODE_API_KEY_2`, …) so a stored selection survives list reorders/removals; only literal-only composition entries keep positional `account-N` ids. The settings page edits `activeAccount` through the generic section-field machinery (a `<select>` bound to a text field) and `modelAccountRules` through its own rules card (staged rows like `accounts`, one `modelAccountRules` write). The picker's billing-access cache is per key. The usage Remote result is `CommandCodeAccountsReport` (`{ accounts: [...] }`); host and client ship in one bundle, so wire-shape changes need no migration — only synced edits in `src/usage-wire.ts`, `src/usage-remote.ts`, `src/client/usage.ts`, and `src/commands.ts`.
 - **Web search (`src/web-search.ts` + the optional `web` seam)**: the model-facing `web_search` tool (from `@deepseek-ai/dsh-tool-web`) is served by a `CommandCodeSearchProvider` registered as `commandcode` on `ctx.web` — same `Authorization: Bearer <key>` + `x-command-code-version` chain, same `apiBase`, so DSH's web search needs NO separate key/endpoint config (unlike `dsh-web-search-deepseek`, which needs its own Anthropic-compatible base). It POSTs `{ query, numResults, allowedDomains?, blockedDomains? }` to `/alpha/web-search` and maps `{ title, url, snippet }` → `WebSearchSource`. Registration rides `ctx.inject(['web'], ...)` exactly like `commands`/`typert`: the provider is registered only when the profile mounts the web service, and the fiber never activates otherwise (this stays an LLM-provider-only plugin without web). The pool's `resolveKey()` (rotation + auth-file revived) is reused, so search benefits from the same multi-account selection; the search endpoint is account-independent so no mid-flight rotation happens. **Selection**: whether the `commandcode` provider WINS over the shipped `deepseek-official` (or a sibling search plugin's pin, e.g. modsearch's `searchProvider: modsearch`) is `Config.webSearch` (default on). The web seam has NO public runtime selector, so the plugin writes its private `searchProviderId` field (read per call by `web.search()`) via `applyCommandCodeSearchSelection()` in `src/web-search.ts` — applied at boot AND on every settings change (the `installSection` `onChange` hook), and restored on fiber unload. The tracked `CommandCodeSearchSelection` remembers the displaced backend id, so toggle-off (and unload) hands the selection back to it — it NEVER forces the factory default, because that is what silenced sibling plugins with Command Code search off (issue #26); a fresh boot straight into `webSearch: false` leaves the field untouched. Re-enables keep the original `displaced` (the field holds our own id then, which must not overwrite the memory), and a field already reading `commandcode` at first touch means "nothing to restore". That write depends on the runtime shape (a plain writable property, not `#private`); the durable alternative is the boot-time `searchProvider: commandcode` cordis patch. The legacy `selectCommandCodeSearchProvider()` stays exported for compatibility but always restores the factory default on disable — new code must not use it. `dsh-web` is a `^0.1.2-rc.1` peer (kept external in tsdown); `tests/web-search.test.ts` pins the wire body, header, result mapping, the `WEB_ABORTED`/`WEB_PROVIDER_CREDENTIAL_MISSING`/`WEB_PROVIDER_ERROR` taxonomy, the selection-field handoff (sibling-pin restore, re-enable memory, unload path via the real host `apply()`), and the legacy rewrite.
-- **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings. On the legacy `/alpha/generate` transport, reasoning blocks are intentionally NOT replayed into later turns (matches the CLI; private reasoning must not leak); on the `/provider/v1/chat/completions` transport they are passed back as `reasoning_content` for tool-loop continuity. Only tool calls with a paired tool result are replayed on both transports.
+- **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings. On the legacy `/alpha/generate` transport, reasoning blocks are intentionally NOT replayed into later turns (matches the CLI; private reasoning must not leak); on the `/provider/v1/chat/completions` transport they are passed back as `reasoning_content` for tool-loop continuity. Only tool calls with a paired tool result are replayed on both transports. **Tool-result images** (`read_image` returns text + a nested `image` block): neither wire can hold an image inside a tool result — the CLI's `tool-result.output` is text-only (the official CLI's own `toV2ToolOutput` filters out everything but text) and Chat Completions forbids non-text `role: 'tool'` content — so `toolResultMedia()` splits each result and both converters emit the bytes in a user message immediately after the tool message, led by the `Attached image(s) from tool result:` note (the shape `@deepseek-ai/dsh-llm-deepseek` uses). Deduplicated by attachment id per result; an image-only result gets a `(image returned; see the attached image)` tool text instead of an empty string; a result without a paired call drops its images with the result. Never flatten a tool result with `blockText` alone again — that is issue #30. The `hasImageContent` gate (model Vision capability + attachment seam) already recurses into tool results, so these images ride the same `readImage` resolver user attachments use.
 - **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 → `RATE_LIMIT`; other HTTP → `PROVIDER_HTTP_ERROR` (403 body's `error.code`, e.g. `MODEL_NOT_IN_PLAN`, is parsed into the message). Unsupported options (`stop`) and image input throw `UNSUPPORTED_OPTION` / `UNSUPPORTED_CONTENT` rather than silently dropping.
 - **Adapter is cordis-free** by design: `src/adapter.ts` takes a per-request `options()` thunk + `resolveApiKey()` from the plugin entry, so settings changes reach the next request without re-registration. It also accepts an injectable `fetchImpl` for tests.
 - **Usage Remote (`commandcode/report`)**: the settings page's account card
@@ -189,9 +200,20 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   the Studio page (no OAuth code exchange), validate via `/alpha/whoami`,
   then store through the credentials seam under the default slot's ref. The
   loopback server mirrors the CLI contract exactly (POST-only `/callback`,
-  10 KB body cap, state-token equality, `{success}` JSON responses); two
-  deliberate hardenings — CORS origins are echoed **only when allowlisted**
-  (the CLI falls back to the first origin), and `Connection: close`. The
+  10 KB body cap, state-token equality, `{success}` JSON responses); three
+  deliberate hardenings over the CLI — CORS origins are echoed **only when
+  allowlisted** (the CLI falls back to the first origin), `Connection: close`,
+  and the denial branch (`{"error":…}`) checks the state token **before** it
+  ends the attempt, exactly where the CLI checks it. That last one is
+  load-bearing: a denial is terminal and a `text/plain` POST rides as a CORS
+  simple request (the browser sends it whatever the origin allowlist says), so
+  without the check any open page could cancel a login in progress. Attempt
+  ownership (`attemptSeq` + `ownsAttempt()`) is the other non-obvious rule:
+  the delivered key is validated over an await, and a cancel or a new `begin()`
+  during that window must win — no key write and no status publish from an
+  attempt that no longer owns the flow. `begin()` likewise retires a `waiting`
+  status whose server is gone (the callback was consumed, the port is closed)
+  instead of handing back a dead authUrl. The
   three endpoints ride the SAME `commandcodeUsage` service and one combined
   contribution (one Host registration, one Client mount); the namespace-level
   `TypertRemoteNamespaceMap.commandcode` augmentation lives ONLY in
@@ -199,6 +221,67 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   literal composition `apiKey` still outranks the stored credential; a
   remote-Host setup (browser ≠ Host machine) falls back to manual paste by
   design.
+- **Literal API keys are `role('secret')`** (`Config.apiKey` and
+  `Config.accounts[].apiKey`): the settings page writes keys through the
+  credentials seam, so the literal path exists only for composition configs —
+  but that path IS a settings value, and the harness strips a secret role from
+  every descriptor it serves (`settings.describe()` runs with
+  `redactSecrets: true`). Dropping the role leaks the key to the browser
+  verbatim (another machine on a remote Host). Pinned by
+  `tests/config-schema.test.ts` against the real `redactSecrets`.
+- **dsh-TUI settings section (`src/tui-settings.ts` + the optional
+  `tuiSettingsSections` seam)**: a TUI-only user has NO other way to enter the
+  API key — dsh-TUI's `/provider` wizard manages its own `llm-pi-ai` routes
+  exclusively, and `/settings` renders only sections a plugin DECLARES (it
+  never reads `settings.installSection`). So the plugin declares a Command Code
+  page over `ctx.inject(['tuiSettingsSections'], …)`, exactly like
+  `commands`/`web`/`typert`; without dsh-TUI the fiber never activates and the
+  plugin stays an LLM-provider-only bundle. Four rules are load-bearing.
+  (1) **No dependency on the terminal front door**: the seam's types are
+  re-declared locally, because the plugin must not import
+  `@deepseek-harness-tui/dsh-tui`. Every read is defensive (missing service,
+  non-object, missing `register` → no section) and the read goes through the
+  REFLECTIVE `ctx.get('tuiSettingsSections')`, never a bare property access —
+  cordis throws `cannot get property … without inject` for an undeclared
+  service, which would take the plugin's boot down on every non-TUI profile.
+  (2) **The key field is a `secret` field**, so dsh-TUI writes the draft
+  through the credentials seam under the declared ref and never into a
+  settings document; the ref must stay out of the host-reserved namespace
+  (`DEEPSEEK_API_KEY`/`DEEPSEEK_*`/`DSH_*` — dsh-TUI silently DROPS a field
+  with a reserved ref, which would leave a page with no key input at all), and
+  a secret field has no `format`/`parse` (the host never seeds a draft from
+  the document).
+  (3) **Unset must stay reachable**: dsh-TUI's `select` kind can only land on
+  a declared option, so `activeAccount` and `lang` are `text` + `options` (the
+  host's own preset-plus-custom shape) with an `auto` sentinel whose `parse`
+  emits `{ kind: 'clear' }`. `filterModelsByPlan` likewise FORMATS its
+  effective default (`true` when unset) instead of the raw `undefined`, since
+  a raw boolean format would render "(empty)" on a fresh install.
+  (4) **Registration is a declaration, not a binding**: the host renders a
+  fixed field list, so anything frozen into it (the credential ref, the
+  account-slot option list) is refreshed by re-registering from the
+  `installSection` `onChange` hook — withdraw first, then declare, and only
+  when `sectionSignature()` actually moved, or every ordinary settings write
+  would churn the screen's section list. A rejecting host is contained with a
+  warning (a shadow-mode capability policy, a future contract change) and stays
+  retryable, never fatal. Pinned by `tests/tui-settings.test.ts`.
+- **Client-side staging survives a failed save** (`src/client/settings.ts`):
+  writes run in order and stop at the first failure, so reconcile must keep
+  every draft the failed write did not land. A label draft is dropped only when
+  the stored label proves it landed; a rule draft only when the stored rules
+  fingerprint changed (the rules write landed, positional ids shifted, and a
+  kept draft would land on the wrong row) — `ruleFingerprint()`. Treating
+  "absent from the stored section" as "already applied" silently reverted typed
+  labels and rule edits with `dirty` false, i.e. no retry. `writeAccounts()`
+  additionally rebuilds the stored list rather than the page's rows: the
+  settings layer replaces the whole `accounts` array, so a rebuilt list deletes
+  every composition entry the page cannot name (literal-key entries have no
+  row) and strips their literal keys.
+- **`catalogIsReady` gates the stale-model cleanup** (`src/client/model-select.ts`):
+  an empty catalog — before the first fetch lands, or after a failure — makes
+  every selected id look retired, so the one-click cleanup would empty the
+  allowlist. Require a non-empty catalog and no failure; the explicit "show
+  all" action stays available without one.
 - **Static capability snapshots** (all in `src/capabilities.ts`, synced from official sources — see the `dsh-commandcode-upstream` skill for the exact extraction procedures; `src/adapter.ts` imports them and keeps only stable wire/runtime logic):
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the CLI bundle's commandcode-provider model table (`command-code/dist/cli.mjs`; minified table/variable names change per release — locate it by the `reasoningEfforts` feature, see the skill), **not** the docs page (whose `Reasoning` flag means "thinks", not "has effort levels").
   - `KNOWN_IMAGE_MODELS` — Vision-capable models, synced from [commandcode.ai/docs/reference/cli/models](https://commandcode.ai/docs/reference/cli/models); note catalog IDs can differ from doc IDs (e.g. `claude-haiku-4-5-20251001` vs doc's `claude-haiku-4-5`).

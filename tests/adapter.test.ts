@@ -332,8 +332,263 @@ test('stream() rejects stop sequences (unsupported option)', async () => {
   )
 })
 
-test('stream() refuses images for models without Vision capability', async () => {
-  const adapter = makeAdapter()
+// ---------------------------------------------------------------------------
+// Tool-result images (issue #30)
+// ---------------------------------------------------------------------------
+
+/** The `read_image` call/result pair the harness produces for one local file. */
+function readImageTurn(ref: ImageAttachmentRef, extra: ContentBlock[] = []): Message[] {
+  const callId = 'call-read-image'
+  return [
+    {
+      role: 'assistant',
+      content: [{ type: 'tool-call', id: callId as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
+      source: { kind: 'model', provider: 'commandcode', model: 'm' },
+    },
+    {
+      role: 'user',
+      content: [{
+        type: 'tool-result',
+        toolCallId: callId as never,
+        isError: false,
+        content: [{ type: 'text', text: 'image/png image, 1x1 px, 10 bytes' }, { type: 'image', attachment: ref }, ...extra],
+      }],
+      source: { kind: 'tool', callId: callId as never },
+    },
+  ]
+}
+
+test('stream() carries tool-result images after the tool message (issue #30)', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const ref = imageRef()
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+  })
+  // `deepseek/deepseek-v4.1-flash` is the Vision model from the issue report.
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [userMessage('what is in /tmp/a.png?'), ...readImageTurn(ref)],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  // The tool message stays text-only: the CLI transport's tool output has no
+  // image form, so the pixels follow it as a user message instead of vanishing.
+  const toolMsg = messages.find((m) => m.role === 'tool')!
+  const result = (toolMsg.content as Record<string, unknown>[])[0]!
+  assert.equal(result.type, 'tool-result')
+  assert.deepEqual(result.output, { type: 'text', value: 'image/png image, 1x1 px, 10 bytes' })
+  const carried = messages[messages.indexOf(toolMsg) + 1]!
+  assert.equal(carried.role, 'user')
+  const parts = carried.content as Record<string, unknown>[]
+  assert.equal(parts.length, 2)
+  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+  // Official CLI image wire shape, byte-identical to a user attachment.
+  assert.deepEqual(parts[1], {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: Buffer.from(pngBytes).toString('base64') },
+  })
+})
+
+test('stream() carries a tool-result image exactly once and never without bytes', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const ref = imageRef()
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+  })
+  // The same attachment twice in one result: one part on the wire, and the
+  // result text is present so the tool message needs no descriptor.
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-sonnet-5',
+    messages: [
+      userMessage('compare these'),
+      ...readImageTurn(ref, [{ type: 'image', attachment: ref }]),
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  const carried = messages[messages.length - 1]!
+  assert.equal(carried.role, 'user')
+  const parts = carried.content as Record<string, unknown>[]
+  assert.equal(parts.filter((p) => p.type === 'image').length, 1)
+  // The text-only tool message keeps the tool's own readable summary.
+  const toolMsg = messages.find((m) => m.role === 'tool')!
+  assert.equal(((toolMsg.content as Record<string, unknown>[])[0]!.output as { value: string }).value, 'image/png image, 1x1 px, 10 bytes')
+})
+
+test('stream() gives an image-only tool result a non-empty tool message', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const ref = imageRef()
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+  })
+  const callId = 'call-image-only'
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-sonnet-5',
+    messages: [
+      userMessage('look'),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: callId as never, name: 'read_image', arguments: '{}' }],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: callId as never,
+          isError: false,
+          content: [{ type: 'image', attachment: ref }],
+        }],
+        source: { kind: 'tool', callId: callId as never },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  const toolMsg = messages.find((m) => m.role === 'tool')!
+  const output = ((toolMsg.content as Record<string, unknown>[])[0]!.output as { value: string }).value
+  assert.notEqual(output, '')
+  assert.match(output, /attached image/)
+  const carried = messages[messages.indexOf(toolMsg) + 1]!
+  const parts = carried.content as Record<string, unknown>[]
+  // The tool text cannot state the dimensions, so the note carries them.
+  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result: 1x1 px$/)
+})
+
+test('openai protocol carries tool-result images as a following user message (issue #30)', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  const ref = imageRef()
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [userMessage('what is in /tmp/a.png?'), ...readImageTurn(ref)],
+  }))
+
+  const messages = capturedBody!.messages as Record<string, unknown>[]
+  // Chat Completions accepts no image part under `role: 'tool'`, so the tool
+  // message carries the text and the image follows as a user message.
+  const toolMsg = messages.find((m) => m.role === 'tool')!
+  assert.equal(toolMsg.content, 'image/png image, 1x1 px, 10 bytes')
+  const carried = messages[messages.indexOf(toolMsg) + 1]!
+  assert.equal(carried.role, 'user')
+  const parts = carried.content as Record<string, unknown>[]
+  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+  assert.deepEqual(parts[1], {
+    type: 'image_url',
+    image_url: { url: `data:image/png;base64,${Buffer.from(pngBytes).toString('base64')}` },
+  })
+})
+
+test('stream() leaves text-only tool results untouched', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const callId = 'call-bash'
+  const adapter = makeAdapter({ fetchImpl })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [
+      userMessage('list files'),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: callId as never, name: 'bash', arguments: '{}' }],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: callId as never, isError: false, content: [{ type: 'text', text: 'file1' }] }],
+        source: { kind: 'tool', callId: callId as never },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool'])
+})
+
+test('stream() drops images of an unpaired tool result with the result itself', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const ref = imageRef()
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+  })
+  // No assistant tool-call pairs this result, so neither the result nor its
+  // image may reach the wire (an orphan image would be unexplainable).
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-sonnet-5',
+    messages: [
+      userMessage('hi'),
+      {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-orphan' as never,
+          isError: false,
+          content: [{ type: 'text', text: 'x' }, { type: 'image', attachment: ref }],
+        }],
+        source: { kind: 'tool', callId: 'call-orphan' as never },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  assert.deepEqual(messages.map((m) => m.role), ['user'])
+  assert.ok(!JSON.stringify(messages).includes('Attached image'))
+})
+
+test('stream() refuses images for models without Vision capability', async () => {  const adapter = makeAdapter()
   const withImage: Message = {
     role: 'user',
     content: [{ type: 'image', attachment: imageRef() }],

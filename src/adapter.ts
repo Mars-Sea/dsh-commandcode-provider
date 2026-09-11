@@ -354,8 +354,82 @@ function blockText(block: ContentBlock): string {
   return block.type === 'text' || block.type === 'reasoning' ? block.text : ''
 }
 
-function toolResultText(block: Extract<ContentBlock, { type: 'tool-result' }>): string {
-  return block.content.map(blockText).filter(Boolean).join('\n')
+/**
+ * One paired tool result as the wire needs it: its text and the images the
+ * tool returned. Neither wire transport can carry an image inside a tool
+ * result (`/provider/v1/chat/completions` forbids non-text `role: 'tool'`
+ * content, and the CLI transport's own `tool-result` output is text-only), so
+ * those images travel in a user message emitted right after the tool message —
+ * the same shape `@deepseek-ai/dsh-llm-deepseek` uses (issue #30).
+ */
+interface ToolResultMedia {
+  /** Visible result text; `''` when the result carried images but no text. */
+  text: string
+  /** Nested image references, in block order, deduplicated by attachment id. */
+  images: ImageAttachmentRef[]
+}
+
+/**
+ * Collect text and nested images of one tool result. The harness `read_image`
+ * tool returns both, so dropping the image half is what made a tool-read image
+ * invisible to a Vision model (issue #30). Deduplication keeps a result that
+ * repeats one attachment from paying for the same pixels twice.
+ */
+function toolResultMedia(block: Extract<ContentBlock, { type: 'tool-result' }>): ToolResultMedia {
+  const chunks: string[] = []
+  const images: ImageAttachmentRef[] = []
+  const seen = new Set<string>()
+  const walk = (blocks: readonly ContentBlock[]): void => {
+    for (const nested of blocks) {
+      if (nested.type === 'text' || nested.type === 'reasoning') {
+        if (nested.text) chunks.push(nested.text)
+        continue
+      }
+      if (nested.type === 'image') {
+        if (!seen.has(nested.attachment.attachmentId)) {
+          seen.add(nested.attachment.attachmentId)
+          images.push(nested.attachment)
+        }
+        continue
+      }
+      if (nested.type === 'tool-result') walk(nested.content)
+    }
+  }
+  walk(block.content)
+  return { text: chunks.join('\n'), images }
+}
+
+/**
+ * Result text for the wire's `role: 'tool'` message. A tool that returned only
+ * an image (and possibly a nested image-only tool result) has no text at all,
+ * and neither transport accepts an empty tool content string, so it gets a
+ * descriptor pointing at the user message that follows with the pixels.
+ */
+function toolResultTextForWire(media: ToolResultMedia): string {
+  return media.text || (media.images.length > 0 ? '(image returned; see the attached image)' : '')
+}
+
+/** Leading line of the user message that carries a tool result's images. */
+const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result:'
+
+/**
+ * The model-visible note introducing the images carried out of one tool
+ * result. Neither transport merges them back into the tool result, so this
+ * line is what tells the model the image it is about to see belongs to the
+ * tool it just ran rather than to the user; it also leads the part list,
+ * because an image-first content array is what some gateways reject. Count and
+ * pixel dimensions are appended when the tool's own text does not already
+ * state them (a result that returns the image and nothing else).
+ */
+function toolResultImageNote(media: ToolResultMedia): string {
+  const first = media.images[0]
+  if (first === undefined) return TOOL_RESULT_IMAGE_TEXT
+  const dimensions = `${first.width}x${first.height} px`
+  if (first.width <= 0 || first.height <= 0 || media.text.includes(dimensions)) {
+    return TOOL_RESULT_IMAGE_TEXT
+  }
+  const count = media.images.length > 1 ? `${media.images.length} images, ` : ''
+  return `${TOOL_RESULT_IMAGE_TEXT} ${count}${dimensions}`
 }
 
 function hasImageContent(message: Message): boolean {
@@ -444,6 +518,7 @@ async function messagesToCC(
     if (message.role === 'user' && message.source.kind === 'tool') {
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
+      const media = toolResultMedia(block)
       out.push({
         role: 'tool',
         content: [
@@ -455,11 +530,27 @@ async function messagesToCC(
             // (matches the official CLI's `?? "unknown"` fallback).
             toolName: toolNames.get(block.toolCallId) || 'unknown',
             output: block.isError
-              ? { type: 'error-text', value: toolResultText(block) }
-              : { type: 'text', value: toolResultText(block) },
+              ? { type: 'error-text', value: toolResultTextForWire(media) }
+              : { type: 'text', value: toolResultTextForWire(media) },
           },
         ],
       })
+      // Images a tool returned (e.g. `read_image`) cannot ride inside the
+      // tool result on this wire, so they follow it as a user message —
+      // otherwise a Vision model receives the metadata text and no pixels.
+      if (media.images.length > 0) {
+        if (!readImage) {
+          throw new LlmError(
+            'Image input requires the durable attachment service',
+            'UNSUPPORTED_CONTENT',
+          )
+        }
+        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media) }]
+        for (const attachment of media.images) {
+          carried.push(await imageToCommandCode(attachment, readImage))
+        }
+        out.push({ role: 'user', content: carried })
+      }
     }
   }
   return out
@@ -571,11 +662,27 @@ async function messagesToOpenAI(
     if (message.role === 'user' && message.source.kind === 'tool') {
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
+      const media = toolResultMedia(block)
       out.push({
         role: 'tool',
         tool_call_id: wireIds.get(block.toolCallId) ?? block.toolCallId,
-        content: toolResultText(block),
+        content: toolResultTextForWire(media),
       })
+      // Chat Completions allows no image part under `role: 'tool'`, so a
+      // tool-returned image (e.g. `read_image`) follows as a user message.
+      if (media.images.length > 0) {
+        if (!readImage) {
+          throw new LlmError(
+            'Image input requires the durable attachment service',
+            'UNSUPPORTED_CONTENT',
+          )
+        }
+        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media) }]
+        for (const attachment of media.images) {
+          carried.push(await imageToOpenAI(attachment, readImage))
+        }
+        out.push({ role: 'user', content: carried })
+      }
     }
   }
   return out

@@ -361,16 +361,38 @@ export class CommandCodeAccountPool {
     }
   }
 
-  /** One account's key: literal → credential seam → auth file (default slot). */
+  /**
+   * One account's key: literal → credential seam → auth file (default slot).
+   *
+   * Every source is normalized here, at the single point where a slot's key
+   * enters the pool. The adapter sends the key through the harness's
+   * `assertUsableApiKey()`, which trims it — a stored key from the credentials
+   * seam, a `.env` line, or a shell export all pick up surrounding whitespace
+   * — and reports that trimmed form back to `markRejected()`. Returning the
+   * raw value would file every 429/401 mark under a key no later lookup can
+   * find: rotation would re-offer the same account, the account card would show
+   * no mark, and the usage endpoints would 401 while chat kept working.
+   * Normalizing once makes resolution, probing, marking, and the request path
+   * agree on one string.
+   */
   private async resolveSlotKey(slot: CommandCodeAccountSlot): Promise<string | undefined> {
-    if (slot.literal !== undefined && slot.literal !== '') return slot.literal
+    if (slot.literal !== undefined) {
+      const literal = normalizeResolvedKey(slot.literal)
+      if (literal !== undefined) return literal
+    }
     if (slot.ref !== undefined) {
       const hit = await this.deps.resolveRef(slot.ref)
-      if (hit !== undefined && hit !== '') return hit
+      if (hit !== undefined) {
+        const resolved = normalizeResolvedKey(hit)
+        if (resolved !== undefined) return resolved
+      }
     }
     if (slot.allowAuthFile) {
       const fromFile = this.deps.authFileKey()
-      if (fromFile !== undefined && fromFile !== '') return fromFile
+      if (fromFile !== undefined) {
+        const fileKey = normalizeResolvedKey(fromFile)
+        if (fileKey !== undefined) return fileKey
+      }
     }
     return undefined
   }
@@ -379,4 +401,15 @@ export class CommandCodeAccountPool {
   private pick(account: ResolvedAccount): { key: string; slot: CommandCodeAccountSlot } {
     return { key: account.key, slot: account.slot }
   }
+}
+
+/**
+ * Normalize one resolved credential to the form every consumer sees. Trim
+ * only: a blank-after-trim value means "no key" (the slot is omitted and the
+ * caller reports `MISSING_CREDENTIAL`), while characters an HTTP header cannot
+ * carry are left for `assertUsableApiKey()` to reject with its own message.
+ */
+function normalizeResolvedKey(value: string): string | undefined {
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
 }

@@ -26,7 +26,7 @@ import type { SettingsCommandCodeKey } from './locales.ts'
 import type { AccountItemState, CatalogModelOption, RuleItemState, SettingsPageState, StagedField } from './settings.ts'
 import type { LoginPageState } from './login.ts'
 import { LoginRow } from './login-row.tsx'
-import { buildModelSelectOptions, groupModelSelectOptions, tierHeadingFor, toggleModelSelection } from './model-select.ts'
+import { buildModelSelectOptions, catalogIsReady, groupModelSelectOptions, staleModelIds, tierHeadingFor, toggleModelSelection } from './model-select.ts'
 import type { UsagePageState } from './usage.ts'
 import { formatMoney, formatMoneyExact, formatResetAt, formatSuccessRate, formatTokensCompact, windowRatio } from './usage.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
@@ -1032,20 +1032,28 @@ function VisibleModelsCard({ t, state, disabled, onSelect, onClear }: {
   // Selected ids the live catalog no longer carries (retired upstream):
   // kept, flagged stale in the dropdown, removable in one click. Never
   // auto-dropped — an empty catalog (fetch failure) must not wipe the list.
-  const catalogIds = new Set(state.catalogModels.map((model) => model.id))
-  const staleIds = state.visibleModels.filter((id) => !catalogIds.has(id))
+  // "Stale" is only meaningful against a catalog we actually hold, so both the
+  // cleanup button and its hint are gated on catalogIsReady: before the first
+  // fetch lands (and after a failure) the empty catalog makes every selection
+  // look retired, turning the one-click cleanup into a button that silently
+  // empties the allowlist. The explicit "show all" entry stays available
+  // either way — clearing the list is then the user's stated intent rather
+  // than an inference from missing data.
+  const readiness = { catalogIds: state.catalogModels.map((model) => model.id), catalogFailed: state.catalogFailed }
+  const staleIds = staleModelIds(state.visibleModels, readiness)
+  const catalogReady = catalogIsReady(readiness)
   return (
     <div className="cc-card" aria-label={t('visibleModelsTitle')}>
       <div className="cc-field">
         <div className="cc-fieldHead">
           <label className="cc-label">{t('visibleModelsTitle')}</label>
           <span className="cc-badges">
-            {staleIds.length > 0 ? (
+            {catalogReady && staleIds.length > 0 ? (
               <button
                 type="button"
                 className="cc-reset"
                 disabled={disabled}
-                onClick={() => onSelect(state.visibleModels.filter((id) => catalogIds.has(id)))}
+                onClick={() => onSelect(state.visibleModels.filter((id) => !staleIds.includes(id)))}
               >
                 {t('visibleModelsCleanStale', { count: staleIds.length })}
               </button>
@@ -1059,7 +1067,7 @@ function VisibleModelsCard({ t, state, disabled, onSelect, onClear }: {
         </div>
         <p className="cc-hint">{t('visibleModelsHint')}</p>
         {state.catalogFailed ? <p className="cc-invalid">{t('rulesCatalogFailed')}</p> : null}
-        {staleIds.length > 0 && !state.catalogFailed ? (
+        {staleIds.length > 0 && catalogReady ? (
           <p className="cc-hint">{t('visibleModelsStaleHint', { count: staleIds.length })}</p>
         ) : null}
         <ModelMultiSelect

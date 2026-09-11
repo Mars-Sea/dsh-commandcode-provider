@@ -18,6 +18,7 @@
 
 - **插件包**：一条 `dsh plugin add` 命令安装到任意 dsh 配置，注册 `commandcode` provider 路由，带实时模型目录。
 - **专属设置页**：API key 输入、连接参数、实时「账户用量」卡片和「隐藏套餐外模型」开关。
+- **终端界面同样可用**：同一次安装即可服务 [dsh-TUI](#终端界面dsh-tui) 配置，终端里有自己的 **`/settings` → Command Code** 页面来填 key 和调模型。
 - **Models 页快捷卡片**：**设置 → Models → Command Code** 卡片内直接显示 key 状态、粘贴输入框和登录按钮。
 - **浏览器内登录获取 key**：设置页一键发起官方授权（与 `cmd login` 同一流程），完成后密钥自动写入本机凭据服务，无需手动创建或粘贴；不可用时随时退回手动粘贴。
 - **多账户轮换**：一个账户用量打满后，请求自动切换到下一个账户。详见[多账户轮换](#多账户轮换)。
@@ -75,6 +76,47 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 ## 验证是否生效
 
 重启后，在 **设置 → Command Code** 填入 API key 并保存；**设置 → Models** 出现 **Command Code** 卡片，模型选择器在 **commandcode** 下列出实时目录。选择套餐内包含的模型发送消息即可。
+
+## 终端界面（dsh-TUI）
+
+插件同样支持终端前端，无需单独安装、无需额外配置：
+
+```sh
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider
+```
+
+之后在模型选择器里选，或者直接指定：
+
+```text
+/model commandcode/deepseek/deepseek-v4.1-flash
+```
+
+`/model` 会列出所有已注册的 provider，Command Code 的实时目录连同套餐/优惠/上下文标注一起出现，`/commandcode` 用量面板在终端里同样可用。
+
+**填写 API key。** 终端没有网页版 Models 页面，所以插件会在终端设置页里声明自己的页面 —— **`/settings` → Command Code** —— 包含 API key、API 地址、隐藏套餐外模型、模型白名单、当前账号和命令语言。key 字段是只写的：它只显示"是否已配置"，输入的内容写进凭据库，不会写进任何 settings 文档。只用终端的用户只需要访问这一个页面。
+
+也可以在终端外配置 key，以下三种方式按优先级生效：
+
+```sh
+export COMMANDCODE_API_KEY="user_..."   # 启动环境变量
+cmd login                               # 写入 ~/.commandcode/auth.json
+```
+
+**把 Command Code 设为默认模型。** dsh-TUI 写死了自己的 agent 路由，它的 `agent-default-model` 设置不会覆盖它。要让每个会话默认走 Command Code，请在自己的 profile patch（`$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`）里覆盖 `agent-loop` 行：
+
+```yaml
+- id: agent-loop
+  inject: [tuiStartup]
+  config:
+    agents:
+      - id: main
+        provider: commandcode
+        model: deepseek/deepseek-v4.1-flash
+        reasoningEffort: max
+        cwd: !!js process.cwd()
+```
+
+**引擎版本要求。** 插件需要导出了 `ToolCallId` 的 dsh 引擎，即 **dsh 0.1.2-alpha.3 或更高**。这覆盖了 dsh-TUI 推荐的引擎（0.1.2-rc.1）以及之后的所有版本，但不包含它 peer 范围里名义上允许的最老引擎：在 dsh 0.1.0-rc.6 / 0.1.1-rc.2 上，插件的模块导入会失败，TUI 无法启动。请升级引擎，或改用 web profile。
 
 ## 用量面板
 

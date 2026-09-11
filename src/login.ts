@@ -171,6 +171,14 @@ export class CommandCodeLoginFlow {
     resolve(credentials: CommandCodeLoginCredentials): void
     reject(failure: LoginSettleError): void
   } | undefined
+  /**
+   * Attempt generation. A delivered callback keeps validating the key
+   * asynchronously (`complete()`), and that window is open to a cancel or a
+   * fresh `begin()`; the generation lets a late completion recognize that it
+   * no longer owns the status face and stop instead of storing a credential
+   * the user cancelled and flipping the page back to success.
+   */
+  private attemptSeq = 0
   private disposed = false
 
   constructor(deps: CommandCodeLoginFlowDeps) {
@@ -195,8 +203,14 @@ export class CommandCodeLoginFlow {
    */
   async begin(): Promise<CommandCodeLoginStatus> {
     if (this.disposed) throw new Error('login flow has been disposed')
-    if (this.statusValue.state === 'waiting') return this.statusValue
+    // Rejoin only a live attempt. A `waiting` status whose server is already
+    // torn down means the callback was consumed and the key is being
+    // validated: that attempt can no longer receive anything, so handing its
+    // dead authUrl back would give the user a link to a closed port. Starting
+    // fresh retires it (the generation check below drops its late completion).
+    if (this.statusValue.state === 'waiting' && this.server !== undefined) return this.statusValue
     this.teardown()
+    const attempt = ++this.attemptSeq
 
     const port = await this.findPort()
     const expectedState = this.deps.randomToken?.(32) ?? randomBytes(32).toString('base64url')
@@ -227,8 +241,8 @@ export class CommandCodeLoginFlow {
     this.timer.unref?.()
 
     void settled.then(
-      (credentials) => this.complete(credentials),
-      (failure) => this.failFrom(failure),
+      (credentials) => this.complete(attempt, credentials),
+      (failure) => this.failFrom(attempt, failure),
     )
     return this.statusValue
   }
@@ -353,9 +367,19 @@ export class CommandCodeLoginFlow {
         json(400, { success: false, error: 'Invalid JSON' })
         return
       }
-      // The Studio reports a denied authorization as an error object.
+      // The Studio reports a denied authorization as an error object. The
+      // state token is checked FIRST, exactly as the CLI does: a denial is
+      // terminal, so an unauthenticated caller that could reach this branch
+      // without a state match could kill a live login from any web page (the
+      // POST rides as a CORS simple request, which the browser sends
+      // regardless of our origin allowlist). Only the holder of the state this
+      // attempt generated may end it.
       if (typeof payload === 'object' && payload !== null && 'error' in payload) {
         const denial = payload as Record<string, unknown>
+        if (denial.state !== expectedState) {
+          json(403, { success: false, error: 'Invalid state token' })
+          return
+        }
         const description = denial.error_description ?? denial.error
         this.settleAttempt(json, 200, { success: true }, new LoginSettleError(
           denial.error === 'access_denied' ? 'denied' : 'error',
@@ -395,14 +419,24 @@ export class CommandCodeLoginFlow {
     else if (credentials !== undefined) settle.resolve(credentials)
   }
 
-  /** Post-validation completion: whoami check, then hand-off to storage. */
-  private async complete(credentials: CommandCodeLoginCredentials): Promise<void> {
-    if (this.disposed || this.statusValue.state !== 'waiting') return
+  /**
+   * Post-validation completion: whoami check, then hand-off to storage.
+   *
+   * Every step re-checks {@link ownsAttempt} first: the whoami round-trip and
+   * the credential write are awaits, and the user may cancel (or start another
+   * attempt) while one is in flight. A completion that no longer owns the
+   * attempt must not write the key or publish a status — otherwise cancel
+   * would report "cancelled" while the credential landed anyway, and the page
+   * would silently flip to success.
+   */
+  private async complete(attempt: number, credentials: CommandCodeLoginCredentials): Promise<void> {
+    if (!this.ownsAttempt(attempt)) return
     const validation = await validateCommandApiKey(
       this.deps.fetchImpl ?? fetch,
       this.readApiBase(),
       credentials.apiKey,
     )
+    if (!this.ownsAttempt(attempt)) return
     if (!validation.valid) {
       const reason: CommandCodeLoginFailureReason = validation.error === 'invalid_key'
         ? 'invalid-key'
@@ -414,9 +448,13 @@ export class CommandCodeLoginFlow {
       })
       return
     }
+    // Last gate before the side effect: a cancel that arrived during the
+    // whoami check must win over storing the key.
+    if (!this.ownsAttempt(attempt)) return
     try {
       await this.deps.storeKey(credentials)
     } catch (error: unknown) {
+      if (!this.ownsAttempt(attempt)) return
       this.setStatus({
         state: 'failed',
         reason: 'unavailable',
@@ -424,15 +462,20 @@ export class CommandCodeLoginFlow {
       })
       return
     }
-    if (this.disposed) return
+    if (!this.ownsAttempt(attempt)) return
     this.clearTimer()
     this.setStatus({ state: 'success', userName: credentials.userName, keyName: credentials.keyName })
   }
 
+  /** Whether one attempt still owns the status face (not cancelled, replaced, or disposed). */
+  private ownsAttempt(attempt: number): boolean {
+    return !this.disposed && this.attemptSeq === attempt && this.statusValue.state === 'waiting'
+  }
+
   /** Map a tagged settle rejection onto the status face. */
-  private failFrom(failure: unknown): void {
+  private failFrom(attempt: number, failure: unknown): void {
     if (!(failure instanceof LoginSettleError)) return
-    if (this.disposed || this.statusValue.state !== 'waiting') return
+    if (!this.ownsAttempt(attempt)) return
     this.setStatus({ state: 'failed', reason: failure.reason, message: failure.message })
   }
 

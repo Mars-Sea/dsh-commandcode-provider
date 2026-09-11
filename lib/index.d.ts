@@ -441,7 +441,20 @@ declare class CommandCodeAccountPool {
    * key until the stored credential changes.
    */
   markRejected(apiKey: string, rejection: AccountRejection): void;
-  /** One account's key: literal → credential seam → auth file (default slot). */
+  /**
+   * One account's key: literal → credential seam → auth file (default slot).
+   *
+   * Every source is normalized here, at the single point where a slot's key
+   * enters the pool. The adapter sends the key through the harness's
+   * `assertUsableApiKey()`, which trims it — a stored key from the credentials
+   * seam, a `.env` line, or a shell export all pick up surrounding whitespace
+   * — and reports that trimmed form back to `markRejected()`. Returning the
+   * raw value would file every 429/401 mark under a key no later lookup can
+   * find: rotation would re-offer the same account, the account card would show
+   * no mark, and the usage endpoints would 401 while chat kept working.
+   * Normalizing once makes resolution, probing, marking, and the request path
+   * agree on one string.
+   */
   private resolveSlotKey;
   /** Hand out the chosen account's key. */
   private pick;
@@ -1022,6 +1035,14 @@ declare class CommandCodeLoginFlow {
   private timer;
   /** Settle hooks of the live attempt's callback promise. */
   private settle;
+  /**
+   * Attempt generation. A delivered callback keeps validating the key
+   * asynchronously (`complete()`), and that window is open to a cancel or a
+   * fresh `begin()`; the generation lets a late completion recognize that it
+   * no longer owns the status face and stop instead of storing a credential
+   * the user cancelled and flipping the page back to success.
+   */
+  private attemptSeq;
   private disposed;
   constructor(deps: CommandCodeLoginFlowDeps);
   /** Subscribe to state transitions. @returns the disposer. */
@@ -1052,8 +1073,19 @@ declare class CommandCodeLoginFlow {
   private handleCallback;
   /** Answer a decisive callback, stop listening, and settle the attempt. */
   private settleAttempt;
-  /** Post-validation completion: whoami check, then hand-off to storage. */
+  /**
+   * Post-validation completion: whoami check, then hand-off to storage.
+   *
+   * Every step re-checks {@link ownsAttempt} first: the whoami round-trip and
+   * the credential write are awaits, and the user may cancel (or start another
+   * attempt) while one is in flight. A completion that no longer owns the
+   * attempt must not write the key or publish a status — otherwise cancel
+   * would report "cancelled" while the credential landed anyway, and the page
+   * would silently flip to success.
+   */
   private complete;
+  /** Whether one attempt still owns the status face (not cancelled, replaced, or disposed). */
+  private ownsAttempt;
   /** Map a tagged settle rejection onto the status face. */
   private failFrom;
   private clearTimer;
@@ -1153,6 +1185,145 @@ declare class CommandCodeSearchProvider implements WebSearchProvider {
   search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>;
   private resolveKey;
 }
+//#endregion
+//#region src/tui-settings.d.ts
+/** Provider-owned translations for one title, label, or hint. */
+interface TuiLocalizedText {
+  readonly zh?: string;
+  readonly en?: string;
+}
+/** Control kinds the dsh-TUI settings screen knows how to render. */
+type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select';
+/** One choice of an options-bearing field. */
+interface TuiSettingsFieldOption {
+  /** Stored value. */
+  readonly value: string;
+  /** Display label (English; also the fallback). */
+  readonly label: string;
+  /** Provider-owned translations for the label. */
+  readonly descriptions?: TuiLocalizedText;
+}
+/** The write one field's draft stages when the section is saved. */
+type TuiSettingsFieldWrite = {
+  readonly kind: 'set';
+  readonly value: unknown;
+} | {
+  readonly kind: 'clear';
+};
+/** One editable field inside a section. */
+interface TuiSettingsField {
+  /** Key path from the section root, in the settings service's `mutate` vocabulary. */
+  readonly path: readonly string[];
+  /** Short field label (English; also the fallback). */
+  readonly label: string;
+  /** Provider-owned translations for the label. */
+  readonly descriptions?: TuiLocalizedText;
+  /** Optional one-line help rendered under the field. */
+  readonly hint?: string;
+  /** Provider-owned translations for the hint. */
+  readonly hintDescriptions?: TuiLocalizedText;
+  /** Optional group id; grouped fields render on that group's subpage. */
+  readonly group?: string;
+  readonly kind: TuiSettingsFieldKind;
+  /**
+   * Choices for an options-bearing field. A `text` field that carries options
+   * is the TUI's own "preset plus custom value" shape: `←`/`→` cycle the
+   * presets while Enter opens the text editor.
+   */
+  readonly options?: readonly TuiSettingsFieldOption[];
+  /** Input placeholder for `kind: 'text' | 'number'`. */
+  readonly placeholder?: string;
+  /**
+   * Credential control: the literal never rides the settings document — the
+   * draft starts blank on every open, a blank draft writes nothing, and a
+   * typed draft writes through the credentials seam under `ref`.
+   */
+  readonly secret?: {
+    readonly ref: string;
+  };
+  /** Render a stored value as draft text. */
+  readonly format?: (value: unknown) => string;
+  /** The write a draft text stages; `undefined` marks the draft invalid. */
+  readonly parse?: (text: string) => TuiSettingsFieldWrite | undefined;
+}
+/** Optional navigation group inside one section. */
+interface TuiSettingsGroup {
+  /** Stable identifier, unique inside the section. */
+  readonly id: string;
+  /** Group title (English; also the fallback). */
+  readonly title: string;
+  /** Provider-owned translations for the title. */
+  readonly descriptions?: TuiLocalizedText;
+}
+/** One plugin's section inside the dsh-TUI settings screen. */
+interface TuiSettingsSection {
+  /** Settings namespace this section edits. */
+  readonly ns: string;
+  /** Section title (English; also the fallback). */
+  readonly title: string;
+  /** Provider-owned translations for the title. */
+  readonly descriptions?: TuiLocalizedText;
+  /** Optional navigation groups, in display order. */
+  readonly groups?: readonly TuiSettingsGroup[];
+  /** Editable fields, in display order. */
+  readonly fields: readonly TuiSettingsField[];
+}
+/** The slice of the `tuiSettingsSections` service this module uses. */
+interface TuiSettingsSectionsService {
+  /** Declare a section; the returned disposer withdraws it. */
+  register(section: TuiSettingsSection): () => void;
+}
+/** The selector value meaning "no pinned account — follow rotation order". */
+declare const ACTIVE_ACCOUNT_AUTO = "auto";
+/** The selector value meaning "no language override — follow the shell locale". */
+declare const LANG_AUTO = "auto";
+/** Everything the section needs from the plugin entry. */
+interface CommandCodeTuiSettingsDeps {
+  /** The plugin's settings namespace (`llm-commandcode`). */
+  ns: string;
+  /** Section title; defaults to `Command Code`. */
+  title?: string;
+  /**
+   * The credential reference the API-key field writes through, read per
+   * registration so a `Config.apiKeyEnv` change re-targets the field instead
+   * of silently writing to the old reference.
+   */
+  apiKeyRef: () => string;
+  /**
+   * Account slots for the active-account selector, in rotation order, read
+   * per registration. A changed list re-registers the section (see
+   * {@link applyCommandCodeTuiSettings}).
+   */
+  accountSlots: () => readonly {
+    id: string;
+    label: string;
+  }[];
+}
+/**
+ * Build the section descriptor. Pure, so tests can pin the exact fields
+ * without a dsh-TUI host.
+ *
+ * Field choices worth keeping: the two option-bearing fields (`activeAccount`,
+ * `lang`) are `text` + `options` rather than `select`, because a `select`
+ * cannot express "unset" — cycling only ever lands on a declared option, so a
+ * `select` would strand the user on a pinned value with no way back to
+ * automatic. The `auto` sentinel plus a `parse` that clears the path keeps the
+ * unset state reachable. The two booleans format their EFFECTIVE default
+ * (`filterModelsByPlan` unset means true at the adapter), so a fresh install
+ * reads true instead of the screen's "(empty)".
+ */
+declare function buildCommandCodeTuiSection(deps: CommandCodeTuiSettingsDeps): TuiSettingsSection;
+/**
+ * Register the Command Code section on a dsh-TUI host.
+ *
+ * @param ctx - the context of an activated `tuiSettingsSections` injection.
+ * @param deps - plugin-owned facts the section reads.
+ * @returns a refresh function that re-registers the section when a fact it
+ *   renders changed (the plugin entry calls it from its settings `onChange`
+ *   hook), or `undefined` when the seam is unusable. The returned function is
+ *   inert after the fiber is torn down.
+ */
+declare function applyCommandCodeTuiSettings(ctx: Context, deps: CommandCodeTuiSettingsDeps): (() => void) | undefined;
 //#endregion
 //#region src/index.d.ts
 declare const name = "llm-commandcode";
@@ -1265,5 +1436,5 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommands, applyUsageRemote, buildCommandAuthUrl, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, selectCommandCodeSearchProvider, studioBaseForApiBase, subscriptionPlanInfo, usageReportSchema, validateCommandApiKey };
+export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, selectCommandCodeSearchProvider, studioBaseForApiBase, subscriptionPlanInfo, usageReportSchema, validateCommandApiKey };
 //# sourceMappingURL=index.d.ts.map

@@ -32,8 +32,16 @@ test('every Harness peer and direct development package starts at 0.1.2-rc.1', (
 test('per-release DSH compatibility is declared for the latest releases', () => {
   // DSH STORE only restores a listing from exact per-release records under
   // dsh.compatibility.dshReleases; a peer range alone is not evidence.
+  // Records are additive: each release keeps its own entry, so the catalog can
+  // still list the plugin for a user who has not moved to the newest engine.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  for (const version of ['0.1.2-rc.1', '0.1.3-alpha.1', '0.1.3-alpha.2', '0.1.5-alpha.1']) {
+  for (const version of [
+    '0.1.2-rc.1',
+    '0.1.3-alpha.1',
+    '0.1.3-alpha.2',
+    '0.1.5-alpha.1',
+    '0.1.5-rc.1',
+  ]) {
     assert.equal(releases[version], 'compatible', `dshReleases[${version}]`)
   }
 })

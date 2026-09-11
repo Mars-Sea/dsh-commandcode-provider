@@ -13,8 +13,10 @@ import assert from 'node:assert/strict'
 
 import {
   buildModelSelectOptions,
+  catalogIsReady,
   groupModelSelectOptions,
   matchesModelQuery,
+  staleModelIds,
   tierHeadingFor,
   toggleModelSelection,
 } from '../src/client/model-select.ts'
@@ -166,4 +168,29 @@ test('returns undefined for unmapped ids', () => {
 
 test('falls back to the raw tier key for a future tier', () => {
   assert.equal(tierHeadingFor('x/new-model', { 'x/new-model': 'ultra' }), 'ultra')
+})
+
+// ---------------------------------------------------------------------------
+// Stale-selection cleanup (only against a catalog we actually hold)
+// ---------------------------------------------------------------------------
+
+test('catalogIsReady is false while the catalog is empty or failed', () => {
+  // Both states make every selected id look retired, which is what turned the
+  // one-click stale cleanup into a button that silently emptied the allowlist.
+  assert.equal(catalogIsReady({ catalogIds: [], catalogFailed: false }), false)
+  assert.equal(catalogIsReady({ catalogIds: [], catalogFailed: true }), false)
+  assert.equal(catalogIsReady({ catalogIds: ['m1'], catalogFailed: true }), false)
+  assert.equal(catalogIsReady({ catalogIds: ['m1'], catalogFailed: false }), true)
+})
+
+test('staleModelIds reports unlisted selections in selection order', () => {
+  const readiness = { catalogIds: ['a', 'b'], catalogFailed: false }
+  assert.deepEqual(staleModelIds(['b', 'gone-1', 'a', 'gone-2'], readiness), ['gone-1', 'gone-2'])
+  assert.deepEqual(staleModelIds(['a'], readiness), [])
+})
+
+test('an empty selection is never stale', () => {
+  // The state that made the old cleanup dangerous: nothing selected must not
+  // read as "everything is stale".
+  assert.deepEqual(staleModelIds([], { catalogIds: [], catalogFailed: false }), [])
 })

@@ -1007,3 +1007,159 @@ test('discard clears a staged visible-model selection', () => {
   assert.deepEqual(controller.state().visibleModels, [])
   assert.equal(controller.state().dirty, false)
 })
+
+// ---------------------------------------------------------------------------
+// Accounts write fidelity (composition entries this page cannot name)
+// ---------------------------------------------------------------------------
+
+test('a landed accounts write preserves entries the page cannot name', async () => {
+  // A composition-config entry may carry a literal `apiKey` (or a shape this
+  // page has no row for). The settings layer replaces the whole `accounts`
+  // array, so rebuilding the list from the page's rows would silently delete
+  // every such entry — and strip the literal key from the entries it keeps.
+  const scope = makeScope({
+    value: {
+      accounts: [
+        { label: 'env-account', apiKeyEnv: 'COMMANDCODE_API_KEY_2' },
+        { label: 'literal-account', apiKey: 'sk-literal-compose' },
+      ],
+    },
+  })
+  const { controller } = makeController({ scope })
+  // The literal entry has no row (nothing to address it by)…
+  assert.deepEqual(controller.state().accounts.map((account) => account.label), ['env-account'])
+  // …but an unrelated save that rewrites the accounts list must not drop it.
+  controller.addAccount()
+  const added = controller.state().accounts.at(-1)!.ref
+  controller.editAccountKey(added, 'sk-third')
+  await controller.save()
+
+  const stored = scope.state.value.accounts as Array<Record<string, unknown>>
+  assert.deepEqual(
+    stored.map((entry) => entry.label),
+    ['env-account', 'literal-account', added === 'COMMANDCODE_API_KEY_3' ? 'Account 3' : stored[2]!.label],
+  )
+  assert.equal(stored[1]!.apiKey, 'sk-literal-compose')
+  assert.equal(stored[1]!.apiKeyEnv, undefined)
+  // The managed entry keeps its reference and gains the staged key's ref.
+  assert.equal(stored[2]!.apiKeyEnv, added)
+})
+
+test('a label draft survives a save that failed before the accounts write', async () => {
+  // Failure order 1: the key write is refused, so the accounts list (which
+  // carries the label) never lands. Treating "not stored" as "already
+  // applied" silently reverted the typed label and persisted the generated
+  // name on the retry.
+  const scope = makeScope({})
+  const api = makeApi({ failSet: true })
+  const { controller } = makeController({ scope, api: api as unknown as ReturnType<typeof makeApi> })
+  controller.addAccount()
+  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
+  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
+  await controller.save()
+
+  assert.equal(controller.state().failed, true)
+  assert.equal(controller.state().accounts[0]?.label, 'Go #2')
+
+  // Retry with the key write fixed: the label the user typed is what lands.
+  api.credentials.set = async (ref: string, value: string) => {
+    api.store.set(ref, value)
+    return { ok: true as const, value: undefined }
+  }
+  await controller.save()
+  assert.equal(controller.state().failed, false)
+  assert.equal(
+    (scope.state.value.accounts as Array<{ label: string }>)[0]?.label,
+    'Go #2',
+  )
+})
+
+test('a label draft survives a failed accounts write itself', async () => {
+  const scope = makeScope({})
+  const realSet = scope.set.bind(scope)
+  scope.set = async (field: string, value: unknown) => {
+    if (field === 'accounts') throw new Error('accounts write refused')
+    return realSet(field, value)
+  }
+  const { controller } = makeController({ scope })
+  controller.addAccount()
+  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
+  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
+  await controller.save()
+
+  assert.equal(controller.state().failed, true)
+  assert.equal(controller.state().accounts[0]?.label, 'Go #2')
+  assert.equal(controller.state().dirty, true, 'the retry stays available')
+})
+
+// ---------------------------------------------------------------------------
+// Routing-rule drafts on a failed save
+// ---------------------------------------------------------------------------
+
+test('a rule draft survives a save that failed before the rules write', async () => {
+  // Writes run in order and stop at the first failure, so a failure BEFORE the
+  // rules write leaves every positional id untouched: the draft still
+  // addresses its row and clearing it would revert the edit with dirty=false
+  // (no retry). Dropping is only correct once the rules write actually landed.
+  const scope = makeScope({
+    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
+  })
+  const api = makeApi({ failSet: true })
+  const { controller } = makeController({ scope, api: api as unknown as ReturnType<typeof makeApi> })
+  const id = controller.state().rules[0]!.id
+  controller.editRuleModels(id, ['deepseek/deepseek-v4-pro', 'claude-sonnet-5'])
+  controller.editAccountKey(DEFAULT_API_KEY_REF, 'sk-typed')
+  await controller.save()
+
+  assert.equal(controller.state().failed, true)
+  assert.deepEqual(
+    controller.state().rules[0]?.models,
+    ['deepseek/deepseek-v4-pro', 'claude-sonnet-5'],
+  )
+  assert.equal(controller.state().dirty, true, 'the retry stays available')
+})
+
+test('a rule draft is dropped when the rules write landed and ids shifted', async () => {
+  // The pre-existing behavior, kept: once the rules write lands, positional
+  // ids shift. A kept draft would then be applied to whichever row now holds
+  // that id — here the appended rule N — so the page would show the wrong
+  // models on the wrong row. Dropping the draft is what keeps the retry honest.
+  const scope = makeScope({
+    value: {
+      modelAccountRules: [
+        { models: ['a-model'], account: 'default' },
+        { models: ['b-model'], account: 'default' },
+      ],
+    },
+  })
+  const realSet = scope.set.bind(scope)
+  let failNext = false
+  scope.set = async (field: string, value: unknown) => {
+    if (failNext && field === 'visibleModels') throw new Error('later write refused')
+    return realSet(field, value)
+  }
+  const { controller } = makeController({ scope })
+  // Remove the first rule and edit the second (pre-save id `rule-1`), then add
+  // N: the landed write leaves [B(edited), N] at ids rule-0 / rule-1.
+  controller.removeRule('rule-0')
+  controller.editRuleModels('rule-1', ['b-model', 'b-extra'])
+  controller.addRule()
+  controller.editRuleModels('new-0', ['n-model'])
+  controller.editVisibleModels(['a-model'])
+  failNext = true
+  await controller.save()
+
+  assert.equal(controller.state().failed, true)
+  // The rules write landed with the edit applied…
+  const stored = scope.state.value.modelAccountRules as Array<{ models: string[] }>
+  assert.deepEqual(stored, [
+    { models: ['b-model', 'b-extra'], account: 'default' },
+    { models: ['n-model'], account: 'default' },
+  ])
+  // …and the draft that addressed the pre-save id is gone, so the appended
+  // rule shows its OWN models instead of inheriting the stale draft.
+  assert.deepEqual(controller.state().rules.map((rule) => rule.models), [
+    ['b-model', 'b-extra'],
+    ['n-model'],
+  ])
+})

@@ -49,6 +49,7 @@ import { CommandCodeLoginFlow } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
+import { applyCommandCodeTuiSettings } from './tui-settings.ts'
 import { KNOWN_PLANS } from './capabilities.ts'
 
 export {
@@ -123,6 +124,16 @@ export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccou
 export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, applyCommandCodeSearchSelection, commandCodeSearchSelection, selectCommandCodeSearchProvider } from './web-search.ts'
 export type { CommandCodeSearchSelection } from './web-search.ts'
 export type { CommandCodeSearchProviderDeps } from './web-search.ts'
+export { ACTIVE_ACCOUNT_AUTO, LANG_AUTO, applyCommandCodeTuiSettings, buildCommandCodeTuiSection } from './tui-settings.ts'
+export type {
+  CommandCodeTuiSettingsDeps,
+  TuiSettingsField,
+  TuiSettingsFieldOption,
+  TuiSettingsFieldWrite,
+  TuiSettingsGroup,
+  TuiSettingsSection,
+  TuiSettingsSectionsService,
+} from './tui-settings.ts'
 
 export const name = 'llm-commandcode'
 export const inject = ['llm']
@@ -228,7 +239,14 @@ export interface Config {
 
 export const Config: z<Config> = z.object({
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
-  apiKey: z.string(),
+  // `role('secret')` is load-bearing, not decoration: a literal key is the one
+  // credential path this plugin cannot keep out of a settings document (the
+  // page writes through the credentials seam instead), so the harness must
+  // strip it from every descriptor read (`settings.describe()` runs with
+  // `redactSecrets: true`). Without the role the literal rides back to the
+  // browser verbatim — including on a remote-Host setup, where that is another
+  // machine. Same declaration as the official providers' `apiKey` field.
+  apiKey: z.string().role('secret'),
   apiBase: z.string(),
   workingDir: z.string(),
   modelsCachePath: z.string(),
@@ -240,7 +258,8 @@ export const Config: z<Config> = z.object({
   accounts: z.array(z.object({
     label: z.string(),
     apiKeyEnv: z.string().role('credential-ref'),
-    apiKey: z.string(),
+    /** Literal key for one extra slot; see the top-level `apiKey` secret note. */
+    apiKey: z.string().role('secret'),
   })),
   activeAccount: z.string(),
   modelAccountRules: z.array(z.object({
@@ -569,6 +588,33 @@ export function apply(ctx: Context, config: Config): void {
     }, 'dsh-commandcode-provider: web search selection')
   })
 
+  // The terminal front door (dsh-TUI) settings page. dsh-TUI owns its own
+  // settings screen and only asks plugins to DECLARE what is editable, so
+  // without this a TUI-only user has no way to enter the API key — the web
+  // Models page is the only other surface that writes it, and dsh-TUI's
+  // `/provider` wizard manages its own `llm-pi-ai` routes exclusively
+  // (issue #28). The seam is an optional service, exactly like `commands`
+  // and `web`: on a profile without dsh-TUI the fiber never activates, and
+  // the plugin stays a plain LLM-provider bundle. The API-key field is a
+  // secret field, so the literal goes to the credentials seam and never into
+  // a settings document.
+  let refreshTuiSettings: (() => void) | undefined
+  ctx.inject(['tuiSettingsSections'], (tuiCtx) => {
+    refreshTuiSettings = applyCommandCodeTuiSettings(tuiCtx, {
+      ns: NS,
+      // Read per registration, so a `Config.apiKeyEnv` change re-targets the
+      // key field instead of leaving it writing to the previous reference.
+      apiKeyRef: () => current().apiKeyEnv ?? DEFAULT_API_KEY_ENV,
+      // The account slots behind the active-account selector. The section is
+      // re-registered when this list changes (the refresh call below), since
+      // the host renders a fixed option list per declaration.
+      accountSlots: () => slots().map((slot) => ({ id: slot.id, label: slot.label })),
+    })
+    tuiCtx.effect(() => () => {
+      refreshTuiSettings = undefined
+    }, 'dsh-commandcode-provider: tui settings handle')
+  })
+
   // Settings became an optional service in dsh 0.1.2. Register the section
   // through its provider when present; profiles without settings continue to
   // use the composition entry captured by `current` above.
@@ -583,8 +629,15 @@ export function apply(ctx: Context, config: Config): void {
       // #26), so flipping the toggle is a handoff, not an overwrite. The
       // adapter's own facts are resolved per request, so nothing else needs
       // registration-level action here.
+      //
+      // The dsh-TUI section is refreshed from the same hook: its key field
+      // follows `apiKeyEnv` and its account selector follows `accounts`, and
+      // both are frozen into the declaration the host renders. The refresh is
+      // a no-op unless one of those facts actually moved, so ordinary writes
+      // (the key itself, the model filters) never churn the screen.
       onChange: () => {
         applySearchSelection(current().webSearch ?? true)
+        refreshTuiSettings?.()
       },
     })
   })

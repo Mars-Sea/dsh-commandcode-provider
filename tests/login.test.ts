@@ -378,3 +378,142 @@ test('begin rejects when no candidate port is free', async () => {
     await new Promise<void>((resolve) => occupant.close(() => resolve()))
   }
 })
+
+// ---------------------------------------------------------------------------
+// Callback authentication and attempt ownership
+// ---------------------------------------------------------------------------
+
+test('a denial without the state token cannot end a live attempt', async () => {
+  // The denial branch is terminal, and a POST carrying `Content-Type:
+  // text/plain` rides as a CORS simple request — the browser sends it whatever
+  // our origin allowlist says, so any open page could otherwise kill a login in
+  // progress by blindly posting `{"error":"access_denied"}` to the loopback
+  // port. The state token is what makes ending an attempt an authorized act
+  // (the official CLI checks it before this branch too).
+  const harness = makeFlow()
+  try {
+    const waiting = await harness.flow.begin()
+    const { callbackUrl } = parseAuthUrl(waiting.authUrl ?? '')
+    const response = await fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', Origin: 'https://evil.example' },
+      body: JSON.stringify({ error: 'access_denied' }),
+    })
+    assert.equal(response.status, 403)
+    assert.deepEqual(await response.json(), { success: false, error: 'Invalid state token' })
+    // The attempt is untouched and can still be completed.
+    assert.equal(harness.flow.status().state, 'waiting')
+  } finally {
+    harness.dispose()
+  }
+})
+
+test('a denial carrying the state token still fails the attempt', async () => {
+  // The Studio's own path must keep working: the same POST with the attempt's
+  // state is decisive.
+  const harness = makeFlow()
+  try {
+    const waiting = await harness.flow.begin()
+    const { callbackUrl, state } = parseAuthUrl(waiting.authUrl ?? '')
+    const response = await fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'access_denied', state, error_description: 'user clicked deny' }),
+    })
+    assert.equal(response.status, 200)
+    const status = await waitFor(harness.flow, (s) => s.state === 'failed')
+    assert.equal(status.reason, 'denied')
+  } finally {
+    harness.dispose()
+  }
+})
+
+test('cancel during key validation wins over the delivered credential', async () => {
+  // The whoami round-trip is an await: cancelling while it is in flight must
+  // not store the key afterwards nor flip the finished status back to success
+  // (the page already stopped polling, so it would keep showing "cancelled"
+  // while the credential had in fact landed).
+  const stored: CommandCodeLoginCredentials[] = []
+  let releaseWhoami: (() => void) | undefined
+  const gate = new Promise<void>((resolve) => { releaseWhoami = resolve })
+  const flow = new CommandCodeLoginFlow({
+    storeKey: async (credentials) => void stored.push(credentials),
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      if (String(input).includes('/alpha/whoami')) {
+        await gate
+        return { status: 200, ok: true, json: async () => ({ user: { id: 'u1' } }) } as Response
+      }
+      return { status: 200, ok: true, json: async () => ({}) } as Response
+    }) as typeof fetch,
+  })
+  try {
+    const waiting = await flow.begin()
+    const { callbackUrl, state } = parseAuthUrl(waiting.authUrl ?? '')
+    await fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials(state)),
+    })
+    // The callback is consumed; the flow is validating the key.
+    flow.cancel()
+    assert.deepEqual(flow.status(), { state: 'failed', reason: 'cancelled' })
+
+    releaseWhoami!()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(stored.length, 0, 'a cancelled attempt never stores the key')
+    assert.deepEqual(flow.status(), { state: 'failed', reason: 'cancelled' })
+  } finally {
+    flow.dispose()
+  }
+})
+
+test('begin() after the callback starts a fresh attempt instead of reusing the closed port', async () => {
+  // Once the callback is consumed the loopback server is closed, so the stored
+  // `waiting` status no longer has anything listening. Handing it back would
+  // give the user an authUrl pointing at a dead port. The key validation is
+  // held open here so the status really is `waiting` with a closed server —
+  // otherwise the immediate whoami stub would settle it first.
+  let releaseWhoami: (() => void) | undefined
+  const gate = new Promise<void>((resolve) => { releaseWhoami = resolve })
+  const harness = makeFlow({
+    whoami: () => ({ status: 200, body: { user: { id: 'u1' } } }),
+  })
+  // Replace the fetch with a gated one so validation cannot finish early.
+  const gated = new CommandCodeLoginFlow({
+    storeKey: async () => {},
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      if (String(input).includes('/alpha/whoami')) {
+        await gate
+        return { status: 200, ok: true, json: async () => ({ user: { id: 'u1' } }) } as Response
+      }
+      return { status: 200, ok: true, json: async () => ({}) } as Response
+    }) as typeof fetch,
+  })
+  harness.dispose()
+  try {
+    const waiting = await gated.begin()
+    const { callbackUrl, state } = parseAuthUrl(waiting.authUrl ?? '')
+    await fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials(state)),
+    })
+    // Still validating: `waiting`, but its server is already closed.
+    assert.equal(gated.status().state, 'waiting')
+    const again = await gated.begin()
+    assert.equal(again.state, 'waiting')
+    assert.notEqual(again.authUrl, waiting.authUrl)
+    // The fresh URL is live: its callback still reaches a listening server.
+    const parsed = parseAuthUrl(again.authUrl ?? '')
+    const response = await fetch(parsed.callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials(parsed.state)),
+    })
+    assert.equal(response.status, 200)
+    releaseWhoami!()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  } finally {
+    gated.dispose()
+  }
+})

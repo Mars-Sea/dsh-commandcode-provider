@@ -160,3 +160,38 @@ export function toggleModelSelection(
     ? selected.filter((value) => value !== modelId)
     : [...selected, modelId]
 }
+
+/** The catalog facts the visible-models card reads (mirrors `SettingsPageState`). */
+export interface CatalogReadiness {
+  /** Catalog model ids the Host reported (`[]` before the first fetch lands). */
+  catalogIds: readonly string[]
+  /** Whether the catalog fetch failed (or the Remote is unavailable). */
+  catalogFailed: boolean
+}
+
+/**
+ * Whether the catalog is trustworthy enough to call an unlisted selection
+ * "retired". FALSE while the first fetch is still in flight and after a
+ * failure, because the catalog is empty then and every selected id would look
+ * stale — which turns the one-click stale cleanup into a button that silently
+ * empties the allowlist. A successfully loaded but empty catalog is treated as
+ * untrustworthy too: an empty list is far more likely a Host problem than every
+ * model being retired at once, and the explicit "show all" entry covers the
+ * user who really wants to clear the list.
+ */
+export function catalogIsReady(readiness: CatalogReadiness): boolean {
+  return readiness.catalogIds.length > 0 && !readiness.catalogFailed
+}
+
+/**
+ * Selected ids the loaded catalog no longer carries, in selection order.
+ * Callers gate user-visible "stale" affordances on {@link catalogIsReady} —
+ * the list itself is informational.
+ */
+export function staleModelIds(
+  selected: readonly string[],
+  readiness: CatalogReadiness,
+): string[] {
+  const catalogIds = new Set(readiness.catalogIds)
+  return selected.filter((id) => !catalogIds.has(id))
+}

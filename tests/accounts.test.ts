@@ -460,3 +460,58 @@ test('resolveKey routes through the rotation hook after a rejection', async () =
   const next = await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro', exclude: 'key-1' })
   assert.equal(next?.key, 'key-2')
 })
+
+// ---------------------------------------------------------------------------
+// Credential normalization (marks must land on the key the adapter reports)
+// ---------------------------------------------------------------------------
+
+test('a key with surrounding whitespace is normalized before it is handed out', async () => {
+  // The adapter sends every key through the harness's `assertUsableApiKey()`,
+  // which trims it, and reports that trimmed form back as the rejected key.
+  // Handing out the raw value would file every 429/401 mark under a string no
+  // later lookup can find: rotation would re-offer the same account and the
+  // marks would never show.
+  const { pool } = makePool({
+    slots: [defaultSlot(), extraSlot(2)],
+    keys: { COMMANDCODE_API_KEY: '  key-1\n', COMMANDCODE_API_KEY_2: 'key-2' },
+  })
+  const resolved = await pool.resolveKey()
+  assert.equal(resolved?.key, 'key-1')
+
+  pool.markRejected('key-1', 'rate-limit')
+  const next = await pool.resolveKey({ exclude: 'key-1' })
+  assert.equal(next?.key, 'key-2', 'the marked account is skipped')
+})
+
+test('a whitespace-padded credential still shares one mark across slots', async () => {
+  // Two slots resolving to the same credential (modulo whitespace) must share
+  // one rotation state, exactly as two identical strings do.
+  const { pool, probeCalls } = makePool({
+    slots: [defaultSlot(), extraSlot(2)],
+    keys: { COMMANDCODE_API_KEY: 'key-1', COMMANDCODE_API_KEY_2: 'key-1 ' },
+    probes: { 'key-1': { exceeded: true, resetAt: Date.now() + 60_000 } },
+  })
+  const accounts = await pool.resolvedAccounts()
+  assert.equal(accounts.length, 1, 'deduplicated by the normalized key')
+  assert.equal(accounts[0]?.key, 'key-1')
+
+  pool.markRejected('key-1', 'rate-limit')
+  await assert.rejects(
+    () => pool.resolveKey(),
+    (error: unknown) => error instanceof LlmError && error.code === 'RATE_LIMIT',
+  )
+  // The probe pass saw the normalized key, not the padded source value.
+  assert.deepEqual(probeCalls, ['key-1'])
+})
+
+test('a credential that is blank after trimming counts as missing', async () => {
+  const { pool } = makePool({ keys: { COMMANDCODE_API_KEY: '   \n' } })
+  assert.deepEqual(await pool.resolvedAccounts(), [])
+  assert.equal(await pool.resolveKey(), undefined)
+})
+
+test('a padded auth-file key is normalized too', async () => {
+  const { pool } = makePool({ authFile: ' file-key\n' })
+  const resolved = await pool.resolveKey()
+  assert.equal(resolved?.key, 'file-key')
+})

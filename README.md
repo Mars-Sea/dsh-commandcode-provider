@@ -18,6 +18,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 
 - **Plugin bundle** — install into any dsh profile with `dsh plugin add`; registers a `commandcode` provider route with a live model catalog.
 - **Dedicated settings page** — API key, connection options, a live account-usage card, and a "Hide out-of-plan models" toggle.
+- **Works in the terminal too** — the same install serves a [dsh-TUI](#terminal-ui-dsh-tui) profile, with its own **`/settings` → Command Code** page for the API key and the model controls.
 - **Models-page key card** — the **Settings → Models → Command Code** card carries the key status, a paste field, and the sign-in button inline.
 - **In-browser sign-in for keys** — start the official authorization flow (the same one `cmd login` runs) from the settings page; the approved key lands in the local credential service automatically. Manual paste remains the fallback.
 - **Multi-account rotation** — when one account hits its usage limit, requests switch to the next account automatically. See [Account rotation](#account-rotation).
@@ -77,6 +78,47 @@ Or skip the CLI: click **Sign in to Command Code** under **Settings → Command 
 ## Verify it works
 
 After restart, enter your API key in **Settings → Command Code** and save; **Settings → Models** shows a **Command Code** card, and the model picker lists the live catalog under **commandcode**. Send a message with a model your plan includes.
+
+## Terminal UI (dsh-TUI)
+
+The plugin also works under a terminal front door — no separate install and no extra configuration:
+
+```sh
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider
+```
+
+Then pick the provider in the model selector, or name it directly:
+
+```text
+/model commandcode/deepseek/deepseek-v4.1-flash
+```
+
+`/model` lists every registered provider, with Command Code's live catalog and its plan/deal/context annotations. The `/commandcode` usage dashboard works there too.
+
+**Entering the key.** The TUI has no web Models page, so the plugin declares its own page in the TUI settings screen — **`/settings` → Command Code** — with the API key, the API base, the out-of-plan model filter, the model allowlist, the active account, and the command language. The key field is write-only: it shows whether a key is configured and writes what you type to the credential store, never to a settings document. The same page is the only place a TUI-only user needs to visit.
+
+Alternatively, set the key outside the TUI — any of these work, in this order of precedence:
+
+```sh
+export COMMANDCODE_API_KEY="user_..."   # launching environment
+cmd login                               # writes ~/.commandcode/auth.json
+```
+
+**Making Command Code the default.** dsh-TUI pins its own agent route, and its `agent-default-model` setting does not override it. To start every session on Command Code, override the `agent-loop` row in your profile patch (`$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`):
+
+```yaml
+- id: agent-loop
+  inject: [tuiStartup]
+  config:
+    agents:
+      - id: main
+        provider: commandcode
+        model: deepseek/deepseek-v4.1-flash
+        reasoningEffort: max
+        cwd: !!js process.cwd()
+```
+
+**Engine version.** The plugin needs a dsh engine that exports `ToolCallId` from `@deepseek-ai/dsh-llm` — **dsh 0.1.2-alpha.3 or later**. That includes the engine dsh-TUI recommends (0.1.2-rc.1) and every later release, but *not* the oldest engines its peer range nominally allows: on dsh 0.1.0-rc.6 or 0.1.1-rc.2 the plugin's module import fails and the TUI will not start. Upgrade the engine, or use the web profile.
 
 ## Usage dashboard
 

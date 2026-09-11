@@ -328,6 +328,15 @@ function sameModels(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /**
+ * Order-sensitive content fingerprint of the stored routing rules. Stored rule
+ * ids are positional (`rule-<index>`), so equality of this fingerprint across a
+ * save is exactly the statement "no rules write landed and no row shifted".
+ */
+function ruleFingerprint(rules: ReadonlyArray<{ models: readonly string[]; account: string }>): string {
+  return JSON.stringify(rules.map((rule) => [rule.models, rule.account]))
+}
+
+/**
  * Controller bridging the `llm-commandcode` scope and the credentials domain
  * onto the page. Public API mirrors the harness's CardForm actions, so the
  * component stays thin.
@@ -367,6 +376,12 @@ export class CommandCodeSettingsController {
    * would delete the wrong row).
    */
   private readonly removedRuleIds = new Map<string, { models: string[]; account: string }>()
+  /**
+   * Fingerprint of the stored routing rules when the last `save()` started;
+   * `undefined` outside a save. Lets reconcile distinguish a landed rules
+   * write from a save that failed before reaching it.
+   */
+  private rulesBeforeSave: string | undefined = undefined
   /** Staged visible-model allowlist (undefined = no draft). */
   private visibleModelsDraft: string[] | undefined = undefined
   /** The catalog the model editors offer (Host-side). */
@@ -674,6 +689,10 @@ export class CommandCodeSettingsController {
     }
     this.saving = true
     this.failed = false
+    // Snapshot the stored routing rules before any write: reconcile needs to
+    // tell "the rules write landed (rows shifted)" from "the save failed
+    // earlier (rows untouched)" — see reconcileRuleStaging.
+    this.rulesBeforeSave = ruleFingerprint(this.storedRules())
     this.publish()
     let landed = true
     // Keys land first so a saved accounts list never names a ref whose key
@@ -716,10 +735,10 @@ export class CommandCodeSettingsController {
 
   /**
    * Drop account staging the stored section already reflects: additions whose
-   * ref is now stored, removals whose ref is gone, and label drafts matching
-   * the stored label. Key drafts are kept — a landed key write is idempotent
-   * on retry, and the draft carries the user's intent when it was the
-   * accounts write that failed.
+   * ref is now stored, removals whose ref is gone, and label drafts that the
+   * stored label proves landed. Key drafts are kept — a landed key write is
+   * idempotent on retry, and the draft carries the user's intent when it was
+   * the accounts write that failed.
    */
   private reconcileAccountStaging(): void {
     const stored = new Set(this.storedExtras().map((extra) => extra.ref))
@@ -729,7 +748,13 @@ export class CommandCodeSettingsController {
     }
     for (const [ref, text] of [...this.labelDrafts]) {
       const storedLabel = this.storedExtras().find((extra) => extra.ref === ref)?.label
-      if (storedLabel === undefined || storedLabel === text.trim()) this.labelDrafts.delete(ref)
+      // A label draft is dropped only when the stored section proves it
+      // landed. An ABSENT entry is not proof: keys land before the accounts
+      // list, so a failed save routinely leaves a staged addition stored
+      // nowhere — treating "not stored" as "already applied" silently threw
+      // away the label the user had typed and persisted the auto-generated
+      // name on the retry instead.
+      if (storedLabel !== undefined && storedLabel === text.trim()) this.labelDrafts.delete(ref)
     }
     // A landed clear already did its job (the Host reports unconfigured);
     // keep only clears that failed so a retry re-attempts them.
@@ -921,14 +946,29 @@ export class CommandCodeSettingsController {
   // Multi-account staging
   // -----------------------------------------------------------------------
 
-  /** The stored extra accounts from the settings section (`accounts`). */
-  private storedExtras(): Array<{ label: string; ref: string }> {
+  /** The raw `accounts` array of the stored section, verbatim. */
+  private rawStoredAccounts(): Array<Record<string, unknown>> {
     const raw = this.scope.getSnapshot().value?.accounts
     if (!Array.isArray(raw)) return []
+    return raw.filter(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === 'object' && entry !== null && !Array.isArray(entry),
+    )
+  }
+
+  /**
+   * The stored extra accounts from the settings section (`accounts`): the rows
+   * this page can address, i.e. the ones carrying a credential reference.
+   *
+   * Entries the page cannot name are deliberately NOT listed here but are also
+   * never dropped — `writeAccounts()` rebuilds the stored list from
+   * {@link rawStoredAccounts} and only rewrites the reference-carrying entries
+   * it manages (see the note there), so a literal-key entry stays in the
+   * document and simply has no row.
+   */
+  private storedExtras(): Array<{ label: string; ref: string }> {
     const out: Array<{ label: string; ref: string }> = []
-    for (const entry of raw) {
-      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
-      const record = entry as Record<string, unknown>
+    for (const record of this.rawStoredAccounts()) {
       const ref = record.apiKeyEnv
       if (typeof ref !== 'string' || ref === '') continue
       const label = record.label
@@ -1025,23 +1065,72 @@ export class CommandCodeSettingsController {
     return runs
   }
 
-  /** Persist the staged accounts list into the settings section. */
+  /**
+   * Persist the staged accounts list into the settings section.
+   *
+   * The stored list is the base — NOT a list rebuilt from this page's rows.
+   * A composition-config entry may carry a literal `apiKey` (or a shape this
+   * page does not know), and the settings layer replaces the whole array, so a
+   * rebuilt list would silently delete every entry the page cannot name along
+   * with the literal keys of the entries it can. Entries are therefore carried
+   * over verbatim and only the reference-carrying rows are rewritten (label
+   * draft applied, staged removals dropped, staged additions appended).
+   */
   private async writeAccounts(): Promise<boolean> {
-    const base = [
-      ...this.storedExtras().filter((extra) => !this.removedRefs.has(extra.ref)),
-      ...this.addedAccounts,
-    ]
+    const removed = this.removedRefs
+    const written = new Set<string>()
+    const list: Array<Record<string, unknown>> = []
+    for (const entry of this.rawStoredAccounts()) {
+      const ref = entry.apiKeyEnv
+      // Not a row this page manages (literal-key or unknown entry): preserve
+      // it exactly as stored rather than dropping it with the rewrite.
+      if (typeof ref !== 'string' || ref === '') {
+        list.push({ ...entry })
+        continue
+      }
+      if (removed.has(ref) || written.has(ref)) continue
+      written.add(ref)
+      list.push(this.accountEntry(ref, entry))
+    }
     // Defensive dedupe by ref: a partially landed earlier save can leave an
     // account both stored and staged-for-addition; never persist duplicates.
-    const seen = new Set<string>()
-    const list = base.filter((extra) => !seen.has(extra.ref) && (seen.add(extra.ref), true)).map((extra) => {
-      const draft = this.labelDrafts.get(extra.ref)?.trim()
-      return { label: draft !== undefined && draft !== '' ? draft : extra.label, apiKeyEnv: extra.ref }
-    })
+    // A staged addition whose ref is already stored is skipped too — the
+    // stored entry (with any literal key or unknown field) wins.
+    for (const extra of this.addedAccounts) {
+      if (written.has(extra.ref)) continue
+      written.add(extra.ref)
+      list.push(this.accountEntry(extra.ref, extra))
+    }
     await this.scope.set('accounts', list)
-    const after = this.storedExtras()
+    // Verify against the same raw entries the write was built from: the
+    // page's row view ignores reference-less entries, so comparing it to
+    // `list` would report a false failure whenever one is present.
+    const after = this.rawStoredAccounts()
     return after.length === list.length
-      && list.every((item, index) => after[index]?.ref === item.apiKeyEnv)
+      && list.every((item, index) => after[index]?.apiKeyEnv === item.apiKeyEnv)
+  }
+
+  /**
+   * One written account entry: the stored/added facts plus the label draft.
+   * `fallback` contributes the non-managed fields (a stored entry's literal
+   * `apiKey`, or any future field) so a rewrite never strips them.
+   */
+  private accountEntry(
+    ref: string,
+    fallback: { label: string } | Record<string, unknown>,
+  ): Record<string, unknown> {
+    const draft = this.labelDrafts.get(ref)?.trim()
+    const base = 'ref' in fallback
+      ? { label: (fallback as { label: string }).label }
+      : { ...(fallback as Record<string, unknown>) }
+    const storedLabel = base.label
+    return {
+      ...base,
+      label: draft !== undefined && draft !== ''
+        ? draft
+        : typeof storedLabel === 'string' && storedLabel !== '' ? storedLabel : ref,
+      apiKeyEnv: ref,
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1137,11 +1226,16 @@ export class CommandCodeSettingsController {
         sameModels(snapshot.models, rule.models) && snapshot.account === rule.account)
       if (landed) this.removedRuleIds.delete(id)
     }
-    // A failed save may land the rules write (shifting every positional id)
-    // while a later write fails: drafts keyed by the pre-save ids no longer
-    // address the rows they were staged against. Matching them to shifted
-    // rows by content would misattribute edits, so drop them — the user
-    // re-applies the edit and the retry stays honest.
+    // Drafts are keyed by positional stored ids, so they survive a failed save
+    // exactly as long as the stored list did not change: writes run in order
+    // and stop at the first failure, so a failure BEFORE the rules write leaves
+    // the stored rows (and their ids) untouched and the drafts still describe
+    // them — clearing here would silently revert the user's edit and leave
+    // `dirty` false, i.e. nothing to retry. Only a save that actually landed
+    // the rules write shifts every positional id, which makes a draft
+    // unattributable; matching shifted rows by content would misattribute
+    // edits, so those drafts are dropped and the user re-applies the edit.
+    if (this.rulesBeforeSave !== undefined && ruleFingerprint(stored) === this.rulesBeforeSave) return
     this.ruleDrafts.clear()
   }
 
