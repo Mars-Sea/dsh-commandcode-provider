@@ -1,0 +1,33 @@
+# gitleaks configuration.
+#
+# Why this file exists: the default ruleset reports the synthetic API-key
+# literals in `tests/config-schema.test.ts` (`apiKey: 'sk-literal-SECRET-123'`
+# and its sibling `sk-second-SECRET-456`). The `generic-api-key` rule matches
+# any `…key: '<high-entropy string>'` assignment, and those fixtures exist
+# precisely to be handed to the settings schema so the redaction contract can
+# be asserted — a test proving literals are stripped needs literals to strip.
+# They are placeholders: real Command Code credentials are `user_…`, and these
+# strings appear nowhere outside that one test. Left unhandled, the finding
+# fails the Security Scans workflow on every push.
+#
+# Scope — keep it this narrow. The allowlist matches the fixture VALUES by
+# regex rather than by path, because a path-scoped rule would open a real hole
+# here: the gitleaks this workflow installs (8.24.3) honours only the singular
+# `[allowlist]` table, and that form silently ignores `targetRules`. A
+# `paths = ['^tests/']` allowlist therefore blinds EVERY detector across the
+# whole test tree, not just `generic-api-key`. Verified against 8.24.3: with a
+# path allowlist, a synthetic AWS key planted in `tests/` was no longer
+# reported; with the regex form below it still is — as is a different
+# high-entropy `sk-` value in the same file, and AWS-shaped keys in `tests/`
+# and `src/`. `regexes` is matched against the secret value, not the line.
+#
+# If gitleaks is ever upgraded to a version that supports `[[allowlists]]`
+# with `targetRules`, this could be re-narrowed to a rule-scoped path
+# allowlist — re-verify before assuming it applies.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic API-key fixtures asserted by the config-schema redaction test."
+regexes = ['''sk-(?:literal|second)-SECRET-\d+''']
