@@ -18,8 +18,8 @@ import {
   studioBaseForApiBase,
   validateCommandApiKey,
   type CommandCodeLoginCredentials,
-  type CommandCodeLoginStatus,
 } from '../src/login.ts'
+import type { CommandCodeLoginStatus } from '../src/login-wire.ts'
 
 /** A whoami stub scripted per call, recording the Authorization header. */
 function makeWhoami(impl: (apiKey: string) => ResponseInit & { body?: unknown } | 'throw'): {
@@ -54,9 +54,11 @@ function makeFlow(overrides?: {
   const stored: CommandCodeLoginCredentials[] = []
   const whoami = makeWhoami(overrides?.whoami ?? (() => ({ status: 200, body: { user: { id: 'u1' } } })))
   const flow = new CommandCodeLoginFlow({
-    timeoutMs: overrides?.timeoutMs,
-    startPort: overrides?.startPort,
-    maxPortAttempts: overrides?.maxPortAttempts,
+    // Optional knobs are omitted (not passed as `undefined`): the flow reads
+    // every one of them with `??`, so the defaults apply either way.
+    ...(overrides?.timeoutMs === undefined ? {} : { timeoutMs: overrides.timeoutMs }),
+    ...(overrides?.startPort === undefined ? {} : { startPort: overrides.startPort }),
+    ...(overrides?.maxPortAttempts === undefined ? {} : { maxPortAttempts: overrides.maxPortAttempts }),
     fetchImpl: whoami.fetchImpl,
     storeKey: overrides?.storeKey ?? (async (credentials) => void stored.push(credentials)),
   })
@@ -104,7 +106,8 @@ function parseAuthUrl(authUrl: string): { callbackUrl: string; port: number; sta
   }
 }
 
-function credentials(state: string, apiKey = 'cc_sk_test_key'): CommandCodeLoginCredentials {
+/** The Studio's callback POST body: the stored credentials plus the state token. */
+function credentials(state: string, apiKey = 'cc_sk_test_key'): CommandCodeLoginCredentials & { state: string } {
   return { apiKey, state, userId: 'u1', userName: 'mars-sea', keyName: 'cli' }
 }
 

@@ -37,12 +37,28 @@ import {
   compareByPlan,
 } from '../src/capabilities.ts'
 import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions } from '../src/adapter.ts'
-import type { ContentBlock, GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ContentBlock, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
+import type {
+  AttachmentStore,
+  ImageAttachmentRef,
+  SaveImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The harness mints a stable id for every message it appends; the adapter
+ * never reads it, but the `Message` contract requires one, so the fixtures
+ * below stamp a fresh id per message.
+ */
+let messageSeq = 0
+function messageId(): MessageId {
+  return MessageId(`msg-${++messageSeq}`)
+}
 
 /** A fetch stub returning a canned Response stream. */
 function fetchReturning(
@@ -50,13 +66,19 @@ function fetchReturning(
   body: string | (() => ReadableStream<Uint8Array>),
   headers: Record<string, string> = {},
 ): typeof fetch {
+  // A string body is encoded into a stream; a caller-supplied stream is used
+  // as-is. (The previous form encoded the stream itself, which would have
+  // stringified it — no caller passes a factory today, so the branch is
+  // typed and wired correctly rather than left as a trap.)
   const text = (): ReadableStream<Uint8Array> =>
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(typeof body === 'string' ? body : body()))
-        controller.close()
-      },
-    })
+    typeof body === 'string'
+      ? new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(body))
+            controller.close()
+          },
+        })
+      : body()
   return (async () => new Response(text(), {
     status,
     headers: { 'content-type': 'application/json', ...headers },
@@ -82,7 +104,7 @@ function makeAdapter(overrides: Partial<CommandCodeAdapterDeps> = {}): CommandCo
 }
 
 function userMessage(text: string): Message {
-  return { role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }
+  return { id: messageId(), role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }
 }
 
 /** A tiny valid-ish PNG byte blob for byte-round-trip assertions. */
@@ -90,7 +112,7 @@ const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
 
 function imageRef(): ImageAttachmentRef {
   return {
-    attachmentId: 'sha256:test-image',
+    attachmentId: AttachmentId('sha256:test-image'),
     mediaType: 'image/png',
     bytes: pngBytes.length,
     width: 1,
@@ -109,10 +131,10 @@ function fakeAttachments(images: Record<string, Uint8Array>): AttachmentStore {
       mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
     },
     async validateImage() {},
-    async saveImage(input) {
+    async saveImage(input: SaveImageAttachment) {
       return { ...imageRef(), mediaType: input.mediaType, bytes: input.data.byteLength }
     },
-    async readImage(ref) {
+    async readImage(ref: ImageAttachmentRef) {
       const data = images[ref.attachmentId]
       if (!data) throw new Error(`no stored image for ${ref.attachmentId}`)
       return { ref, data }
@@ -265,10 +287,10 @@ function parallelTurn(
   const content: ContentBlock[] = []
   if (options.assistantText !== undefined) content.push({ type: 'text', text: options.assistantText })
   for (const id of ids) {
-    content.push({ type: 'tool-call', id: id as never, name: 'read_image', arguments: `{"file_path":"/tmp/${id}.png"}` })
+    content.push({ type: 'tool-call', id: ToolCallId(id), name: 'read_image', arguments: `{"file_path":"/tmp/${id}.png"}` })
   }
   const messages: Message[] = [
-    { role: 'assistant', content, source: { kind: 'model', provider: 'commandcode', model: 'm' } },
+    { id: messageId(), role: 'assistant', content, source: { kind: 'model', provider: 'commandcode', model: 'm' } },
   ]
   for (const [index, id] of ids.entries()) {
     const result = results[index] ?? {}
@@ -276,9 +298,10 @@ function parallelTurn(
     if (result.text !== undefined) blocks.push({ type: 'text', text: result.text })
     for (const attachment of result.images ?? []) blocks.push({ type: 'image', attachment })
     messages.push({
+      id: messageId(),
       role: 'user',
-      content: [{ type: 'tool-result', toolCallId: id as never, isError: result.isError ?? false, content: blocks }],
-      source: { kind: 'tool', callId: id as never },
+      content: [{ type: 'tool-result', toolCallId: ToolCallId(id), isError: result.isError ?? false, content: blocks }],
+      source: { kind: 'tool', callId: ToolCallId(id) },
     })
   }
   return messages
@@ -290,7 +313,7 @@ function parallelTurn(
 
 test('stream() sends the harness conversation in Command Code wire format', async () => {
   let capturedBody: Record<string, unknown> | undefined
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
     return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', {
       status: 200,
@@ -305,7 +328,7 @@ test('stream() sends the harness conversation in Command Code wire format', asyn
     system: 'You are helpful.',
     messages: [
       userMessage('Hello'),
-      { role: 'assistant', content: [{ type: 'text', text: 'Hi' }], source: { kind: 'model', provider: 'commandcode', model: 'm' } },
+      { id: messageId(), role: 'assistant', content: [{ type: 'text', text: 'Hi' }], source: { kind: 'model', provider: 'commandcode', model: 'm' } },
       userMessage('How are you?'),
     ],
     tools: [{ name: 'bash', description: 'run a command', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } }],
@@ -339,22 +362,22 @@ test('stream() replays only paired tool calls', async () => {
     return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
-  const callId = 'call-123'
+  const callId = ToolCallId('call-123')
   const adapter = makeAdapter({ fetchImpl })
   await collect(adapter.stream({
     provider: 'commandcode',
     model: 'deepseek/deepseek-v4-flash',
     messages: [
       userMessage('List files'),
-      {
+      { id: messageId(),
         role: 'assistant',
         content: [
           { type: 'tool-call', id: callId, name: 'bash', arguments: '{"command":"ls"}' },
-          { type: 'tool-call', id: 'call-unanswered', name: 'bash', arguments: '{}' },
+          { type: 'tool-call', id: ToolCallId('call-unanswered'), name: 'bash', arguments: '{}' },
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
         source: { kind: 'tool', callId },
@@ -390,7 +413,7 @@ test('stream() remaps overlong cross-provider tool-call ids to the gateway limit
   // issued by another provider that exceeds the gateway's `call_id <= 64`
   // limit. The adapter must remap it to a short per-request alias while
   // keeping each call/result pair correlated.
-  const longId = `opencode-${'x'.repeat(80)}`
+  const longId = ToolCallId(`opencode-${'x'.repeat(80)}`)
   assert.ok(longId.length > 64)
   const adapter = makeAdapter({ fetchImpl })
   await collect(adapter.stream({
@@ -398,29 +421,29 @@ test('stream() remaps overlong cross-provider tool-call ids to the gateway limit
     model: 'deepseek/deepseek-v4-flash',
     messages: [
       userMessage('List files'),
-      {
+      { id: messageId(),
         role: 'assistant',
         content: [
-          { type: 'tool-call', id: longId as never, name: 'bash-long', arguments: '{}' },
-          { type: 'tool-call', id: 'cc-1' as never, name: 'bash-alias-clash', arguments: '{}' },
-          { type: 'tool-call', id: 'call-short' as never, name: 'bash-short', arguments: '{}' },
+          { type: 'tool-call', id: longId, name: 'bash-long', arguments: '{}' },
+          { type: 'tool-call', id: ToolCallId('cc-1'), name: 'bash-alias-clash', arguments: '{}' },
+          { type: 'tool-call', id: ToolCallId('call-short'), name: 'bash-short', arguments: '{}' },
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
-        content: [{ type: 'tool-result', toolCallId: longId as never, isError: false, content: [{ type: 'text', text: 'a' }] }],
-        source: { kind: 'tool', callId: longId as never },
+        content: [{ type: 'tool-result', toolCallId: longId, isError: false, content: [{ type: 'text', text: 'a' }] }],
+        source: { kind: 'tool', callId: longId },
       },
-      {
+      { id: messageId(),
         role: 'user',
-        content: [{ type: 'tool-result', toolCallId: 'cc-1' as never, isError: false, content: [{ type: 'text', text: 'b' }] }],
-        source: { kind: 'tool', callId: 'cc-1' as never },
+        content: [{ type: 'tool-result', toolCallId: ToolCallId('cc-1'), isError: false, content: [{ type: 'text', text: 'b' }] }],
+        source: { kind: 'tool', callId: ToolCallId('cc-1') },
       },
-      {
+      { id: messageId(),
         role: 'user',
-        content: [{ type: 'tool-result', toolCallId: 'call-short' as never, isError: false, content: [{ type: 'text', text: 'c' }] }],
-        source: { kind: 'tool', callId: 'call-short' as never },
+        content: [{ type: 'tool-result', toolCallId: ToolCallId('call-short'), isError: false, content: [{ type: 'text', text: 'c' }] }],
+        source: { kind: 'tool', callId: ToolCallId('call-short') },
       },
     ],
   }))
@@ -450,19 +473,19 @@ test('stream() falls back to "unknown" for an empty tool-call name', async () =>
     return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
-  const callId = 'call-empty-name'
+  const callId = ToolCallId('call-empty-name')
   const adapter = makeAdapter({ fetchImpl })
   await collect(adapter.stream({
     provider: 'commandcode',
     model: 'deepseek/deepseek-v4-flash',
     messages: [
       userMessage('List files'),
-      {
+      { id: messageId(),
         role: 'assistant',
         content: [{ type: 'tool-call', id: callId, name: '', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
         source: { kind: 'tool', callId },
@@ -495,22 +518,22 @@ test('stream() rejects stop sequences (unsupported option)', async () => {
 
 /** The `read_image` call/result pair the harness produces for one local file. */
 function readImageTurn(ref: ImageAttachmentRef, extra: ContentBlock[] = []): Message[] {
-  const callId = 'call-read-image'
+  const callId = ToolCallId('call-read-image')
   return [
-    {
+    { id: messageId(),
       role: 'assistant',
-      content: [{ type: 'tool-call', id: callId as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
+      content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
       source: { kind: 'model', provider: 'commandcode', model: 'm' },
     },
-    {
+    { id: messageId(),
       role: 'user',
       content: [{
         type: 'tool-result',
-        toolCallId: callId as never,
+        toolCallId: callId,
         isError: false,
         content: [{ type: 'text', text: 'image/png image, 1x1 px, 10 bytes' }, { type: 'image', attachment: ref }, ...extra],
       }],
-      source: { kind: 'tool', callId: callId as never },
+      source: { kind: 'tool', callId: callId },
     },
   ]
 }
@@ -598,26 +621,26 @@ test('stream() gives an image-only tool result a non-empty tool message', async 
     fetchImpl,
     resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
   })
-  const callId = 'call-image-only'
+  const callId = ToolCallId('call-image-only')
   await collect(adapter.stream({
     provider: 'commandcode',
     model: 'claude-sonnet-5',
     messages: [
       userMessage('look'),
-      {
+      { id: messageId(),
         role: 'assistant',
-        content: [{ type: 'tool-call', id: callId as never, name: 'read_image', arguments: '{}' }],
+        content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{
           type: 'tool-result',
-          toolCallId: callId as never,
+          toolCallId: callId,
           isError: false,
           content: [{ type: 'image', attachment: ref }],
         }],
-        source: { kind: 'tool', callId: callId as never },
+        source: { kind: 'tool', callId: callId },
       },
     ],
   }))
@@ -684,8 +707,8 @@ test('stream() keeps parallel tool results consecutive before their image carrie
     return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
-  const refA = { ...imageRef(), attachmentId: 'sha256:test-image-a' }
-  const refB = { ...imageRef(), attachmentId: 'sha256:test-image-b' }
+  const refA = { ...imageRef(), attachmentId: AttachmentId('sha256:test-image-a') }
+  const refB = { ...imageRef(), attachmentId: AttachmentId('sha256:test-image-b') }
   const adapter = makeAdapter({
     fetchImpl,
     resolveAttachments: () =>
@@ -700,33 +723,33 @@ test('stream() keeps parallel tool results consecutive before their image carrie
     model: 'deepseek/deepseek-v4.1-flash',
     messages: [
       userMessage('read both files'),
-      {
+      { id: messageId(),
         role: 'assistant',
         content: [
-          { type: 'tool-call', id: 'call-a' as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' },
-          { type: 'tool-call', id: 'call-b' as never, name: 'read_image', arguments: '{"file_path":"/tmp/b.png"}' },
+          { type: 'tool-call', id: ToolCallId('call-a'), name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' },
+          { type: 'tool-call', id: ToolCallId('call-b'), name: 'read_image', arguments: '{"file_path":"/tmp/b.png"}' },
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{
           type: 'tool-result',
-          toolCallId: 'call-a' as never,
+          toolCallId: ToolCallId('call-a'),
           isError: false,
           content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }],
         }],
-        source: { kind: 'tool', callId: 'call-a' as never },
+        source: { kind: 'tool', callId: ToolCallId('call-a') },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{
           type: 'tool-result',
-          toolCallId: 'call-b' as never,
+          toolCallId: ToolCallId('call-b'),
           isError: false,
           content: [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }],
         }],
-        source: { kind: 'tool', callId: 'call-b' as never },
+        source: { kind: 'tool', callId: ToolCallId('call-b') },
       },
     ],
   }))
@@ -760,8 +783,8 @@ test('openai protocol groups carried images after the whole parallel tool turn',
     })
   }) as unknown as typeof fetch
 
-  const refA = { ...imageRef(), attachmentId: 'sha256:test-image-a' }
-  const refB = { ...imageRef(), attachmentId: 'sha256:test-image-b' }
+  const refA = { ...imageRef(), attachmentId: AttachmentId('sha256:test-image-a') }
+  const refB = { ...imageRef(), attachmentId: AttachmentId('sha256:test-image-b') }
   const adapter = makeAdapter({
     fetchImpl,
     resolveAttachments: () =>
@@ -780,33 +803,33 @@ test('openai protocol groups carried images after the whole parallel tool turn',
     model: 'deepseek/deepseek-v4.1-flash',
     messages: [
       userMessage('read both files'),
-      {
+      { id: messageId(),
         role: 'assistant',
         content: [
-          { type: 'tool-call', id: 'call-a' as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' },
-          { type: 'tool-call', id: 'call-b' as never, name: 'read_image', arguments: '{"file_path":"/tmp/b.png"}' },
+          { type: 'tool-call', id: ToolCallId('call-a'), name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' },
+          { type: 'tool-call', id: ToolCallId('call-b'), name: 'read_image', arguments: '{"file_path":"/tmp/b.png"}' },
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{
           type: 'tool-result',
-          toolCallId: 'call-a' as never,
+          toolCallId: ToolCallId('call-a'),
           isError: false,
           content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }],
         }],
-        source: { kind: 'tool', callId: 'call-a' as never },
+        source: { kind: 'tool', callId: ToolCallId('call-a') },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{
           type: 'tool-result',
-          toolCallId: 'call-b' as never,
+          toolCallId: ToolCallId('call-b'),
           isError: false,
           content: [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }],
         }],
-        source: { kind: 'tool', callId: 'call-b' as never },
+        source: { kind: 'tool', callId: ToolCallId('call-b') },
       },
     ],
   }))
@@ -838,7 +861,7 @@ test('stream() names a remapped call id in the carrier note, not the harness id'
   // remapped to a short alias on the wire (issue #23), so naming the
   // harness-side id would point the model at a call that is nowhere in the
   // request it is reading.
-  const longId = `opencode-${'y'.repeat(80)}`
+  const longId = ToolCallId(`opencode-${'y'.repeat(80)}`)
   assert.ok(longId.length > 64)
   const ref = imageRef()
   const adapter = makeAdapter({
@@ -850,20 +873,20 @@ test('stream() names a remapped call id in the carrier note, not the harness id'
     model: 'deepseek/deepseek-v4.1-flash',
     messages: [
       userMessage('read it'),
-      {
+      { id: messageId(),
         role: 'assistant',
-        content: [{ type: 'tool-call', id: longId as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
+        content: [{ type: 'tool-call', id: longId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
         content: [{
           type: 'tool-result',
-          toolCallId: longId as never,
+          toolCallId: longId,
           isError: false,
           content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: ref }],
         }],
-        source: { kind: 'tool', callId: longId as never },
+        source: { kind: 'tool', callId: longId },
       },
     ],
   }))
@@ -921,7 +944,7 @@ test('both transports drop a user message that converted to nothing', async () =
         ...readImageTurn(ref, []),
         // Both spellings of "nothing to send": a genuinely empty content list,
         // and one whose only block is dropped during conversion.
-        { role: 'user', content: [], source: { kind: 'user' } },
+        { id: messageId(), role: 'user', content: [], source: { kind: 'user' } },
         { role: 'user', content: [{ type: 'reasoning', text: 'thinking' }], source: { kind: 'user' } } as never,
         userMessage('and now?'),
       ],
@@ -1022,10 +1045,10 @@ test('both transports answer every parallel tool group consecutively', async () 
       messages: [
         userMessage('go'),
         ...parallelTurn(['c1', 'c2'], [{ images: [refA] }, { images: [refB] }]),
-        {
+        { id: messageId(),
           role: 'user',
-          content: [{ type: 'tool-result', toolCallId: 'c-orphan' as never, isError: false, content: [{ type: 'text', text: 'orphan' }, { type: 'image', attachment: refC }] }],
-          source: { kind: 'tool', callId: 'c-orphan' as never },
+          content: [{ type: 'tool-result', toolCallId: ToolCallId('c-orphan'), isError: false, content: [{ type: 'text', text: 'orphan' }, { type: 'image', attachment: refC }] }],
+          source: { kind: 'tool', callId: ToolCallId('c-orphan') },
         },
       ],
     },
@@ -1050,22 +1073,22 @@ test('stream() leaves text-only tool results untouched', async () => {
     return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
-  const callId = 'call-bash'
+  const callId = ToolCallId('call-bash')
   const adapter = makeAdapter({ fetchImpl })
   await collect(adapter.stream({
     provider: 'commandcode',
     model: 'deepseek/deepseek-v4-flash',
     messages: [
       userMessage('list files'),
-      {
+      { id: messageId(),
         role: 'assistant',
-        content: [{ type: 'tool-call', id: callId as never, name: 'bash', arguments: '{}' }],
+        content: [{ type: 'tool-call', id: callId, name: 'bash', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
-        content: [{ type: 'tool-result', toolCallId: callId as never, isError: false, content: [{ type: 'text', text: 'file1' }] }],
-        source: { kind: 'tool', callId: callId as never },
+        content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
+        source: { kind: 'tool', callId: callId },
       },
     ],
   }))
@@ -1093,15 +1116,15 @@ test('stream() drops images of an unpaired tool result with the result itself', 
     model: 'claude-sonnet-5',
     messages: [
       userMessage('hi'),
-      {
+      { id: messageId(),
         role: 'user',
         content: [{
           type: 'tool-result',
-          toolCallId: 'call-orphan' as never,
+          toolCallId: ToolCallId('call-orphan'),
           isError: false,
           content: [{ type: 'text', text: 'x' }, { type: 'image', attachment: ref }],
         }],
-        source: { kind: 'tool', callId: 'call-orphan' as never },
+        source: { kind: 'tool', callId: ToolCallId('call-orphan') },
       },
     ],
   }))
@@ -1112,7 +1135,7 @@ test('stream() drops images of an unpaired tool result with the result itself', 
 })
 
 test('stream() refuses images for models without Vision capability', async () => {  const adapter = makeAdapter()
-  const withImage: Message = {
+  const withImage: Message = { id: messageId(),
     role: 'user',
     content: [{ type: 'image', attachment: imageRef() }],
     source: { kind: 'user' },
@@ -1130,7 +1153,7 @@ test('stream() refuses images for models without Vision capability', async () =>
 test('stream() requires the durable attachment service for image input', async () => {
   // claude-sonnet-5 has Vision, but no resolveAttachments is provided.
   const adapter = makeAdapter()
-  const withImage: Message = {
+  const withImage: Message = { id: messageId(),
     role: 'user',
     content: [{ type: 'image', attachment: imageRef() }],
     source: { kind: 'user' },
@@ -1156,7 +1179,7 @@ test('stream() sends images in the official Command Code wire format', async () 
     fetchImpl,
     resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
   })
-  const withImage: Message = {
+  const withImage: Message = { id: messageId(),
     role: 'user',
     content: [
       { type: 'text', text: 'what is in this image?' },
@@ -1205,6 +1228,7 @@ test('resolveModel() advertises plan tier, deal, Image, and context', async () =
     assert.deepEqual(textOnly.inputModalities, ['text'])
     // Text-only DeepSeek models carry a time-of-day pricing marker (Peak/Half
     // by current UTC hour) instead of an Image marker.
+    assert.ok(textOnly.description !== undefined, 'a resolved model describes its capabilities')
     assert.match(textOnly.description, /^Go · (?:Peak|Half)$/)
     // A model with a permanent deal shows its discount.
     const deal = await adapter.resolveModel('commandcode', 'MiniMaxAI/MiniMax-M3')
@@ -1241,9 +1265,13 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   // description. DeepSeek models carry time-of-day pricing, so the
   // peak/off-peak marker (Peak/Half) depends on the current UTC hour; the
   // fixed parts stay deterministic.
-  assert.match(byId.get('deepseek/deepseek-v4-pro')!.description, /^Go · (?:Peak|Half) · 1M$/)
-  assert.deepEqual(byId.get('deepseek/deepseek-v4-flash')!.inputModalities, ['text'])
-  assert.match(byId.get('deepseek/deepseek-v4-flash')!.description, /^Go · (?:Peak|Half) · 1M$/)
+  const v4Pro = byId.get('deepseek/deepseek-v4-pro')!
+  assert.ok(v4Pro.description !== undefined)
+  assert.match(v4Pro.description, /^Go · (?:Peak|Half) · 1M$/)
+  const v4Flash = byId.get('deepseek/deepseek-v4-flash')!
+  assert.deepEqual(v4Flash.inputModalities, ['text'])
+  assert.ok(v4Flash.description !== undefined)
+  assert.match(v4Flash.description, /^Go · (?:Peak|Half) · 1M$/)
   assert.equal(byId.get('poolside/laguna-s-2.1-free')!.description, 'Go · FREE · 256K')
   // The picker shows rows in returned order: the free model leads, then Go
   // models, then Pro, alphabetically within a tier (input order was
@@ -1687,22 +1715,22 @@ test('openai protocol sends flat body and replays reasoning_content in history',
     }),
     fetchImpl,
   })
-  const callId = 'call-1'
+  const callId = ToolCallId('call-1')
   const messages: Message[] = [
     userMessage('weather?'),
-    {
+    { id: messageId(),
       role: 'assistant',
       content: [
         { type: 'text', text: 'I will look it up.' },
         { type: 'reasoning', text: 'I need the weather tool.' },
-        { type: 'tool-call', id: callId as never, name: 'get_weather', arguments: '{}' },
+        { type: 'tool-call', id: callId, name: 'get_weather', arguments: '{}' },
       ],
       source: { kind: 'model', provider: 'commandcode', model: 'm' },
     },
-    {
+    { id: messageId(),
       role: 'user',
-      content: [{ type: 'tool-result', toolCallId: callId as never, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
-      source: { kind: 'tool', callId: callId as never },
+      content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
+      source: { kind: 'tool', callId: callId },
     },
   ]
   await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash', messages }))
@@ -1726,7 +1754,7 @@ test('openai protocol sends flat body and replays reasoning_content in history',
 
 test('openai protocol remaps overlong cross-provider tool-call ids', async () => {
   let capturedBody: Record<string, unknown> | undefined
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
     return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
       status: 200,
@@ -1745,22 +1773,22 @@ test('openai protocol remaps overlong cross-provider tool-call ids', async () =>
     }),
     fetchImpl,
   })
-  const longId = `opencode-${'y'.repeat(80)}`
+  const longId = ToolCallId(`opencode-${'y'.repeat(80)}`)
   assert.ok(longId.length > 64)
   await collect(adapter.stream({
     provider: 'commandcode',
     model: 'deepseek/deepseek-v4-flash',
     messages: [
       userMessage('weather?'),
-      {
+      { id: messageId(),
         role: 'assistant',
-        content: [{ type: 'tool-call', id: longId as never, name: 'get_weather', arguments: '{}' }],
+        content: [{ type: 'tool-call', id: longId, name: 'get_weather', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      {
+      { id: messageId(),
         role: 'user',
-        content: [{ type: 'tool-result', toolCallId: longId as never, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
-        source: { kind: 'tool', callId: longId as never },
+        content: [{ type: 'tool-result', toolCallId: longId, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
+        source: { kind: 'tool', callId: longId },
       },
     ],
   }))
@@ -2190,7 +2218,13 @@ test('listModels() falls back to the on-disk cache when the fetch fails', async 
   }))
   try {
     const adapter = new CommandCodeAdapter({
-      options: () => ({ apiBase: 'https://api.commandcode.ai', workingDir: '/tmp', modelsCachePath: cachePath }),
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai',
+        workingDir: '/tmp',
+        modelsCachePath: cachePath,
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      }),
       resolveApiKey: async () => 'k',
       fetchImpl: (async () => { throw new Error('network down') }) as unknown as typeof fetch,
     })
@@ -2489,7 +2523,7 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // once it lapsed (see KNOWN_PEAK_PRICING).
   assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'], undefined)
   // Free model is marked free.
-  assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free'].free, true)
+  assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free']?.free, true)
   // stealth/ox-alpha's free deal ended in command-code@1.34.0 when the model
   // was retired; its successor z-ai/glm-5.3-flash has no deal (1.35.0).
   assert.equal(KNOWN_DEALS['stealth/ox-alpha'], undefined)

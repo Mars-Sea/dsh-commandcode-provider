@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { CommandCodeAdapter } from '../src/adapter.ts'
+import { CommandCodeAdapter, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from '../src/adapter.ts'
 import { commandDefinition } from '../src/commands.ts'
 import type { CommandInvocation } from '@deepseek-ai/dsh-commands'
 
@@ -34,6 +34,8 @@ function makeAdapter(fetchImpl: typeof fetch): CommandCodeAdapter {
       apiBase: 'https://api.commandcode.ai',
       workingDir: '/tmp',
       modelsCachePath: '/tmp/cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     }),
     resolveApiKey: async () => 'user_test_key',
     fetchImpl,
@@ -158,7 +160,13 @@ test('getUsage degrades per endpoint on failure', async () => {
 
 test('getUsage requires a key', async () => {
   const adapter = new CommandCodeAdapter({
-    options: () => ({ apiBase: 'https://api.commandcode.ai', workingDir: '/tmp', modelsCachePath: '/tmp/c.json' }),
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp',
+      modelsCachePath: '/tmp/c.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    }),
     resolveApiKey: async () => { throw new Error('no key') },
     fetchImpl: makeFetch({}),
   })
@@ -284,7 +292,13 @@ test('command reports endpoint failures instead of crashing', async () => {
 
 test('command errors when getUsage throws', async () => {
   const adapter = new CommandCodeAdapter({
-    options: () => ({ apiBase: 'https://api.commandcode.ai', workingDir: '/tmp', modelsCachePath: '/tmp/c.json' }),
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp',
+      modelsCachePath: '/tmp/c.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    }),
     resolveApiKey: async () => { throw new Error('key missing') },
     fetchImpl: makeFetch({}),
   })

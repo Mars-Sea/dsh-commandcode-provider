@@ -92,7 +92,7 @@ async function boot({ mountCredentials = true }: { mountCredentials?: boolean } 
   // A faithful stand-in for the api-gateway `ClientRemoteService`: mounting a
   // contribution installs each namespace as a Cordis `remote.<ns>` service, so
   // `inject(['remote.credentials'])` resolves exactly as it does in alpha2.
-  ctx.provide('remote', {
+  const clientRemote = {
     async $mount(contribution: { package: string; descriptors: Array<{ namespace: string; method: string }> }) {
       const groups = new Map<string, Array<{ method: string }>>()
       for (const descriptor of contribution.descriptors) {
@@ -117,9 +117,10 @@ async function boot({ mountCredentials = true }: { mountCredentials?: boolean } 
     $on(_event: string, _listener: () => void) {
       return () => {}
     },
-  })
+  }
+  ctx.provide('remote', clientRemote)
 
-  await ctx.get<{ $mount: (c: { package: string; descriptors: Array<{ namespace: string; method: string }> }) => Promise<() => void> }>('remote')!.$mount({
+  await clientRemote.$mount({
     package: 'boot',
     descriptors: [
       // The credentials namespace (dsh-api-settings-controller in alpha2).
@@ -139,7 +140,7 @@ async function boot({ mountCredentials = true }: { mountCredentials?: boolean } 
 
   const registered = new Map<string, { name: string }>()
   ctx.provide('slots', {
-    inject(name: string, fn: () => void) {
+    inject(_name: string, fn: () => void) {
       fn()
     },
     register(options: { id?: string; key?: string; name: string }, _component: unknown) {

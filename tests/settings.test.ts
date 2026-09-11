@@ -16,9 +16,7 @@ import assert from 'node:assert/strict'
 import {
   CommandCodeSettingsController,
   DEFAULT_API_KEY_REF,
-  COMMANDCODE_NS,
   type SettingsPageApi,
-  type SettingsPageState,
 } from '../src/client/settings.ts'
 
 // ---------------------------------------------------------------------------
@@ -69,10 +67,19 @@ function makeScope(init: {
   }
 }
 
-type Scope = ReturnType<typeof makeScope>
+/**
+ * The catalog Remote call as a fixture may state it. The Host's payload comes
+ * from outside the type system and `refreshCatalog()` parses it defensively, so
+ * a case may deliberately carry malformed entries.
+ */
+type ModelsStub = () => Promise<{
+  ok: boolean
+  value?: { models: readonly unknown[] }
+  error?: { message: string }
+}>
 
 /** The credentials-domain slice the page writes through. */
-function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string>; failSet?: boolean; failUnset?: boolean; models?: SettingsPageApi['models'] }) {
+function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<string, string>; failSet?: boolean; failUnset?: boolean; models?: ModelsStub }) {
   const store = init.store ?? new Map<string, string>()
   const configured = init.configured ?? store.has(DEFAULT_API_KEY_REF)
   const writable = init.writable ?? true
@@ -416,7 +423,7 @@ test('save() reports failure when a credentials write rejects and keeps drafts',
 
 test('a credentials.set that returns not-ok reports failure', async () => {
   const api = makeApi({})
-  api.credentials.set = async () => ({ result: { ok: false as const, error: { message: 'rejected' } } })
+  api.credentials.set = async () => ({ ok: false as const, error: { message: 'rejected' } })
   const { controller } = makeController({ api })
   controller.edit('apiKey', 'sk-bad')
   await controller.save()

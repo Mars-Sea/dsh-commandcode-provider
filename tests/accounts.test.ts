@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { CommandCodeAccountPool, accountUsable, matchModelRule, selectAccountForModel } from '../src/accounts.ts'
-import type { CommandCodeAccountSlot, CommandCodeModelAccountRule, FiveHourWindowProbe } from '../src/accounts.ts'
+import type { CommandCodeAccountSlot, CommandCodeModelAccountRule, FiveHourWindowProbe, ResolvedAccount } from '../src/accounts.ts'
 
 /** The implicit first account, as the plugin entry builds it. */
 function defaultSlot(over: Partial<CommandCodeAccountSlot> = {}): CommandCodeAccountSlot {
@@ -400,7 +400,7 @@ test('matchModelRule ignores empty model lists and returns undefined without rul
 })
 
 test('selectAccountForModel picks the routed account when usable', () => {
-  const accounts = [
+  const accounts: ResolvedAccount[] = [
     { slot: defaultSlot(), key: 'key-1', state: undefined },
     { slot: extraSlot(2), key: 'key-2', state: undefined },
   ]
@@ -411,7 +411,7 @@ test('selectAccountForModel picks the routed account when usable', () => {
 })
 
 test('selectAccountForModel ignores a routed account that is not usable', () => {
-  const accounts = [
+  const accounts: ResolvedAccount[] = [
     { slot: defaultSlot(), key: 'key-1', state: undefined },
     { slot: extraSlot(2), key: 'key-2', state: { kind: 'disabled', reason: '401', until: 0 } },
   ]

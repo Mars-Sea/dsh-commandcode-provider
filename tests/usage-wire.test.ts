@@ -117,7 +117,9 @@ test('schema rejects a missing or malformed accounts array', () => {
 })
 
 test('schema rejects an account entry with a wrong-typed field', () => {
-  const bad = wrap({ ...makeAccount({ failures: [] }), active: 'yes' })
+  // Deliberately malformed wire frame: built outside the typed helpers, exactly
+  // like the untrusted JSON the boundary validator receives.
+  const bad: unknown = { accounts: [{ ...makeAccount({ failures: [] }), active: 'yes' }] }
   assert.throws(() => usageReportSchema.parse(bad), /account\.active/)
   const badCooldown = wrap({ ...makeAccount({ failures: [] }), cooldownUntil: Number.NaN })
   assert.throws(() => usageReportSchema.parse(badCooldown), /account\.cooldownUntil/)
@@ -130,14 +132,17 @@ test('schema rejects non-object and array roots', () => {
 })
 
 test('schema rejects a missing or malformed failures array', () => {
-  assert.throws(() => usageReportSchema.parse(wrap({ ...makeAccount({ failures: [] }), report: {} })), /failures/)
+  const noFailures: unknown = { accounts: [{ ...makeAccount({ failures: [] }), report: {} }] }
+  assert.throws(() => usageReportSchema.parse(noFailures), /failures/)
   const bad = wrap(makeAccount({ failures: [500] as unknown as string[] }))
   assert.throws(() => usageReportSchema.parse(bad), /failures/)
 })
 
 test('schema rejects a section with a wrong-typed field', () => {
   const report = makeReport()
-  const bad = wrap(makeAccount({ ...report, usage: { ...report.usage, totalCost: 'a lot' as unknown as number } }))
+  const { usage } = report
+  assert.ok(usage)
+  const bad = wrap(makeAccount({ ...report, usage: { ...usage, totalCost: 'a lot' as unknown as number } }))
   assert.throws(() => usageReportSchema.parse(bad), /usage\.totalCost/)
 })
 

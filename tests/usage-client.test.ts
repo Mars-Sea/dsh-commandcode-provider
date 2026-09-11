@@ -46,7 +46,13 @@ function makeReport(): CommandCodeAccountsReport {
   }
 }
 
-/** A remote whose behaviour each test scripts. */
+/**
+ * A remote whose behaviour each test scripts. `models()` is part of the
+ * `UsageRemote` contract the card is handed (the settings page's catalog
+ * editor uses it), but these tests only drive the report lifecycle, so it
+ * answers with an explicit "not scripted" failure rather than inventing a
+ * catalog no test asserts on.
+ */
 function makeRemote(impl: () => Promise<Awaited<ReturnType<UsageRemote['report']>>>): UsageRemote & { calls: number } {
   const remote = {
     calls: 0,
@@ -54,6 +60,7 @@ function makeRemote(impl: () => Promise<Awaited<ReturnType<UsageRemote['report']
       remote.calls += 1
       return impl()
     },
+    models: async () => ({ ok: false as const, error: { message: 'models() is not scripted in this test' } }),
   }
   return remote
 }

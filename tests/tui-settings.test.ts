@@ -22,6 +22,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { Context } from '@deepseek-ai/cordis'
+import type { Plugin } from '@deepseek-ai/cordis'
 
 import {
   ACTIVE_ACCOUNT_AUTO,
@@ -62,6 +63,17 @@ const CATALOG: readonly TuiModelChoice[] = [
 ]
 
 /** Build the section over a mutable slot list and allowlist, like the entry does. */
+/**
+ * A stored allowlist as a hand-edited document really holds it. `storedIds()`
+ * takes `unknown` for exactly this reason — the value comes from a settings
+ * document nothing has validated — but `build()`'s `visible` option is declared
+ * as the *validated* id list, so a case that deliberately stores junk crosses
+ * that boundary here, once, named, and keeps the array literal itself checked.
+ */
+function storedJunk(ids: readonly unknown[]): readonly string[] {
+  return ids as readonly string[]
+}
+
 function build(
   overrides: Partial<Deps> & { visible?: readonly string[]; flags?: Record<string, boolean> } = {},
 ): {
@@ -257,7 +269,10 @@ test('a stored allowlist decides which boxes are checked', () => {
   // rather than the page claiming the user hid every model.
   const alpha = checkbox(section, 'go/alpha')
   assert.equal(alpha.format?.(undefined), 'true')
-  const listed = build({ visible: ['go/alpha', 3, '', 'pro/gamma'] }).section
+  // A hand-edited document holds what it holds: the number and the blank are
+  // there on purpose, so this case crosses the fixture's validated `visible`
+  // option through the one documented boundary below.
+  const listed = build({ visible: storedJunk(['go/alpha', 3, '', 'pro/gamma']) }).section
   assert.equal(checkbox(listed, 'go/alpha').format?.(undefined), 'true')
   assert.equal(checkbox(listed, 'goat/beta').format?.(undefined), 'false')
 })
@@ -449,7 +464,7 @@ async function mount(options: {
   if (options.withService !== false) ctx.provide('tuiSettingsSections', seam.service)
   const spy = spyWarn(ctx)
   let refresh: (() => void) | undefined
-  const fiber = ctx.plugin(((pluginCtx: Context) => {
+  const fiber = ctx.plugin<Plugin.Function>((pluginCtx: Context) => {
     refresh = applyCommandCodeTuiSettings(pluginCtx, {
       ns: 'llm-commandcode',
       apiKeyRef: () => options.ref ?? DEFAULT_REF,
@@ -457,7 +472,7 @@ async function mount(options: {
       visibleModels: () => [],
       modelChoices: () => CATALOG,
     })
-  }) as never, {})
+  }, {})
   await fiber
   return {
     ctx,
@@ -508,7 +523,7 @@ test('a changed credential reference re-registers the key field', async () => {
   ctx.provide('tuiSettingsSections', seam.service)
   let ref = DEFAULT_REF
   let refresh: (() => void) | undefined
-  const fiber = ctx.plugin(((pluginCtx: Context) => {
+  const fiber = ctx.plugin<Plugin.Function>((pluginCtx: Context) => {
     refresh = applyCommandCodeTuiSettings(pluginCtx, {
       ns: 'llm-commandcode',
       apiKeyRef: () => ref,
@@ -516,7 +531,7 @@ test('a changed credential reference re-registers the key field', async () => {
       visibleModels: () => [],
       modelChoices: () => CATALOG,
     })
-  }) as never, {})
+  }, {})
   await fiber
   assert.equal(
     seam.sections[0]?.fields.find((entry) => entry.secret !== undefined)?.secret?.ref,
@@ -549,7 +564,7 @@ test('a rejecting host is contained, not fatal', async () => {
   ctx.provide('tuiSettingsSections', seam.service)
   const spy = spyWarn(ctx)
   let refresh: (() => void) | undefined
-  const fiber = ctx.plugin(((pluginCtx: Context) => {
+  const fiber = ctx.plugin<Plugin.Function>((pluginCtx: Context) => {
     refresh = applyCommandCodeTuiSettings(pluginCtx, {
       ns: 'llm-commandcode',
       apiKeyRef: () => DEFAULT_REF,
@@ -557,7 +572,7 @@ test('a rejecting host is contained, not fatal', async () => {
       visibleModels: () => [],
       modelChoices: () => CATALOG,
     })
-  }) as never, {})
+  }, {})
   await fiber
   assert.equal(spy.messages.length, 1)
   assert.match(spy.messages[0] ?? '', /dsh-TUI settings section/)
@@ -584,13 +599,14 @@ test('a malformed seam is ignored rather than trusted', async () => {
     const ctx = new Context()
     ctx.provide('tuiSettingsSections', value)
     let refresh: (() => void) | undefined
-    const fiber = ctx.plugin(((pluginCtx: Context) => {
+    const fiber = ctx.plugin<Plugin.Function>((pluginCtx: Context) => {
       refresh = applyCommandCodeTuiSettings(pluginCtx, {
         ns: 'llm-commandcode',
         apiKeyRef: () => DEFAULT_REF,
         accountSlots: () => [],
+        visibleModels: () => [],
       })
-    }) as never, {})
+    }, {})
     await fiber
     assert.equal(refresh, undefined, `seam ${JSON.stringify(value)} is not usable`)
     await (fiber as unknown as { dispose: () => Promise<void> }).dispose()

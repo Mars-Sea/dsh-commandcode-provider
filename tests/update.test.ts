@@ -68,10 +68,10 @@ function makeMemoryStorage(): Storage {
       return map.size
     },
     clear: () => map.clear(),
-    getItem: (key) => map.get(key) ?? null,
+    getItem: (key: string) => map.get(key) ?? null,
     key: () => null,
-    removeItem: (key) => void map.delete(key),
-    setItem: (key, value) => void map.set(key, value),
+    removeItem: (key: string) => void map.delete(key),
+    setItem: (key: string, value: string) => void map.set(key, value),
   } as unknown as Storage
 }
 

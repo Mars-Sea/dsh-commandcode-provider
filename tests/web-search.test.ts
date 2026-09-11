@@ -55,7 +55,9 @@ function makeProvider(overrides?: {
   const provider = new CommandCodeSearchProvider({
     resolveKey: async () => key,
     apiBase: () => apiBase,
-    fetchImpl: overrides?.fetchImpl,
+    // Omitted (never explicitly `undefined`) when the caller supplies no stub:
+    // `exactOptionalPropertyTypes` forbids an undefined-valued optional field.
+    ...(overrides?.fetchImpl === undefined ? {} : { fetchImpl: overrides.fetchImpl }),
   })
   return { provider, key, apiBase }
 }
@@ -74,7 +76,7 @@ function asResponse(init: ResponseInit & { body?: unknown }): Response {
 }
 
 test('sends the CLI web-search POST with the Command Code key and version header', async () => {
-  const { provider, key } = makeProvider()
+  const { key } = makeProvider()
   const stub = makeFetch(() => asResponse(okBody([{ title: 't', url: 'https://a.example', snippet: 's' }])))
   const tied = new CommandCodeSearchProvider({
     resolveKey: async () => key,
@@ -93,7 +95,7 @@ test('sends the CLI web-search POST with the Command Code key and version header
 })
 
 test('maps the results array to WebSearchSource and omits empty optional fields', async () => {
-  const { provider, key } = makeProvider()
+  const { key } = makeProvider()
   const stub = makeFetch(() => asResponse(okBody([
     { title: 'T1', url: 'https://a.example/1', snippet: 'S1' },
     { title: 'T2', url: 'https://b.example/2', snippet: '' },
@@ -117,7 +119,6 @@ test('maps the results array to WebSearchSource and omits empty optional fields'
 })
 
 test('clamps the maxResults bound into Command Code numResults range', async () => {
-  const { provider } = makeProvider()
   // Over-bounds → 10 (floor), under-bounds → 1 (ceil).
   const high = makeFetch(() => asResponse(okBody([{ title: 'x', url: 'u', snippet: 's' }])))
   await new CommandCodeSearchProvider({
@@ -149,7 +150,6 @@ test('throws WEB_PROVIDER_CREDENTIAL_MISSING when no key can be resolved', async
 })
 
 test('preserves the plugin RATE_LIMIT cause with WEB_PROVIDER_ERROR code', async () => {
-  const { provider } = makeProvider()
   const stub = makeFetch(() => asResponse(okBody([{ title: 'x', url: 'u', snippet: 's' }])))
   const failing = new CommandCodeSearchProvider({
     resolveKey: async () => { throw Object.assign(new Error('llm-commandcode: all accounts exhausted'), { code: 'RATE_LIMIT' }) },
@@ -346,7 +346,6 @@ test('host apply() hands the selection back to the prior backend when webSearch 
   const { Context } = await import('@deepseek-ai/cordis')
   const { apply } = await import('../src/index.ts')
   const { WebRuntime } = await import('@deepseek-ai/dsh-web')
-  const { Service } = await import('@deepseek-ai/cordis')
   const SettingsService = await import('@deepseek-ai/dsh-settings')
 
   // A minimal concrete SettingsProvider: the abstract base's init only needs
@@ -370,7 +369,9 @@ test('host apply() hands the selection back to the prior backend when webSearch 
     registerAdapter: () => {},
   })
   await ctx.plugin(WebRuntime, { searchProvider: 'modsearch' })
-  await ctx.plugin(MemorySettings, {})
+  // `SettingsProvider`'s constructor takes only the context, so the plugin
+  // declares no config and takes none.
+  await ctx.plugin(MemorySettings)
 
   let settingsNs: string | undefined
   const seen: string[] = []
@@ -395,7 +396,7 @@ test('host apply() hands the selection back to the prior backend when webSearch 
     return origRegister(ns, schema, opts)
   }) as typeof settings.register
 
-  await ctx.plugin(apply as never, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
+  await ctx.plugin(apply, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
   assert.equal(seen.includes('llm-commandcode'), true)
   assert.equal(settingsNs, 'llm-commandcode')
 

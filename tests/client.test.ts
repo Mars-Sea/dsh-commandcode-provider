@@ -37,10 +37,18 @@ function imageGateError(model: string) {
   }
 }
 
+/** One selectModel payload (the shape the wrapped face is called with). */
+interface SelectModelPayload {
+  sessionId: string
+  provider: string
+  model: string
+  reasoningEffort?: string
+}
+
 /** A sessions face whose selectModel returns the given result. */
-function sessionsReturning(result: unknown) {
+function sessionsReturning<T>(result: T) {
   return {
-    selectModel: async () => result,
+    selectModel: async (_payload: SelectModelPayload, _signal?: AbortSignal) => result,
   }
 }
 
@@ -92,7 +100,7 @@ test('withFriendlyImageError() rewrites the image-gate message with the model na
   const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'deepseek/deepseek-v4-flash' })
   assert.equal(result.result.ok, false)
   assert.equal(result.result.error.code, 'model-unavailable')
-  assert.equal(result.result.error.details.model, 'deepseek/deepseek-v4-flash')
+  assert.equal(result.result.error.details?.model, 'deepseek/deepseek-v4-flash')
   assert.match(result.result.error.message, /当前会话已包含图片/)
   assert.match(result.result.error.message, /deepseek\/deepseek-v4-flash/)
   assert.match(result.result.error.message, /不支持图片输入/)
@@ -104,7 +112,7 @@ test('withFriendlyImageError() rewrites the image-gate message with the model na
   const result = await wrapped.selectModel({ sessionId: 's', provider: 'commandcode', model: 'deepseek/deepseek-v4-flash' })
   assert.equal(result.result.ok, false)
   assert.equal(result.result.error.code, 'model-unavailable')
-  assert.equal(result.result.error.details.model, 'deepseek/deepseek-v4-flash')
+  assert.equal(result.result.error.details?.model, 'deepseek/deepseek-v4-flash')
   assert.match(result.result.error.message, /session already contains images/i)
   assert.match(result.result.error.message, /deepseek\/deepseek-v4-flash/)
   assert.match(result.result.error.message, /does not accept image input/i)

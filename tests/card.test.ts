@@ -39,7 +39,6 @@ import {
 } from '../src/client/card.tsx'
 import type { SettingsPageState } from '../src/client/settings.ts'
 import type { LoginPageState } from '../src/client/login.ts'
-import type { CommandCodeLoginFailureReason } from '../src/login-wire.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers (mirrors tests/settings.test.ts)
@@ -48,12 +47,17 @@ import type { CommandCodeLoginFailureReason } from '../src/login-wire.ts'
 function makeScope(init: {
   status?: 'ready' | 'unavailable'
   writable?: boolean
-  value?: Record<string, unknown>
+  value?: Record<string, unknown> | undefined
+  /**
+   * Starting user layer; `set()` grows it. Sourced from the caller because a
+   * local initialized to `undefined` narrows to the `undefined` type.
+   */
+  user?: Record<string, unknown> | undefined
 }) {
   const state = {
     status: init.status ?? 'ready',
     value: init.value ?? {},
-    user: undefined,
+    user: init.user,
     base: undefined,
     revision: 1,
     writable: init.writable ?? true,
@@ -83,7 +87,7 @@ function makeScope(init: {
   }
 }
 
-function makeApi(init: { store?: Map<string, string> }) {
+function makeApi(init: { store?: Map<string, string> | undefined }) {
   const store = init.store ?? new Map<string, string>()
   const credentials = {
     describe: async (refs: string[]) => {
@@ -124,8 +128,6 @@ function makeLoginRemote(outcomes: Array<'success' | 'failed'> = []) {
     },
   }
 }
-
-type LoginRemote = ReturnType<typeof makeLoginRemote>
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve))
@@ -179,7 +181,7 @@ function makeCardProps(opts?: {
 // ---------------------------------------------------------------------------
 
 test('cardMode falls back to the registration posture without a snapshot', () => {
-  const { props } = makeCardProps({ withController: false })
+  makeCardProps({ withController: false })
   const mode = cardMode(undefined)
   assert.equal(mode.kind, 'registration')
 })
@@ -189,10 +191,10 @@ test('cardMode is live and reports the controller credential fact', async () => 
   await flush()
   const mode = cardMode(props.useCommandCodeSettings((state) => state))
   assert.equal(mode.kind, 'live')
-  assert.equal(mode.kind !== 'registration' ? mode.ready : false, true)
+  assert.equal(mode.kind === 'live' ? mode.ready : false, true)
   // No stored key: the card's authoritative fact says unconfigured even
   // though the Models page join has not confirmed anything either.
-  assert.equal(mode.kind !== 'registration' ? mode.controllerConfigured : false, false)
+  assert.equal(mode.kind === 'live' ? mode.controllerConfigured : false, false)
 })
 
 test('cardMode reports configured from the controller once a key is stored', async () => {

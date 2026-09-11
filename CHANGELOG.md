@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **A user message that converts to nothing is now dropped by both transports.** The CLI transport emitted it as `{ role: 'user', content: [] }` while the Provider API transport skipped it, so the same conversation could be assembled two different ways — and an empty content array is a shape the gateway has no reason to accept. Both now skip a user message that produced no text and no image (including one whose only blocks are ones this adapter does not put on the wire). An image carried out of a tool result is still flushed before the skip, so a pending image is never lost with the message.
 
+### Changed
+- **`npm run typecheck` now checks the test suite too.** `tsconfig.json` included only `src`, so `tests/` was never type-checked — `tsx` strips types without checking them, which is why a test file could reference an undeclared type for months and still pass. Every test file type-checks now, and CI's existing `typecheck` step covers them from here on. No shipped behavior changed: this is the quality gate catching up with the suite.
+
 ## [0.10.5] - 2026-09-11
 
 ### Added

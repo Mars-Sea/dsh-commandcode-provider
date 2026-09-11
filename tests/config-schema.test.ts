@@ -18,6 +18,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { redactSecrets } from '@deepseek-ai/dsh-settings'
+import type z from '@deepseek-ai/schemastery'
 
 import { Config, resolveAdapterOptions } from '../src/index.ts'
 
@@ -27,7 +28,11 @@ test('literal API keys are declared secret and stripped from a settings descript
     apiKey: 'sk-literal-SECRET-123',
     accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2', apiKey: 'sk-second-SECRET-456' }],
   }
-  const redacted = redactSecrets(Config, value) as {
+  // `redactSecrets` declares its schema parameter as `z<never>` because it only
+  // walks the declared `role('secret')` positions; the plugin's own schema is
+  // `z<Config>`, so the call states that widening explicitly at this boundary
+  // rather than loosening the assertion the test exists to make.
+  const redacted = redactSecrets(Config as z<never>, value) as {
     value: Record<string, unknown>
     secrets: Array<{ path: readonly (string | number)[] }>
   }
