@@ -515,6 +515,13 @@ async function messagesToCC(
           parts.push(await imageToCommandCode(block.attachment, readImage))
         }
       }
+      // A user message that converted to nothing carries no information, and
+      // an empty content array is a needless gateway-compat risk, so it is
+      // dropped — the same rule the Provider API converter applies below.
+      // (`dsh-llm-deepseek` instead pushes `content: ''`; skipping is the
+      // safer half of that divergence to keep.) The flush above has already
+      // run, so a pending image carrier is never dropped with it.
+      if (parts.length === 0) continue
       out.push({ role: 'user', content: parts })
       continue
     }
@@ -655,6 +662,9 @@ async function messagesToOpenAI(
           parts.push(await imageToOpenAI(block.attachment, readImage))
         }
       }
+      // Same rule as the CLI converter: a converted-to-nothing user message is
+      // dropped rather than sent as an empty content array. The flush above
+      // already ran, so a pending image carrier survives this skip.
       if (parts.length === 0) continue
       const hasImage = parts.some((part) => (part as { type?: string }).type === 'image_url')
       if (!hasImage && parts.length === 1) {

@@ -36,8 +36,8 @@ import {
   peakPricingState,
   compareByPlan,
 } from '../src/capabilities.ts'
-import type { CommandCodeAdapterDeps } from '../src/adapter.ts'
-import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions } from '../src/adapter.ts'
+import type { ContentBlock, GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 // ---------------------------------------------------------------------------
@@ -125,6 +125,163 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[
   const out: StreamChunk[] = []
   for await (const chunk of stream) out.push(chunk)
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Gateway wire invariants
+// ---------------------------------------------------------------------------
+
+type WireMessage = Record<string, unknown>
+
+/** The tool-call ids an assistant wire message declares, in either wire shape. */
+function wireCallIds(message: WireMessage): string[] {
+  if (message.role !== 'assistant') return []
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return message.tool_calls.map((call) => String((call as { id: unknown }).id))
+  }
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((part) => (part as { type?: string }).type === 'tool-call')
+      .map((part) => String((part as { toolCallId: unknown }).toolCallId))
+  }
+  return []
+}
+
+/** The tool-call id a tool wire message answers, in either wire shape. */
+function wireAnswers(message: WireMessage): string | undefined {
+  if (message.role !== 'tool') return undefined
+  if (typeof message.tool_call_id === 'string') return message.tool_call_id
+  if (Array.isArray(message.content)) {
+    const part = message.content.find((p) => (p as { type?: string }).type === 'tool-result')
+    if (part) return String((part as { toolCallId: unknown }).toolCallId)
+  }
+  return undefined
+}
+
+/**
+ * The gateway rule behind issue #33: an assistant message carrying tool calls
+ * must be followed by tool messages answering ALL of them, consecutively, with
+ * nothing else in between (it answers with
+ * `An assistant message with 'tool_calls' must be followed by tool messages
+ * responding to each 'tool_call_id'`, HTTP 400, on every replay of the
+ * history — so a violation is not a bad turn, it is a dead conversation).
+ *
+ * Written against the wire body rather than the harness messages on purpose:
+ * it re-derives the rule from whatever the transport actually emitted, so it
+ * holds for both the nested CLI shape and the flat Provider API shape, and it
+ * keeps holding if the converters are refactored. Returns one description per
+ * violating assistant message, so a caller can assert on a single history or
+ * just report.
+ */
+function toolGroupViolations(messages: WireMessage[]): string[] {
+  const violations: string[] = []
+  for (const [index, message] of messages.entries()) {
+    const ids = wireCallIds(message)
+    if (ids.length === 0) continue
+    const unanswered = new Set(ids)
+    const answered: string[] = []
+    let cursor = index + 1
+    // Bounded: a group answered at the very end of the list walks the cursor
+    // off the array, which must read as "nothing more answers it".
+    while (cursor < messages.length) {
+      const answer = wireAnswers(messages[cursor]!)
+      if (answer === undefined) break
+      answered.push(answer)
+      unanswered.delete(answer)
+      cursor++
+    }
+    if (unanswered.size === 0) continue
+    const nextRole = cursor < messages.length ? messages[cursor]!.role : '(end of list)'
+    const later = messages.slice(cursor).map(wireAnswers).filter((id): id is string => id !== undefined)
+    const deferred = [...unanswered].filter((id) => later.includes(id))
+    violations.push(
+      `assistant[${index}] calls [${ids.join(', ')}]: answered consecutively by [${answered.join(', ')}], ` +
+        `left unanswered [${[...unanswered].join(', ')}] before ${String(nextRole)}` +
+        (deferred.length > 0
+          ? ` (answered after the gap: [${deferred.join(', ')}])`
+          : ' (never answered)'),
+    )
+  }
+  return violations
+}
+
+/** Assert one captured wire body satisfies the gateway's tool-group rule. */
+function assertToolGroupsAnswered(messages: WireMessage[], label: string): void {
+  assert.deepEqual(toolGroupViolations(messages), [], `${label}: tool groups must be answered consecutively`)
+}
+
+const OPENAI_OPTIONS = (): CommandCodeConnectionOptions => ({
+  apiBase: 'https://api.commandcode.ai',
+  workingDir: '/tmp/project',
+  modelsCachePath: '/tmp/cc-models-cache.json',
+  requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+  streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  protocol: 'openai' as const,
+})
+
+/** Run one history through a transport and return the messages it emitted. */
+async function captureWire(
+  protocol: 'cli' | 'openai',
+  messages: Message[],
+  images: Record<string, Uint8Array>,
+): Promise<WireMessage[]> {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return protocol === 'openai'
+      ? new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      : new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments(images),
+    ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages,
+  }))
+  assert.ok(capturedBody, 'the adapter must issue a request')
+  return (protocol === 'openai'
+    ? capturedBody!.messages
+    : (capturedBody!.params as Record<string, unknown>).messages) as WireMessage[]
+}
+
+/**
+ * One assistant turn issuing `ids` in parallel, followed by one tool result
+ * per id — the shape issues #30 and #33 both live in. `assistantText` adds a
+ * text block beside the calls, and each result may carry text, images, or be
+ * an error.
+ */
+function parallelTurn(
+  ids: string[],
+  results: { text?: string; images?: ImageAttachmentRef[]; isError?: boolean }[],
+  options: { assistantText?: string } = {},
+): Message[] {
+  const content: ContentBlock[] = []
+  if (options.assistantText !== undefined) content.push({ type: 'text', text: options.assistantText })
+  for (const id of ids) {
+    content.push({ type: 'tool-call', id: id as never, name: 'read_image', arguments: `{"file_path":"/tmp/${id}.png"}` })
+  }
+  const messages: Message[] = [
+    { role: 'assistant', content, source: { kind: 'model', provider: 'commandcode', model: 'm' } },
+  ]
+  for (const [index, id] of ids.entries()) {
+    const result = results[index] ?? {}
+    const blocks: ContentBlock[] = []
+    if (result.text !== undefined) blocks.push({ type: 'text', text: result.text })
+    for (const attachment of result.images ?? []) blocks.push({ type: 'image', attachment })
+    messages.push({
+      role: 'user',
+      content: [{ type: 'tool-result', toolCallId: id as never, isError: result.isError ?? false, content: blocks }],
+      source: { kind: 'tool', callId: id as never },
+    })
+  }
+  return messages
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +875,172 @@ test('stream() names a remapped call id in the carrier note, not the harness id'
   const note = ((carrier.content as Record<string, unknown>[])[0]! as { text: string }).text
   assert.match(note, new RegExp(`^Attached image\\(s\\) from tool result \\(${wireId}\\):`))
   assert.ok(!note.includes(longId), 'the note names the wire alias, not the overlong harness id')
+})
+
+test('both transports drop a user message that converted to nothing', async () => {
+  // The two converters disagreed on this input: the CLI transport emitted
+  // `{ role: 'user', content: [] }` while the Provider API transport dropped
+  // the message. An empty content array is a needless gateway-compat risk and
+  // the message carries nothing, so both transports now drop it — including
+  // when the empty content comes only from blocks this adapter does not put
+  // on the wire (a user message whose sole block is a `reasoning` one).
+  const ref = imageRef()
+  for (const protocol of ['cli', 'openai'] as const) {
+    let capturedBody: Record<string, unknown> | undefined
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body))
+      return protocol === 'openai'
+        ? new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          })
+        : new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    }) as unknown as typeof fetch
+
+    const adapter = makeAdapter({
+      fetchImpl,
+      resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+      ...(protocol === 'openai'
+        ? {
+            options: () => ({
+              apiBase: 'https://api.commandcode.ai',
+              workingDir: '/tmp/project',
+              modelsCachePath: '/tmp/cc-models-cache.json',
+              requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+              streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+              protocol: 'openai' as const,
+            }),
+          }
+        : {}),
+    })
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      messages: [
+        userMessage('read it'),
+        ...readImageTurn(ref, []),
+        // Both spellings of "nothing to send": a genuinely empty content list,
+        // and one whose only block is dropped during conversion.
+        { role: 'user', content: [], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'reasoning', text: 'thinking' }], source: { kind: 'user' } } as never,
+        userMessage('and now?'),
+      ],
+    }))
+
+    const messages = (protocol === 'openai'
+      ? capturedBody!.messages
+      : (capturedBody!.params as Record<string, unknown>).messages) as Record<string, unknown>[]
+    // Nothing on the wire converted to empty, and the image carrier that was
+    // pending before those two messages was still flushed rather than dropped.
+    assert.deepEqual(
+      messages.map((m) => m.role),
+      ['user', 'assistant', 'tool', 'user', 'user'],
+      `${protocol}: empty user messages must be dropped and the carrier kept`,
+    )
+    const carried = messages.filter((m) => m.role === 'user')
+    assert.match(JSON.stringify(carried[1]), /Attached image/)
+    assert.match(JSON.stringify(messages.at(-1)), /and now\?/)
+  }
+})
+
+test('the tool-group invariant detects the interleaving it exists for', () => {
+  // A validator that can never fail would pass every history below for the
+  // wrong reason, so feed it the two orderings that matter: the pre-fix #33
+  // shape (a carrier between the tool results) must be caught, and the fixed
+  // ordering must be clean. The first body is exactly what this adapter
+  // emitted before #33, so this test fails if the invariant goes blind.
+  const interleaved = [
+    { role: 'user' },
+    { role: 'assistant', tool_calls: [{ id: 'call-a' }, { id: 'call-b' }] },
+    { role: 'tool', tool_call_id: 'call-a' },
+    { role: 'user', content: [{ type: 'text', text: 'Attached image(s) from tool result (call-a):' }] },
+    { role: 'tool', tool_call_id: 'call-b' },
+  ]
+  const violations = toolGroupViolations(interleaved)
+  assert.equal(violations.length, 1, 'the interleaved group must be reported')
+  assert.match(violations[0]!, /answered consecutively by \[call-a\]/)
+  assert.match(violations[0]!, /left unanswered \[call-b\]/)
+  assert.match(violations[0]!, /answered after the gap/)
+
+  // Nothing answered at all is caught too, and the grouped ordering is clean.
+  assert.equal(toolGroupViolations([
+    { role: 'assistant', tool_calls: [{ id: 'call-a' }] },
+    { role: 'user', content: 'hi' },
+  ]).length, 1)
+  // A fully answered group that ENDS the list is clean: the scan must stop at
+  // the end of the array rather than read past it.
+  assert.deepEqual(toolGroupViolations([
+    { role: 'assistant', tool_calls: [{ id: 'call-a' }] },
+    { role: 'tool', tool_call_id: 'call-a' },
+  ]), [])
+  assert.deepEqual(toolGroupViolations([
+    { role: 'assistant', tool_calls: [{ id: 'call-a' }, { id: 'call-b' }] },
+    { role: 'tool', tool_call_id: 'call-a' },
+    { role: 'tool', tool_call_id: 'call-b' },
+    { role: 'user', content: [{ type: 'text', text: 'Attached image(s) from tool result (call-a):' }] },
+    { role: 'user', content: [{ type: 'text', text: 'Attached image(s) from tool result (call-b):' }] },
+  ]), [])
+})
+
+test('both transports answer every parallel tool group consecutively', async () => {
+  // The invariant is checked once over a table of histories rather than
+  // re-pinned shape by shape: what the gateway enforces is a property of the
+  // whole message list, and the interesting failures (a carrier landing inside
+  // a group, a group split across a user turn) only show up when the list is
+  // derived from a real history.
+  const ids = ['sha256:order-a', 'sha256:order-b', 'sha256:order-c', 'sha256:order-d']
+  const images = Object.fromEntries(ids.map((id) => [id, pngBytes]))
+  const refs = ids.map((attachmentId) => ({ ...imageRef(), attachmentId }))
+  const [refA, refB, refC, refD] = refs as [ImageAttachmentRef, ImageAttachmentRef, ImageAttachmentRef, ImageAttachmentRef]
+
+  const histories: { name: string; messages: Message[] }[] = [
+    { name: 'one text-only result', messages: [userMessage('go'), ...parallelTurn(['c1'], [{ text: 'done' }])] },
+    { name: 'one image result (#30 shape)', messages: [userMessage('go'), ...parallelTurn(['c1'], [{ text: 'a', images: [refA] }])] },
+    { name: 'two image results (#33 shape)', messages: [userMessage('go'), ...parallelTurn(['c1', 'c2'], [{ text: 'a', images: [refA] }, { text: 'b', images: [refB] }])] },
+    { name: 'three image results', messages: [userMessage('go'), ...parallelTurn(['c1', 'c2', 'c3'], [{ images: [refA] }, { text: 'b', images: [refB] }, { images: [refC] }])] },
+    { name: 'a group mixing image and text results', messages: [userMessage('go'), ...parallelTurn(['c1', 'c2'], [{ text: 'text only' }, { images: [refB] }])] },
+    { name: 'an error result carrying an image', messages: [userMessage('go'), ...parallelTurn(['c1', 'c2'], [{ text: 'failed', images: [refA], isError: true }, { text: 'ok' }])] },
+    {
+      name: 'two parallel groups in one conversation',
+      messages: [
+        userMessage('go'),
+        ...parallelTurn(['c1', 'c2'], [{ images: [refA] }, { images: [refB] }]),
+        ...parallelTurn(['c3', 'c4'], [{ images: [refC] }, { images: [refD] }], { assistantText: 'reading more' }),
+      ],
+    },
+    {
+      name: 'a group followed by a later user turn',
+      messages: [
+        userMessage('go'),
+        ...parallelTurn(['c1', 'c2'], [{ images: [refA] }, { images: [refB] }]),
+        userMessage('and now?'),
+        ...parallelTurn(['c3'], [{ text: 'ok' }]),
+      ],
+    },
+    {
+      name: 'a group with an unpaired extra result',
+      messages: [
+        userMessage('go'),
+        ...parallelTurn(['c1', 'c2'], [{ images: [refA] }, { images: [refB] }]),
+        {
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: 'c-orphan' as never, isError: false, content: [{ type: 'text', text: 'orphan' }, { type: 'image', attachment: refC }] }],
+          source: { kind: 'tool', callId: 'c-orphan' as never },
+        },
+      ],
+    },
+    {
+      name: 'assistant text alongside parallel image calls',
+      messages: [userMessage('go'), ...parallelTurn(['c1', 'c2'], [{ images: [refA] }, { images: [refB] }], { assistantText: 'let me look' })],
+    },
+  ]
+
+  for (const protocol of ['cli', 'openai'] as const) {
+    for (const history of histories) {
+      const wire = await captureWire(protocol, history.messages, images)
+      assertToolGroupsAnswered(wire, `${protocol} · ${history.name}`)
+    }
+  }
 })
 
 test('stream() leaves text-only tool results untouched', async () => {
