@@ -410,26 +410,37 @@ function toolResultTextForWire(media: ToolResultMedia): string {
 }
 
 /** Leading line of the user message that carries a tool result's images. */
-const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result:'
+const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result'
 
 /**
  * The model-visible note introducing the images carried out of one tool
  * result. Neither transport merges them back into the tool result, so this
  * line is what tells the model the image it is about to see belongs to the
  * tool it just ran rather than to the user; it also leads the part list,
- * because an image-first content array is what some gateways reject. Count and
- * pixel dimensions are appended when the tool's own text does not already
- * state them (a result that returns the image and nothing else).
+ * because an image-first content array is what some gateways reject.
+ *
+ * The note names the tool call the image came out of, because a turn's
+ * carriers are emitted as a group after the whole tool group (issue #33):
+ * position alone would have to carry the association, and every `read_image`
+ * result renders the same envelope text, so two parallel calls would produce
+ * two identical notes. The id is the WIRE id — the one the model saw on the
+ * `tool-call` it issued and on the tool message just above — so an overlong
+ * cross-provider id is named by the alias that replaced it, not by the
+ * harness-side id the model never saw.
+ *
+ * Count and pixel dimensions are appended when the tool's own text does not
+ * already state them (a result that returns the image and nothing else).
  */
-function toolResultImageNote(media: ToolResultMedia): string {
+function toolResultImageNote(media: ToolResultMedia, toolCallId: string): string {
+  const lead = `${TOOL_RESULT_IMAGE_TEXT} (${toolCallId}):`
   const first = media.images[0]
-  if (first === undefined) return TOOL_RESULT_IMAGE_TEXT
+  if (first === undefined) return lead
   const dimensions = `${first.width}x${first.height} px`
   if (first.width <= 0 || first.height <= 0 || media.text.includes(dimensions)) {
-    return TOOL_RESULT_IMAGE_TEXT
+    return lead
   }
   const count = media.images.length > 1 ? `${media.images.length} images, ` : ''
-  return `${TOOL_RESULT_IMAGE_TEXT} ${count}${dimensions}`
+  return `${lead} ${count}${dimensions}`
 }
 
 function hasImageContent(message: Message): boolean {
@@ -533,12 +544,15 @@ async function messagesToCC(
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
       const media = toolResultMedia(block)
+      // Resolved once: the tool message and the carrier note below must name
+      // the same call, or the model cannot tie an image back to its result.
+      const wireToolCallId = wireIds.get(block.toolCallId) ?? block.toolCallId
       out.push({
         role: 'tool',
         content: [
           {
             type: 'tool-result',
-            toolCallId: wireIds.get(block.toolCallId) ?? block.toolCallId,
+            toolCallId: wireToolCallId,
             // `paired` guarantees a call with this id exists, so the map
             // always hits; `|| 'unknown'` also guards an empty call name
             // (matches the official CLI's `?? "unknown"` fallback).
@@ -559,7 +573,7 @@ async function messagesToCC(
             'UNSUPPORTED_CONTENT',
           )
         }
-        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media) }]
+        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media, wireToolCallId) }]
         for (const attachment of media.images) {
           carried.push(await imageToCommandCode(attachment, readImage))
         }
@@ -692,9 +706,12 @@ async function messagesToOpenAI(
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
       const media = toolResultMedia(block)
+      // Resolved once: the tool message and the carrier note below must name
+      // the same call, or the model cannot tie an image back to its result.
+      const wireToolCallId = wireIds.get(block.toolCallId) ?? block.toolCallId
       out.push({
         role: 'tool',
-        tool_call_id: wireIds.get(block.toolCallId) ?? block.toolCallId,
+        tool_call_id: wireToolCallId,
         content: toolResultTextForWire(media),
       })
       // Chat Completions allows no image part under `role: 'tool'`, so a
@@ -706,7 +723,7 @@ async function messagesToOpenAI(
             'UNSUPPORTED_CONTENT',
           )
         }
-        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media) }]
+        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media, wireToolCallId) }]
         for (const attachment of media.images) {
           carried.push(await imageToOpenAI(attachment, readImage))
         }

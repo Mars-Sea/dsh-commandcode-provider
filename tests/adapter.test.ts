@@ -388,7 +388,7 @@ test('stream() carries tool-result images after the tool message (issue #30)', a
   assert.equal(carried.role, 'user')
   const parts = carried.content as Record<string, unknown>[]
   assert.equal(parts.length, 2)
-  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result \(call-read-image\):$/)
   // Official CLI image wire shape, byte-identical to a user attachment.
   assert.deepEqual(parts[1], {
     type: 'image',
@@ -473,7 +473,7 @@ test('stream() gives an image-only tool result a non-empty tool message', async 
   const carried = messages[messages.indexOf(toolMsg) + 1]!
   const parts = carried.content as Record<string, unknown>[]
   // The tool text cannot state the dimensions, so the note carries them.
-  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result: 1x1 px$/)
+  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result \(call-image-only\): 1x1 px$/)
 })
 
 test('openai protocol carries tool-result images as a following user message (issue #30)', async () => {
@@ -513,7 +513,7 @@ test('openai protocol carries tool-result images as a following user message (is
   const carried = messages[messages.indexOf(toolMsg) + 1]!
   assert.equal(carried.role, 'user')
   const parts = carried.content as Record<string, unknown>[]
-  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+  assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result \(call-read-image\):$/)
   assert.deepEqual(parts[1], {
     type: 'image_url',
     image_url: { url: `data:image/png;base64,${Buffer.from(pngBytes).toString('base64')}` },
@@ -583,11 +583,14 @@ test('stream() keeps parallel tool results consecutive before their image carrie
   const callIds = tools.map((m) => (((m.content as Record<string, unknown>[])[0]! as { toolCallId: string }).toolCallId))
   assert.deepEqual(callIds, ['call-a', 'call-b'])
   const carried = messages.slice(-2) as Record<string, unknown>[]
-  for (const msg of carried) {
+  for (const [index, msg] of carried.entries()) {
     const parts = msg.content as Record<string, unknown>[]
-    assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+    // Each carrier names its OWN call: the ids are what tie the grouped
+    // images back to the tool results they came out of.
+    assert.match((parts[0] as { text: string }).text, new RegExp(`^Attached image\\(s\\) from tool result \\(${callIds[index]}\\):`))
     assert.equal(parts[1]!.type, 'image')
   }
+  assert.notEqual(callIds[0], callIds[1])
 })
 
 test('openai protocol groups carried images after the whole parallel tool turn', async () => {
@@ -658,11 +661,63 @@ test('openai protocol groups carried images after the whole parallel tool turn',
   const tools = messages.filter((m) => m.role === 'tool')
   assert.deepEqual(tools.map((m) => m.tool_call_id), ['call-a', 'call-b'])
   const carried = messages.slice(-2) as Record<string, unknown>[]
-  for (const msg of carried) {
+  for (const [index, msg] of carried.entries()) {
     const parts = msg.content as Record<string, unknown>[]
-    assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+    // Same per-call naming as the CLI transport, so both wires let the model
+    // tie a grouped image back to its own tool result.
+    assert.match((parts[0] as { text: string }).text, new RegExp(`^Attached image\\(s\\) from tool result \\(${tools[index]!.tool_call_id as string}\\):`))
     assert.equal((parts[1] as { type: string }).type, 'image_url')
   }
+})
+
+test('stream() names a remapped call id in the carrier note, not the harness id', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  // The note must name the id the MODEL saw. An overlong cross-provider id is
+  // remapped to a short alias on the wire (issue #23), so naming the
+  // harness-side id would point the model at a call that is nowhere in the
+  // request it is reading.
+  const longId = `opencode-${'y'.repeat(80)}`
+  assert.ok(longId.length > 64)
+  const ref = imageRef()
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: pngBytes }),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [
+      userMessage('read it'),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: longId as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: longId as never,
+          isError: false,
+          content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: ref }],
+        }],
+        source: { kind: 'tool', callId: longId as never },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  const wireId = ((messages.find((m) => m.role === 'tool')!.content as Record<string, unknown>[])[0]! as { toolCallId: string }).toolCallId
+  assert.equal(wireId.length <= 64, true)
+  const carrier = messages.find((m) => m.role === 'user' && JSON.stringify(m.content).includes('Attached image'))!
+  const note = ((carrier.content as Record<string, unknown>[])[0]! as { text: string }).text
+  assert.match(note, new RegExp(`^Attached image\\(s\\) from tool result \\(${wireId}\\):`))
+  assert.ok(!note.includes(longId), 'the note names the wire alias, not the overlong harness id')
 })
 
 test('stream() leaves text-only tool results untouched', async () => {
