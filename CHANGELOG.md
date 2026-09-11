@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Reading several images in one turn no longer makes the conversation unusable** ([#33](https://github.com/Mars-Sea/dsh-commandcode-provider/pull/33)). When one assistant turn issued parallel tool calls whose results each carried an image (two `read_image` calls, say), both transports emitted each image carrier as a user message directly after its own tool result, so a user message sat between the two tool messages. The gateway requires an assistant's tool blocks to be answered consecutively and rejected the request with HTTP 400 (`An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'`); because that history is replayed on every later turn, the conversation could not continue on this provider at all — a retry did not help and only switching provider or model worked. The carriers are now buffered and flushed once the whole tool group has been emitted, so parallel results stay adjacent (`assistant → tool → tool → user → user`) on both the CLI and the Provider API transport. A single-call turn keeps the shape from [#30](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/30).
+
 ## [0.10.5] - 2026-09-11
 
 ### Added
