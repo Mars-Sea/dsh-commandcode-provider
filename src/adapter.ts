@@ -471,10 +471,23 @@ async function messagesToCC(
   // result side resolves through the same map so each pair stays correlated.
   const wireIds = wireToolCallIds(paired)
 
+  // Tool-returned images ride as user messages after their tool result. The
+  // harness can emit several tool calls in one assistant turn, and the
+  // gateway expects an assistant's tool blocks to be answered consecutively:
+  // a user message interleaved between tool results breaks the pairing and
+  // the request is rejected. So image carriers are buffered and flushed only
+  // once the whole tool group (or the next non-tool message) has been emitted.
+  const pendingImages: unknown[] = []
+  const flushPendingImages = () => {
+    for (const message of pendingImages) out.push(message)
+    pendingImages.length = 0
+  }
+
   for (const message of messages) {
     if (message.role === 'system') continue // folded into params.system by the caller
 
     if (message.role === 'user' && message.source.kind !== 'tool') {
+      flushPendingImages()
       const parts: unknown[] = []
       for (const block of message.content) {
         if (block.type === 'text') parts.push({ type: 'text', text: block.text })
@@ -496,6 +509,7 @@ async function messagesToCC(
     }
 
     if (message.role === 'assistant') {
+      flushPendingImages()
       const parts: unknown[] = []
       for (const block of message.content) {
         if (block.type === 'text') {
@@ -549,10 +563,11 @@ async function messagesToCC(
         for (const attachment of media.images) {
           carried.push(await imageToCommandCode(attachment, readImage))
         }
-        out.push({ role: 'user', content: carried })
+        pendingImages.push({ role: 'user', content: carried })
       }
     }
   }
+  flushPendingImages()
   return out
 }
 
@@ -594,12 +609,25 @@ async function messagesToOpenAI(
   // transports consistent and correlation only needs to hold per request.
   const wireIds = wireToolCallIds(paired)
 
+  // Tool-returned images ride as user messages after their tool result. The
+  // harness can emit several tool calls in one assistant turn, and the
+  // gateway expects an assistant's tool blocks to be answered consecutively:
+  // a user message interleaved between tool results breaks the pairing and
+  // the request is rejected. So image carriers are buffered and flushed only
+  // once the whole tool group (or the next non-tool message) has been emitted.
+  const pendingImages: unknown[] = []
+  const flushPendingImages = () => {
+    for (const message of pendingImages) out.push(message)
+    pendingImages.length = 0
+  }
+
   for (const message of messages) {
     // System messages are folded into the single top-level system message by
     // the caller, matching the existing adapter's conversation folding.
     if (message.role === 'system') continue
 
     if (message.role === 'user' && message.source.kind !== 'tool') {
+      flushPendingImages()
       const parts: unknown[] = []
       for (const block of message.content) {
         if (block.type === 'text') parts.push({ type: 'text', text: block.text })
@@ -626,6 +654,7 @@ async function messagesToOpenAI(
     }
 
     if (message.role === 'assistant') {
+      flushPendingImages()
       const text = message.content
         .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
         .map((block) => block.text)
@@ -681,10 +710,11 @@ async function messagesToOpenAI(
         for (const attachment of media.images) {
           carried.push(await imageToOpenAI(attachment, readImage))
         }
-        out.push({ role: 'user', content: carried })
+        pendingImages.push({ role: 'user', content: carried })
       }
     }
   }
+  flushPendingImages()
   return out
 }
 

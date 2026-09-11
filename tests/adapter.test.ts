@@ -520,6 +520,151 @@ test('openai protocol carries tool-result images as a following user message (is
   })
 })
 
+test('stream() keeps parallel tool results consecutive before their image carriers', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const refA = { ...imageRef(), attachmentId: 'sha256:test-image-a' }
+  const refB = { ...imageRef(), attachmentId: 'sha256:test-image-b' }
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () =>
+      fakeAttachments({ [refA.attachmentId]: pngBytes, [refB.attachmentId]: pngBytes }),
+  })
+  // One assistant turn with two parallel read_image calls, each answered with
+  // an image-bearing tool result — the shape that used to interleave the
+  // image carrier between the tool results and break the gateway's
+  // consecutive-tool pairing check.
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [
+      userMessage('read both files'),
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: 'call-a' as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' },
+          { type: 'tool-call', id: 'call-b' as never, name: 'read_image', arguments: '{"file_path":"/tmp/b.png"}' },
+        ],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-a' as never,
+          isError: false,
+          content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }],
+        }],
+        source: { kind: 'tool', callId: 'call-a' as never },
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-b' as never,
+          isError: false,
+          content: [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }],
+        }],
+        source: { kind: 'tool', callId: 'call-b' as never },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  // user → assistant(2 calls) → tool(a) → tool(b) → user(imgA) → user(imgB):
+  // both tool results must come out consecutively, with the carried images
+  // only afterwards.
+  assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'user', 'user'])
+  const tools = messages.filter((m) => m.role === 'tool')
+  const callIds = tools.map((m) => (((m.content as Record<string, unknown>[])[0]! as { toolCallId: string }).toolCallId))
+  assert.deepEqual(callIds, ['call-a', 'call-b'])
+  const carried = messages.slice(-2) as Record<string, unknown>[]
+  for (const msg of carried) {
+    const parts = msg.content as Record<string, unknown>[]
+    assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+    assert.equal(parts[1]!.type, 'image')
+  }
+})
+
+test('openai protocol groups carried images after the whole parallel tool turn', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  const refA = { ...imageRef(), attachmentId: 'sha256:test-image-a' }
+  const refB = { ...imageRef(), attachmentId: 'sha256:test-image-b' }
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () =>
+      fakeAttachments({ [refA.attachmentId]: pngBytes, [refB.attachmentId]: pngBytes }),
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [
+      userMessage('read both files'),
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: 'call-a' as never, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' },
+          { type: 'tool-call', id: 'call-b' as never, name: 'read_image', arguments: '{"file_path":"/tmp/b.png"}' },
+        ],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-a' as never,
+          isError: false,
+          content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }],
+        }],
+        source: { kind: 'tool', callId: 'call-a' as never },
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-b' as never,
+          isError: false,
+          content: [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }],
+        }],
+        source: { kind: 'tool', callId: 'call-b' as never },
+      },
+    ],
+  }))
+
+  const messages = capturedBody!.messages as Record<string, unknown>[]
+  // The OpenAI transport's flat message list must keep the two tool messages
+  // adjacent; both image carriers follow only after the last tool result.
+  assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'user', 'user'])
+  const tools = messages.filter((m) => m.role === 'tool')
+  assert.deepEqual(tools.map((m) => m.tool_call_id), ['call-a', 'call-b'])
+  const carried = messages.slice(-2) as Record<string, unknown>[]
+  for (const msg of carried) {
+    const parts = msg.content as Record<string, unknown>[]
+    assert.match((parts[0] as { text: string }).text, /^Attached image\(s\) from tool result:/)
+    assert.equal((parts[1] as { type: string }).type, 'image_url')
+  }
+})
+
 test('stream() leaves text-only tool results untouched', async () => {
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
