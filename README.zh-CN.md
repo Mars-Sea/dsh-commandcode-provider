@@ -45,7 +45,15 @@
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1
   ```
 
-> `latest` tag 现在始终指向当前 0.1.2 线的插件版本，普通 `@latest` 安装即可获得 dsh 0.1.2+ 的最新稳定版。旧 0.5.0 时代的 Harness 用户必须显式钉住 `@0.9.1`。
+> `latest` tag 指向当前 0.1.2 线的插件版本。旧 0.5.0 时代的 Harness 用户必须显式钉住 `@0.9.1`。
+
+**pnpm 11 会拦下刚发布的新版本。** 它的 `minimumReleaseAge` 默认为 1440 分钟，发布不足一天的版本会被跳过，`@latest` 解析到**上一个**版本 —— 而且是静默的，命令照样以成功退出。想装 24 小时内发布的版本，必须写精确版本号：
+
+```sh
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.10.5
+```
+
+这一点对每个 profile 都成立，包括下面的终端界面。
 
 插件可直接在 pnpm 10 的全新插件市场 generation 中安装。不要另行添加 `@deepseek-ai/dsh-invariants` dependency；插件已将其声明为 Host peer，Harness 包仍由当前 dsh profile 统一管理。
 
@@ -57,6 +65,14 @@
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.2-rc.1 及以上
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 更早的 dsh（0.5.0 线，不再维护）
 ```
+
+每个 profile 各自更新 —— 终端界面有独立的插件列表（见下文）：
+
+```sh
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.10.5
+```
+
+要更新到发布不足 24 小时的版本，和上面的安装一样写精确版本号；pnpm 11 的年龄门禁会把 `@latest` 解析成上一个版本。
 
 然后重启 Web 应用。
 
@@ -79,11 +95,13 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 
 ## 终端界面（dsh-TUI）
 
-插件同样支持终端前端，无需单独安装、无需额外配置：
+插件同样支持终端前端。**每个 dsh profile 有独立的插件列表**，所以上面那条 Web 安装命令不会装到终端里 —— 还要把插件装进 `dsh-tui` profile：
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.10.5
 ```
+
+这里请写精确版本号。新版本发布后的 24 小时内，只写包名（或 `@latest`）会被静默解析到上一个版本 —— 安装命令照样成功，但 profile 里拿到的是旧版本，结果就是全新的终端安装里既没有 **`/settings` → Command Code** 页面，也看不到任何 `commandcode` 模型。
 
 之后在模型选择器里选，或者直接指定：
 
@@ -93,7 +111,9 @@ dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider
 
 `/model` 会列出所有已注册的 provider，Command Code 的实时目录连同套餐/优惠/上下文标注一起出现，`/commandcode` 用量面板在终端里同样可用。
 
-**填写 API key。** 终端没有网页版 Models 页面，所以插件会在终端设置页里声明自己的页面 —— **`/settings` → Command Code** —— 包含 API key、API 地址、隐藏套餐外模型、模型白名单、当前账号和命令语言。key 字段是只写的：它只显示"是否已配置"，输入的内容写进凭据库，不会写进任何 settings 文档。只用终端的用户只需要访问这一个页面。
+**填写 API key。** 终端没有网页版 Models 页面，所以插件会在终端设置页里声明自己的页面 —— **`/settings` → Command Code** —— 包含 API key、API 地址、隐藏套餐外模型、当前账号和命令语言。key 字段是只写的：它只显示"是否已配置"，输入的内容写进凭据库，不会写进任何 settings 文档。只用终端的用户只需要访问这一个页面。
+
+**选择模型。** 同一页面把整个模型目录列成勾选框，按套餐档位分组（Go → GOAT → Pro → Provider），免费模型排在最前，不需要手打任何模型 id。默认全部勾选——未设置白名单就等于"显示全部模型"；把不想在选择器里看到的取消勾选即可。选择会以「单模型覆盖」的形式保存在网页端编辑的 `visibleModels` 列表旁边，两个界面可以混用，手写的 `visibleModels` 也照常生效。
 
 也可以在终端外配置 key，以下三种方式按优先级生效：
 

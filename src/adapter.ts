@@ -722,6 +722,16 @@ export interface CommandCodeConnectionOptions {
    */
   visibleModels?: string[] | undefined
   /**
+   * Per-model visibility overrides, keyed by catalog id. Written by the
+   * terminal settings page, whose checkbox list gives every model its own
+   * boolean field: a field writes one value at one path, so membership in
+   * {@link visibleModels} cannot be expressed from there, while a flag can.
+   * An id present here decides that model on its own (true = listed, false =
+   * hidden); an id absent here follows {@link visibleModels} exactly as it did
+   * before, so composition configs and the web page are unaffected.
+   */
+  modelVisibility?: Readonly<Record<string, boolean>> | undefined
+  /**
    * Optional protocol hint. `'auto'` (default) uses billing/cache plus
    * Provider API fallback; `'cli'` forces `/alpha/generate`; `'openai'`
    * prefers `/provider/v1/chat/completions` but still falls back to the CLI
@@ -1339,9 +1349,19 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const allow = Array.isArray(visible) && visible.length > 0
       ? new Set(visible.filter((id) => typeof id === 'string' && id !== ''))
       : undefined
+    // Per-model overrides, written by the terminal settings page's checkboxes
+    // (its seam can only give each model its own boolean field, and a boolean
+    // cannot express "this id is in the list"). An explicit flag decides the
+    // model on its own; everything unflagged still follows the array above, so
+    // a composition-config allowlist and the web page keep working untouched.
+    const overrides = this.deps.options().modelVisibility
     return catalog
       .filter((model) => modelVisibleInPlan(model.id, access))
-      .filter((model) => allow === undefined || allow.has(model.id))
+      .filter((model) => {
+        const override = overrides?.[model.id]
+        if (typeof override === 'boolean') return override
+        return allow === undefined || allow.has(model.id)
+      })
       .map(toInfo)
       // The picker renders rows in the order returned: sort by plan tier
       // (Go first, … Provider last) so the models a Go-plan user can actually

@@ -53,6 +53,16 @@ interface CommandCodeConnectionOptions {
    */
   visibleModels?: string[] | undefined;
   /**
+   * Per-model visibility overrides, keyed by catalog id. Written by the
+   * terminal settings page, whose checkbox list gives every model its own
+   * boolean field: a field writes one value at one path, so membership in
+   * {@link visibleModels} cannot be expressed from there, while a flag can.
+   * An id present here decides that model on its own (true = listed, false =
+   * hidden); an id absent here follows {@link visibleModels} exactly as it did
+   * before, so composition configs and the web page are unaffected.
+   */
+  modelVisibility?: Readonly<Record<string, boolean>> | undefined;
+  /**
    * Optional protocol hint. `'auto'` (default) uses billing/cache plus
    * Provider API fallback; `'cli'` forces `/alpha/generate`; `'openai'`
    * prefers `/provider/v1/chat/completions` but still falls back to the CLI
@@ -1277,6 +1287,17 @@ interface TuiSettingsSectionsService {
 declare const ACTIVE_ACCOUNT_AUTO = "auto";
 /** The selector value meaning "no language override — follow the shell locale". */
 declare const LANG_AUTO = "auto";
+/** One catalog model offered as a checkbox. */
+interface TuiModelChoice {
+  /** Catalog model id, e.g. `deepseek/deepseek-v4-pro`. */
+  readonly id: string;
+  /** Minimum plan tier key from `KNOWN_PLANS`. */
+  readonly tier: string;
+  /** Whether the model is currently free, so it leads its group. */
+  readonly free: boolean;
+  /** Footer hint for the focused row: plan tier · deal · peak · `Image`. */
+  readonly hint: string;
+}
 /** Everything the section needs from the plugin entry. */
 interface CommandCodeTuiSettingsDeps {
   /** The plugin's settings namespace (`llm-commandcode`). */
@@ -1298,6 +1319,21 @@ interface CommandCodeTuiSettingsDeps {
     id: string;
     label: string;
   }[];
+  /**
+   * The stored model allowlist, read LIVE at save time. A checkbox judges its
+   * inherited state against this, so it must be read when the write runs, not
+   * captured when the section was registered. An empty list means "every model
+   * is visible" (the adapter's rule).
+   */
+  visibleModels: () => readonly string[];
+  /**
+   * The per-model override map the checkboxes write, read per registration so
+   * ids this build's catalog does not know still get a row of their own. Same
+   * live-read rule as {@link visibleModels}.
+   */
+  modelVisibility?: () => Readonly<Record<string, boolean>> | undefined;
+  /** The models to offer as checkboxes; defaults to the static snapshot. */
+  modelChoices?: () => readonly TuiModelChoice[];
 }
 /**
  * Build the section descriptor. Pure, so tests can pin the exact fields
@@ -1308,9 +1344,9 @@ interface CommandCodeTuiSettingsDeps {
  * cannot express "unset" — cycling only ever lands on a declared option, so a
  * `select` would strand the user on a pinned value with no way back to
  * automatic. The `auto` sentinel plus a `parse` that clears the path keeps the
- * unset state reachable. The two booleans format their EFFECTIVE default
- * (`filterModelsByPlan` unset means true at the adapter), so a fresh install
- * reads true instead of the screen's "(empty)".
+ * unset state reachable. `filterModelsByPlan` formats its EFFECTIVE default
+ * (unset means true at the adapter), so a fresh install reads true instead of
+ * the screen's "(empty)".
  */
 declare function buildCommandCodeTuiSection(deps: CommandCodeTuiSettingsDeps): TuiSettingsSection;
 /**
@@ -1367,6 +1403,15 @@ interface Config {
    * filter card; applies after the subscription-tier filter.
    */
   visibleModels?: string[];
+  /**
+   * Per-model visibility overrides from the terminal settings page's checkbox
+   * list, keyed by catalog id (`true` = listed, `false` = hidden). An id here
+   * decides that model on its own; an id absent here follows `visibleModels`.
+   * dsh-TUI keys a staged edit by the field's path, so the checkboxes need one
+   * path per model — a map — because a boolean field cannot express "this id
+   * is a member of the array".
+   */
+  modelVisibility?: Record<string, boolean>;
   /**
    * Extra accounts for multi-account rotation. The top-level
    * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first

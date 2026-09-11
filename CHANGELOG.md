@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] - 2026-09-11
+
+### Added
+- **The terminal settings page lists every model as a checkbox.** The TUI's model allowlist was a text field expecting comma-separated catalog ids typed from memory; it now renders the whole catalog under plan-tier headings (Go → GOAT → Pro → Provider), free models first, each row carrying its plan/deal/context summary as the footer hint. Everything reads as checked until something is excluded, matching the adapter's "an unset allowlist shows every model" rule, and a model this build does not recognize (retired upstream, or added after this release) still gets a row of its own instead of becoming impossible to switch from the terminal.
+- **`Config.modelVisibility`, a per-model override layer beside `visibleModels`.** The TUI cannot add an id to the array it edits, so each checkbox records `modelVisibility.<id>` (true listed / false hidden) instead; an id absent from the map keeps following `visibleModels`, and the subscription-tier filter still applies on top. A hand-edited document carrying a non-boolean entry falls back to the array rather than hiding the model.
+
+### Fixed
+- **The terminal model checkboxes now save the model you toggled.** dsh-TUI keys a staged edit by the field's PATH, so the whole list of checkboxes sharing one `visibleModels` path shared one draft: each of them parsed that same draft on save, every write op addressed the same path, and only the last field's op survived — silently replacing the allowlist with what the last catalog model's row evaluated to instead of the row the user had switched. Each checkbox now addresses a path of its own, and a toggle writes only when it disagrees with the inherited state, so switching a model back leaves no residue in the document.
+
+### Changed
+- **Per-release compatibility now covers dsh `0.1.5-rc.2`.** `dsh.compatibility.dshReleases` declares it `compatible` alongside `0.1.2-rc.1`, `0.1.3-alpha.1`, `0.1.3-alpha.2`, `0.1.5-alpha.1` and `0.1.5-rc.1`, so the DSH STORE can list the plugin for the current Harness release. Verified on a dsh-TUI profile running that engine: the `/settings` → Command Code page, the model checkbox list, and the picker's catalog all behave as they do on 0.1.5-rc.1. An older release keeps its own record rather than being replaced, so a user who has not moved to the newest engine still sees the listing.
+
+### Documentation
+- **The install and update instructions now say which profile receives the plugin and how to escape pnpm's release-age gate** (both READMEs). A `dsh-tui` profile owns its own plugin list, so the web install does not reach the terminal: the terminal UI needs its own `dsh plugin --profile dsh-tui add`, and it now shows an exact version because a bare package name — or `@latest` — is silently resolved to the previous release for the first 24 hours after a publish (pnpm 11's `minimumReleaseAge`) and the install still exits successfully, which is how a fresh terminal install can end up with no Command Code settings page and no `commandcode` models at all.
+
 ## [0.10.4] - 2026-09-11
 
 ### Added

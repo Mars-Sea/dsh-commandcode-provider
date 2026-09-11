@@ -24,10 +24,32 @@
  * `DEEPSEEK_*`/`DSH_*` refs from plugin sections, and this plugin's default
  * (`COMMANDCODE_API_KEY`) is its own namespace.
  *
+ * The model allowlist is a **checkbox per catalog model**, grouped by plan
+ * tier — the terminal counterpart of the web page's searchable dropdown, and
+ * the reason this page does not ask anyone to type 60+ model ids from memory.
+ * dsh-TUI's seam has no multi-select kind (only `text | number | boolean |
+ * select`) and no array element path a checkbox could own, so each model is
+ * its own `boolean` field that WRITES THE WHOLE ARRAY through its `parse`:
+ * the seam lets a field's write carry any value, which is what makes a
+ * per-model checkbox express set membership. Two rules keep that honest.
+ * (1) `parse` reads the allowlist LIVE through its thunk instead of the value
+ * the field was built with, and rebuilds the array from THAT: the screen
+ * stages several toggles into one save, so a captured base would let two
+ * quick toggles resurrect each other's stale list. (2) An empty allowlist
+ * means "show every model" to the adapter, so the checkboxes render the
+ * EFFECTIVE set — unset shows everything checked, and checking a box only
+ * records an explicit list once something is excluded.
+ *
  * @module dsh-commandcode-provider/tui-settings
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+
+import {
+  KNOWN_PLANS,
+  capabilityDescription,
+  isFreeModel,
+} from './capabilities.ts'
 
 /** Provider-owned translations for one title, label, or hint. */
 export interface TuiLocalizedText {
@@ -124,6 +146,73 @@ export const ACTIVE_ACCOUNT_AUTO = 'auto'
 /** The selector value meaning "no language override — follow the shell locale". */
 export const LANG_AUTO = 'auto'
 
+/** Tier display names, mirroring the web dropdown's headings (`model-select.ts`). */
+const TIER_TITLES: Readonly<Record<string, string>> = {
+  go: 'Go',
+  goat: 'GOAT',
+  pro: 'Pro',
+  provider: 'Provider',
+  max: 'Max',
+}
+
+/** Tiers in picker order; a model outside this set joins the "Other" group. */
+const TIER_ORDER: readonly string[] = ['go', 'goat', 'pro', 'provider', 'max']
+
+/** The group holding models this build's catalog does not know. */
+const OTHER_GROUP_ID = 'models-other'
+
+/** One catalog model offered as a checkbox. */
+export interface TuiModelChoice {
+  /** Catalog model id, e.g. `deepseek/deepseek-v4-pro`. */
+  readonly id: string
+  /** Minimum plan tier key from `KNOWN_PLANS`. */
+  readonly tier: string
+  /** Whether the model is currently free, so it leads its group. */
+  readonly free: boolean
+  /** Footer hint for the focused row: plan tier · deal · peak · `Image`. */
+  readonly hint: string
+}
+
+/**
+ * Every model this build knows, in checkbox order: plan tier (Go first), then
+ * free before paid inside a tier, then by id.
+ *
+ * The list is the static capability snapshot rather than a live catalog read
+ * on purpose — a settings page must draw synchronously, and the snapshot is
+ * synced from the same upstream table the picker's tier headings come from.
+ * A model added upstream after this build still reaches the user: an empty
+ * allowlist shows everything, and a model named in the allowlist but absent
+ * here is rendered by the "Other" group instead of disappearing.
+ */
+export function commandCodeTuiModelChoices(): readonly TuiModelChoice[] {
+  return Object.keys(KNOWN_PLANS)
+    .map((id) => ({
+      id,
+      tier: KNOWN_PLANS[id] ?? '',
+      free: isFreeModel(id),
+      hint: capabilityDescription(id),
+    }))
+    .sort((a, b) => {
+      const tierDelta = tierRank(a.tier) - tierRank(b.tier)
+      if (tierDelta !== 0) return tierDelta
+      if (a.free !== b.free) return a.free ? -1 : 1
+      return a.id.localeCompare(b.id)
+    })
+}
+
+/** Sort rank of a tier key; unknown tiers trail every known one. */
+function tierRank(tier: string): number {
+  const rank = TIER_ORDER.indexOf(tier)
+  return rank === -1 ? TIER_ORDER.length : rank
+}
+
+/** The stored allowlist as a clean id list (non-strings and blanks dropped). */
+function storedIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === 'string' && id !== '')
+    : []
+}
+
 /** Everything the section needs from the plugin entry. */
 export interface CommandCodeTuiSettingsDeps {
   /** The plugin's settings namespace (`llm-commandcode`). */
@@ -142,6 +231,21 @@ export interface CommandCodeTuiSettingsDeps {
    * {@link applyCommandCodeTuiSettings}).
    */
   accountSlots: () => readonly { id: string; label: string }[]
+  /**
+   * The stored model allowlist, read LIVE at save time. A checkbox judges its
+   * inherited state against this, so it must be read when the write runs, not
+   * captured when the section was registered. An empty list means "every model
+   * is visible" (the adapter's rule).
+   */
+  visibleModels: () => readonly string[]
+  /**
+   * The per-model override map the checkboxes write, read per registration so
+   * ids this build's catalog does not know still get a row of their own. Same
+   * live-read rule as {@link visibleModels}.
+   */
+  modelVisibility?: () => Readonly<Record<string, boolean>> | undefined
+  /** The models to offer as checkboxes; defaults to the static snapshot. */
+  modelChoices?: () => readonly TuiModelChoice[]
 }
 
 /**
@@ -153,15 +257,81 @@ export interface CommandCodeTuiSettingsDeps {
  * cannot express "unset" — cycling only ever lands on a declared option, so a
  * `select` would strand the user on a pinned value with no way back to
  * automatic. The `auto` sentinel plus a `parse` that clears the path keeps the
- * unset state reachable. The two booleans format their EFFECTIVE default
- * (`filterModelsByPlan` unset means true at the adapter), so a fresh install
- * reads true instead of the screen's "(empty)".
+ * unset state reachable. `filterModelsByPlan` formats its EFFECTIVE default
+ * (unset means true at the adapter), so a fresh install reads true instead of
+ * the screen's "(empty)".
  */
 export function buildCommandCodeTuiSection(
   deps: CommandCodeTuiSettingsDeps,
 ): TuiSettingsSection {
   const ref = deps.apiKeyRef()
   const slots = deps.accountSlots()
+  const choices = (deps.modelChoices ?? commandCodeTuiModelChoices)()
+  const catalogIds = choices.map((choice) => choice.id)
+  const known = new Set(catalogIds)
+  // An empty allowlist means "show every model" at the adapter, so an
+  // unchecked-for-no-reason model reads as visible. The stored facts are read
+  // live by each field, never captured here.
+  const stored = storedIds(deps.visibleModels())
+  const overrides = deps.modelVisibility?.() ?? {}
+  // Models this build's catalog cannot place (retired or renamed upstream, or
+  // added after this snapshot) plus stored-but-unknown ids. They get their own
+  // group so they stay visible and switchable instead of silently sticking.
+  const extras = [...new Set([...stored, ...Object.keys(overrides)])].filter((id) => !known.has(id))
+
+  const tierGroups = TIER_ORDER
+    .filter((tier) => choices.some((choice) => choice.tier === tier))
+    .map((tier) => ({
+      id: `models-${tier}`,
+      title: `${TIER_TITLES[tier] ?? tier} models`,
+      descriptions: { zh: `${TIER_TITLES[tier] ?? tier} 模型` },
+    }))
+  // Models this snapshot cannot place (a tier added upstream) share the group
+  // with the stored-but-unknown allowlist entries.
+  const unranked = choices.filter((choice) => tierRank(choice.tier) === TIER_ORDER.length)
+  const otherGroup = unranked.length > 0 || extras.length > 0
+    ? [{ id: OTHER_GROUP_ID, title: 'Other models', descriptions: { zh: '其他模型' } }]
+    : []
+
+  /**
+   * One checkbox: a boolean at a path of its OWN (`modelVisibility.<id>`).
+   *
+   * The path must be unique per model. dsh-TUI keys a staged draft by the
+   * field's path (`fieldKey`), so N checkboxes sharing `visibleModels` share
+   * ONE draft: every one of them then parses that same draft on save, all N
+   * write ops address the same path, and only the LAST field's op survives —
+   * which silently rewrote the allowlist from the last catalog model instead
+   * of the one that was toggled. A per-model key is what makes a checkbox
+   * express one model's state.
+   *
+   * An override equal to what the array already says is written as a CLEAR, so
+   * toggling a model back to its inherited state leaves no residue and the
+   * document stays minimal.
+   */
+  const modelField = (id: string, hint: string, group: string): TuiSettingsField => ({
+    path: ['modelVisibility', id],
+    group,
+    kind: 'boolean',
+    label: id,
+    ...(hint === '' ? {} : { hint }),
+    format: (value) => {
+      if (typeof value === 'boolean') return String(value)
+      // No override: the model follows the array allowlist, where empty or
+      // unset means "everything is visible".
+      const listed = storedIds(deps.visibleModels())
+      return String(listed.length === 0 || listed.includes(id))
+    },
+    parse: (text) => {
+      const on = text.trim() === 'true'
+      // Read the array LIVE, not at registration time: the screen stages a
+      // toggle and saves it later, and the inherited state must be judged
+      // against what the document holds when the write runs.
+      const listed = storedIds(deps.visibleModels())
+      const inherited = listed.length === 0 || listed.includes(id)
+      return on === inherited ? { kind: 'clear' } : { kind: 'set', value: on }
+    },
+  })
+
   return {
     ns: deps.ns,
     title: deps.title ?? 'Command Code',
@@ -169,6 +339,8 @@ export function buildCommandCodeTuiSection(
     groups: [
       { id: 'connection', title: 'Connection', descriptions: { zh: '连接' } },
       { id: 'models', title: 'Models', descriptions: { zh: '模型' } },
+      ...tierGroups,
+      ...otherGroup,
       { id: 'advanced', title: 'Advanced', descriptions: { zh: '高级' } },
     ],
     fields: [
@@ -209,23 +381,11 @@ export function buildCommandCodeTuiSection(
         format: (value) => (value === false ? 'false' : 'true'),
         parse: (text) => ({ kind: 'set', value: text.trim() === 'true' }),
       },
-      {
-        path: ['visibleModels'],
-        group: 'models',
-        kind: 'text',
-        label: 'Visible models',
-        descriptions: { zh: '显示的模型' },
-        hint: 'Comma-separated catalog ids; empty shows every model.',
-        hintDescriptions: { zh: '以逗号分隔的模型 id；留空表示显示全部模型。' },
-        format: (value) => (Array.isArray(value)
-          ? value.filter((id): id is string => typeof id === 'string' && id !== '')
-          : []
-        ).join(', '),
-        parse: (text) => {
-          const ids = text.split(',').map((id) => id.trim()).filter((id) => id !== '')
-          return ids.length === 0 ? { kind: 'clear' } : { kind: 'set', value: ids }
-        },
-      },
+      ...choices
+        .filter((choice) => tierRank(choice.tier) !== TIER_ORDER.length)
+        .map((choice) => modelField(choice.id, choice.hint, `models-${choice.tier}`)),
+      ...unranked.map((choice) => modelField(choice.id, choice.hint, OTHER_GROUP_ID)),
+      ...extras.map((id) => modelField(id, capabilityDescription(id), OTHER_GROUP_ID)),
       {
         path: ['activeAccount'],
         group: 'advanced',
@@ -308,15 +468,23 @@ function tuiSettingsService(ctx: Context): TuiSettingsSectionsService | undefine
 
 /**
  * Identity of everything in the section that can change at runtime: the
- * credential reference behind the API-key field and the account slots behind
- * the active-account selector. Re-registration is skipped while this matches,
- * so ordinary settings writes never churn the screen's section list.
+ * credential reference behind the API-key field, the account slots behind the
+ * active-account selector, and the stored-but-unknown allowlist entries that
+ * get a checkbox of their own. Re-registration is skipped while this matches,
+ * so ordinary settings writes never churn the screen's section list — the
+ * checkboxes themselves read their state live and need no re-declaration.
  */
 function sectionSignature(section: TuiSettingsSection): string {
   const active = section.fields.find((field) => field.path.join('.') === 'activeAccount')
   return JSON.stringify({
     secret: section.fields.find((field) => field.secret !== undefined)?.secret?.ref ?? '',
     options: active?.options?.map((option) => option.value) ?? [],
+    // Only this group's membership can change the field LIST: every catalog
+    // checkbox reads its own state live, so an ordinary toggle needs no
+    // re-declaration.
+    other: section.fields
+      .filter((field) => field.group === OTHER_GROUP_ID)
+      .map((field) => field.label),
   })
 }
 

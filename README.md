@@ -47,7 +47,15 @@ Pick the release line that matches your DeepSeek Harness version:
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1
   ```
 
-> The `latest` tag now always points at the current 0.1.2-line plugin release, so a plain `@latest` install gets the newest stable release for dsh 0.1.2+. Users on the old 0.5.0-era Harness line must pin `@0.9.1` explicitly.
+> The `latest` tag points at the current 0.1.2-line plugin release. Users on the old 0.5.0-era Harness line must pin `@0.9.1` explicitly.
+
+**pnpm 11 holds back new releases.** Its `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly:
+
+```sh
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.10.5
+```
+
+The same applies to every profile you install into, including the terminal UI below.
 
 Fresh pnpm 10 marketplace generations are supported directly. Do not add a separate `@deepseek-ai/dsh-invariants` dependency; the plugin declares it as a Host peer so the active dsh profile remains the owner of Harness packages.
 
@@ -59,6 +67,14 @@ Update with the same tag you installed with:
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.2-rc.1+
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
+
+Each profile updates separately — the terminal UI owns its own plugin list (see below):
+
+```sh
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.10.5
+```
+
+To move to a version published less than 24 hours ago, name it exactly as in Install above; pnpm 11's age gate resolves `@latest` to the previous release instead.
 
 Then restart the web app.
 
@@ -81,11 +97,13 @@ After restart, enter your API key in **Settings → Command Code** and save; **S
 
 ## Terminal UI (dsh-TUI)
 
-The plugin also works under a terminal front door — no separate install and no extra configuration:
+The plugin also works under a terminal front door. **Each dsh profile owns its own plugin list**, so the web install above does not reach the terminal — add the plugin to the `dsh-tui` profile as well:
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.10.5
 ```
+
+Pin the exact version here. For the first 24 hours after a release, a bare package name (or `@latest`) is silently resolved to the previous one: the install succeeds, but the profile gets the older build — which is how a fresh terminal install ends up with no **`/settings` → Command Code** page and no `commandcode` models at all.
 
 Then pick the provider in the model selector, or name it directly:
 
@@ -95,7 +113,9 @@ Then pick the provider in the model selector, or name it directly:
 
 `/model` lists every registered provider, with Command Code's live catalog and its plan/deal/context annotations. The `/commandcode` usage dashboard works there too.
 
-**Entering the key.** The TUI has no web Models page, so the plugin declares its own page in the TUI settings screen — **`/settings` → Command Code** — with the API key, the API base, the out-of-plan model filter, the model allowlist, the active account, and the command language. The key field is write-only: it shows whether a key is configured and writes what you type to the credential store, never to a settings document. The same page is the only place a TUI-only user needs to visit.
+**Entering the key.** The TUI has no web Models page, so the plugin declares its own page in the TUI settings screen — **`/settings` → Command Code** — with the API key, the API base, the out-of-plan model filter, the active account, and the command language. The key field is write-only: it shows whether a key is configured and writes what you type to the credential store, never to a settings document. The same page is the only place a TUI-only user needs to visit.
+
+**Picking models.** That page lists the whole catalog as checkboxes, grouped by plan tier (Go → GOAT → Pro → Provider) with the free models first, so nothing has to be typed from memory. Everything starts checked, because an unset allowlist means "show every model" — uncheck the ones you do not want in the picker. The choice is stored as per-model overrides next to the `visibleModels` list the web page edits, so both surfaces can be used interchangeably and a plain `visibleModels` written by hand still works.
 
 Alternatively, set the key outside the TUI — any of these work, in this order of precedence:
 

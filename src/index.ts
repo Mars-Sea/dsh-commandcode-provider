@@ -182,6 +182,15 @@ export interface Config {
    */
   visibleModels?: string[]
   /**
+   * Per-model visibility overrides from the terminal settings page's checkbox
+   * list, keyed by catalog id (`true` = listed, `false` = hidden). An id here
+   * decides that model on its own; an id absent here follows `visibleModels`.
+   * dsh-TUI keys a staged edit by the field's path, so the checkboxes need one
+   * path per model — a map — because a boolean field cannot express "this id
+   * is a member of the array".
+   */
+  modelVisibility?: Record<string, boolean>
+  /**
    * Extra accounts for multi-account rotation. The top-level
    * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first
    * (`default`) account; each entry here adds one more. When a request is
@@ -254,6 +263,15 @@ export const Config: z<Config> = z.object({
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   filterModelsByPlan: z.boolean(),
   visibleModels: z.array(z.string()),
+  /**
+   * Per-model visibility overrides for the terminal settings page's checkbox
+   * list, keyed by catalog id. dsh-TUI addresses a staged edit by its field
+   * PATH, so two checkboxes sharing one path would overwrite each other's
+   * draft and the section's last model would decide every write; a map gives
+   * each checkbox a path of its own. An id listed here wins over
+   * {@link visibleModels}; ids absent here keep following it.
+   */
+  modelVisibility: z.dict(z.boolean()),
   webSearch: z.boolean().default(true),
   accounts: z.array(z.object({
     label: z.string(),
@@ -292,7 +310,26 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     visibleModels: Array.isArray(config.visibleModels)
       ? config.visibleModels.filter((id) => typeof id === 'string' && id !== '')
       : undefined,
+    // Only real booleans survive: a hand-edited document can carry anything,
+    // and a malformed flag must fall back to the array rather than hide a
+    // model. An all-empty map is the same as no map.
+    modelVisibility: readModelVisibility(config.modelVisibility),
   }
+}
+
+/**
+ * Per-model visibility overrides, cleaned for the adapter. Programmatic
+ * construction may bypass Schemastery normalization, so a non-object or a
+ * non-boolean entry is dropped here instead of reaching the picker filter.
+ * @param raw - The `modelVisibility` value from any config source.
+ * @returns A frozen id → boolean map, or undefined when nothing is set.
+ */
+function readModelVisibility(raw: unknown): Readonly<Record<string, boolean>> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const entries = Object.entries(raw).filter(
+    (entry): entry is [string, boolean] => entry[0] !== '' && typeof entry[1] === 'boolean',
+  )
+  return entries.length === 0 ? undefined : Object.fromEntries(entries)
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -609,6 +646,13 @@ export function apply(ctx: Context, config: Config): void {
       // re-registered when this list changes (the refresh call below), since
       // the host renders a fixed option list per declaration.
       accountSlots: () => slots().map((slot) => ({ id: slot.id, label: slot.label })),
+      // The model allowlist is read LIVE on every toggle: a checkbox judges
+      // its inherited state against the current document, not against
+      // whatever the declaration happened to be registered with. The override
+      // map is read here too, so an id this build's catalog does not place
+      // still gets a row of its own.
+      visibleModels: () => options().visibleModels ?? [],
+      modelVisibility: () => options().modelVisibility,
     })
     tuiCtx.effect(() => () => {
       refreshTuiSettings = undefined

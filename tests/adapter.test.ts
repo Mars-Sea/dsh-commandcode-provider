@@ -942,6 +942,71 @@ test('listModels({ unfiltered: true }) serves the full catalog for the page edit
   assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
 })
 
+// Per-model overrides: what the terminal settings page's checkboxes write.
+test('listModels() lets a modelVisibility flag decide one model on its own', async () => {
+  const catalogue = async (options: Record<string, unknown>): Promise<string[]> => {
+    const { fetchImpl } = fetchRouting({
+      '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+      ...subscriptionStubs('individual-go', 'active'),
+      '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+    })
+    const adapter = makeAdapter({
+      fetchImpl,
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai',
+        workingDir: '/tmp/project',
+        modelsCachePath: '/tmp/cc-models-cache.json',
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+        ...options,
+      }),
+    })
+    return (await adapter.listModels('commandcode')).map((m) => m.id).sort()
+  }
+  // Baseline (no array, no flags) is the plan-filtered catalog.
+  assert.deepEqual(await catalogue({}), ['deepseek/deepseek-v4-pro', 'some-future-model'])
+  // A `false` flag hides a model the empty array would have shown…
+  assert.deepEqual(await catalogue({ modelVisibility: { 'deepseek/deepseek-v4-pro': false } }), [
+    'some-future-model',
+  ])
+  // …a `true` flag shows a model the array would have hidden…
+  assert.deepEqual(await catalogue({
+    visibleModels: ['some-future-model'],
+    modelVisibility: { 'deepseek/deepseek-v4-pro': true },
+  }), ['deepseek/deepseek-v4-pro', 'some-future-model'])
+  // …and an id the map does not mention still follows the array exactly.
+  assert.deepEqual(await catalogue({ visibleModels: ['some-future-model'] }), ['some-future-model'])
+  // The plan filter is not bypassed: a flag can only decide a model the
+  // account can actually reach.
+  assert.deepEqual(await catalogue({ modelVisibility: { 'claude-sonnet-5': true } }), [
+    'deepseek/deepseek-v4-pro',
+    'some-future-model',
+  ])
+})
+
+test('listModels() ignores a non-boolean override instead of hiding the model', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    ...subscriptionStubs('individual-go', 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const adapter = makeAdapter({
+    fetchImpl,
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      // A hand-edited document can carry anything; the adapter must fall back
+      // to the array rather than treat a string as "hidden".
+      modelVisibility: { 'deepseek/deepseek-v4-pro': 'yes' } as never,
+    }),
+  })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.equal(ids.includes('deepseek/deepseek-v4-pro'), true)
+})
+
 test('modelVisibleInPlan() fails open on every uncertainty', async () => {
   const { modelVisibleInPlan } = await import('../src/capabilities.ts')
   // No billing data at all -> visible.

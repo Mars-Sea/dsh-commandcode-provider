@@ -28,12 +28,18 @@ import {
   LANG_AUTO,
   applyCommandCodeTuiSettings,
   buildCommandCodeTuiSection,
+  commandCodeTuiModelChoices,
 } from '../src/tui-settings.ts'
 import type {
+  TuiModelChoice,
   TuiSettingsField,
   TuiSettingsSection,
   TuiSettingsSectionsService,
 } from '../src/tui-settings.ts'
+import { KNOWN_PLANS } from '../src/capabilities.ts'
+
+/** Plan tiers in picker order, mirrored from the web dropdown's headings. */
+const TIER_ORDER: readonly string[] = ['go', 'goat', 'pro', 'provider', 'max']
 
 /** The plugin's default credential reference. */
 const DEFAULT_REF = 'COMMANDCODE_API_KEY'
@@ -41,30 +47,73 @@ const DEFAULT_REF = 'COMMANDCODE_API_KEY'
 interface Deps {
   apiKeyRef: () => string
   accountSlots: () => readonly { id: string; label: string }[]
+  visibleModels: () => readonly string[]
+  modelVisibility: () => Readonly<Record<string, boolean>> | undefined
+  modelChoices: () => readonly TuiModelChoice[]
 }
 
-/** Build the section over a mutable slot list, like the plugin entry does. */
-function build(overrides: Partial<Deps> = {}): {
+/** A tiny catalog in the shape `commandCodeTuiModelChoices()` produces. */
+const CATALOG: readonly TuiModelChoice[] = [
+  { id: 'free/ling', tier: 'go', free: true, hint: 'Go · FREE' },
+  { id: 'go/alpha', tier: 'go', free: false, hint: 'Go · 1M' },
+  { id: 'goat/beta', tier: 'goat', free: false, hint: 'GOAT · Image' },
+  { id: 'pro/gamma', tier: 'pro', free: false, hint: 'Pro · 256K' },
+  { id: 'provider/delta', tier: 'provider', free: false, hint: 'Provider · 1M' },
+]
+
+/** Build the section over a mutable slot list and allowlist, like the entry does. */
+function build(
+  overrides: Partial<Deps> & { visible?: readonly string[]; flags?: Record<string, boolean> } = {},
+): {
   section: TuiSettingsSection
   slots: { id: string; label: string }[]
+  setVisible: (ids: readonly string[]) => void
+  setFlags: (flags: Record<string, boolean>) => void
   deps: Deps
 } {
+  const { visible: initial = [], flags: initialFlags = {}, ...rest } = overrides
   const slots = [
     { id: 'default', label: 'Default' },
     { id: 'COMMANDCODE_API_KEY_2', label: 'Backup' },
   ]
+  let visible = [...initial]
+  let flags = { ...initialFlags }
   const deps: Deps = {
     apiKeyRef: () => DEFAULT_REF,
     accountSlots: () => slots,
-    ...overrides,
+    // Read through mutable cells: the fields must see the LIVE document on
+    // every call, so a test can land a write between two parses.
+    visibleModels: () => visible,
+    modelVisibility: () => flags,
+    modelChoices: () => CATALOG,
+    ...rest,
   }
-  return { section: buildCommandCodeTuiSection({ ns: 'llm-commandcode', ...deps }), slots, deps }
+  return {
+    section: buildCommandCodeTuiSection({ ns: 'llm-commandcode', ...deps }),
+    slots,
+    setVisible: (ids) => {
+      visible = [...ids]
+    },
+    setFlags: (next) => {
+      flags = { ...next }
+    },
+    deps,
+  }
 }
 
 /** One field by its settings path. */
 function field(section: TuiSettingsSection, path: string): TuiSettingsField {
   const hit = section.fields.find((candidate) => candidate.path.join('.') === path)
   assert.ok(hit !== undefined, `section declares a "${path}" field`)
+  return hit
+}
+
+/** The checkbox for one model id. */
+function checkbox(section: TuiSettingsSection, id: string): TuiSettingsField {
+  const hit = section.fields.find(
+    (candidate) => candidate.path.join('.') === `modelVisibility.${id}`,
+  )
+  assert.ok(hit !== undefined, `section offers a checkbox for "${id}"`)
   return hit
 }
 
@@ -80,16 +129,28 @@ test('the section targets the plugin namespace and groups every field', () => {
   const { section } = build()
   assert.equal(section.ns, 'llm-commandcode')
   assert.equal(section.title, 'Command Code')
+  assert.deepEqual((section.groups ?? []).map((group) => group.id), [
+    'connection',
+    'models',
+    'models-go',
+    'models-goat',
+    'models-pro',
+    'models-provider',
+    'advanced',
+  ])
   const groups = new Set((section.groups ?? []).map((group) => group.id))
-  assert.deepEqual([...groups], ['connection', 'models', 'advanced'])
   for (const entry of section.fields) {
-    assert.ok(entry.group !== undefined, `${entry.path.join('.')} declares a group`)
-    assert.equal(groups.has(entry.group), true, `${entry.path.join('.')} names a declared group`)
+    assert.ok(entry.group !== undefined, `${entry.label} declares a group`)
+    assert.equal(groups.has(entry.group), true, `${entry.label} names a declared group`)
   }
-  // Paths address distinct settings keys; a duplicate would make two rows edit
-  // one value and the second overwrite the first's draft.
+  // Every field addresses a settings key of its own — see the dedicated
+  // uniqueness test below for why the checkboxes cannot share one.
   const paths = section.fields.map((entry) => entry.path.join('.'))
   assert.equal(new Set(paths).size, paths.length)
+  assert.equal(
+    section.fields.filter((entry) => entry.path[0] === 'modelVisibility').length,
+    CATALOG.length,
+  )
 })
 
 test('the API key is a secret field on the plugin credential reference', () => {
@@ -140,22 +201,132 @@ test('the plan filter renders its effective default, not the stored undefined', 
   assert.deepEqual(parse(filter, 'true'), { kind: 'set', value: true })
 })
 
-test('the visible-models field is a comma list over the stored array', () => {
-  const visible = field(build().section, 'visibleModels')
-  assert.equal(visible.kind, 'text')
-  assert.equal(visible.format?.(['a', 'b']), 'a, b')
-  assert.equal(visible.format?.([]), '')
-  // A malformed document must not break the screen's render: only strings
-  // survive, and blanks are dropped at both ends.
-  assert.equal(visible.format?.(['a', 3, '', 'b']), 'a, b')
-  assert.equal(visible.format?.(undefined), '')
-  assert.equal(visible.format?.('not-an-array'), '')
-  assert.deepEqual(parse(visible, 'a, b'), { kind: 'set', value: ['a', 'b'] })
-  assert.deepEqual(parse(visible, ' a ,, b , '), { kind: 'set', value: ['a', 'b'] })
-  assert.deepEqual(parse(visible, '   '), { kind: 'clear' })
-  // A single id must still stage an array, or the section would write a bare
-  // string into a `z.array(z.string())` field and fail validation.
-  assert.deepEqual(parse(visible, 'only'), { kind: 'set', value: ['only'] })
+test('every field owns a unique path, so no two drafts collide', () => {
+  const { section } = build()
+  // dsh-TUI keys a staged draft by the field's PATH and pushes one write op
+  // per field carrying that key. Two fields sharing a path therefore share one
+  // draft, every one of them parses it on save, and only the LAST op survives —
+  // which is how a checkbox list once silently rewrote the allowlist from the
+  // last catalog model instead of the row the user toggled. This invariant is
+  // the whole reason each model gets `modelVisibility.<id>`.
+  const paths = section.fields.map((entry) => entry.path.join('.'))
+  assert.equal(new Set(paths).size, paths.length, 'no two fields share a path')
+})
+
+test('every catalog model is its own checkbox in its plan tier group', () => {
+  const { section } = build()
+  const boxes = section.fields.filter((entry) => entry.path[0] === 'modelVisibility')
+  assert.deepEqual(boxes.map((entry) => entry.label), CATALOG.map((choice) => choice.id))
+  assert.deepEqual(boxes.map((entry) => entry.group), [
+    'models-go',
+    'models-go',
+    'models-goat',
+    'models-pro',
+    'models-provider',
+  ])
+  for (const box of boxes) {
+    // `select` cannot express membership and the seam has no multi-select, so a
+    // boolean per model is the only control that renders as a checkbox.
+    assert.equal(box.kind, 'boolean')
+    assert.equal(box.path.length, 2, 'each checkbox addresses its own key')
+    assert.ok(box.parse !== undefined && box.format !== undefined, 'a checkbox formats and parses')
+    assert.match(box.hint ?? '', /·/, 'the row hint carries the capability summary')
+  }
+})
+
+test('an unset allowlist renders every model checked', () => {
+  const { section } = build()
+  for (const box of section.fields.filter((entry) => entry.path[0] === 'modelVisibility')) {
+    // Empty means "show everything" to the adapter, so the checkboxes render
+    // the EFFECTIVE visibility — an all-unchecked page would read as "nothing
+    // is allowed" and invite a save that hides every model.
+    assert.equal(box.format?.(undefined), 'true', `${box.label} is checked when unset`)
+  }
+})
+
+test('a stored allowlist decides which boxes are checked', () => {
+  const { section } = build({ visible: ['go/alpha', 'pro/gamma'] })
+  const checked = section.fields
+    .filter((entry) => entry.path[0] === 'modelVisibility')
+    .filter((entry) => entry.format?.(undefined) === 'true')
+    .map((entry) => entry.label)
+  assert.deepEqual(checked, ['go/alpha', 'pro/gamma'])
+  // A malformed document must not break the render, and must be judged the way
+  // the adapter judges it: `resolveAdapterOptions` drops a non-array to
+  // `undefined`, which means "show everything" — so every box reads checked
+  // rather than the page claiming the user hid every model.
+  const alpha = checkbox(section, 'go/alpha')
+  assert.equal(alpha.format?.(undefined), 'true')
+  const listed = build({ visible: ['go/alpha', 3, '', 'pro/gamma'] }).section
+  assert.equal(checkbox(listed, 'go/alpha').format?.(undefined), 'true')
+  assert.equal(checkbox(listed, 'goat/beta').format?.(undefined), 'false')
+})
+
+test('a checkbox writes an override, and only when it disagrees with the array', () => {
+  const { section } = build()
+  // Unset means "all visible", so switching one off is a real override…
+  assert.deepEqual(parse(checkbox(section, 'go/alpha'), 'false'), { kind: 'set', value: false })
+  // …while switching an already-visible model on is not, and must leave no
+  // residue: the clear re-inherits the composition layer and keeps the
+  // document minimal.
+  assert.deepEqual(parse(checkbox(section, 'go/alpha'), 'true'), { kind: 'clear' })
+})
+
+test('the array allowlist stays the baseline an override is judged against', () => {
+  const { section, setVisible } = build({ visible: ['go/alpha', 'pro/gamma'] })
+  const beta = checkbox(section, 'goat/beta')
+  // beta is hidden by the array, so checking it is an override…
+  assert.deepEqual(parse(beta, 'true'), { kind: 'set', value: true })
+  // …and unchecking it again is not.
+  assert.deepEqual(parse(beta, 'false'), { kind: 'clear' })
+  // A write that landed after this declaration was built changes the baseline:
+  // the inherited state must be read when the save runs, not when the section
+  // was registered.
+  setVisible([])
+  assert.deepEqual(parse(beta, 'false'), { kind: 'set', value: false })
+  assert.deepEqual(parse(beta, 'true'), { kind: 'clear' })
+})
+
+test('an override decides its own model, whatever the array says', () => {
+  const { section } = build({ visible: ['go/alpha'], flags: { 'goat/beta': true, 'pro/gamma': false } })
+  assert.equal(checkbox(section, 'go/alpha').format?.(undefined), 'true', 'follows the array')
+  assert.equal(checkbox(section, 'goat/beta').format?.(true), 'true', 'override wins')
+  assert.equal(checkbox(section, 'pro/gamma').format?.(false), 'false', 'override wins')
+})
+
+test('ids this build cannot place stay visible and switchable', () => {
+  const { section } = build({
+    visible: ['retired/model'],
+    flags: { 'gone/too': false },
+  })
+  assert.ok((section.groups ?? []).some((group) => group.id === 'models-other'))
+  // A model retired or renamed upstream must not vanish from the page — from
+  // either the array or the override map — or it could never be switched from
+  // the terminal again.
+  assert.deepEqual(
+    section.fields.filter((entry) => entry.group === 'models-other').map((entry) => entry.label),
+    ['retired/model', 'gone/too'],
+  )
+  assert.equal(checkbox(section, 'retired/model').format?.(undefined), 'true')
+  assert.equal(checkbox(section, 'gone/too').format?.(false), 'false')
+  // Its checkbox writes its own key, like any other row.
+  assert.deepEqual(parse(checkbox(section, 'gone/too'), 'true'), { kind: 'set', value: true })
+})
+
+test('the shipped catalog is the known model table, tier-ordered', () => {
+  const choices = commandCodeTuiModelChoices()
+  const ids = choices.map((choice) => choice.id)
+  assert.equal(ids.length, Object.keys(KNOWN_PLANS).length)
+  assert.equal(new Set(ids).size, ids.length, 'no model is offered twice')
+  const ranks = choices.map((choice) => TIER_ORDER.indexOf(choice.tier))
+  assert.equal(ranks.includes(-1), false, 'every shipped model sits in a known tier')
+  for (let i = 1; i < ranks.length; i += 1) {
+    assert.ok((ranks[i] as number) >= (ranks[i - 1] as number), 'tiers ascend (Go first)')
+  }
+  // Free models lead their own tier — they cost nothing and every account can
+  // use them, so they are the best first candidates.
+  const go = choices.filter((choice) => choice.tier === 'go')
+  assert.equal(go[0]?.free, true)
 })
 
 test('the active-account field keeps "unset" reachable', () => {
@@ -283,6 +454,8 @@ async function mount(options: {
       ns: 'llm-commandcode',
       apiKeyRef: () => options.ref ?? DEFAULT_REF,
       accountSlots: () => slots,
+      visibleModels: () => [],
+      modelChoices: () => CATALOG,
     })
   }) as never, {})
   await fiber
@@ -340,6 +513,8 @@ test('a changed credential reference re-registers the key field', async () => {
       ns: 'llm-commandcode',
       apiKeyRef: () => ref,
       accountSlots: () => slots,
+      visibleModels: () => [],
+      modelChoices: () => CATALOG,
     })
   }) as never, {})
   await fiber
@@ -379,6 +554,8 @@ test('a rejecting host is contained, not fatal', async () => {
       ns: 'llm-commandcode',
       apiKeyRef: () => DEFAULT_REF,
       accountSlots: () => [],
+      visibleModels: () => [],
+      modelChoices: () => CATALOG,
     })
   }) as never, {})
   await fiber
