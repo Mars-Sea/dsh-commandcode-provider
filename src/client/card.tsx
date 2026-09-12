@@ -6,7 +6,7 @@
  * Models page dispatches for every Command Code provider row).
  *
  * The official Models page opens one editor card per provider row through its
- * own 编辑 button. For a namespace the page does not curate a layout for
+ * own Edit button. For a namespace the page does not curate a layout for
  * (`llm-commandcode`), that editor is a bare shell — a pointer to
  * `settings.yaml` above a permanently disabled apply button. This panel takes
  * its place: the slot outlet renders right beside the official editor inside
@@ -105,7 +105,7 @@ export interface SlotWrapperSiblings {
  * Find the official editor card among the slot outlet's siblings, or null
  * while it is closed. The Models page renders the editor as an immediate
  * sibling of the outlet wrapper — after it in a provider row (the target of
- * the row's 编辑 toggle), before it in the first-run setup card and the
+ * the row's Edit toggle), before it in the first-run setup card and the
  * add-provider card, where it is always open. The editor is the only such
  * sibling whose CSS module class carries the `editor` stem
  * (`<hash>_editor`); the row header and the add card's provider select
@@ -207,7 +207,7 @@ function CardKeyField({ state, disabled, t, onEdit }: {
  * the Models page (saved row, first-run setup posture, and add-provider
  * draft).
  *
- * Closed (the official 编辑 toggle off) the panel renders nothing: the row
+ * Closed (the official Edit toggle off) the panel renders nothing: the row
  * head the Models page owns already names the provider and shows the
  * credential dot, so a page full of providers stays compact. Opening the
  * official editor mounts the editor shell as the outlet's sibling; the panel

@@ -17,7 +17,7 @@
 import type { InvocationDescriptor, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
 
 /** The npm package identity every contribution and descriptor claims. */
-export const REMOTE_PACKAGE = '@mars-sea/dsh-commandcode-provider'
+export const REMOTE_PACKAGE = '@xer-on/dsh-commandcode-provider'
 
 /** The Cordis service key the Gateway resolves every Command Code Remote from. */
 export const REMOTE_SERVICE = 'commandcodeUsage'

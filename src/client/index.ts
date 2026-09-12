@@ -35,13 +35,23 @@ import { CommandCodeSettingsController, COMMANDCODE_NS, type SettingsPageState }
 import type { HostDescriptionSource, SettingsPageApi } from './settings.ts'
 import { adaptLegacyCredentials, type LegacyCredentialsApi } from './legacy-credentials.ts'
 import { CommandCodeUsageController, type UsagePageState, type UsageRemote } from './usage.ts'
+import { CommandCodePricesController, type SessionCostPricesState } from './prices.ts'
 import { CommandCodeLoginController, type LoginPageState, type LoginRemote } from './login.ts'
-import { USAGE_REMOTE_CONTRIBUTION, MODELS_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
+import { USAGE_REMOTE_CONTRIBUTION, MODELS_REMOTE_CONTRIBUTION, PRICES_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
 import { LOGIN_REMOTE_CONTRIBUTION } from '../login-wire.ts'
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { CommandCodeSettingsPage } from './section.tsx'
 import { CommandCodeProviderCard } from './card.tsx'
-import { zh, en } from './locales.ts'
+import { CommandCodePanel, CommandCodeFooterEntry } from './panel-view.tsx'
+import type { PanelInjected } from './panel-view.tsx'
+import { CommandCodeSessionCost } from './session-cost-view.tsx'
+import type { SessionCostInjected } from './session-cost-view.tsx'
+import { startPanelAutoRefresh } from './panel.ts'
+import { PANEL_CSS, PANEL_CSS_ID } from './panel-styles.ts'
+// Type-only: pulls in the SlotMap merge for the composer dock (the readout's
+// home) so the registration below typechecks against the real contract.
+import type {} from './session-cost-slots.ts'
+import { commandCodeCopy } from './locales.ts'
 
 export { isImageSessionRejection, withFriendlyImageError } from './sessions.ts'
 
@@ -176,13 +186,61 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 /** Inject the page stylesheet once (idempotent per tag). */
 function injectPageCss(): void {
   if (typeof document === 'undefined') return
-  const id = '@mars-sea/dsh-commandcode-provider/CommandCodeSettingsPage.module.css'
+  const id = '@xer-on/dsh-commandcode-provider/CommandCodeSettingsPage.module.css'
   if (document.querySelector(`style[data-plugin-css="${id}"]`) !== null) return
   const tag = document.createElement('style')
-  tag.dataset.plugin = '@mars-sea/dsh-commandcode-provider'
+  tag.dataset.plugin = '@xer-on/dsh-commandcode-provider'
   tag.dataset.pluginCss = id
   tag.textContent = PAGE_CSS
   document.head.appendChild(tag)
+}
+
+/**
+ * Install the plans & quota panel's stylesheet and return its disposer, for
+ * `ctx.effect` to own. Keyed by its own `data-plugin-css` id, so the injection
+ * is idempotent even if a second surface asks for it later.
+ */
+function injectPanelCss(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  if (document.querySelector(`style[data-plugin-css="${PANEL_CSS_ID}"]`) !== null) return () => {}
+  const tag = document.createElement('style')
+  tag.dataset.plugin = '@xer-on/dsh-commandcode-provider'
+  tag.dataset.pluginCss = PANEL_CSS_ID
+  tag.textContent = PANEL_CSS
+  document.head.appendChild(tag)
+  return () => {
+    tag.remove()
+  }
+}
+
+/**
+ * Plans & quota panel id. It is the layout's `MainPanelId`: one string shared
+ * by the `sidebar.footer.action` card and the `main` slot cell, so the card
+ * selects this panel and nothing else. `dsh-client-ui-layout` is not a
+ * dependency of this bundle (its type is only a brand over `string`), so the
+ * brand is applied at the two call sites instead of importing the package.
+ */
+const PANEL_ID = 'commandcode-panel'
+
+/**
+ * The composer figure's entry id in `conversation.composer.dock`. Its own id,
+ * not the shipped `stats` cell's: reusing `stats` would REPLACE the tokens /
+ * cache-hit / throughput readout rather than inject into it, and that readout is
+ * the harness's to format (see `./session-cost-display.ts`).
+ */
+const SESSION_COST_ID = 'commandcode-session-cost'
+
+/**
+ * The one shot of the `layout` service this plugin needs, declared structurally
+ * for the same reason as {@link PANEL_ID}: importing the package would make the
+ * browser resolve a client module this bundle never calls. Reached through the
+ * reflective `ctx.get('layout')`, never a bare `ctx.layout` property — cordis
+ * throws `cannot get property … without inject` for an undeclared service, and
+ * declaring `layout` statically would park the whole client fiber on a service
+ * some profiles never mount.
+ */
+interface LayoutSelectionSeam {
+  selectPanel(id: string): void
 }
 
 /** Connection fields retained by pre-0.1.2 clients and absent from the current transport handle. */
@@ -202,20 +260,19 @@ export function apply(ctx: Context): void {
 
   const connection = ctx.get('connection') as LegacyConnectionLike | undefined
   if (connection !== undefined) {
-    // The wrapper is reached from a non-React path that has no `t` in scope;
-    // it reads the active client locale at call time, so a language switch
-    // immediately applies to the next selectModel failure. On legacy builds
-    // it wraps `connection.api.sessions`; 0.1.2 replaced that façade with
+    // The wrapper is reached from a non-React path that has no `t` in scope,
+    // so it reads the plugin's own English copy. On legacy builds it wraps
+    // `connection.api.sessions`; 0.1.2 replaced that façade with
     // `remote.session`, so the helper safely skips this UX-only rewrite there
     // instead of preventing the whole plugin from activating.
-    installFriendlyImageError(connection, () => ctx.locale.getLocale().active === 'zh' ? 'zh' : 'en')
+    installFriendlyImageError(connection)
   }
 
   // The "Command Code" settings page: register the section once the
   // `settings.section` declaration is on the ledger (ui-settings-general
   // owns the shell; registration order relative to it is not constrained —
   // `slots.inject` waits for the declaration).
-  ctx.effect(() => ctx.locale.register('settings.commandcode', { zh, en }), 'dsh-commandcode-provider: page copy')
+  ctx.effect(() => ctx.locale.register('settings.commandcode', 'en', commandCodeCopy), 'dsh-commandcode-provider: page copy')
 
   const legacyApi = adaptLegacyCredentials(connection?.api?.credentials)
   if (legacyApi !== undefined) {
@@ -275,11 +332,16 @@ function applyClientSurfaces(
   // their error branches.
   let usageNamespace: (typeof ctx.remote)['commandcode'] | undefined
   let usageMountError: string | undefined
+  // Declared here, constructed below once the Remote seam exists: the mount
+  // effect underneath is the price table's only trigger, and it runs after this
+  // function's body either way.
+  let pricesController: CommandCodePricesController | undefined
   const contribution: TypertRemoteContribution = {
     package: USAGE_REMOTE_CONTRIBUTION.package,
     descriptors: [
       ...USAGE_REMOTE_CONTRIBUTION.descriptors,
       ...MODELS_REMOTE_CONTRIBUTION.descriptors,
+      ...PRICES_REMOTE_CONTRIBUTION.descriptors,
       ...LOGIN_REMOTE_CONTRIBUTION.descriptors,
     ],
   }
@@ -296,6 +358,11 @@ function applyClientSurfaces(
         usageNamespace = namespaceCtx.remote.commandcode
         // The catalog Remote is live now; (re)fetch it for the model editors.
         controller.refreshCatalog()
+        // ...and the price table, which the composer's cost readout needs. This
+        // is the only trigger: it is idempotent, so a readout already on screen
+        // simply starts pricing when the table lands, and the request is issued
+        // after the namespace exists (asking earlier could only fail).
+        pricesController?.ensure()
         namespaceCtx.effect(() => () => {
           usageNamespace = undefined
         }, 'dsh-commandcode-provider: usage namespace')
@@ -326,6 +393,13 @@ function applyClientSurfaces(
       }
       return namespace.models()
     },
+    prices: async () => {
+      const namespace = usageNamespace
+      if (namespace === undefined) {
+        return { ok: false, error: { message: usageMountError ?? 'commandcode/prices remote is not mounted' } }
+      }
+      return namespace.prices()
+    },
   }
   // Wire the catalog Remote into the settings controller's models seam so the
   // model editors can fetch the catalog once the mount lands.
@@ -334,6 +408,14 @@ function applyClientSurfaces(
   ctx.effect(() => () => usageController.dispose(), 'dsh-commandcode-provider: usage controller')
   const usageStore = createSnapshotStore<UsagePageState>(usageController.state())
   usageController.subscribe(() => usageStore.set(usageController.state()))
+
+  // The composer's session-cost readout prices a session from a static table,
+  // so its controller is a one-shot cache rather than a poll: it fetches once
+  // the namespace is live and never again.
+  pricesController = new CommandCodePricesController(usageRemote)
+  ctx.effect(() => () => pricesController?.dispose(), 'dsh-commandcode-provider: price table')
+  const pricesStore = createSnapshotStore<SessionCostPricesState>(pricesController.state())
+  pricesController.subscribe(() => pricesStore.set(pricesController.state()))
 
   // The login panel: same namespace, three endpoints; the key never crosses
   // to the browser — the Host validates and stores it through the credentials
@@ -415,7 +497,7 @@ function applyClientSurfaces(
   // card of an adapter family. Registering under `llm-commandcode` mounts the
   // panel beside the official editor on every Command Code row — including
   // the first-run setup posture, exactly where a user without a key lands.
-  // While the official 编辑 toggle is open, the panel hides the official
+  // While the official Edit toggle is open, the panel hides the official
   // editor shell (for this namespace it holds only the settings.yaml hint
   // over a disabled apply) and shows the real controls; see card.tsx.
   // The registration carries its own inject face (store hooks + actions)
@@ -441,6 +523,118 @@ function applyClientSurfaces(
       cancelLogin: () => void loginController.cancel(),
     }),
   }, CommandCodeProviderCard))
+
+  // The plans & quota panel: a footer card pinned at the bottom of the
+  // sidebar, on top of the Settings seat, that opens a dashboard in the
+  // center column.
+  //
+  // Two registrations, one navigation entry. `sidebar.footer.action` is the
+  // list the sidebar shell renders in its foot area directly above the
+  // Settings seat (`footArea` = `footerActions` then `settingsArea`), which is
+  // what puts this card at the bottom of the column rather than at the top
+  // with the global panel icons of `sidebar.panellist`. The layout's keyed
+  // `main` slot holds the panel the card opens — `ctx.layout.selectPanel(id)`
+  // resolves the id against that registry and throws when no cell occupies it,
+  // so BOTH are required, and BOTH need the `inject` face below (an entry
+  // without one receives none of the panel's data; see the `hooks` → `useX`
+  // rule in panel-view.tsx).
+  //
+  // Unlike a `sidebar.panellist` row, the shell renders NO chrome around a
+  // footer action: our component is the button, it owns the label (so a title
+  // carrying live quota needs no re-registration — that dance existed only
+  // because the shell caches a panellist entry's label), and it selects the
+  // panel itself through the `open` action below.
+  //
+  // Neither registration declares a `locale` namespace: the panel is English by
+  // construction, from `./panel-copy.ts`, not by locale lookup.
+  //
+  // Shape notes:
+  //   * The stylesheet gets its own `ctx.effect` rather than riding an `inject`
+  //     callback's return value, so the tag's lifetime is the plugin fiber's and
+  //     is unaffected by a slot declaration collapsing and re-declaring.
+  //   * Each registration is guarded so a failure in one surface cannot abort
+  //     `applyClientSurfaces` and take the OTHER surfaces down with it —
+  //     `slots.inject` rethrows a callback failure synchronously once the
+  //     declaration exists. The renderer contains a *render* crash by abdicating
+  //     the entry with no visible error (that is how an earlier revision of this
+  //     panel shipped an invisible row), so a failure that leaves nothing on
+  //     screen must at least be loud in the console.
+  const panelFace = (): PanelInjected => ({
+    hooks: { commandCodeUsage: usageStore, commandCodeSettings: store },
+    refresh: () => void usageController.refresh(),
+    // The credential gate rides the live settings snapshot, so a key saved on
+    // the settings page reaches the next tick without re-registration.
+    startAutoRefresh: () => startPanelAutoRefresh(usageController, () => controller.state().anyAccountConfigured),
+    // `layout` is read reflectively AT CLICK TIME, never captured at setup:
+    // ui-layout is not a dependency of this bundle (its types are not imported
+    // and its client module is never resolved), so a static `inject` would park
+    // the whole client fiber — settings page included — on a service another
+    // profile may never mount. By the time a click is possible the footer slot
+    // itself is on screen, and ui-sidebar only activates with `layout` present,
+    // so the read always lands; the guard covers the impossible case anyway.
+    open: () => {
+      const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
+      if (typeof layout?.selectPanel === 'function') layout.selectPanel(PANEL_ID)
+    },
+  })
+
+  ctx.effect(() => injectPanelCss(), 'dsh-commandcode-provider: panel styles')
+
+  try {
+    ctx.slots.inject('main', () => ctx.slots.register(
+      { name: 'main', key: PANEL_ID, inject: panelFace },
+      CommandCodePanel,
+    ))
+  } catch (error: unknown) {
+    console.error('[dsh-commandcode-provider] could not register the plans & quota panel:', error)
+  }
+
+  try {
+    ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
+      // `order` is the only control over position inside a list slot, and the
+      // renderer sorts ascending. ui-cordis's footer chip registers at the
+      // default 0, so 1 makes this card the LAST action — the one directly on
+      // top of the Settings seat — regardless of which plugin's fiber mounts
+      // first.
+      { name: 'sidebar.footer.action', id: PANEL_ID, order: 1, inject: panelFace },
+      CommandCodeFooterEntry,
+    ))
+  } catch (error: unknown) {
+    console.error('[dsh-commandcode-provider] could not register the sidebar footer card:', error)
+  }
+
+  // The composer's session-cost figure: an entry in the dock below the input
+  // that renders NO surface of its own. The cost is injected into the harness's
+  // own token-usage UI — the amount as the last item of the shipped pill's text
+  // run, the breakdown as rows inside the usage dialog that pill opens (see
+  // `./session-cost-display.ts`).
+  //
+  // The entry exists for its SEATS, not for a surface: `useProjection` is a
+  // standard prop the composer hands every dock occupant, so this registration
+  // is the only way to read the session's token accounting. Its id must stay
+  // distinct from the shipped `stats` cell's, because registering under an
+  // existing id REPLACES that cell rather than extending it.
+  //
+  // It carries only the price-table hook: the token buckets and the model
+  // selection arrive from the composer itself as standard dock props
+  // (`useProjection`), which the owner supplies to every occupant.
+  //
+  // No `locale` namespace and no `t` seat: the figure is English by
+  // construction, from `./session-cost.ts`.
+  const sessionCostFace = (): SessionCostInjected => ({
+    hooks: { commandCodePrices: pricesStore },
+  })
+
+  try {
+    ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register(
+      // No `order`: the entry renders nothing, so its position among the dock's
+      // rows cannot matter — the sort only ever decides what a reader sees.
+      { name: 'conversation.composer.dock', id: SESSION_COST_ID, inject: sessionCostFace },
+      CommandCodeSessionCost,
+    ))
+  } catch (error: unknown) {
+    console.error('[dsh-commandcode-provider] could not register the composer session-cost readout:', error)
+  }
 }
 
 export const inject: readonly string[] = [

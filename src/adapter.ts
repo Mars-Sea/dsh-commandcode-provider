@@ -1,11 +1,11 @@
 /**
  * DeepSeek Harness LLM adapter for the Command Code Provider API.
  *
- * Ported from pi-commandcode-provider@0.5.1 (MIT). This is an unofficial,
- * community-maintained integration; you need your own Command Code account
- * and API key or subscription, and Command Code's terms apply.
+ * An unofficial, community-maintained integration: you need your own Command
+ * Code account and API key or subscription, and Command Code's terms apply.
  *
- * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
+ * Wire protocol (reverse-engineered from the official command-code CLI,
+ * command-code@1.28.4;
  * re-verified against command-code@1.53.1 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
@@ -63,7 +63,7 @@ import {
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.53.1'
+export const COMMAND_CODE_CLI_VERSION = '1.53.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -97,7 +97,7 @@ export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 const MODEL_CACHE_VERSION = 1
 
 // ---------------------------------------------------------------------------
-// Small helpers (ported from converters.ts / models.ts)
+// Small helpers for the wire-format conversions below.
 // ---------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -155,150 +155,6 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
   return {}
 }
 
-// ---------------------------------------------------------------------------
-// Tool-schema normalization (issue #35)
-// The gateway validates every function schema's ROOT as an object schema and
-// rejects the whole request otherwise (`schema must be a JSON Schema of
-// type: "object", got type: null`). Tool schemas do not always come from
-// the harness's own typed builder, which always declares `type: 'object'`: a
-// third-party plugin or an MCP bridge can register a hand-written schema, and
-// a generator can emit a root `$ref`. Neither is this plugin's to correct, but
-// the request is the plugin's to send, so every schema leaving here is
-// normalized to the object root the provider requires. Only the root is
-// touched, and every path returns a copy: the harness may deep-freeze the
-// caller's schema.
-// ---------------------------------------------------------------------------
-
-/** How deep a root `$ref` / combinator chain is followed while normalizing. */
-const SCHEMA_NORMALIZE_MAX_DEPTH = 4
-
-/**
- * Whether a type-less node is object-shaped enough to be one with the type
- * declared: `properties`/`required`/`additionalProperties` only make sense on
- * an object, and a schema carrying them was meant to be one.
- */
-function isObjectShaped(node: Record<string, unknown>): boolean {
-  return (
-    isRecord(node.properties) ||
-    isRecord(node.patternProperties) ||
-    Array.isArray(node.required) ||
-    node.additionalProperties !== undefined
-  )
-}
-
-/** The `required` names of one schema node, ignoring malformed entries. */
-function requiredNames(node: Record<string, unknown>): string[] {
-  return Array.isArray(node.required) ? node.required.filter((name): name is string => typeof name === 'string') : []
-}
-
-/** Resolve a local `#/...` pointer inside the schema that carried it. */
-function resolveLocalRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
-  if (!ref.startsWith('#/')) return undefined
-  let node: unknown = root
-  for (const rawSegment of ref.slice(2).split('/')) {
-    const segment = rawSegment.replace(/~1/g, '/').replace(/~0/g, '~')
-    if (!isRecord(node)) return undefined
-    node = node[segment]
-  }
-  return isRecord(node) ? node : undefined
-}
-
-/**
- * Flatten a type-less combinator node into one object schema, so the model
- * still sees the branch fields instead of an argument-free tool. `allOf`
- * branches must all hold, so their `required` entries are all kept; `anyOf` /
- * `oneOf` branches are alternatives, so only a name required by every branch
- * survives. Returns undefined when no branch describes an object.
- */
-function mergeCombinatorBranches(
-  node: Record<string, unknown>,
-  depth: number,
-): Record<string, unknown> | undefined {
-  // A plugin can hand over a self-referential schema object; the bound keeps
-  // the walk finite (JSON-parsed schemas are acyclic, JS ones need not be).
-  if (depth >= SCHEMA_NORMALIZE_MAX_DEPTH) return undefined
-  const properties: Record<string, unknown> = {}
-  const required = new Set<string>()
-  const alternatives: string[][] = []
-  let sawBranch = false
-
-  for (const key of ['allOf', 'anyOf', 'oneOf'] as const) {
-    const branches = node[key]
-    if (!Array.isArray(branches)) continue
-    const objectBranches: Record<string, unknown>[] = []
-    for (const branch of branches) {
-      if (!isRecord(branch)) continue
-      objectBranches.push(toolParametersSchema(branch, depth + 1))
-    }
-    if (objectBranches.length === 0) continue
-    sawBranch = true
-    // An `anyOf`/`oneOf` group contributes the intersection of its branches;
-    // an `allOf` group contributes the union.
-    const names = objectBranches.map(requiredNames)
-    if (key === 'allOf') for (const name of names.flat()) required.add(name)
-    else if (names.length > 0) {
-      alternatives.push(names[0]!.filter((name) => names.every((list) => list.includes(name))))
-    }
-    for (const branch of objectBranches) {
-      const branchProperties = isRecord(branch.properties) ? branch.properties : {}
-      for (const [name, schema] of Object.entries(branchProperties)) {
-        if (!(name in properties)) properties[name] = schema
-      }
-    }
-  }
-  if (!sawBranch) return undefined
-  // A name must satisfy every group, so each group's intersection joins the
-  // union: an allOf-required field and an anyOf-common field are both required.
-  for (const group of alternatives) for (const name of group) required.add(name)
-
-  const merged: Record<string, unknown> = { type: 'object', properties }
-  if (required.size > 0) merged.required = [...required]
-  // The merged schema is a superset of the alternatives it replaced, so it
-  // stays open unless the node itself closed it.
-  if (node.additionalProperties !== undefined) merged.additionalProperties = node.additionalProperties
-  for (const key of ['description', 'title'] as const) {
-    if (node[key] !== undefined) merged[key] = node[key]
-  }
-  return merged
-}
-
-/**
- * Normalize one tool's parameters schema to an object-rooted JSON Schema.
- * A schema that already declares an object root is passed through untouched;
- * a type-less object-shaped one gains the type; a root `$ref` or combinator is
- * resolved/merged; anything else (an array/scalar root, or no schema at all)
- * degrades to a permissive free-form object, because a request the provider
- * refuses helps no one and the tool's own description is still in the prompt.
- */
-function toolParametersSchema(parameters: unknown, depth = 0): Record<string, unknown> {
-  if (!isRecord(parameters)) return { type: 'object', properties: {}, additionalProperties: true }
-  if (parameters.type === 'object') return parameters
-  // `["object", "null"]` is accepted by JSON Schema but not by the provider's
-  // validator, which compares the root `type` against the string "object".
-  if (Array.isArray(parameters.type) && parameters.type.includes('object')) {
-    return { ...parameters, type: 'object' }
-  }
-
-  if (parameters.type === undefined || parameters.type === null) {
-    if (typeof parameters.$ref === 'string' && depth < SCHEMA_NORMALIZE_MAX_DEPTH) {
-      const target = resolveLocalRef(parameters, parameters.$ref)
-      if (target !== undefined) {
-        const { $ref: _ref, ...rest } = parameters
-        return toolParametersSchema({ ...target, ...rest }, depth + 1)
-      }
-    }
-    if (isObjectShaped(parameters)) return { ...parameters, type: 'object' }
-    const merged = mergeCombinatorBranches(parameters, depth)
-    if (merged !== undefined) return merged
-    // A root `$ref` this plugin cannot resolve still gets the declared type:
-    // that is what the provider validates for, and an object is what every
-    // schema generator emits one for.
-    if (typeof parameters.$ref === 'string') return { ...parameters, type: 'object' }
-  }
-
-  return { type: 'object', properties: {}, additionalProperties: true }
-}
-
 export function projectSlugFromPath(pathName: string): string {
   const slug = pathName
     .toLowerCase()
@@ -330,7 +186,7 @@ function parseStreamEventLine(line: string): unknown | undefined {
 // Credential fallback from the official Command Code CLI auth file. Used as
 // the last fallback by the plugin entry, so a user who already logged in with
 // `command-code login` can reuse that credential. Only the official CLI's own
-// file is read — pi/OMP auth files are intentionally not scanned, so their
+// file is read — no other tool's credential store is scanned, so foreign
 // credentials and formats cannot surprise this adapter.
 // ---------------------------------------------------------------------------
 
@@ -363,7 +219,7 @@ export function resolveAuthFileApiKey(): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Model catalog discovery with on-disk cache fallback (ported from models.ts)
+// Model catalog discovery with on-disk cache fallback.
 // ---------------------------------------------------------------------------
 
 interface CommandCodeModel {
@@ -421,12 +277,12 @@ async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): 
 
 // ---------------------------------------------------------------------------
 // Message conversion: harness Message[] -> Command Code wire messages.
-// Both transports replay historical reasoning. The CLI transport carries it as
-// a `reasoning` block inside the assistant message (the shape the official
-// CLI's `toWireMessages` emits), the Provider API transport as the
-// `reasoning_content` field, because DeepSeek's thinking-mode contract
-// requires the previous chain of thought to be passed back whenever tool calls
-// are in play (issue #34). Only tool calls with a paired tool result are
+// The legacy /alpha/generate transport intentionally does NOT replay reasoning
+// blocks (matches the official CLI of that era; prior
+// private reasoning must not leak into later turns). The documented
+// /provider/v1/chat/completions transport DOES replay them as
+// `reasoning_content`, because DeepSeek's thinking-mode contract requires it
+// when tools are in play. Only tool calls with a paired tool result are
 // replayed on both transports.
 // ---------------------------------------------------------------------------
 
@@ -554,37 +410,26 @@ function toolResultTextForWire(media: ToolResultMedia): string {
 }
 
 /** Leading line of the user message that carries a tool result's images. */
-const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result'
+const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result:'
 
 /**
  * The model-visible note introducing the images carried out of one tool
  * result. Neither transport merges them back into the tool result, so this
  * line is what tells the model the image it is about to see belongs to the
  * tool it just ran rather than to the user; it also leads the part list,
- * because an image-first content array is what some gateways reject.
- *
- * The note names the tool call the image came out of, because a turn's
- * carriers are emitted as a group after the whole tool group (issue #33):
- * position alone would have to carry the association, and every `read_image`
- * result renders the same envelope text, so two parallel calls would produce
- * two identical notes. The id is the WIRE id — the one the model saw on the
- * `tool-call` it issued and on the tool message just above — so an overlong
- * cross-provider id is named by the alias that replaced it, not by the
- * harness-side id the model never saw.
- *
- * Count and pixel dimensions are appended when the tool's own text does not
- * already state them (a result that returns the image and nothing else).
+ * because an image-first content array is what some gateways reject. Count and
+ * pixel dimensions are appended when the tool's own text does not already
+ * state them (a result that returns the image and nothing else).
  */
-function toolResultImageNote(media: ToolResultMedia, toolCallId: string): string {
-  const lead = `${TOOL_RESULT_IMAGE_TEXT} (${toolCallId}):`
+function toolResultImageNote(media: ToolResultMedia): string {
   const first = media.images[0]
-  if (first === undefined) return lead
+  if (first === undefined) return TOOL_RESULT_IMAGE_TEXT
   const dimensions = `${first.width}x${first.height} px`
   if (first.width <= 0 || first.height <= 0 || media.text.includes(dimensions)) {
-    return lead
+    return TOOL_RESULT_IMAGE_TEXT
   }
   const count = media.images.length > 1 ? `${media.images.length} images, ` : ''
-  return `${lead} ${count}${dimensions}`
+  return `${TOOL_RESULT_IMAGE_TEXT} ${count}${dimensions}`
 }
 
 function hasImageContent(message: Message): boolean {
@@ -659,13 +504,6 @@ async function messagesToCC(
           parts.push(await imageToCommandCode(block.attachment, readImage))
         }
       }
-      // A user message that converted to nothing carries no information, and
-      // an empty content array is a needless gateway-compat risk, so it is
-      // dropped — the same rule the Provider API converter applies below.
-      // (`dsh-llm-deepseek` instead pushes `content: ''`; skipping is the
-      // safer half of that divergence to keep.) The flush above has already
-      // run, so a pending image carrier is never dropped with it.
-      if (parts.length === 0) continue
       out.push({ role: 'user', content: parts })
       continue
     }
@@ -676,16 +514,6 @@ async function messagesToCC(
       for (const block of message.content) {
         if (block.type === 'text') {
           parts.push({ type: 'text', text: block.text })
-        } else if (block.type === 'reasoning') {
-          // Replay the thinking block, exactly as the official CLI's
-          // `toWireMessages` does (command-code@1.53.1: a `thinking` block
-          // becomes `{ type: 'reasoning', text }`). This is not optional
-          // politeness: the gateway rebuilds the provider request from these
-          // blocks, and a DeepSeek thinking-mode assistant turn whose tool
-          // calls arrive without its reasoning is rejected with "The
-          // `reasoning_content` in the thinking mode must be passed back to
-          // the API" — which failed every tool-loop turn (issue #34).
-          parts.push({ type: 'reasoning', text: block.text })
         } else if (block.type === 'tool-call' && paired.has(block.id)) {
           parts.push({
             type: 'tool-call',
@@ -694,6 +522,7 @@ async function messagesToCC(
             input: recordOrEmpty(block.arguments),
           })
         }
+        // reasoning blocks: skipped by design (see header comment)
       }
       if (parts.length > 0) out.push({ role: 'assistant', content: parts })
       continue
@@ -704,15 +533,12 @@ async function messagesToCC(
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
       const media = toolResultMedia(block)
-      // Resolved once: the tool message and the carrier note below must name
-      // the same call, or the model cannot tie an image back to its result.
-      const wireToolCallId = wireIds.get(block.toolCallId) ?? block.toolCallId
       out.push({
         role: 'tool',
         content: [
           {
             type: 'tool-result',
-            toolCallId: wireToolCallId,
+            toolCallId: wireIds.get(block.toolCallId) ?? block.toolCallId,
             // `paired` guarantees a call with this id exists, so the map
             // always hits; `|| 'unknown'` also guards an empty call name
             // (matches the official CLI's `?? "unknown"` fallback).
@@ -733,7 +559,7 @@ async function messagesToCC(
             'UNSUPPORTED_CONTENT',
           )
         }
-        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media, wireToolCallId) }]
+        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media) }]
         for (const attachment of media.images) {
           carried.push(await imageToCommandCode(attachment, readImage))
         }
@@ -815,9 +641,6 @@ async function messagesToOpenAI(
           parts.push(await imageToOpenAI(block.attachment, readImage))
         }
       }
-      // Same rule as the CLI converter: a converted-to-nothing user message is
-      // dropped rather than sent as an empty content array. The flush above
-      // already ran, so a pending image carrier survives this skip.
       if (parts.length === 0) continue
       const hasImage = parts.some((part) => (part as { type?: string }).type === 'image_url')
       if (!hasImage && parts.length === 1) {
@@ -869,12 +692,9 @@ async function messagesToOpenAI(
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
       const media = toolResultMedia(block)
-      // Resolved once: the tool message and the carrier note below must name
-      // the same call, or the model cannot tie an image back to its result.
-      const wireToolCallId = wireIds.get(block.toolCallId) ?? block.toolCallId
       out.push({
         role: 'tool',
-        tool_call_id: wireToolCallId,
+        tool_call_id: wireIds.get(block.toolCallId) ?? block.toolCallId,
         content: toolResultTextForWire(media),
       })
       // Chat Completions allows no image part under `role: 'tool'`, so a
@@ -886,7 +706,7 @@ async function messagesToOpenAI(
             'UNSUPPORTED_CONTENT',
           )
         }
-        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media, wireToolCallId) }]
+        const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media) }]
         for (const attachment of media.images) {
           carried.push(await imageToOpenAI(attachment, readImage))
         }
@@ -1201,7 +1021,7 @@ async function buildCliBody(
         type: 'function',
         name: tool.name,
         description: tool.description,
-        input_schema: toolParametersSchema(tool.parameters),
+        input_schema: tool.parameters,
       })),
       system: facts.systemText,
       max_tokens: facts.maxTokens,
@@ -1227,7 +1047,7 @@ async function buildOpenAIBody(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: toolParametersSchema(tool.parameters),
+      parameters: tool.parameters,
     },
   }))
   return {
@@ -1338,7 +1158,7 @@ async function connectGenerate(
       throw new LlmError(
         `Command Code API request to ${endpoint} did not respond within ${connection.requestTimeoutMs}ms`
         + `: ${errorChain(error)}`
-        + `；Command Code API 请求在 ${connection.requestTimeoutMs} 毫秒内未收到响应——通常是网络或代理问题，请检查后重试`,
+        + ' — this is usually a network or proxy problem; check it and retry',
         'TIMEOUT',
         { cause: error },
       )
@@ -1350,7 +1170,7 @@ async function connectGenerate(
     // names the real root cause instead of a generic wrapper.
     throw new LlmError(
       `Command Code API request to ${endpoint} failed: ${errorChain(error)}`
-      + '；Command Code API 请求连接失败——通常是网络或代理问题，请检查网络或代理设置后重试',
+      + ' — this is usually a network or proxy problem; check your network or proxy settings and retry',
       'TRANSPORT',
       { cause: error },
     )
@@ -1370,8 +1190,8 @@ async function connectGenerate(
 
 /**
  * The StreamChunk block-assembly state shared by both transport handlers:
- * at most one text block and one reasoning block are open at a time (same
- * assumption as the pi plugin).
+ * at most one text block and one reasoning block are open at a time (the same
+ * assumption the official CLI makes).
  */
 interface BlockAssembler {
   nextIndex: number
@@ -2043,7 +1863,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           if (options.signal?.aborted) throw error
           throw new LlmError(
             `Command Code API stream from ${connection.apiBase} failed while reading: ${errorChain(error)}`
-            + '；Command Code API 流式响应中途断开——网络波动所致，重试通常可恢复',
+            + ' — the stream dropped mid-response, usually a network blip; a retry normally recovers',
             'TRANSPORT',
             { cause: error },
           )
@@ -2059,7 +1879,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
             throw new LlmError(
               `Command Code API stream from ${connection.apiBase} was idle for ${connection.streamIdleTimeoutMs}ms`
               + ' (no events) and was treated as a dead connection'
-              + `；Command Code API 流式响应已 ${connection.streamIdleTimeoutMs} 毫秒无任何事件，被判定为死连接——长思考模型可在设置中调大流空闲超时`,
+              + ' — a long-thinking model can need a larger stream idle timeout, which is configurable in the settings',
               'TIMEOUT',
             )
           }
@@ -2093,7 +1913,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         yield* closeReasoning(asm)
         if (protocol === 'openai') yield* emitOpenAiToolCalls(asm)
         if (!asm.sawContent) {
-          throw new LlmError('Command Code returned an empty response；Command Code 返回了空响应，重试通常可恢复', 'EMPTY_RESPONSE')
+          throw new LlmError('Command Code returned an empty response; a retry normally recovers', 'EMPTY_RESPONSE')
         }
         yield { type: 'finish', reason: { kind: 'stop' } }
       }
@@ -2129,12 +1949,10 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
   const detail = providerCode ?? `HTTP ${status}`
   if (status === 401) {
     // An invalid or missing credential is a config problem, not a
-    // transport failure: retrying it identically cannot succeed. Bilingual —
-    // the harness UI renders this message verbatim in its retry chrome.
+    // transport failure: retrying it identically cannot succeed.
     return new LlmError(
       `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
-      + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file'
-      + '；Command Code API 返回 401：API 密钥缺失或无效——请在设置页检查 COMMANDCODE_API_KEY 存储的密钥，或检查 auth 文件',
+      + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file',
       'INVALID_CREDENTIAL',
       { status: 401 },
     )

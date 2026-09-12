@@ -23,5 +23,5 @@ export const PLUGIN_VERSION: string = pkg.version
 export const PLUGIN_RELEASES_URL: string = (() => {
   const repo: unknown = (pkg as { repository?: unknown }).repository
   const url = typeof repo === 'string' ? repo : (repo as { url?: unknown } | undefined)?.url
-  return `${typeof url === 'string' ? url.replace(/^git\+/, '').replace(/\.git$/, '') : 'https://github.com/Mars-Sea/dsh-commandcode-provider'}/releases`
+  return `${typeof url === 'string' ? url.replace(/^git\+/, '').replace(/\.git$/, '') : 'https://github.com/xer-on/dsh-commandcode'}/releases`
 })()

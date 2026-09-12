@@ -560,7 +560,7 @@ function AccountTabDot({ entry }: { entry: CommandCodeAccountUsage }) {
 }
 
 /**
- * The account-usage card: the `/commandcode` dashboard's facts rendered as
+ * The account-usage card: the account's usage and credit facts rendered as
  * a native settings card. With several accounts the card is a carousel — a
  * tab strip (label + status dot) switches between accounts so the page stays
  * short; each account's report carries its own remove affordance (the

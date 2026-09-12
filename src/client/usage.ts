@@ -1,8 +1,8 @@
 /**
  * Browser controller for the settings page's account-usage card.
  *
- * The card renders the same account/usage/credit facts the `/commandcode`
- * command prints, fetched Host-side through the `commandcode/report` Remote
+ * The card renders the account/usage/credit facts, fetched Host-side through
+ * the `commandcode/report` Remote
  * (the browser never holds the API key). This controller owns the fetch
  * lifecycle — idle/loading/ready/error, one in-flight request at a time,
  * stale-response dropping — and the display formatting, so the React
@@ -13,7 +13,7 @@
  * @module dsh-commandcode-provider/client/usage
  */
 
-import type { CommandCodeAccountsReport, CommandCodeCatalog } from '../usage-wire.ts'
+import type { CommandCodeAccountsReport, CommandCodeCatalog, CommandCodePriceTable } from '../usage-wire.ts'
 import type { CommandCodeLoginStatus } from '../login-wire.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -23,19 +23,21 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
  * typert.remote-client files use), so `ctx.remote.commandcode.*()` is typed
  * once each contribution is mounted. The `commandcode` namespace member is
  * declared exactly once (interface merging forbids duplicate members), so
- * this one declaration carries the usage report, the model catalog, AND the
- * login endpoints — the endpoint-level declarations live beside their
- * controllers.
+ * this one declaration carries the usage report, the model catalog, the price
+ * table, AND the login endpoints — the endpoint-level declarations live beside
+ * their controllers.
  */
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteMap {
     'commandcode/report': () => Promise<RemoteResult<CommandCodeAccountsReport>>
     'commandcode/models': () => Promise<RemoteResult<CommandCodeCatalog>>
+    'commandcode/prices': () => Promise<RemoteResult<CommandCodePriceTable>>
   }
   interface TypertRemoteNamespaceMap {
     commandcode: {
       report: () => Promise<RemoteResult<CommandCodeAccountsReport>>
       models: () => Promise<RemoteResult<CommandCodeCatalog>>
+      prices: () => Promise<RemoteResult<CommandCodePriceTable>>
       loginBegin: () => Promise<RemoteResult<CommandCodeLoginStatus>>
       loginStatus: () => Promise<RemoteResult<CommandCodeLoginStatus>>
       loginCancel: () => Promise<RemoteResult<CommandCodeLoginStatus>>
@@ -43,7 +45,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   }
 }
 
-/** The narrow slice of the mounted Remote this controller calls. */
+/** The narrow slice of the mounted Remote this plugin calls. */
 export interface UsageRemote {
   report(): Promise<
     | { ok: true; value: CommandCodeAccountsReport }
@@ -51,6 +53,10 @@ export interface UsageRemote {
   >
   models(): Promise<
     | { ok: true; value: CommandCodeCatalog }
+    | { ok: false; error: { message: string } }
+  >
+  prices(): Promise<
+    | { ok: true; value: CommandCodePriceTable }
     | { ok: false; error: { message: string } }
   >
 }

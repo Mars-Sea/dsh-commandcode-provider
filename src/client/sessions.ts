@@ -21,18 +21,19 @@
  * extra peer dependency into the package; the shapes are stable and the
  * client build inlines them anyway.
  *
- * The wrapper takes a `getLocale` thunk because it is reached from a
- * non-React path that has no `t` in scope; the supplied thunk reads the
- * active locale at call time (typically `() => ctx.locale.getLocale().active`
- * in the client entry), and the message template lives in the shared
- * `commandcodeCommand` dictionary used by the Host-side `/commandcode`
- * command — the same bilingual surface serves both.
+ * The replacement message is a plain English constant owned by this module:
+ * the rewrite runs on a non-React path with no `t` in scope, and like every
+ * other surface this plugin owns it reads the same on every locale.
  *
  * This module is deliberately free of React and other client-platform
  * imports so the node test runner can exercise it directly.
  */
 
-import { commandcodeCommand, type LocaleId } from '../command-locales.ts'
+/** The friendly rewrite; `{model}` is replaced with the requested model id. */
+const IMAGE_GATE_MESSAGE =
+  'This session already contains images, and model {model} does not accept'
+  + ' image input; please select an image-capable model, or remove the'
+  + ' images from the session first.'
 
 /** The `model-unavailable` error details: provider + model id. */
 interface ModelUnavailableDetails {
@@ -83,10 +84,7 @@ export function isImageSessionRejection(
 }
 
 /** Wrap the shared sessions API so selectModel failures read friendlier. */
-export function withFriendlyImageError(
-  sessions: SessionsLike,
-  getLocale: () => LocaleId,
-): SessionsLike {
+export function withFriendlyImageError(sessions: SessionsLike): SessionsLike {
   const selectModel = sessions.selectModel.bind(sessions)
   return {
     ...sessions,
@@ -94,15 +92,13 @@ export function withFriendlyImageError(
       const result = await selectModel(payload, signal)
       if (!isImageSessionRejection(result)) return result
       const model = result.result.error.details?.model ?? payload.model
-      const template = commandcodeCommand[getLocale()].imageGate
-        ?? commandcodeCommand.en.imageGate
       return {
         ...result,
         result: {
           ...result.result,
           error: {
             ...result.result.error,
-            message: template.replace('{model}', model),
+            message: IMAGE_GATE_MESSAGE.replace('{model}', model),
           },
         },
       }
@@ -127,13 +123,10 @@ export interface ConnectionLike {
  * a 0.1.2 connection has no `api.sessions`, and its absence must never block
  * the plugin from mounting its settings, credential, or usage surfaces.
  */
-export function installFriendlyImageError(
-  connection: ConnectionLike,
-  getLocale: () => LocaleId,
-): boolean {
+export function installFriendlyImageError(connection: ConnectionLike): boolean {
   const api = connection.api
   const sessions = api?.sessions
   if (api === undefined || sessions === undefined || typeof sessions.selectModel !== 'function') return false
-  api.sessions = withFriendlyImageError(sessions, getLocale)
+  api.sessions = withFriendlyImageError(sessions)
   return true
 }

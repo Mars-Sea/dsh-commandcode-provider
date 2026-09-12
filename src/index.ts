@@ -1,6 +1,6 @@
 /**
  * dsh-commandcode-provider — DeepSeek Harness LLM provider plugin for Command
- * Code (unofficial; ported from pi-commandcode-provider@0.5.1).
+ * Code (unofficial, community-maintained).
  *
  * Registers the `commandcode` provider route on `ctx.llm` and declares it in
  * the configurable-provider directory, so the web Models page shows a
@@ -12,7 +12,7 @@
  *
  * ```yaml
  * - id: llm-commandcode
- *   name: "@mars-sea/dsh-commandcode-provider"
+ *   name: "@xer-on/dsh-commandcode-provider"
  *   config:
  *     apiKeyEnv: COMMANDCODE_API_KEY
  * ```
@@ -42,12 +42,10 @@ import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './ad
 import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
 import { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
 import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModelAccountRule } from './accounts.ts'
-import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
 import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire.ts'
 import { CommandCodeLoginFlow } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
-import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
 import { applyCommandCodeTuiSettings } from './tui-settings.ts'
 import { KNOWN_PLANS } from './capabilities.ts'
@@ -86,8 +84,6 @@ export {
 } from './capabilities.ts'
 export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
 export type { CommandCodeBillingAccess } from './capabilities.ts'
-export { applyCommands, commandDefinition } from './commands.ts'
-export type { CommandCodeCommandDeps } from './commands.ts'
 export { applyUsageRemote, CommandCodeUsageService } from './usage-remote.ts'
 export type { CommandCodeUsageDeps, LoginFlowFacade } from './usage-remote.ts'
 export { USAGE_REPORT_ENDPOINT, usageReportSchema } from './usage-wire.ts'
@@ -124,7 +120,7 @@ export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccou
 export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, applyCommandCodeSearchSelection, commandCodeSearchSelection, selectCommandCodeSearchProvider } from './web-search.ts'
 export type { CommandCodeSearchSelection } from './web-search.ts'
 export type { CommandCodeSearchProviderDeps } from './web-search.ts'
-export { ACTIVE_ACCOUNT_AUTO, LANG_AUTO, applyCommandCodeTuiSettings, buildCommandCodeTuiSection } from './tui-settings.ts'
+export { ACTIVE_ACCOUNT_AUTO, applyCommandCodeTuiSettings, buildCommandCodeTuiSection } from './tui-settings.ts'
 export type {
   CommandCodeTuiSettingsDeps,
   TuiSettingsField,
@@ -143,7 +139,7 @@ const DEFAULT_API_KEY_ENV = 'COMMANDCODE_API_KEY'
 
 /** The single provider route this plugin owns. */
 export const PROVIDER = 'commandcode'
-/** Default models cache path (mirrors the pi plugin's on-disk cache). */
+/** Default models cache path (mirrors the official CLI's on-disk cache). */
 export const DEFAULT_MODELS_CACHE_PATH = join(homedir(), '.commandcode', 'models-cache.json')
 
 /**
@@ -232,18 +228,6 @@ export interface Config {
    * Defaults to true.
    */
   webSearch?: boolean
-  /**
-   * Language override for the `/commandcode` Host-side command's user-facing
-   * copy. Host commands cannot read the client's `ctx.locale`, so this is
-   * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
-   * `LC_ALL`/`LANG` from the launching shell, falling back to `'zh'`. The
-   * web settings page is unaffected — it follows the browser's language
-   * preference on its own. Two surfaces, two independent locales. The
-   * declared type is `string` (the schemastery `pattern` cannot narrow
-   * literal types); an unknown value is treated as "unset" by
-   * `pickCommandLocale`.
-   */
-  lang?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -284,7 +268,6 @@ export const Config: z<Config> = z.object({
     models: z.array(z.string()),
     account: z.string(),
   })),
-  lang: z.string().pattern(/^(zh|en)$/).default('zh' as const),
 })
 
 /** One resolution's complete request facts: connection plus credential reference. */
@@ -475,9 +458,9 @@ export function apply(ctx: Context, config: Config): void {
   // The live route: this is what makes models requestable under `commandcode`.
   ctx.llm.registerAdapter([PROVIDER], adapter)
 
-  // Per-account usage for the /commandcode dashboard and the settings
-  // page's account card: every pool account (configured or not) gets one
-  // entry, each fetched with its own key so plan/credit facts never mix.
+  // Per-account usage for the settings page's account card and the sidebar
+  // panel: every pool account (configured or not) gets one entry, each
+  // fetched with its own key so plan/credit facts never mix.
   const usageReports = async (): Promise<CommandCodeAccountsReport> => {
     // describeAccounts (not deduped) so two slots sharing one credential are
     // both reported as configured; the active badge follows the deduped
@@ -514,19 +497,6 @@ export function apply(ctx: Context, config: Config): void {
     }))
     return { accounts: entries }
   }
-
-  // The /commandcode usage command rides the optional `commands` service: a
-  // child fiber injects it, so it registers whenever the profile mounts
-  // dsh-commands and the fiber simply never activates when it does not.
-  // The command runs Host-side and has no access to the client's locale
-  // service, so its language is resolved here from `Config.lang` (explicit
-  // override) and the launching shell's `LC_ALL`/`LANG` (inferred default);
-  // resolved per invocation so a settings change reaches the next command
-  // run without a restart.
-  const commandLocale = (): LocaleId => pickCommandLocale(current().lang)
-  ctx.inject(['commands'], (commandCtx) => {
-    applyCommands(commandCtx, { adapter, reports: usageReports, getLocale: commandLocale })
-  })
 
   // The settings page's account card: getUsage exposed to the browser through
   // the Typert Gateway (`commandcode/report`). Rides the optional `typert`

@@ -143,8 +143,6 @@ export interface TuiSettingsSectionsService {
 /** The selector value meaning "no pinned account — follow rotation order". */
 export const ACTIVE_ACCOUNT_AUTO = 'auto'
 
-/** The selector value meaning "no language override — follow the shell locale". */
-export const LANG_AUTO = 'auto'
 
 /** Tier display names, mirroring the web dropdown's headings (`model-select.ts`). */
 const TIER_TITLES: Readonly<Record<string, string>> = {
@@ -252,8 +250,8 @@ export interface CommandCodeTuiSettingsDeps {
  * Build the section descriptor. Pure, so tests can pin the exact fields
  * without a dsh-TUI host.
  *
- * Field choices worth keeping: the two option-bearing fields (`activeAccount`,
- * `lang`) are `text` + `options` rather than `select`, because a `select`
+ * Field choices worth keeping: the option-bearing field (`activeAccount`) is
+ * `text` + `options` rather than `select`, because a `select`
  * cannot express "unset" — cycling only ever lands on a declared option, so a
  * `select` would strand the user on a pinned value with no way back to
  * automatic. The `auto` sentinel plus a `parse` that clears the path keeps the
@@ -284,13 +282,12 @@ export function buildCommandCodeTuiSection(
     .map((tier) => ({
       id: `models-${tier}`,
       title: `${TIER_TITLES[tier] ?? tier} models`,
-      descriptions: { zh: `${TIER_TITLES[tier] ?? tier} 模型` },
     }))
   // Models this snapshot cannot place (a tier added upstream) share the group
   // with the stored-but-unknown allowlist entries.
   const unranked = choices.filter((choice) => tierRank(choice.tier) === TIER_ORDER.length)
   const otherGroup = unranked.length > 0 || extras.length > 0
-    ? [{ id: OTHER_GROUP_ID, title: 'Other models', descriptions: { zh: '其他模型' } }]
+    ? [{ id: OTHER_GROUP_ID, title: 'Other models' }]
     : []
 
   /**
@@ -335,13 +332,12 @@ export function buildCommandCodeTuiSection(
   return {
     ns: deps.ns,
     title: deps.title ?? 'Command Code',
-    descriptions: { zh: 'Command Code（非官方）' },
     groups: [
-      { id: 'connection', title: 'Connection', descriptions: { zh: '连接' } },
-      { id: 'models', title: 'Models', descriptions: { zh: '模型' } },
+      { id: 'connection', title: 'Connection' },
+      { id: 'models', title: 'Models' },
       ...tierGroups,
       ...otherGroup,
-      { id: 'advanced', title: 'Advanced', descriptions: { zh: '高级' } },
+      { id: 'advanced', title: 'Advanced' },
     ],
     fields: [
       {
@@ -349,20 +345,16 @@ export function buildCommandCodeTuiSection(
         group: 'connection',
         kind: 'text',
         label: 'API key',
-        descriptions: { zh: 'API 密钥' },
         secret: { ref },
         hint: `Stored in the credential store as ${ref}, never in settings.yaml.`,
-        hintDescriptions: { zh: `保存在凭据库（${ref}），不会写入 settings.yaml。` },
       },
       {
         path: ['apiBase'],
         group: 'connection',
         kind: 'text',
         label: 'API base',
-        descriptions: { zh: 'API 地址' },
         placeholder: 'https://api.commandcode.ai',
         hint: 'Leave empty for the public Command Code Provider API.',
-        hintDescriptions: { zh: '留空即使用官方 Command Code Provider API。' },
         parse: (text) => {
           const trimmed = text.trim()
           return trimmed === '' ? { kind: 'clear' } : { kind: 'set', value: trimmed }
@@ -373,9 +365,7 @@ export function buildCommandCodeTuiSection(
         group: 'models',
         kind: 'boolean',
         label: 'Hide out-of-plan models',
-        descriptions: { zh: '隐藏套餐外的模型' },
         hint: 'Keeps models above your subscription tier out of the picker. Fails open.',
-        hintDescriptions: { zh: '在选择器里隐藏超出当前订阅档位的模型；判断不出来时全部显示。' },
         // Unset means "filter" at the adapter, so render the effective default
         // rather than letting the raw boolean format report an empty value.
         format: (value) => (value === false ? 'false' : 'true'),
@@ -391,46 +381,21 @@ export function buildCommandCodeTuiSection(
         group: 'advanced',
         kind: 'text',
         label: 'Active account',
-        descriptions: { zh: '当前账号' },
         hint: 'A pinned account id, or auto to follow the rotation order.',
-        hintDescriptions: { zh: '固定使用某个账号的 id；auto 表示按轮换顺序自动选择。' },
         options: [
           {
             value: ACTIVE_ACCOUNT_AUTO,
             label: 'Automatic (rotation order)',
-            descriptions: { zh: '自动（按轮换顺序）' },
           },
           ...slots.map((slot) => ({
             value: slot.id,
             label: slot.label,
-            descriptions: { zh: slot.label },
           })),
         ],
         format: (value) => (typeof value === 'string' && value.trim() !== '' ? value : ACTIVE_ACCOUNT_AUTO),
         parse: (text) => {
           const trimmed = text.trim()
           return trimmed === '' || trimmed === ACTIVE_ACCOUNT_AUTO
-            ? { kind: 'clear' }
-            : { kind: 'set', value: trimmed }
-        },
-      },
-      {
-        path: ['lang'],
-        group: 'advanced',
-        kind: 'text',
-        label: 'Command language',
-        descriptions: { zh: '命令语言' },
-        hint: 'Language of the /commandcode dashboard; auto follows the shell locale.',
-        hintDescriptions: { zh: '/commandcode 用量面板的语言；auto 跟随终端 locale。' },
-        options: [
-          { value: LANG_AUTO, label: 'Automatic (shell locale)', descriptions: { zh: '自动（跟随终端 locale）' } },
-          { value: 'zh', label: '中文' },
-          { value: 'en', label: 'English' },
-        ],
-        format: (value) => (value === 'zh' || value === 'en' ? value : LANG_AUTO),
-        parse: (text) => {
-          const trimmed = text.trim()
-          return trimmed === '' || trimmed === LANG_AUTO
             ? { kind: 'clear' }
             : { kind: 'set', value: trimmed }
         },

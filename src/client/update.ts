@@ -36,7 +36,7 @@ export const FETCH_TIMEOUT_MS = 5000
  * name is path-escaped (`%2F`) so no client normalizes the slash away.
  */
 export const NPM_LATEST_URL =
-  'https://registry.npmjs.org/@mars-sea%2Fdsh-commandcode-provider/latest'
+  'https://registry.npmjs.org/@xer-on%2Fdsh-commandcode-provider/latest'
 
 /**
  * Compare two version strings (`major.minor.patch[-pre]`). Returns a negative
@@ -149,7 +149,7 @@ export interface UpdateCheckStore {
 }
 
 /** The `localStorage` key holding {@link UpdateCheckRecord}. */
-export const UPDATE_CHECK_CACHE_KEY = '@mars-sea/dsh-commandcode-provider/update-check'
+export const UPDATE_CHECK_CACHE_KEY = '@xer-on/dsh-commandcode-provider/update-check'
 
 /**
  * A {@link UpdateCheckStore} backed by `localStorage`. Tolerates a missing or
