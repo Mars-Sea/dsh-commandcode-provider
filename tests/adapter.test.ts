@@ -355,6 +355,168 @@ test('stream() sends the harness conversation in Command Code wire format', asyn
   void capturedInit
 })
 
+test('stream() replays reasoning blocks on the CLI transport', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  // Issue #34: a DeepSeek thinking-mode assistant turn whose tool calls are
+  // replayed WITHOUT its thinking is rejected by the provider ("The
+  // `reasoning_content` in the thinking mode must be passed back to the
+  // API"), which killed every tool-loop turn on the CLI transport. The
+  // official CLI's `toWireMessages` replays each thinking block as a
+  // `{ type: 'reasoning', text }` assistant part, in content order.
+  const callId = ToolCallId('call-think')
+  const adapter = makeAdapter({ fetchImpl })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [
+      userMessage('List files'),
+      { id: messageId(),
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'I should list the files first.' },
+          { type: 'text', text: 'Listing.' },
+          { type: 'tool-call', id: callId, name: 'bash', arguments: '{"command":"ls"}' },
+        ],
+        source: { kind: 'model', provider: 'commandcode', model: 'm' },
+      },
+      { id: messageId(),
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
+        source: { kind: 'tool', callId },
+      },
+    ],
+  }))
+
+  const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
+  const assistant = messages.find((m) => m.role === 'assistant')!
+  const parts = assistant.content as Record<string, unknown>[]
+  // Order is preserved: the provider rebuilds the assistant turn from it.
+  assert.deepEqual(parts.map((part) => part.type), ['reasoning', 'text', 'tool-call'])
+  assert.equal(parts[0]!.text, 'I should list the files first.')
+  assert.equal(parts[1]!.text, 'Listing.')
+})
+
+test('stream() normalizes tool schemas to an object root on the CLI transport', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const adapter = makeAdapter({ fetchImpl })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [userMessage('go')],
+    tools: [
+      // Already object-rooted: untouched.
+      { name: 'bash', description: 'run', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } },
+      // A hand-written schema that never declared its root type (issue #35:
+      // this is the `dispatch_task` shape the provider rejected).
+      { name: 'dispatch_task', description: 'dispatch', parameters: { properties: { task: { type: 'string' } }, required: ['task'] } },
+      // A generator's union root.
+      {
+        name: 'union_task',
+        description: 'union',
+        parameters: { anyOf: [
+          { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
+          { type: 'object', properties: { b: { type: 'number' } }, required: ['b'] },
+        ] },
+      },
+      // Nothing usable at the root: a permissive object keeps the request alive.
+      { name: 'odd_task', description: 'odd', parameters: { type: 'array', items: { type: 'string' } } },
+      // A union `type` at the root: collapsed to the string the provider wants.
+      { name: 'nullable_task', description: 'nullable', parameters: { type: ['object', 'null'], properties: { y: { type: 'string' } } } },
+      // A generated root `$ref`: resolved so the fields survive, not just the type.
+      {
+        name: 'ref_task',
+        description: 'ref',
+        parameters: {
+          $ref: '#/$defs/Args',
+          $defs: { Args: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] } },
+        },
+      },
+    ],
+  }))
+
+  const tools = (capturedBody!.params as Record<string, unknown>).tools as Record<string, unknown>[]
+  const schemaOf = (name: string): Record<string, unknown> =>
+    tools.find((tool) => tool.name === name)!.input_schema as Record<string, unknown>
+
+  const bash = schemaOf('bash')
+  assert.equal(bash.type, 'object')
+  assert.deepEqual(bash.properties, { cmd: { type: 'string' } })
+
+  const dispatch = schemaOf('dispatch_task')
+  assert.equal(dispatch.type, 'object')
+  assert.deepEqual(dispatch.properties, { task: { type: 'string' } })
+  assert.deepEqual(dispatch.required, ['task'])
+
+  // The union keeps every branch field; no branch's `required` is silently
+  // imposed on the others, so the merged root requires nothing.
+  const union = schemaOf('union_task')
+  assert.equal(union.type, 'object')
+  assert.deepEqual(Object.keys(union.properties as object), ['a', 'b'])
+  assert.equal(union.required, undefined)
+
+  const odd = schemaOf('odd_task')
+  assert.equal(odd.type, 'object')
+  assert.deepEqual(odd.properties, {})
+  assert.equal(odd.additionalProperties, true)
+
+  const ref = schemaOf('ref_task')
+  assert.equal(ref.type, 'object')
+  assert.equal(ref.$ref, undefined)
+  assert.deepEqual(ref.properties, { x: { type: 'string' } })
+  assert.deepEqual(ref.required, ['x'])
+
+  assert.equal(schemaOf('nullable_task').type, 'object')
+})
+
+test('stream() normalizes tool schemas to an object root on the Provider API transport', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+
+  const adapter = makeAdapter({
+    fetchImpl,
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    messages: [userMessage('go')],
+    tools: [
+      { name: 'bash', description: 'run', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } },
+      { name: 'dispatch_task', description: 'dispatch', parameters: { properties: { task: { type: 'string' } }, required: ['task'] } },
+    ],
+  }))
+
+  const tools = capturedBody!.tools as { function: { name: string; parameters: Record<string, unknown> } }[]
+  const parametersOf = (name: string): Record<string, unknown> =>
+    tools.find((tool) => tool.function.name === name)!.function.parameters
+  assert.equal(parametersOf('bash').type, 'object')
+  assert.equal(parametersOf('dispatch_task').type, 'object')
+  assert.deepEqual(parametersOf('dispatch_task').properties, { task: { type: 'string' } })
+})
+
 test('stream() replays only paired tool calls', async () => {
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -2714,6 +2876,16 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('CLI version and API base constants are stable', () => {
+  // command-code@1.53.1 (2026-09-12): the CLI changelog lists four CLI-local
+  // items (default compaction model set to DeepSeek V4.1 Flash in /config, a
+  // BYOK reasoning-effort fix, and two /usage summary-line changes — Extra
+  // Credits shown separately, the "$X left" field removed). Static inspection
+  // of the 1.53.1 bundle confirms no transport drift: the /alpha/generate body,
+  // endpoints, effort map, subscription plan maps, every plan tier, every deal
+  // and the peak/off-peak membership and schedule are unchanged. The one model
+  // routing change is upstream-internal (`gpt-5.6-terra` / `gpt-5.6-luna` now
+  // served through vercel-ai-gateway instead of openrouter, same efforts,
+  // modalities and 1.05M context).
   // command-code@1.53.0 (2026-09-10): "Add new deepseek/deepseek-v4.1-flash
   // model" — Go-tier, Vision, ['low','high','max'] efforts, same hourly
   // schedule as the other DeepSeek models ($0.15/$0.60 off-peak, $0.30/$1.20
@@ -2727,7 +2899,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.53.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.53.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

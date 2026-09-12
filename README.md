@@ -52,7 +52,7 @@ Pick the release line that matches your DeepSeek Harness version:
 **pnpm 11 holds back new releases.** Its `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly:
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.10.5
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.10.6
 ```
 
 The same applies to every profile you install into, including the terminal UI below.
@@ -71,7 +71,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 Each profile updates separately — the terminal UI owns its own plugin list (see below):
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.10.5
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.10.6
 ```
 
 To move to a version published less than 24 hours ago, name it exactly as in Install above; pnpm 11's age gate resolves `@latest` to the previous release instead.
@@ -100,7 +100,7 @@ After restart, enter your API key in **Settings → Command Code** and save; **S
 The plugin also works under a terminal front door. **Each dsh profile owns its own plugin list**, so the web install above does not reach the terminal — add the plugin to the `dsh-tui` profile as well:
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.10.5
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.10.6
 ```
 
 Pin the exact version here. For the first 24 hours after a release, a bare package name (or `@latest`) is silently resolved to the previous one: the install succeeds, but the profile gets the older build — which is how a fresh terminal install ends up with no **`/settings` → Command Code** page and no `commandcode` models at all.
@@ -217,7 +217,8 @@ When your deployment's dsh shell mounts the web capability (`@deepseek-ai/dsh-we
 - **Image input is model-gated** — only Vision models accept images; text-only models refuse them.
 - Switching to a text-only model in an image-bearing session is rejected by dsh — pick a model marked *`Image`* or remove the images first.
 - **No `stop` sequences** — requests carrying one fail.
-- On the legacy `/alpha/generate` transport, reasoning blocks are not replayed into later turns; on the `/provider/v1/chat/completions` transport, historical reasoning is passed back as `reasoning_content` so tool-calling loops can keep their chain of thought. Only tool calls with a paired tool result are replayed on both transports.
+- Historical reasoning is replayed on both transports so a tool-calling loop keeps its chain of thought: `/provider/v1/chat/completions` passes it back as `reasoning_content`, and `/alpha/generate` carries it as a `reasoning` block inside the rebuilt assistant turn (the shape the official CLI sends) — a DeepSeek thinking-mode tool loop is rejected without it. Only tool calls with a paired tool result are replayed on either transport.
+- Every tool's parameter schema is normalized to the object root the provider requires, so a tool declared without one (a third-party plugin's hand-written schema, an MCP server's own `inputSchema`, a generated root `$ref`) no longer fails the whole turn with `schema must be a JSON Schema of 'type: "object"'`.
 - The model catalog is browsable without a key; chat requests need one.
 
 ## Permissions & privacy

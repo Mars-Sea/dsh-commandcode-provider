@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.53.0 — endpoints, request shape, and
+ * re-verified against command-code@1.53.1 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -63,7 +63,7 @@ import {
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.53.0'
+export const COMMAND_CODE_CLI_VERSION = '1.53.1'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -153,6 +153,150 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
     }
   }
   return {}
+}
+
+// ---------------------------------------------------------------------------
+// Tool-schema normalization (issue #35)
+// The gateway validates every function schema's ROOT as an object schema and
+// rejects the whole request otherwise (`schema must be a JSON Schema of
+// type: "object", got type: null`). Tool schemas do not always come from
+// the harness's own typed builder, which always declares `type: 'object'`: a
+// third-party plugin or an MCP bridge can register a hand-written schema, and
+// a generator can emit a root `$ref`. Neither is this plugin's to correct, but
+// the request is the plugin's to send, so every schema leaving here is
+// normalized to the object root the provider requires. Only the root is
+// touched, and every path returns a copy: the harness may deep-freeze the
+// caller's schema.
+// ---------------------------------------------------------------------------
+
+/** How deep a root `$ref` / combinator chain is followed while normalizing. */
+const SCHEMA_NORMALIZE_MAX_DEPTH = 4
+
+/**
+ * Whether a type-less node is object-shaped enough to be one with the type
+ * declared: `properties`/`required`/`additionalProperties` only make sense on
+ * an object, and a schema carrying them was meant to be one.
+ */
+function isObjectShaped(node: Record<string, unknown>): boolean {
+  return (
+    isRecord(node.properties) ||
+    isRecord(node.patternProperties) ||
+    Array.isArray(node.required) ||
+    node.additionalProperties !== undefined
+  )
+}
+
+/** The `required` names of one schema node, ignoring malformed entries. */
+function requiredNames(node: Record<string, unknown>): string[] {
+  return Array.isArray(node.required) ? node.required.filter((name): name is string => typeof name === 'string') : []
+}
+
+/** Resolve a local `#/...` pointer inside the schema that carried it. */
+function resolveLocalRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
+  if (!ref.startsWith('#/')) return undefined
+  let node: unknown = root
+  for (const rawSegment of ref.slice(2).split('/')) {
+    const segment = rawSegment.replace(/~1/g, '/').replace(/~0/g, '~')
+    if (!isRecord(node)) return undefined
+    node = node[segment]
+  }
+  return isRecord(node) ? node : undefined
+}
+
+/**
+ * Flatten a type-less combinator node into one object schema, so the model
+ * still sees the branch fields instead of an argument-free tool. `allOf`
+ * branches must all hold, so their `required` entries are all kept; `anyOf` /
+ * `oneOf` branches are alternatives, so only a name required by every branch
+ * survives. Returns undefined when no branch describes an object.
+ */
+function mergeCombinatorBranches(
+  node: Record<string, unknown>,
+  depth: number,
+): Record<string, unknown> | undefined {
+  // A plugin can hand over a self-referential schema object; the bound keeps
+  // the walk finite (JSON-parsed schemas are acyclic, JS ones need not be).
+  if (depth >= SCHEMA_NORMALIZE_MAX_DEPTH) return undefined
+  const properties: Record<string, unknown> = {}
+  const required = new Set<string>()
+  const alternatives: string[][] = []
+  let sawBranch = false
+
+  for (const key of ['allOf', 'anyOf', 'oneOf'] as const) {
+    const branches = node[key]
+    if (!Array.isArray(branches)) continue
+    const objectBranches: Record<string, unknown>[] = []
+    for (const branch of branches) {
+      if (!isRecord(branch)) continue
+      objectBranches.push(toolParametersSchema(branch, depth + 1))
+    }
+    if (objectBranches.length === 0) continue
+    sawBranch = true
+    // An `anyOf`/`oneOf` group contributes the intersection of its branches;
+    // an `allOf` group contributes the union.
+    const names = objectBranches.map(requiredNames)
+    if (key === 'allOf') for (const name of names.flat()) required.add(name)
+    else if (names.length > 0) {
+      alternatives.push(names[0]!.filter((name) => names.every((list) => list.includes(name))))
+    }
+    for (const branch of objectBranches) {
+      const branchProperties = isRecord(branch.properties) ? branch.properties : {}
+      for (const [name, schema] of Object.entries(branchProperties)) {
+        if (!(name in properties)) properties[name] = schema
+      }
+    }
+  }
+  if (!sawBranch) return undefined
+  // A name must satisfy every group, so each group's intersection joins the
+  // union: an allOf-required field and an anyOf-common field are both required.
+  for (const group of alternatives) for (const name of group) required.add(name)
+
+  const merged: Record<string, unknown> = { type: 'object', properties }
+  if (required.size > 0) merged.required = [...required]
+  // The merged schema is a superset of the alternatives it replaced, so it
+  // stays open unless the node itself closed it.
+  if (node.additionalProperties !== undefined) merged.additionalProperties = node.additionalProperties
+  for (const key of ['description', 'title'] as const) {
+    if (node[key] !== undefined) merged[key] = node[key]
+  }
+  return merged
+}
+
+/**
+ * Normalize one tool's parameters schema to an object-rooted JSON Schema.
+ * A schema that already declares an object root is passed through untouched;
+ * a type-less object-shaped one gains the type; a root `$ref` or combinator is
+ * resolved/merged; anything else (an array/scalar root, or no schema at all)
+ * degrades to a permissive free-form object, because a request the provider
+ * refuses helps no one and the tool's own description is still in the prompt.
+ */
+function toolParametersSchema(parameters: unknown, depth = 0): Record<string, unknown> {
+  if (!isRecord(parameters)) return { type: 'object', properties: {}, additionalProperties: true }
+  if (parameters.type === 'object') return parameters
+  // `["object", "null"]` is accepted by JSON Schema but not by the provider's
+  // validator, which compares the root `type` against the string "object".
+  if (Array.isArray(parameters.type) && parameters.type.includes('object')) {
+    return { ...parameters, type: 'object' }
+  }
+
+  if (parameters.type === undefined || parameters.type === null) {
+    if (typeof parameters.$ref === 'string' && depth < SCHEMA_NORMALIZE_MAX_DEPTH) {
+      const target = resolveLocalRef(parameters, parameters.$ref)
+      if (target !== undefined) {
+        const { $ref: _ref, ...rest } = parameters
+        return toolParametersSchema({ ...target, ...rest }, depth + 1)
+      }
+    }
+    if (isObjectShaped(parameters)) return { ...parameters, type: 'object' }
+    const merged = mergeCombinatorBranches(parameters, depth)
+    if (merged !== undefined) return merged
+    // A root `$ref` this plugin cannot resolve still gets the declared type:
+    // that is what the provider validates for, and an object is what every
+    // schema generator emits one for.
+    if (typeof parameters.$ref === 'string') return { ...parameters, type: 'object' }
+  }
+
+  return { type: 'object', properties: {}, additionalProperties: true }
 }
 
 export function projectSlugFromPath(pathName: string): string {
@@ -277,12 +421,12 @@ async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): 
 
 // ---------------------------------------------------------------------------
 // Message conversion: harness Message[] -> Command Code wire messages.
-// The legacy /alpha/generate transport intentionally does NOT replay reasoning
-// blocks (matches the pi plugin and the official CLI of that era; prior
-// private reasoning must not leak into later turns). The documented
-// /provider/v1/chat/completions transport DOES replay them as
-// `reasoning_content`, because DeepSeek's thinking-mode contract requires it
-// when tools are in play. Only tool calls with a paired tool result are
+// Both transports replay historical reasoning. The CLI transport carries it as
+// a `reasoning` block inside the assistant message (the shape the official
+// CLI's `toWireMessages` emits), the Provider API transport as the
+// `reasoning_content` field, because DeepSeek's thinking-mode contract
+// requires the previous chain of thought to be passed back whenever tool calls
+// are in play (issue #34). Only tool calls with a paired tool result are
 // replayed on both transports.
 // ---------------------------------------------------------------------------
 
@@ -532,6 +676,16 @@ async function messagesToCC(
       for (const block of message.content) {
         if (block.type === 'text') {
           parts.push({ type: 'text', text: block.text })
+        } else if (block.type === 'reasoning') {
+          // Replay the thinking block, exactly as the official CLI's
+          // `toWireMessages` does (command-code@1.53.1: a `thinking` block
+          // becomes `{ type: 'reasoning', text }`). This is not optional
+          // politeness: the gateway rebuilds the provider request from these
+          // blocks, and a DeepSeek thinking-mode assistant turn whose tool
+          // calls arrive without its reasoning is rejected with "The
+          // `reasoning_content` in the thinking mode must be passed back to
+          // the API" — which failed every tool-loop turn (issue #34).
+          parts.push({ type: 'reasoning', text: block.text })
         } else if (block.type === 'tool-call' && paired.has(block.id)) {
           parts.push({
             type: 'tool-call',
@@ -540,7 +694,6 @@ async function messagesToCC(
             input: recordOrEmpty(block.arguments),
           })
         }
-        // reasoning blocks: skipped by design (see header comment)
       }
       if (parts.length > 0) out.push({ role: 'assistant', content: parts })
       continue
@@ -1048,7 +1201,7 @@ async function buildCliBody(
         type: 'function',
         name: tool.name,
         description: tool.description,
-        input_schema: tool.parameters,
+        input_schema: toolParametersSchema(tool.parameters),
       })),
       system: facts.systemText,
       max_tokens: facts.maxTokens,
@@ -1074,7 +1227,7 @@ async function buildOpenAIBody(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: toolParametersSchema(tool.parameters),
     },
   }))
   return {

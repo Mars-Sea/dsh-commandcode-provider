@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.53.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.53.1";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
