@@ -167,9 +167,9 @@ function renderReport(report: CommandCodeUsageReport, locale: LocaleId, title?: 
     lines.push(
       commandCopy(locale, 'creditsHeader'),
       commandCopy(locale, 'monthlyLine')
-        .replace('{monthly}', moneyShort(c.monthlyCredits))
-        .replace('{purchased}', moneyShort(c.purchasedCredits))
-        .replace('{free}', moneyShort(c.freeCredits)),
+        .replace('{monthly}', (c.monthlyReported === false ? '—' : moneyShort(c.monthlyCredits)))
+        .replace('{purchased}', (c.purchasedReported === false ? '—' : moneyShort(c.purchasedCredits)))
+        .replace('{free}', (c.freeReported === false ? '—' : moneyShort(c.freeCredits))),
       commandCopy(locale, 'barLine')
         .replace('{bar}', bar(c.monthlyCredits, c.monthlyCredits + c.purchasedCredits))
         .replace('{pct}', monthlyPct),

@@ -38,6 +38,7 @@
  * @module dsh-commandcode-provider/client/session-cost-view
  */
 
+import type { SessionCostFacts } from '../cost-facts.ts'
 import { useEffect, useRef } from 'react'
 import type { SnapshotStore } from './snapshot-store.ts'
 import type { SessionCostPricesState } from './prices.ts'
@@ -75,6 +76,7 @@ export interface SessionCostInjected {
  * `UseProjection` this mirrors).
  */
 interface ProjectionSeats {
+  commandCodeCost: SessionCostFacts
   tokenUsage: SessionUsageBuckets
   modelSelection: SessionModelSelectionProjection
 }
@@ -124,7 +126,8 @@ function SessionCostEntry(props: SessionCostComponentProps) {
   const prices = props.useCommandCodePrices((state) => state)
   const usage = props.useProjection('tokenUsage')
   const selection = props.useProjection('modelSelection')
-  const view = buildSessionCostView({ usage, selection, table: prices.table, now: Date.now() })
+  const facts = props.useProjection('commandCodeCost')
+  const view = buildSessionCostView({ usage, selection, facts, table: prices.table, now: Date.now() })
 
   useEffect(() => {
     // No DOM outside a browser: the server render used by the tests, and a

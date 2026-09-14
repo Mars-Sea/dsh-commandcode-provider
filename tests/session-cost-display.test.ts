@@ -1,3 +1,4 @@
+import { withRequestFacts } from './cost-fixture.ts'
 /**
  * DOM-injection tests for the composer's session-cost figure
  * (`src/client/session-cost-display.ts`). Run with `npm test`.
@@ -23,10 +24,12 @@ import assert from 'node:assert/strict'
 import { SessionCostDisplay, type SessionCostObserverFactory } from '../src/client/session-cost-display.ts'
 import {
   SESSION_COST_COPY,
-  buildSessionCostView,
+  buildSessionCostView as buildCostView,
   type SessionCostInput,
 } from '../src/client/session-cost.ts'
 import type { CommandCodePriceTable } from '../src/usage-wire.ts'
+
+const buildSessionCostView = (input: SessionCostInput) => buildCostView(withRequestFacts(input))
 
 // ---------------------------------------------------------------------------
 // A fake DOM: only what the display actually touches

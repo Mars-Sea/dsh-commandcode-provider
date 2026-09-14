@@ -31,17 +31,13 @@
  * decided by `isPeakPricingHour()` in ./capabilities.ts, on the same
  * Monday-Friday UTC schedule the model picker labels.
  *
- * Context-tiered models are stored at their BASE band only (the page's own
- * "rates shown are the ≤ N tokens band" rule). The generator reports which
- * models those are, because a session whose per-request context crosses the
- * band is billed higher by Command Code than this table knows: those figures
- * are a floor, not an exact quote. Carrying the tiers would mean the wire
- * contract and the readout both learning a context dimension, which is a
- * product decision rather than a sync detail — see AGENTS.md.
+ * Context-tiered models carry every band, with inclusive prompt-token bounds
+ * and an unbounded final band. The durable cost projection selects each
+ * request's band from its input/cache buckets, never from session totals.
  *
  * Do not hand-edit the table below: run `node scripts/sync-model-prices.mjs`,
  * which re-reads the page, asserts the structure and the off-peak equality,
- * prints the context-tier and cross-check warnings for a human, and rewrites
+ * prints cross-check warnings for a human, and rewrites
  * only the rows. `--check` reports drift without writing (exit 1 on drift,
  * exit 2 when the page could not be read, so a network failure never reads as
  * "up to date"). Everything else in this file — this doc, the types, the slug
@@ -62,6 +58,7 @@ interface ModelPriceRow {
   readonly id: string
   readonly rates: readonly number[]
   readonly peak?: readonly number[]
+  readonly contextTiers?: readonly { maxContext?: number; rates: readonly number[] }[]
 }
 
 /**
@@ -108,12 +105,12 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'gpt-5.4', rates: [2.5, 15, 0.25, 0] },
   { id: 'gpt-5.4-mini', rates: [0.75, 4.5, 0.075, 0] },
   { id: 'gpt-5.5', rates: [5, 30, 0.5, 0] },
-  { id: 'gpt-5.6-luna', rates: [0.2, 1.2, 0.02, 0.25] },
-  { id: 'gpt-5.6-sol', rates: [5, 30, 0.5, 6.25] },
-  { id: 'gpt-5.6-terra', rates: [2, 12, 0.2, 2.5] },
-  { id: 'gpt-6-astra', rates: [10, 50, 1, 12.5] },
+  { id: 'gpt-5.6-luna', rates: [0.2, 1.2, 0.02, 0.25], contextTiers: [{"maxContext":272000,"rates":[0.2,1.2,0.02,0.25]},{"rates":[0.4,1.8,0.04,0.5]}] },
+  { id: 'gpt-5.6-sol', rates: [5, 30, 0.5, 6.25], contextTiers: [{"maxContext":272000,"rates":[5,30,0.5,6.25]},{"rates":[10,45,1,12.5]}] },
+  { id: 'gpt-5.6-terra', rates: [2, 12, 0.2, 2.5], contextTiers: [{"maxContext":272000,"rates":[2,12,0.2,2.5]},{"rates":[4,18,0.4,5]}] },
+  { id: 'gpt-6-astra', rates: [10, 50, 1, 12.5], contextTiers: [{"maxContext":272000,"rates":[10,50,1,12.5]},{"rates":[20,75,2,25]}] },
   { id: 'grok-4.5', rates: [2, 6, 0.5] },
-  { id: 'grok-4.6', rates: [2, 6, 0.5] },
+  { id: 'grok-4.6', rates: [2, 6, 0.5], contextTiers: [{"maxContext":200000,"rates":[2,6,0.5]},{"rates":[4,12,1]}] },
   { id: 'inkling', rates: [1, 4.05, 0.17] },
   { id: 'inkling-small', rates: [0.5, 1.2, 0.1] },
   { id: 'kimi-k2.5', rates: [0.6, 3, 0.1] },
@@ -133,10 +130,10 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'muse-spark-1.3-contributor', rates: [0.1, 0.2, 0.002] },
   { id: 'nemotron-3-ultra', rates: [0.6, 2.4, 0.12] },
   { id: 'qwen-3.6-max', rates: [1.3, 7.8, 0.26, 1.63] },
-  { id: 'qwen-3.6-plus', rates: [0.5, 3, 0.1] },
-  { id: 'qwen-3.7-flash', rates: [0.03, 0.13, 0.006, 0.038] },
+  { id: 'qwen-3.6-plus', rates: [0.5, 3, 0.1], contextTiers: [{"maxContext":256000,"rates":[0.5,3,0.1]},{"rates":[2,6,0.2]}] },
+  { id: 'qwen-3.7-flash', rates: [0.03, 0.13, 0.006, 0.038], contextTiers: [{"maxContext":32000,"rates":[0.03,0.13,0.006,0.038]},{"maxContext":256000,"rates":[0.1,0.4,0.02,0.125]},{"rates":[0.2,0.8,0.04,0.25]}] },
   { id: 'qwen-3.7-max', rates: [2.5, 7.5, 0.5, 3.13] },
-  { id: 'qwen-3.7-plus', rates: [0.4, 1.6, 0.08, 0.5] },
+  { id: 'qwen-3.7-plus', rates: [0.4, 1.6, 0.08, 0.5], contextTiers: [{"maxContext":256000,"rates":[0.4,1.6,0.08,0.5]},{"rates":[1.2,4.8,0.24,1.5]}] },
   { id: 'qwen-3.8-27b', rates: [0.4, 3, 0.04] },
   { id: 'qwen-3.8-flash', rates: [0.16, 0.47, 0.016] },
   { id: 'qwen-3.8-max', rates: [2, 6, 0.25, 2.5] },
@@ -211,6 +208,9 @@ function ratesOf(values: readonly number[]): CommandCodeModelRates {
 function wireRow(id: string, slug: string, row: ModelPriceRow): CommandCodeModelPrice {
   const price: CommandCodeModelPrice = { id, slug, ...ratesOf(row.rates) }
   if (row.peak !== undefined) price.peak = ratesOf(row.peak)
+  if (row.contextTiers !== undefined) price.contextTiers = row.contextTiers.map(tier => ({
+    ...ratesOf(tier.rates), ...(tier.maxContext === undefined ? {} : { maxContext: tier.maxContext }),
+  }))
   return price
 }
 

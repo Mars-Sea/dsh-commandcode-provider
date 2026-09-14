@@ -63,9 +63,9 @@ const CREDITS = {
   weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
 }
 
-test('no credential renders the key prompt, not an empty dashboard', () => {
+test('credential-reference absence alone does not rule out Host fallback keys', () => {
   const view = buildPanelView({ usage: usage(), apiKeyConfigured: false })
-  assert.equal(view.noKey, true)
+  assert.equal(view.noKey, false)
   assert.equal(view.accounts.length, 0)
 })
 
@@ -526,4 +526,15 @@ test('two mounted surfaces share one loop and one fetch', () => {
   assert.equal(timer.pending(), 0)
   assert.equal(PANEL_AUTO_REFRESH_MS, 120_000)
   resetPanelAutoRefresh()
+})
+
+test('omitted purchased and free balances remain unknown while explicit zero is shown', () => {
+  const view = buildPanelView({ apiKeyConfigured: false, usage: usage({ report: { accounts: [entry({ report: {
+    credits: { ...CREDITS, purchasedCredits: 0, freeCredits: 0, purchasedReported: true, freeReported: false },
+  } })] } }) })
+  assert.equal(view.noKey, false, 'Host-resolved literal or CLI keys override an absent browser credential ref')
+  assert.equal(view.accounts[0]?.monthly?.purchased, '$0.00')
+  assert.equal(view.accounts[0]?.monthly?.free, '—')
+  const missing = buildPanelView({ apiKeyConfigured: true, usage: usage({ report: { accounts: [entry({ configured: false })] } }) })
+  assert.equal(missing.noKey, true, 'only the Host can establish that no usable key exists')
 })

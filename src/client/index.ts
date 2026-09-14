@@ -365,7 +365,7 @@ function applyClientSurfaces(
         // is its only trigger: `ensure()` is idempotent, so a readout already on
         // screen simply starts pricing when the table lands, and asking earlier
         // could only fail (the namespace did not exist yet).
-        pricesController?.ensure()
+        pricesController?.reload()
         namespaceCtx.effect(() => () => {
           usageNamespace = undefined
         }, 'dsh-commandcode-provider: usage namespace')
@@ -406,7 +406,7 @@ function applyClientSurfaces(
       // the namespace member is genuinely missing. Report it as a failure the
       // readout treats as permanent rather than throwing.
       if (typeof call !== 'function') {
-        return { ok: false, error: { message: 'the Host serves no commandcode/prices endpoint' } }
+        return { ok: false, error: { message: 'the Host serves no commandcode/prices endpoint', permanent: true } }
       }
       return call.call(namespace)
     },
@@ -586,10 +586,10 @@ function applyClientSurfaces(
   //     screen must at least be loud in the console.
   const panelFace = (): PanelInjected => ({
     hooks: { commandCodeUsage: usageStore, commandCodeSettings: store },
-    refresh: () => void usageController.refresh(),
-    // The credential gate rides the live settings snapshot, so a key saved on
-    // the settings page reaches the next tick without re-registration.
-    startAutoRefresh: () => startPanelAutoRefresh(usageController, () => controller.state().anyAccountConfigured),
+    refresh: () => { pricesController?.ensure(); void usageController.refresh() },
+    // The Host resolves every credential source, including CLI auth and literals.
+    // A browser credential-reference lookup cannot determine availability.
+    startAutoRefresh: () => startPanelAutoRefresh(usageController, () => true),
     // `layout` is read reflectively AT CLICK TIME, never captured at setup:
     // ui-layout is not a dependency of this bundle (its types are not imported
     // and its client module is never resolved), so a static `inject` would park

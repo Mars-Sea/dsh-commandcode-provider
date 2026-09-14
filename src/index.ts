@@ -26,6 +26,7 @@
  * @module dsh-commandcode-provider
  */
 
+import { installCostProjection } from './cost-projection.ts'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -333,6 +334,7 @@ function readModelVisibility(raw: unknown): Readonly<Record<string, boolean>> | 
 }
 
 export function apply(ctx: Context, config: Config): void {
+  installCostProjection(ctx)
   let current: () => Config = () => config
   let lastRaw: Config | undefined
   let lastGood: ResolvedCommandCodeOptions | undefined

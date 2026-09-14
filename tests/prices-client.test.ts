@@ -128,3 +128,63 @@ test('a disposed controller drops in-flight results and stops publishing', async
   assert.deepEqual(seen, ['loading'])
   assert.equal(controller.state().status, 'loading')
 })
+
+function retryTimer() {
+  let next: (() => void) | undefined
+  const delays: number[] = []
+  return { delays, set(callback: () => void, ms: number) { next = callback; delays.push(ms); return callback }, clear() { next = undefined }, fire() { const callback = next; next = undefined; callback?.() }, pending: () => !!next }
+}
+const settled = async () => { await Promise.resolve(); await Promise.resolve() }
+
+test('transient failures automatically retry without another mount, with bounded backoff', async () => {
+  const timer = retryTimer()
+  let calls = 0
+  const controller = new CommandCodePricesController({ prices: async () => {
+    calls++
+    return { ok: false, error: { message: 'temporary disconnect' } }
+  } }, timer)
+  controller.ensure(); await settled()
+  for (let i = 0; i < 3; i++) { timer.fire(); await settled() }
+  assert.equal(calls, 4)
+  assert.deepEqual(timer.delays, [1000, 2000, 4000])
+  assert.equal(timer.pending(), false)
+  controller.ensure(); await settled()
+  assert.equal(calls, 5, 'manual refresh remains available after the bounded retries')
+  controller.dispose()
+})
+
+test('a successful retry caches prices and disposal cancels pending retries', async () => {
+  const timer = retryTimer()
+  let calls = 0
+  const controller = new CommandCodePricesController({ prices: async () => ++calls === 1
+    ? { ok: false, error: { message: 'not ready' } }
+    : { ok: true, value: TABLE } }, timer)
+  controller.ensure(); await settled(); timer.fire(); await settled()
+  assert.equal(controller.state().status, 'ready')
+  assert.equal(timer.pending(), false)
+  controller.reload(); await settled()
+  controller.dispose(); timer.fire()
+  assert.equal(calls, 3)
+  const failing = new CommandCodePricesController({ prices: async () => { throw new Error('offline') } }, timer)
+  failing.ensure(); await settled()
+  assert.equal(timer.pending(), true)
+  failing.dispose()
+  assert.equal(timer.pending(), false)
+})
+
+test('namespace rebind ignores old in-flight results and resets permanent failures', async () => {
+  const timer = retryTimer()
+  let release!: (value: { ok: true; value: CommandCodePriceTable }) => void
+  const remote = { prices: () => new Promise<{ ok: true; value: CommandCodePriceTable }>(resolve => { release = resolve }) }
+  const controller = new CommandCodePricesController(remote, timer)
+  controller.ensure()
+  const newer = { ...TABLE, peakHours: [] }
+  remote.prices = async () => ({ ok: true, value: newer })
+  controller.reload(); await settled()
+  release({ ok: true, value: TABLE }); await settled()
+  assert.deepEqual(controller.state().table, newer)
+  const absent = new CommandCodePricesController({ prices: async () => ({ ok: false, error: { message: 'missing', permanent: true } }) }, timer)
+  absent.ensure(); await settled()
+  assert.equal(timer.pending(), false)
+  controller.dispose(); absent.dispose()
+})

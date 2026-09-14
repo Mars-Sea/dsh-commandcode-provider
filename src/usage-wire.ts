@@ -154,6 +154,9 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
     if (credits.monthlyReported !== undefined) {
       parsed.monthlyReported = booleanField(credits, 'monthlyReported', 'credits.monthlyReported')
     }
+    for (const flag of ['purchasedReported', 'freeReported'] as const) {
+      if (credits[flag] !== undefined) parsed[flag] = booleanField(credits, flag, `credits.${flag}`)
+    }
     // Absent means the endpoint reported no such window. The window parsers
     // return undefined for an absent block, and an optional member is only set
     // when it was really there.
@@ -355,6 +358,11 @@ export interface CommandCodeModelRates {
   cacheWriteCost?: number
 }
 
+/** One whole-request context band; maxContext is inclusive, absent on the last band. */
+export interface CommandCodeContextTier extends CommandCodeModelRates {
+  maxContext?: number
+}
+
 /** One model's rates plus the peak-hour override for time-of-day models. */
 export interface CommandCodeModelPrice extends CommandCodeModelRates {
   /**
@@ -371,6 +379,7 @@ export interface CommandCodeModelPrice extends CommandCodeModelRates {
    * row without it is flat-priced.
    */
   peak?: CommandCodeModelRates
+  contextTiers?: CommandCodeContextTier[]
   /**
    * Whether the model costs nothing on every plan right now (a free deal or a
    * `:free` catalog variant). Served explicitly at zero rates so a surface can
@@ -436,6 +445,21 @@ function parseModelPrice(value: unknown): CommandCodeModelPrice {
     ...parseRates(source, 'model'),
   }
   if (source.peak !== undefined) price.peak = parseRates(priceRecord(source.peak, 'model.peak'), 'model.peak')
+  if (source.contextTiers !== undefined) {
+    if (!Array.isArray(source.contextTiers) || source.contextTiers.length === 0) priceReject('contextTiers')
+    let previous = 0
+    price.contextTiers = (source.contextTiers as unknown[]).map((value, index, tiers) => {
+      const tier = priceRecord(value, 'contextTier')
+      const out: CommandCodeContextTier = parseRates(tier, 'contextTier')
+      if (tier.maxContext !== undefined) {
+        const max = priceNumber(tier, 'maxContext', 'contextTier.maxContext')
+        if (!Number.isSafeInteger(max) || max <= previous || index === tiers.length - 1) priceReject('contextTier.maxContext')
+        previous = max
+        out.maxContext = max
+      } else if (index !== tiers.length - 1) priceReject('contextTier.maxContext')
+      return out
+    })
+  }
   if (source.free !== undefined) price.free = priceBoolean(source, 'free', 'model.free')
   return price
 }

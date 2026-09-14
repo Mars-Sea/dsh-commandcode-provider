@@ -330,7 +330,7 @@ export function CommandCodePanel(props: PanelComponentProps) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={view.loading || view.noKey}
+            disabled={view.loading}
             onClick={() => props.refresh()}
           >
             {view.loading ? text('refreshing') : text('refresh')}

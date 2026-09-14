@@ -1024,6 +1024,8 @@ export interface CommandCodeCredits {
    * figure, so a cross-version pair does not lose a real balance.
    */
   monthlyReported?: boolean
+  purchasedReported?: boolean
+  freeReported?: boolean
   /**
    * Five-hour rolling window limits, absent when the endpoint reported no such
    * window. Absence is NOT "a window with no cap": a reported window with
@@ -1136,6 +1138,8 @@ function parseCreditLimits(credits: Record<string, unknown> | undefined): Comman
     // Recorded separately from the scalar: the panel must not report an
     // omitted balance as a consumed one.
     monthlyReported: numberValue(creditsData?.monthlyCredits) !== undefined,
+    purchasedReported: numberValue(creditsData?.purchasedCredits) !== undefined,
+    freeReported: numberValue(creditsData?.freeCredits) !== undefined,
   }
   // Optional members are only present when reported, never present-but-undefined
   // (`exactOptionalPropertyTypes`), so an absent window cannot be mistaken for a

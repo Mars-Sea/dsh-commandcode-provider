@@ -140,6 +140,8 @@ interface CommandCodeCredits {
    * figure, so a cross-version pair does not lose a real balance.
    */
   monthlyReported?: boolean;
+  purchasedReported?: boolean;
+  freeReported?: boolean;
   /**
    * Five-hour rolling window limits, absent when the endpoint reported no such
    * window. Absence is NOT "a window with no cap": a reported window with
@@ -831,6 +833,10 @@ interface CommandCodeModelRates {
    */
   cacheWriteCost?: number;
 }
+/** One whole-request context band; maxContext is inclusive, absent on the last band. */
+interface CommandCodeContextTier extends CommandCodeModelRates {
+  maxContext?: number;
+}
 /** One model's rates plus the peak-hour override for time-of-day models. */
 interface CommandCodeModelPrice extends CommandCodeModelRates {
   /**
@@ -847,6 +853,7 @@ interface CommandCodeModelPrice extends CommandCodeModelRates {
    * row without it is flat-priced.
    */
   peak?: CommandCodeModelRates;
+  contextTiers?: CommandCodeContextTier[];
   /**
    * Whether the model costs nothing on every plan right now (a free deal or a
    * `:free` catalog variant). Served explicitly at zero rates so a surface can

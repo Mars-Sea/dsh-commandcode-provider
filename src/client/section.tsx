@@ -504,9 +504,9 @@ function AccountReport({ entry, fetchedAt, t, onRemove }: {
 
       {credits !== undefined ? (
         <div className="cc-usageStats">
-          <UsageStat label={t('usageMonthly')} value={formatMoney(credits.monthlyCredits)} />
-          <UsageStat label={t('usagePurchased')} value={formatMoney(credits.purchasedCredits)} />
-          <UsageStat label={t('usageFree')} value={formatMoney(credits.freeCredits)} />
+          <UsageStat label={t('usageMonthly')} value={credits.monthlyReported === false ? '—' : formatMoney(credits.monthlyCredits)} />
+          <UsageStat label={t('usagePurchased')} value={credits.purchasedReported === false ? '—' : formatMoney(credits.purchasedCredits)} />
+          <UsageStat label={t('usageFree')} value={credits.freeReported === false ? '—' : formatMoney(credits.freeCredits)} />
         </div>
       ) : null}
 

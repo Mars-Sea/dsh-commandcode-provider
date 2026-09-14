@@ -219,7 +219,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 - **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 → `RATE_LIMIT`; other HTTP → `PROVIDER_HTTP_ERROR` (403 body's `error.code`, e.g. `MODEL_NOT_IN_PLAN`, is parsed into the message). Unsupported options (`stop`) and image input throw `UNSUPPORTED_OPTION` / `UNSUPPORTED_CONTENT` rather than silently dropping.
 - **Adapter is cordis-free** by design: `src/adapter.ts` takes a per-request `options()` thunk + `resolveApiKey()` from the plugin entry, so settings changes reach the next request without re-registration. It also accepts an injectable `fetchImpl` for tests.
 - **Plans & quota panel + composer session cost (ported from PR #36)**: two
-  client-only surfaces on top of the EXISTING Host facts. (1) The sidebar footer
+  client surfaces using Host usage and durable request-cost facts. (1) The sidebar footer
   card (`sidebar.footer.action`, order 1 — directly above Settings) and the
   dashboard it opens in the layout's keyed `main` slot both render one
   projection, `buildPanelView()` in `src/client/panel.ts`: plan, the 5-hour and
@@ -227,8 +227,9 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   way (`limit - remaining`), and the purchased/free balances. The projections
   fetch nothing themselves: both read the usage controller's snapshot, and
   `startPanelAutoRefresh()` is a refcounted 2-minute tick that calls
-  `usage.refresh()` while a credential is configured (it is the panel's only
-  fetch, and it skips the call — never the timer — without one).
+  `usage.refresh()` while mounted. The Host report determines configuration,
+  including composition literals and CLI-auth fallback; browser credential
+  references must never gate this read. Unreported credit fields stay dashes.
   (2) The composer readout (`conversation.composer.dock`, id
   `commandcode-session-cost` — never the shipped `stats` id, which would REPLACE
   the harness's token/cache-hit/throughput cell) renders NO surface of its own:
@@ -265,6 +266,18 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   The three slot declarations are re-stated locally
   (`panel-slots.ts`, `session-cost-slots.ts`) and must stay structurally
   identical to upstream's, exactly like the Models-card merge in `card.tsx`.
+- **Durable session cost facts** (`src/cost-projection.ts`): optional reflective
+  `sessionProjections` registration folds `request/header` model selection and
+  `step/start` / `llm/retry-started` timestamps alongside v1 usage chunks and v2
+  assistant message/attempt stream settlements. Samples replace within an
+  attempt; retries add. Rate-equivalent requests aggregate into bounded groups,
+  using all prompt token buckets for each request's context tier. The pricing
+  fingerprint versions checkpoints and guards the client table; schema/fold
+  changes must bump the fingerprint seed. Restoring/forking uses the Host log,
+  not browser memory. Match all buckets against `tokenUsage` before decorating.
+  Never price cumulative usage with `modelSelection.lastUsed` or current time.
+  Missing projection means hidden cost; missing rates/other-provider usage
+  produce a labeled subtotal. Published-rate estimates are not provider invoices.
 - **Price table Remote (`commandcode/prices`)**: `src/model-prices.ts` vendors
   the official per-token rates and serves them Host-side over the SAME
   `commandcodeUsage` service and one combined contribution (report + catalog +
@@ -277,7 +290,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   instead of restating it; the model-independent half of that rule is
   `isPeakPricingHour()` in `capabilities.ts`, which `peakPricingState()` now
   delegates to. `CommandCodePricesController` (`src/client/prices.ts`) is a
-  one-shot cache, and both the namespace member and `UsageRemote.prices` are
+  cache with three bounded transient retries (1/2/4 seconds), and both the namespace member and `UsageRemote.prices` are
   OPTIONAL because the Host and bundle can be a cross-version pair — a Host
   without the endpoint lands in a permanent "no prices" state instead of
   throwing. `tests/model-prices.test.ts` fails whenever a catalog model has no
@@ -286,9 +299,8 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   **Syncing the table is a script, not a hand edit**: `node
   scripts/sync-model-prices.mjs` re-reads the page's embedded model JSON, asserts
   it still duplicates its base rates into `offPeak` and that peak ≥ off-peak,
-  prints a warning for every model carrying `contextTiers` (the row stores the
-  BASE band only, so those figures are a FLOOR for a session that crosses the
-  band), CROSS-CHECKS each rewritten row against the page's own rendered table,
+  carries every `contextTiers` band including its inclusive input-token bound,
+  CROSS-CHECKS each rewritten row against the page's own rendered table,
   and rewrites only the `MODEL_PRICE_ROWS` literal. `--check` reports drift
   without writing (exit 1 on drift, exit 2 when the page could not be read, so a
   network failure never reads as "up to date"). The cross-check is the point: a

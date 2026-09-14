@@ -418,3 +418,14 @@ test('command renders one section per pool account with rotation badges in en', 
   assert.match(result.text, /no API key configured/)
   assert.match(result.text, /⚠️ exceeded!/)
 })
+
+test('partial credit payload distinguishes omitted balances from reported zero', async () => {
+  const adapter = makeAdapter(makeFetch({
+    '/alpha/billing/credits': { status: 200, body: { credits: { monthlyCredits: 5, purchasedCredits: 0 } } },
+  }))
+  const report = await adapter.getUsage()
+  assert.equal(report.credits?.monthlyReported, true)
+  assert.equal(report.credits?.purchasedReported, true)
+  assert.equal(report.credits?.freeReported, false)
+  assert.equal(report.credits?.purchasedCredits, 0)
+})

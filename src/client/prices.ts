@@ -7,13 +7,10 @@
  * could drift from the snapshot, and a price update reaches an open page
  * without rebuilding the client bundle.
  *
- * The table is static for the life of a page, so this controller is a one-shot
- * cache rather than a poll: `ensure()` fetches at most once and is a no-op once
- * it has succeeded, and a failure stays retryable because the surface that needs
- * it can mount before the Remote namespace is live (the composer is often
- * already on screen when the plugin's client half applies). Nothing here
- * refreshes on a timer — unlike the account-usage card, whose endpoint really
- * does move.
+ * Successful reads are cached until the Host namespace rebinds. Transient
+ * failures retry three times with bounded backoff; manual refresh can retry
+ * after that. Rebinding drops stale in-flight results and resets the budget.
+ * Missing endpoints are permanent until the namespace changes.
  *
  * Deliberately JSX-free, mirroring `./usage.ts`.
  *
@@ -32,7 +29,7 @@ export interface PricesRemote {
    */
   prices?(): Promise<
     | { ok: true; value: CommandCodePriceTable }
-    | { ok: false; error: { message: string } }
+    | { ok: false; error: { message: string; permanent?: boolean } }
   >
 }
 
@@ -62,20 +59,37 @@ const IDLE: SessionCostPricesState = { status: 'idle', table: undefined, error: 
  * One-shot cache over the `commandcode/prices` Remote. Public API mirrors
  * {@link CommandCodeUsageController}: `state()`, `subscribe`, and `ensure()`.
  */
+export interface PriceRetryTimer {
+  set(callback: () => void, ms: number): unknown
+  clear(handle: unknown): void
+}
+const RETRY_TIMER: PriceRetryTimer = {
+  set(callback, ms) { const handle = setTimeout(callback, ms); handle.unref?.(); return handle },
+  clear(handle) { clearTimeout(handle as ReturnType<typeof setTimeout>) },
+}
+
 export class CommandCodePricesController {
   private readonly remote: PricesRemote
   private readonly listeners = new Set<() => void>()
   private current: SessionCostPricesState = IDLE
+  private generation = 0
   private inFlight = false
   private disposed = false
 
-  constructor(remote: PricesRemote) {
+  private retryHandle: unknown
+  private attempts = 0
+  private permanent = false
+  private readonly timer: PriceRetryTimer
+
+  constructor(remote: PricesRemote, timer: PriceRetryTimer = RETRY_TIMER) {
+    this.timer = timer
     this.remote = remote
   }
 
   /** Release every subscription. Idempotent; in-flight results are dropped. */
   dispose(): void {
     this.disposed = true
+    this.clearRetry()
     this.listeners.clear()
   }
 
@@ -96,34 +110,65 @@ export class CommandCodePricesController {
    * are both triggers, in either order, and only one request is ever issued.
    */
   ensure(): void {
-    if (this.disposed || this.inFlight || this.current.status === 'ready') return
+    if (this.disposed || this.permanent || this.inFlight || this.current.status === 'ready') return
+    this.clearRetry()
     const call = this.remote.prices
     // An older Host half serves no price endpoint. That is a permanent
     // condition for this page, so it lands in the error state (the readout
     // stays hidden) rather than retrying on every mount.
     if (typeof call !== 'function') {
+      this.permanent = true
       this.publish({ status: 'error', table: undefined, error: 'the Host serves no commandcode/prices endpoint' })
       return
     }
+    const generation = this.generation
     this.inFlight = true
+    this.attempts += 1
     this.publish({ status: 'loading', table: this.current.table, error: undefined })
-    void call.call(this.remote).then((result) => {
-      if (this.disposed) return
+    let request: ReturnType<NonNullable<PricesRemote['prices']>>
+    try { request = call.call(this.remote) } catch (error) { request = Promise.reject(error) }
+    void request.then((result) => {
+      if (this.disposed || generation !== this.generation) return
       this.inFlight = false
       if (result.ok) {
         this.publish({ status: 'ready', table: result.value, error: undefined })
         return
       }
+      this.permanent = result.error.permanent === true
       this.publish({ status: 'error', table: undefined, error: result.error.message })
+      this.scheduleRetry()
     }, (error: unknown) => {
-      if (this.disposed) return
+      if (this.disposed || generation !== this.generation) return
       this.inFlight = false
       this.publish({
         status: 'error',
         table: undefined,
         error: error instanceof Error ? error.message : String(error),
       })
+      this.scheduleRetry()
     })
+  }
+
+  /** Rebinding a Host invalidates cached prices and restarts the bounded retry budget. */
+  reload(): void {
+    if (this.disposed) return
+    this.generation += 1
+    this.inFlight = false
+    this.clearRetry()
+    this.permanent = false
+    this.attempts = 0
+    this.current = IDLE
+    this.ensure()
+  }
+
+  private clearRetry(): void {
+    if (this.retryHandle !== undefined) this.timer.clear(this.retryHandle)
+    this.retryHandle = undefined
+  }
+
+  private scheduleRetry(): void {
+    if (this.disposed || this.permanent || this.attempts >= 4) return
+    this.retryHandle = this.timer.set(() => { this.retryHandle = undefined; this.ensure() }, 1000 * 2 ** (this.attempts - 1))
   }
 
   private publish(next: SessionCostPricesState): void {

@@ -204,7 +204,20 @@ function buildRows(records, rendered) {
     }
 
     if (record.contextTiers !== undefined) {
-      problems.push(`  · ${id}: has contextTiers; row stores the base band only`)
+      if (!Array.isArray(record.contextTiers) || record.contextTiers.length === 0) throw new Error(`${id}: invalid contextTiers`)
+      let previous = 0
+      row.contextTiers = record.contextTiers.map((tier, index, tiers) => {
+        const rates = [rate(tier.inputCost), rate(tier.outputCost), rate(tier.cacheReadCost)]
+        if (tier.cacheWriteCost !== undefined) rates.push(rate(tier.cacheWriteCost))
+        if (tier.maxContext === undefined) {
+          if (index !== tiers.length - 1) throw new Error(`${id}: only the last context tier can be unbounded`)
+          return { rates }
+        }
+        const maxContext = tier.maxContext
+        if (!Number.isSafeInteger(maxContext) || maxContext <= previous || index === tiers.length - 1) throw new Error(`${id}: invalid context tier boundary`)
+        previous = maxContext
+        return { maxContext, rates }
+      })
     }
 
     // Second opinion: the rendered row must agree with the embedded JSON.
@@ -231,7 +244,8 @@ function renderRows(rows) {
     .map((row) => {
       const rates = row.rates.join(', ')
       const peak = row.peak === undefined ? '' : `, peak: [${row.peak.join(', ')}]`
-      return `  { id: '${row.id}', rates: [${rates}]${peak} },`
+      const tiers = row.contextTiers === undefined ? '' : `, contextTiers: ${JSON.stringify(row.contextTiers)}`
+      return `  { id: '${row.id}', rates: [${rates}]${peak}${tiers} },`
     })
     .join('\n')
 }
