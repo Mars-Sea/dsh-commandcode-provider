@@ -150,7 +150,7 @@ test('schema rejects a window limit with a non-boolean exceeded flag', () => {
   const report = makeReport()
   const bad = wrap(makeAccount({
     ...report,
-    credits: { ...report.credits!, fiveHour: { ...report.credits!.fiveHour, exceeded: 'yes' as unknown as boolean } },
+    credits: { ...report.credits!, fiveHour: { ...report.credits!.fiveHour!, exceeded: 'yes' as unknown as boolean } },
   }))
   assert.throws(() => usageReportSchema.parse(bad), /fiveHour\.exceeded/)
 })
@@ -239,4 +239,77 @@ test('models descriptor targets the commandcodeUsage service and models method',
   assert.equal(MODELS_DESCRIPTOR.service, 'commandcodeUsage')
   assert.equal(MODELS_DESCRIPTOR.namespace, 'commandcode')
   assert.equal(MODELS_DESCRIPTOR.method, 'models')
+})
+
+// ---------------------------------------------------------------------------
+// Price-table Remote (`commandcode/prices`)
+// ---------------------------------------------------------------------------
+
+import { PRICES_DESCRIPTOR, PRICES_ENDPOINT, PRICES_REMOTE_CONTRIBUTION, pricesSchema } from '../src/usage-wire.ts'
+
+test('prices schema parses rates, the optional peak block, and the windows', () => {
+  const parsed = pricesSchema.parse({
+    models: [
+      { id: 'deepseek/deepseek-v4-pro', slug: 'deepseek-v4-pro', inputCost: 0.66, outputCost: 1.98, cacheReadCost: 0.022,
+        peak: { inputCost: 1.32, outputCost: 3.96, cacheReadCost: 0.044 } },
+      { id: 'meituan/LongCat-2.0:free', slug: 'meituan/LongCat-2.0:free', inputCost: 0, outputCost: 0, cacheReadCost: 0, free: true },
+    ],
+    peakHours: [[1, 4], [6, 10]],
+  })
+  assert.deepEqual(parsed.peakHours, [[1, 4], [6, 10]])
+  assert.equal(parsed.models[0]?.peak?.inputCost, 1.32)
+  // A flat row carries no peak block: that absence IS the flat-price signal.
+  assert.equal(parsed.models[1]?.peak, undefined)
+  assert.equal(parsed.models[1]?.free, true)
+})
+
+test('prices schema keeps a missing cache-write rate missing', () => {
+  const parsed = pricesSchema.parse({
+    models: [{ id: 'a', slug: 'a', inputCost: 1, outputCost: 2, cacheReadCost: 0.1 }],
+    peakHours: [],
+  })
+  assert.equal(parsed.models[0]?.cacheWriteCost, undefined)
+
+  const withRate = pricesSchema.parse({
+    models: [{ id: 'a', slug: 'a', inputCost: 1, outputCost: 2, cacheReadCost: 0.1, cacheWriteCost: 1.25 }],
+    peakHours: [],
+  })
+  assert.equal(withRate.models[0]?.cacheWriteCost, 1.25)
+})
+
+test('prices schema rejects a malformed table', () => {
+  assert.throws(() => pricesSchema.parse({}), /models/)
+  assert.throws(() => pricesSchema.parse({ models: [], peakHours: 'soon' }), /peakHours/)
+  assert.throws(() => pricesSchema.parse({ models: [], peakHours: [[1]] }), /peakHours\[\]/)
+  assert.throws(() => pricesSchema.parse({ models: [], peakHours: [['1', 4]] }), /peakHours\[\]/)
+  // A present-but-non-numeric rate is a contract violation, not a zero.
+  assert.throws(
+    () => pricesSchema.parse({ models: [{ id: 'a', slug: 'a', inputCost: 'free', outputCost: 2, cacheReadCost: 0.1 }], peakHours: [] }),
+    /model\.inputCost/,
+  )
+  assert.throws(
+    () => pricesSchema.parse({
+      models: [{ id: 'a', slug: 'a', inputCost: 1, outputCost: 2, cacheReadCost: 0.1, peak: { inputCost: 1 } }],
+      peakHours: [],
+    }),
+    /model\.peak\.outputCost/,
+  )
+})
+
+test('prices descriptor targets the commandcodeUsage service and prices method', () => {
+  assert.equal(PRICES_DESCRIPTOR.id, `@mars-sea/dsh-commandcode-provider#${PRICES_ENDPOINT}`)
+  assert.equal(PRICES_DESCRIPTOR.service, 'commandcodeUsage')
+  assert.equal(PRICES_DESCRIPTOR.namespace, 'commandcode')
+  assert.equal(PRICES_DESCRIPTOR.method, 'prices')
+  assert.equal(PRICES_REMOTE_CONTRIBUTION.descriptors[0], PRICES_DESCRIPTOR)
+})
+
+test('price wire retains all context bands and rejects gaps in ordered boundaries', () => {
+  const rate = { inputCost: 1, outputCost: 2, cacheReadCost: .1 }
+  const parse = (contextTiers: unknown) => pricesSchema.parse({ models: [{ id: 'tiered', slug: 'tiered', ...rate, contextTiers }], peakHours: [] })
+  const tiers = [{ ...rate, maxContext: 32000 }, { ...rate, inputCost: 4 }]
+  assert.deepEqual(parse(tiers).models[0]?.contextTiers, tiers)
+  for (const invalid of [[], [{ ...rate, maxContext: 32000 }], [{ ...rate }, { ...rate }], [{ ...rate, maxContext: 2 }, { ...rate, maxContext: 1 }, rate]]) {
+    assert.throws(() => parse(invalid), /contextTier/)
+  }
 })

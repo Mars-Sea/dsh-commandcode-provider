@@ -126,15 +126,36 @@ interface CommandCodeCredits {
   monthlyCredits: number;
   purchasedCredits: number;
   freeCredits: number;
-  /** Five-hour rolling window limits. */
-  fiveHour: {
+  /**
+   * Whether the endpoint actually published a monthly balance. The scalar
+   * above defaults to 0 for shape stability, which is a LIE about an omitted
+   * field — and a false "0 left, fully consumed" on the dashboard. Consumers
+   * that render the figure must check this first: an explicit `false` means
+   * "not reported", not "nothing left".
+   *
+   * Optional on purpose. `undefined` means the flag itself was never recorded —
+   * an older Host half, or a frame from before this field existed — and is read
+   * as "assume reported", which is the behavior that shipped. Only an explicit
+   * `false` from a Host that knows the balance was omitted suppresses the
+   * figure, so a cross-version pair does not lose a real balance.
+   */
+  monthlyReported?: boolean;
+  purchasedReported?: boolean;
+  freeReported?: boolean;
+  /**
+   * Five-hour rolling window limits, absent when the endpoint reported no such
+   * window. Absence is NOT "a window with no cap": a reported window with
+   * `cap === 0` is uncapped spend, while an absent one was never reported at
+   * all, and only the un-reported case must keep a figure off the dashboard.
+   */
+  fiveHour?: {
     used: number;
     cap: number;
     exceeded: boolean;
     resetAt: number;
   };
-  /** Weekly window limits. */
-  weekly: {
+  /** Weekly window limits; absent under the same rule as {@link fiveHour}. */
+  weekly?: {
     used: number;
     cap: number;
     exceeded: boolean;
@@ -670,8 +691,11 @@ declare const KNOWN_DEALS: Readonly<Record<string, KnownDeal>>;
  * weekday, full price) **Monday to Friday only**; the other 17 hours of a
  * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
  * The V4 Flash Vision (exp) variant (command-code@1.32.0) shares the V4 Flash
- * windows and peak prices ($0.44/$1.32) — each row's hover annotation states
- * exactly 2× that row's displayed off-peak prices. The picker shows the
+ * rates exactly — $0.15/$0.60 off-peak and $0.30/$1.20 peak, per the page's own
+ * `timeOfDay` block, not merely 2× its own off-peak figures: a rate that is
+ * internally consistent can still be the wrong row, which is why the vendored
+ * price table (`./model-prices.ts`) is synced from the page and not hand-kept.
+ * The picker shows the
  * *current* state as a compact
  * label (`Peak`/`Half`) matching the English noun style of the other markers
  * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
@@ -789,6 +813,69 @@ interface CommandCodeCatalogModel {
 /** The model-catalog Remote result: the full catalog, sorted for picking. */
 interface CommandCodeCatalog {
   models: CommandCodeCatalogModel[];
+}
+/**
+ * One model's per-token rates, in USD per 1,000,000 tokens — the unit the
+ * official pricing page publishes in.
+ */
+interface CommandCodeModelRates {
+  /** Uncached (billed) input tokens. */
+  inputCost: number;
+  /** Completion tokens. */
+  outputCost: number;
+  /** Input tokens served from the provider's cache. */
+  cacheReadCost: number;
+  /**
+   * Input tokens written into the provider's cache. Present for a minority of
+   * models — the page publishes no cache-write rate for the rest, whose
+   * cache-write tokens are therefore UNPRICED. Do not substitute a multiple of
+   * the input rate for a missing value.
+   */
+  cacheWriteCost?: number;
+}
+/** One whole-request context band; maxContext is inclusive, absent on the last band. */
+interface CommandCodeContextTier extends CommandCodeModelRates {
+  maxContext?: number;
+}
+/** One model's rates plus the peak-hour override for time-of-day models. */
+interface CommandCodeModelPrice extends CommandCodeModelRates {
+  /**
+   * Lookup key: the catalog model id when a catalog model maps to this row,
+   * otherwise the pricing page's own slug. A session reports catalog ids, so
+   * this is the primary key the browser looks up by.
+   */
+  id: string;
+  /** The pricing page's slug for this row — the secondary lookup key. */
+  slug: string;
+  /**
+   * Rates charged inside the peak windows. The row's own top-level rates are
+   * the off-peak rates, so a row WITH this block is time-of-day priced and a
+   * row without it is flat-priced.
+   */
+  peak?: CommandCodeModelRates;
+  contextTiers?: CommandCodeContextTier[];
+  /**
+   * Whether the model costs nothing on every plan right now (a free deal or a
+   * `:free` catalog variant). Served explicitly at zero rates so a surface can
+   * say "free" rather than showing nothing.
+   */
+  free?: boolean;
+}
+/** The price-table Remote result: every known model's rates. */
+interface CommandCodePriceTable {
+  /**
+   * Every priced model, keyed by {@link CommandCodeModelPrice.id} (catalog id
+   * first, pricing slug as the fallback) and carrying its slug as a second
+   * lookup key. A model absent from this list has no known price and must
+   * render no cost at all rather than a guess.
+   */
+  models: CommandCodeModelPrice[];
+  /**
+   * Peak-pricing windows as `[startHour, endHour)` in UTC, end-exclusive,
+   * applying Monday–Friday only. Shipped with the table so the browser prices
+   * against the Host snapshot's schedule instead of restating it.
+   */
+  peakHours: Array<[number, number]>;
 }
 //#endregion
 //#region src/command-locales.d.ts
@@ -916,6 +1003,13 @@ interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = CommandC
    */
   listModels?: () => Promise<CommandCodeCatalog>;
   /**
+   * Price-table source for the composer's session-cost figure. Defaults to the
+   * vendored snapshot, so the endpoint can never silently serve an empty table
+   * — an unpriced cost is the failure this feature is meant to remove. Override
+   * only to stub it in a test.
+   */
+  prices?: () => CommandCodePriceTable;
+  /**
    * The browser-login flow (wired by the plugin entry). Absent means the
    * login endpoints answer `idle` / reject with a plain message — the page's
    * manual paste path stays the fallback.
@@ -949,6 +1043,13 @@ declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = C
    * the live list instead of typed by hand.
    */
   models(): Promise<CommandCodeCatalog>;
+  /**
+   * The model price table the composer prices an in-progress session with.
+   * Static vendored data (the official pricing page's rates), served Host-side
+   * so the browser bundle never carries a copy that could drift from the
+   * snapshot, and so a price update reaches an open page without a rebuild.
+   */
+  prices(): Promise<CommandCodePriceTable>;
   /**
    * Start (or rejoin) a browser-login attempt and return its fresh status —
    * `waiting` carrying the Studio URL. Rejects when the flow cannot start

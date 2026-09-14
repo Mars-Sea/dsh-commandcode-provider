@@ -101,8 +101,9 @@ test('getUsage parses account, usage, and credits', async () => {
   assert.equal(report.usage?.totalCount, 935)
   assert.equal(report.usage?.totalCost, 1.3187)
   assert.equal(report.credits?.monthlyCredits, 8.68)
-  assert.equal(report.credits?.fiveHour.cap, 3)
-  assert.equal(report.credits?.weekly.used, 1.32)
+  assert.equal(report.credits?.monthlyReported, true)
+  assert.equal(report.credits?.fiveHour?.cap, 3)
+  assert.equal(report.credits?.weekly?.used, 1.32)
   assert.equal(report.plan?.name, 'Pro')
   assert.equal(report.plan?.status, 'active')
   assert.equal(report.plan?.monthlyCredits, 30)
@@ -326,7 +327,7 @@ test('command renders one section per pool account with rotation badges in zh', 
           report: {
             account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
             credits: {
-              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0,
+              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0, monthlyReported: true,
               fiveHour: { used: 3, cap: 3, exceeded: true, resetAt },
               weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
             },
@@ -381,7 +382,7 @@ test('command renders one section per pool account with rotation badges in en', 
           report: {
             account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
             credits: {
-              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0,
+              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0, monthlyReported: true,
               fiveHour: { used: 3, cap: 3, exceeded: true, resetAt },
               weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
             },
@@ -416,4 +417,36 @@ test('command renders one section per pool account with rotation badges in en', 
   assert.match(result.text, /📊 Go #3/)
   assert.match(result.text, /no API key configured/)
   assert.match(result.text, /⚠️ exceeded!/)
+})
+
+test('partial credit payload distinguishes omitted balances from reported zero', async () => {
+  const adapter = makeAdapter(makeFetch({
+    '/alpha/billing/credits': { status: 200, body: { credits: { monthlyCredits: 5, purchasedCredits: 0 } } },
+  }))
+  const report = await adapter.getUsage()
+  assert.equal(report.credits?.monthlyReported, true)
+  assert.equal(report.credits?.purchasedReported, true)
+  assert.equal(report.credits?.freeReported, false)
+  assert.equal(report.credits?.purchasedCredits, 0)
+})
+
+test('credit ratios require both balances and print exactly one percent sign', async () => {
+  for (const locale of ['en', 'zh'] as const) {
+    for (const patch of [
+      { purchasedReported: false }, { monthlyReported: false },
+      { monthlyCredits: 0, purchasedCredits: 0 }, {},
+    ]) {
+      const def = commandDefinition({
+        adapter: { getUsage: async () => ({ failures: [], credits: {
+          monthlyCredits: 5, purchasedCredits: 5, freeCredits: 0,
+          monthlyReported: true, purchasedReported: true, freeReported: false, ...patch,
+        } }) } as unknown as CommandCodeAdapter,
+        getLocale: () => locale,
+      })
+      const result = await invoke(def, '')
+      assert.doesNotMatch(result.text, /%%/)
+      if (Object.keys(patch).length === 0) assert.match(result.text, /50%/)
+      else assert.doesNotMatch(result.text, /%|[█░]/, 'missing or zero denominator must not render a ratio')
+    }
+  }
 })

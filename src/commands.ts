@@ -161,36 +161,45 @@ function renderReport(report: CommandCodeUsageReport, locale: LocaleId, title?: 
 
   if (report.credits) {
     const c = report.credits
-    const monthlyPct = c.monthlyCredits > 0
-      ? `${((c.monthlyCredits / (c.monthlyCredits + c.purchasedCredits)) * 100).toFixed(0)}%`
-      : '—'
+    const balanceTotal = c.monthlyCredits + c.purchasedCredits
+    const ratioKnown = c.monthlyReported !== false && c.purchasedReported !== false && balanceTotal > 0
     lines.push(
       commandCopy(locale, 'creditsHeader'),
       commandCopy(locale, 'monthlyLine')
-        .replace('{monthly}', moneyShort(c.monthlyCredits))
-        .replace('{purchased}', moneyShort(c.purchasedCredits))
-        .replace('{free}', moneyShort(c.freeCredits)),
-      commandCopy(locale, 'barLine')
-        .replace('{bar}', bar(c.monthlyCredits, c.monthlyCredits + c.purchasedCredits))
-        .replace('{pct}', monthlyPct),
-      '',
-      commandCopy(locale, 'windowsHeader'),
-      commandCopy(locale, 'fiveHourLine')
-        .replace('{used}', moneyShort(c.fiveHour.used))
-        .replace('{cap}', moneyShort(c.fiveHour.cap))
-        .replace('{warn}', c.fiveHour.exceeded ? commandCopy(locale, 'exceededWarning') : ''),
-      commandCopy(locale, 'windowBarLine')
-        .replace('{bar}', bar(c.fiveHour.used, c.fiveHour.cap))
-        .replace('{when}', resetLabel(c.fiveHour.resetAt)),
-      commandCopy(locale, 'weeklyLine')
-        .replace('{used}', moneyShort(c.weekly.used))
-        .replace('{cap}', moneyShort(c.weekly.cap))
-        .replace('{warn}', c.weekly.exceeded ? commandCopy(locale, 'exceededWarning') : ''),
-      commandCopy(locale, 'windowBarLine')
-        .replace('{bar}', bar(c.weekly.used, c.weekly.cap))
-        .replace('{when}', resetLabel(c.weekly.resetAt)),
+        .replace('{monthly}', (c.monthlyReported === false ? '—' : moneyShort(c.monthlyCredits)))
+        .replace('{purchased}', (c.purchasedReported === false ? '—' : moneyShort(c.purchasedCredits)))
+        .replace('{free}', (c.freeReported === false ? '—' : moneyShort(c.freeCredits))),
+      ...(ratioKnown ? [commandCopy(locale, 'barLine')
+        .replace('{bar}', bar(c.monthlyCredits, balanceTotal))
+        .replace('{pct}', ((c.monthlyCredits / balanceTotal) * 100).toFixed(0))] : []),
       '',
     )
+    // Only the windows the endpoint actually reported: an unlimited account
+    // reports none, and printing two zeroed rows for it would invent limits.
+    const windowLines: string[] = []
+    if (c.fiveHour !== undefined) {
+      windowLines.push(
+        commandCopy(locale, 'fiveHourLine')
+          .replace('{used}', moneyShort(c.fiveHour.used))
+          .replace('{cap}', moneyShort(c.fiveHour.cap))
+          .replace('{warn}', c.fiveHour.exceeded ? commandCopy(locale, 'exceededWarning') : ''),
+        commandCopy(locale, 'windowBarLine')
+          .replace('{bar}', bar(c.fiveHour.used, c.fiveHour.cap))
+          .replace('{when}', resetLabel(c.fiveHour.resetAt)),
+      )
+    }
+    if (c.weekly !== undefined) {
+      windowLines.push(
+        commandCopy(locale, 'weeklyLine')
+          .replace('{used}', moneyShort(c.weekly.used))
+          .replace('{cap}', moneyShort(c.weekly.cap))
+          .replace('{warn}', c.weekly.exceeded ? commandCopy(locale, 'exceededWarning') : ''),
+        commandCopy(locale, 'windowBarLine')
+          .replace('{bar}', bar(c.weekly.used, c.weekly.cap))
+          .replace('{when}', resetLabel(c.weekly.resetAt)),
+      )
+    }
+    if (windowLines.length > 0) lines.push(commandCopy(locale, 'windowsHeader'), ...windowLines, '')
   }
 
   if (report.failures.length > 0) {

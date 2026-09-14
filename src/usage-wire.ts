@@ -21,7 +21,7 @@
  * @module dsh-commandcode-provider/usage-wire
  */
 
-import type { CommandCodeUsageReport, UsageBlockReason } from './adapter.ts'
+import type { CommandCodeCredits, CommandCodeUsageReport, UsageBlockReason } from './adapter.ts'
 
 export type { CommandCodeUsageReport, UsageBlockReason }
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
@@ -68,7 +68,19 @@ const { reject, record, stringField, numberField, booleanField } =
   makeBoundaryValidator('commandcode/report result:')
 
 /** Validate one window-limit block (`fiveHour` / `weekly`). */
-function windowLimit(value: unknown, field: string): { used: number; cap: number; exceeded: boolean; resetAt: number } {
+/**
+ * Parse one quota window, or undefined when the frame carries no such window.
+ *
+ * The distinction is load-bearing at this boundary: an ABSENT window means the
+ * billing endpoint reported none (an unlimited plan), while a present block with
+ * `cap: 0` means uncapped spend that was really reported. Collapsing the two
+ * would draw a zeroed quota row for an account that has no such limit.
+ */
+function windowLimit(
+  value: unknown,
+  field: string,
+): { used: number; cap: number; exceeded: boolean; resetAt: number } | undefined {
+  if (value === undefined) return undefined
   const source = record(value, field)
   return {
     used: numberField(source, 'used', `${field}.used`),
@@ -127,13 +139,32 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
 
   if (source.credits !== undefined) {
     const credits = record(source.credits, 'credits')
-    report.credits = {
+    const parsed: CommandCodeCredits = {
       monthlyCredits: numberField(credits, 'monthlyCredits', 'credits.monthlyCredits'),
       purchasedCredits: numberField(credits, 'purchasedCredits', 'credits.purchasedCredits'),
       freeCredits: numberField(credits, 'freeCredits', 'credits.freeCredits'),
-      fiveHour: windowLimit(credits.fiveHour, 'credits.fiveHour'),
-      weekly: windowLimit(credits.weekly, 'credits.weekly'),
     }
+    // OPTIONAL on the wire: a Host half that predates this field serves the
+    // scalar 0 for an omitted balance, which cannot be told from a real zero.
+    // An explicit `false` therefore means "not reported" and the panel keeps the
+    // figure off the dashboard; an absent flag (an older Host) stays unset and
+    // is read as "assume reported", so a real balance is not lost cross-version.
+    // A PRESENT value must still be a boolean, so a malformed frame is rejected
+    // here rather than coerced.
+    if (credits.monthlyReported !== undefined) {
+      parsed.monthlyReported = booleanField(credits, 'monthlyReported', 'credits.monthlyReported')
+    }
+    for (const flag of ['purchasedReported', 'freeReported'] as const) {
+      if (credits[flag] !== undefined) parsed[flag] = booleanField(credits, flag, `credits.${flag}`)
+    }
+    // Absent means the endpoint reported no such window. The window parsers
+    // return undefined for an absent block, and an optional member is only set
+    // when it was really there.
+    const fiveHour = windowLimit(credits.fiveHour, 'credits.fiveHour')
+    const weekly = windowLimit(credits.weekly, 'credits.weekly')
+    if (fiveHour !== undefined) parsed.fiveHour = fiveHour
+    if (weekly !== undefined) parsed.weekly = weekly
+    report.credits = parsed
   }
 
   if (source.plan !== undefined) {
@@ -301,4 +332,175 @@ export const MODELS_DESCRIPTOR: InvocationDescriptor =
 export const MODELS_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
   package: USAGE_REMOTE_PACKAGE,
   descriptors: [MODELS_DESCRIPTOR],
+}
+
+// ---------------------------------------------------------------------------
+// Model price table Remote (`commandcode/prices`)
+// ---------------------------------------------------------------------------
+
+/**
+ * One model's per-token rates, in USD per 1,000,000 tokens — the unit the
+ * official pricing page publishes in.
+ */
+export interface CommandCodeModelRates {
+  /** Uncached (billed) input tokens. */
+  inputCost: number
+  /** Completion tokens. */
+  outputCost: number
+  /** Input tokens served from the provider's cache. */
+  cacheReadCost: number
+  /**
+   * Input tokens written into the provider's cache. Present for a minority of
+   * models — the page publishes no cache-write rate for the rest, whose
+   * cache-write tokens are therefore UNPRICED. Do not substitute a multiple of
+   * the input rate for a missing value.
+   */
+  cacheWriteCost?: number
+}
+
+/** One whole-request context band; maxContext is inclusive, absent on the last band. */
+export interface CommandCodeContextTier extends CommandCodeModelRates {
+  maxContext?: number
+}
+
+/** One model's rates plus the peak-hour override for time-of-day models. */
+export interface CommandCodeModelPrice extends CommandCodeModelRates {
+  /**
+   * Lookup key: the catalog model id when a catalog model maps to this row,
+   * otherwise the pricing page's own slug. A session reports catalog ids, so
+   * this is the primary key the browser looks up by.
+   */
+  id: string
+  /** The pricing page's slug for this row — the secondary lookup key. */
+  slug: string
+  /**
+   * Rates charged inside the peak windows. The row's own top-level rates are
+   * the off-peak rates, so a row WITH this block is time-of-day priced and a
+   * row without it is flat-priced.
+   */
+  peak?: CommandCodeModelRates
+  contextTiers?: CommandCodeContextTier[]
+  /**
+   * Whether the model costs nothing on every plan right now (a free deal or a
+   * `:free` catalog variant). Served explicitly at zero rates so a surface can
+   * say "free" rather than showing nothing.
+   */
+  free?: boolean
+}
+
+/** The price-table Remote result: every known model's rates. */
+export interface CommandCodePriceTable {
+  /**
+   * Every priced model, keyed by {@link CommandCodeModelPrice.id} (catalog id
+   * first, pricing slug as the fallback) and carrying its slug as a second
+   * lookup key. A model absent from this list has no known price and must
+   * render no cost at all rather than a guess.
+   */
+  models: CommandCodeModelPrice[]
+  /**
+   * Peak-pricing windows as `[startHour, endHour)` in UTC, end-exclusive,
+   * applying Monday–Friday only. Shipped with the table so the browser prices
+   * against the Host snapshot's schedule instead of restating it.
+   */
+  peakHours: Array<[number, number]>
+}
+
+/** Canonical `<namespace>/<method>` endpoint of the price-table Remote. */
+export const PRICES_ENDPOINT = 'commandcode/prices'
+
+/**
+ * The shared read/validate helpers for the price-table endpoint — its own
+ * instance so price boundary errors name `commandcode/prices`.
+ */
+const {
+  reject: priceReject,
+  record: priceRecord,
+  stringField: priceString,
+  numberField: priceNumber,
+  booleanField: priceBoolean,
+} = makeBoundaryValidator('commandcode/prices result:')
+
+/** Parse one rate block (`rates`, or a model's `peak` override). */
+function parseRates(source: Record<string, unknown>, field: string): CommandCodeModelRates {
+  const rates: CommandCodeModelRates = {
+    inputCost: priceNumber(source, 'inputCost', `${field}.inputCost`),
+    outputCost: priceNumber(source, 'outputCost', `${field}.outputCost`),
+    cacheReadCost: priceNumber(source, 'cacheReadCost', `${field}.cacheReadCost`),
+  }
+  // Optional on the wire: only a minority of models publish a cache-write
+  // rate, and a present non-number is a contract violation rather than a
+  // silent zero.
+  if (source.cacheWriteCost !== undefined) {
+    rates.cacheWriteCost = priceNumber(source, 'cacheWriteCost', `${field}.cacheWriteCost`)
+  }
+  return rates
+}
+
+/** Parse one untrusted boundary value into a {@link CommandCodeModelPrice}. */
+function parseModelPrice(value: unknown): CommandCodeModelPrice {
+  const source = priceRecord(value, 'model')
+  const price: CommandCodeModelPrice = {
+    id: priceString(source, 'id', 'model.id'),
+    slug: priceString(source, 'slug', 'model.slug'),
+    ...parseRates(source, 'model'),
+  }
+  if (source.peak !== undefined) price.peak = parseRates(priceRecord(source.peak, 'model.peak'), 'model.peak')
+  if (source.contextTiers !== undefined) {
+    if (!Array.isArray(source.contextTiers) || source.contextTiers.length === 0) priceReject('contextTiers')
+    let previous = 0
+    price.contextTiers = (source.contextTiers as unknown[]).map((value, index, tiers) => {
+      const tier = priceRecord(value, 'contextTier')
+      const out: CommandCodeContextTier = parseRates(tier, 'contextTier')
+      if (tier.maxContext !== undefined) {
+        const max = priceNumber(tier, 'maxContext', 'contextTier.maxContext')
+        if (!Number.isSafeInteger(max) || max <= previous || index === tiers.length - 1) priceReject('contextTier.maxContext')
+        previous = max
+        out.maxContext = max
+      } else if (index !== tiers.length - 1) priceReject('contextTier.maxContext')
+      return out
+    })
+  }
+  if (source.free !== undefined) price.free = priceBoolean(source, 'free', 'model.free')
+  return price
+}
+
+/** Parse the wire result into a {@link CommandCodePriceTable}. */
+function parsePriceTable(value: unknown): CommandCodePriceTable {
+  const source = priceRecord(value, 'result')
+  const models = source.models
+  if (!Array.isArray(models)) priceReject('models')
+  const peakHours = source.peakHours
+  if (!Array.isArray(peakHours)) priceReject('peakHours')
+  return {
+    models: (models as unknown[]).map(parseModelPrice),
+    peakHours: (peakHours as unknown[]).map((window) => {
+      if (!Array.isArray(window) || window.length !== 2) priceReject('peakHours[]')
+      const [start, end] = window as [unknown, unknown]
+      if (typeof start !== 'number' || typeof end !== 'number') priceReject('peakHours[]')
+      return [start, end] as [number, number]
+    }),
+  }
+}
+
+/** The strict result codec for the price-table Remote. */
+export const pricesSchema: TypertSchema<CommandCodePriceTable> = {
+  parse: parsePriceTable,
+}
+
+/**
+ * The price-table invocation descriptor, sharing the same `commandcodeUsage`
+ * service and `commandcode` namespace as the report and catalog endpoints.
+ */
+export const PRICES_DESCRIPTOR: InvocationDescriptor =
+  makeRemoteDescriptor<CommandCodePriceTable>(
+    PRICES_ENDPOINT,
+    'prices',
+    `${USAGE_REMOTE_PACKAGE}#CommandCodePriceTable`,
+    pricesSchema,
+  )
+
+/** The Client-face contribution for the price-table endpoint. */
+export const PRICES_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
+  package: USAGE_REMOTE_PACKAGE,
+  descriptors: [PRICES_DESCRIPTOR],
 }

@@ -20,7 +20,9 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { CommandCodeAdapter, CommandCodeConnectionOptions } from './adapter.ts'
 import { USAGE_HOST_CONTRIBUTION } from './usage-wire.ts'
 import { MODELS_DESCRIPTOR } from './usage-wire.ts'
-import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire.ts'
+import { PRICES_DESCRIPTOR } from './usage-wire.ts'
+import type { CommandCodeAccountsReport, CommandCodeCatalog, CommandCodePriceTable } from './usage-wire.ts'
+import { modelPriceTable } from './model-prices.ts'
 import { LOGIN_DESCRIPTORS } from './login-wire.ts'
 import type { CommandCodeLoginStatus } from './login-wire.ts'
 
@@ -57,6 +59,13 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
    * editors degrade to the empty state.
    */
   listModels?: () => Promise<CommandCodeCatalog>
+  /**
+   * Price-table source for the composer's session-cost figure. Defaults to the
+   * vendored snapshot, so the endpoint can never silently serve an empty table
+   * — an unpriced cost is the failure this feature is meant to remove. Override
+   * only to stub it in a test.
+   */
+  prices?: () => CommandCodePriceTable
   /**
    * The browser-login flow (wired by the plugin entry). Absent means the
    * login endpoints answer `idle` / reject with a plain message — the page's
@@ -135,6 +144,16 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
   }
 
   /**
+   * The model price table the composer prices an in-progress session with.
+   * Static vendored data (the official pricing page's rates), served Host-side
+   * so the browser bundle never carries a copy that could drift from the
+   * snapshot, and so a price update reaches an open page without a rebuild.
+   */
+  async prices(): Promise<CommandCodePriceTable> {
+    return (this.deps.prices ?? modelPriceTable)()
+  }
+
+  /**
    * Start (or rejoin) a browser-login attempt and return its fresh status —
    * `waiting` carrying the Studio URL. Rejects when the flow cannot start
    * (no free loopback port, disposed plugin); the Gateway folds the throw
@@ -183,7 +202,7 @@ export function applyUsageRemote<C extends CommandCodeConnectionOptions>(
     // Client mount) 1:1.
     const unregister = registry.register({
       ...USAGE_HOST_CONTRIBUTION,
-      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, MODELS_DESCRIPTOR, ...LOGIN_DESCRIPTORS],
+      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, MODELS_DESCRIPTOR, PRICES_DESCRIPTOR, ...LOGIN_DESCRIPTORS],
     })
     // The registry's own effect would outlive this fiber; withdraw the
     // contribution when the plugin unloads.

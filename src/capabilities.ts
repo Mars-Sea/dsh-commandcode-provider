@@ -571,8 +571,11 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
  * weekday, full price) **Monday to Friday only**; the other 17 hours of a
  * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
  * The V4 Flash Vision (exp) variant (command-code@1.32.0) shares the V4 Flash
- * windows and peak prices ($0.44/$1.32) — each row's hover annotation states
- * exactly 2× that row's displayed off-peak prices. The picker shows the
+ * rates exactly — $0.15/$0.60 off-peak and $0.30/$1.20 peak, per the page's own
+ * `timeOfDay` block, not merely 2× its own off-peak figures: a rate that is
+ * internally consistent can still be the wrong row, which is why the vendored
+ * price table (`./model-prices.ts`) is synced from the page and not hand-kept.
+ * The picker shows the
  * *current* state as a compact
  * label (`Peak`/`Half`) matching the English noun style of the other markers
  * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
@@ -610,11 +613,34 @@ export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
 /**
  * Peak hours (UTC, hour-of-day range end-exclusive): 01–03 and 06–09.
  * Weekday-only — see `peakPricingState()`; weekends are fully off-peak.
+ *
+ * Exported because the vendored price table (`./model-prices.ts`) ships these
+ * windows to the browser with the table itself: the composer prices a session
+ * against the very schedule this snapshot knows rather than restating it, so
+ * there is one place to update when the windows move.
  */
-const PEAK_HOUR_RANGES: ReadonlyArray<readonly [number, number]> = [
+export const PEAK_HOUR_RANGES: ReadonlyArray<readonly [number, number]> = [
   [1, 4],
   [6, 10],
 ]
+
+/**
+ * Whether `now` (defaults to `Date.now()`) falls inside a peak-pricing window,
+ * ignoring which model is asking. Peak rates apply Monday–Friday (UTC) only,
+ * so a weekend timestamp is off-peak even inside {@link PEAK_HOUR_RANGES}.
+ *
+ * Model-independent on purpose: `peakPricingState()` adds the membership test
+ * on top for the picker's label, while the price table selects peak rates from
+ * a row's own `peak` block — so a model whose catalog id spelling differs from
+ * the one in {@link KNOWN_PEAK_PRICING} still gets the right half of the day.
+ */
+export function isPeakPricingHour(now: number = Date.now()): boolean {
+  const at = new Date(now)
+  const day = at.getUTCDay()
+  if (day === 0 || day === 6) return false
+  const hour = at.getUTCHours()
+  return PEAK_HOUR_RANGES.some(([start, end]) => hour >= start && hour < end)
+}
 
 /**
  * Whether `now` (defaults to `Date.now()`) falls in a peak-pricing window for
@@ -628,12 +654,7 @@ export function peakPricingState(
   now: number = Date.now(),
 ): 'peak' | 'off-peak' | undefined {
   if (!KNOWN_PEAK_PRICING.has(modelId)) return undefined
-  const at = new Date(now)
-  const day = at.getUTCDay()
-  if (day === 0 || day === 6) return 'off-peak'
-  const hour = at.getUTCHours()
-  const inPeak = PEAK_HOUR_RANGES.some(([start, end]) => hour >= start && hour < end)
-  return inPeak ? 'peak' : 'off-peak'
+  return isPeakPricingHour(now) ? 'peak' : 'off-peak'
 }
 
 /**
