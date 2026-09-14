@@ -1366,6 +1366,335 @@ test('stream() sends images in the official Command Code wire format', async () 
 })
 
 // ---------------------------------------------------------------------------
+// Request image budget (issue #37)
+//
+// Both transports inline every historical image, and the gateway caps a whole
+// request body (measured ~50.17 MB, undocumented). Once a session crossed it,
+// every later request on this route failed with 413 forever. These tests pin
+// the budget that keeps the recent tail and turns the oldest images into
+// model-visible placeholders instead.
+// ---------------------------------------------------------------------------
+
+/** The core helper's eviction placeholder, as it opens in both transports. */
+const PLACEHOLDER_PREFIX = '[image omitted to fit request image limits'
+
+/**
+ * An image reference DECLARING `bytes` normalized bytes. The budget accounts
+ * declared sizes, so a test crosses the cap without allocating megabytes; the
+ * stored payload stays one byte long and unique per index, which is what lets
+ * a test name the occurrences that survived.
+ */
+function sizedImageRef(index: number, bytes: number): ImageAttachmentRef {
+  return {
+    attachmentId: AttachmentId(`sha256:budget-image-${index}`),
+    mediaType: 'image/png',
+    bytes,
+    width: 4,
+    height: 4,
+  }
+}
+
+/** The stored bytes of `sizedImageRef(index, …)`; the last byte is the index. */
+function sizedImageBytes(index: number): Uint8Array {
+  return Uint8Array.from([...pngBytes, index])
+}
+
+/** One user message per image, oldest first — the shape a screenshot loop builds. */
+function imageHistory(sizes: number[]): { messages: Message[]; images: Record<string, Uint8Array> } {
+  const messages: Message[] = []
+  const images: Record<string, Uint8Array> = {}
+  for (const [index, bytes] of sizes.entries()) {
+    const ref = sizedImageRef(index, bytes)
+    images[ref.attachmentId] = sizedImageBytes(index)
+    messages.push({
+      id: messageId(),
+      role: 'user',
+      content: [{ type: 'text', text: `shot ${index}` }, { type: 'image', attachment: ref }],
+      source: { kind: 'user' },
+    })
+  }
+  return { messages, images }
+}
+
+/** The success stream each transport understands. */
+function okStream(protocol: 'cli' | 'openai'): Response {
+  return protocol === 'openai'
+    ? new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    : new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+}
+
+/**
+ * Drive one history through a transport against a fetch stub whose answer
+ * depends on the attempt number, returning every request body the adapter
+ * issued plus the error `stream()` ended with (undefined on success). What
+ * each ATTEMPT carried is the observable the 413 ladder is about, so a
+ * success-only capture helper cannot express these tests.
+ */
+async function runAttempts(
+  protocol: 'cli' | 'openai',
+  messages: Message[],
+  images: Record<string, Uint8Array>,
+  status: (attempt: number) => number = () => 200,
+): Promise<{ bodies: Record<string, unknown>[]; error?: unknown }> {
+  const bodies: Record<string, unknown>[] = []
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    const code = status(bodies.length)
+    return code === 200
+      ? okStream(protocol)
+      : new Response('{"error":{"message":"request entity too large"}}', { status: code })
+  }) as unknown as typeof fetch
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments(images),
+    ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+  })
+  let error: unknown
+  try {
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      messages,
+    }))
+  } catch (thrown) {
+    error = thrown
+  }
+  return { bodies, error }
+}
+
+/** The parts of every user message in one captured body, either transport. */
+function userParts(
+  body: Record<string, unknown>,
+  protocol: 'cli' | 'openai',
+): Record<string, unknown>[] {
+  const messages = (protocol === 'openai'
+    ? body.messages
+    : (body.params as Record<string, unknown>).messages) as Record<string, unknown>[]
+  return messages
+    .filter((m) => m.role === 'user' && Array.isArray(m.content))
+    .flatMap((m) => m.content as Record<string, unknown>[])
+}
+
+/** The `sizedImageRef` indices a captured body still carries as real pixels. */
+function survivingImageIndices(
+  body: Record<string, unknown>,
+  protocol: 'cli' | 'openai',
+): number[] {
+  return userParts(body, protocol)
+    .filter((p) => p.type === 'image' || p.type === 'image_url')
+    .map((p) => {
+      const data = p.type === 'image'
+        ? (p.source as { data: string }).data
+        : (p.image_url as { url: string }).url.split(',')[1]!
+      const bytes = Buffer.from(data, 'base64')
+      return bytes[bytes.length - 1]!
+    })
+}
+
+/** The eviction placeholders a captured body carries, in wire order. */
+function placeholderTexts(
+  body: Record<string, unknown>,
+  protocol: 'cli' | 'openai',
+): string[] {
+  return userParts(body, protocol)
+    .filter((p) => p.type === 'text')
+    .map((p) => p.text as string)
+    .filter((text) => text.startsWith(PLACEHOLDER_PREFIX))
+}
+
+test('stream() sends every image while the history is inside the image budget', async () => {
+  // Twenty small screenshots: far below both the count and the byte budget, so
+  // the projection must be a no-op and the wire byte-identical to before.
+  const { messages, images } = imageHistory(Array.from({ length: 20 }, () => pngBytes.length))
+  const { bodies, error } = await runAttempts('cli', messages, images)
+
+  assert.equal(error, undefined)
+  assert.equal(bodies.length, 1)
+  assert.equal(placeholderTexts(bodies[0]!, 'cli').length, 0)
+  assert.deepEqual(survivingImageIndices(bodies[0]!, 'cli'), [...Array(20).keys()])
+})
+
+test('stream() evicts the oldest images once the history exceeds the image-count budget (issue #37)', async () => {
+  // 61 images: one past the 60-image budget, and the 30-count quantum means
+  // the oldest 30 go at once rather than one per request.
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  const { bodies, error } = await runAttempts('cli', messages, images)
+
+  assert.equal(error, undefined)
+  const body = bodies[0]!
+  const survivors = survivingImageIndices(body, 'cli')
+  // The newest 31 keep their pixels; the oldest 30 became placeholders.
+  assert.deepEqual(survivors, [...Array(61).keys()].slice(30))
+  const placeholders = placeholderTexts(body, 'cli')
+  assert.equal(placeholders.length, 30)
+  // The placeholder names the attachment it replaced, so the model can tell
+  // which image is gone (or ask for it again) instead of silently losing it.
+  assert.match(placeholders[0]!, /sha256:budget-image-0/)
+  // The eviction happens IN PLACE: the message keeps its own text block and
+  // gains a placeholder part where its image was.
+  const firstUser = (body.params as { messages: Record<string, unknown>[] }).messages
+    .filter((m) => m.role === 'user')[0]!
+  assert.deepEqual(
+    (firstUser.content as Record<string, unknown>[]).map((p) => p.type),
+    ['text', 'text'],
+  )
+})
+
+test('stream() evicts the oldest images once the history exceeds the image-byte budget (issue #37)', async () => {
+  // Ten images of 4 MiB each: 53.3 MiB of base64, past the 32 MiB budget, with
+  // the 16 MiB byte quantum deciding how many go at once.
+  const { messages, images } = imageHistory(Array.from({ length: 10 }, () => 4 * 1024 * 1024))
+  const { bodies, error } = await runAttempts('cli', messages, images)
+
+  assert.equal(error, undefined)
+  const body = bodies[0]!
+  const survivors = survivingImageIndices(body, 'cli')
+  // Eviction always removes a PREFIX, so what survives is the newest suffix.
+  assert.deepEqual(survivors, [...Array(10).keys()].slice(10 - survivors.length))
+  const placeholders = placeholderTexts(body, 'cli')
+  assert.equal(placeholders.length, 10 - survivors.length)
+  assert.ok(placeholders.length > 0, 'a history past the byte budget must lose images')
+  // The remaining request really is inside the budget (base64 accounting).
+  const keptBytes = survivors.length * Math.ceil((4 * 1024 * 1024) / 3) * 4
+  assert.ok(keptBytes <= 32 * 1024 * 1024, `kept ${keptBytes} base64 bytes, over the budget`)
+})
+
+test('stream() carries an evicted tool-result image as placeholder tool text (issue #37)', async () => {
+  // A vision self-check loop's history in miniature: a huge `read_image`
+  // result the budget must drop, plus a newer user image it must keep.
+  const toolRef = sizedImageRef(0, 40 * 1024 * 1024)
+  const laterRef = sizedImageRef(1, pngBytes.length)
+  const laterImage: Message = {
+    id: messageId(),
+    role: 'user',
+    content: [{ type: 'text', text: 'shot 1' }, { type: 'image', attachment: laterRef }],
+    source: { kind: 'user' },
+  }
+  const { bodies, error } = await runAttempts(
+    'cli',
+    [userMessage('what is in /tmp/a.png?'), ...readImageTurn(toolRef), laterImage],
+    { [toolRef.attachmentId]: sizedImageBytes(0), [laterRef.attachmentId]: sizedImageBytes(1) },
+  )
+
+  assert.equal(error, undefined)
+  const body = bodies[0]!
+  const messages = (body.params as { messages: Record<string, unknown>[] }).messages
+  // Only the newer user image survives; the evicted tool image is not re-sent
+  // as a carrier message either.
+  assert.deepEqual(survivingImageIndices(body, 'cli'), [1])
+  assert.equal(placeholderTexts(body, 'cli').length, 0)
+  // Neither transport can hold an image inside a tool result, so an evicted
+  // one has to surface as the tool message's OWN text — otherwise the model
+  // would read a tool result that mentions an image and then never see one.
+  const tool = messages.find((m) => m.role === 'tool')!
+  const output = ((tool.content as Record<string, unknown>[])[0]!.output as { value: string }).value
+  assert.match(output, /^image\/png image, 1x1 px, 10 bytes\n\[image omitted to fit request image limits/)
+  assert.match(output, /sha256:budget-image-0/)
+  const afterTool = messages[messages.indexOf(tool) + 1]!
+  assert.ok(
+    !JSON.stringify(afterTool).includes('Attached image(s) from tool result'),
+    'an evicted tool image must not emit a carrier message',
+  )
+})
+
+test('stream() keeps parallel tool groups consecutive when the budget evicts one result image (issue #37)', async () => {
+  // Two parallel `read_image` calls where only the first result is over the
+  // budget: the eviction must not disturb the issue #33 ordering rule — the
+  // tool messages stay consecutive and the surviving carrier still lands
+  // after the whole group.
+  const hugeRef = sizedImageRef(0, 40 * 1024 * 1024)
+  const smallRef = sizedImageRef(1, pngBytes.length)
+  const { bodies, error } = await runAttempts(
+    'cli',
+    [
+      userMessage('read both'),
+      ...parallelTurn(
+        ['call-a', 'call-b'],
+        [{ images: [hugeRef] }, { text: 'second result', images: [smallRef] }],
+      ),
+    ],
+    { [hugeRef.attachmentId]: sizedImageBytes(0), [smallRef.attachmentId]: sizedImageBytes(1) },
+  )
+
+  assert.equal(error, undefined)
+  const wire = (bodies[0]!.params as { messages: WireMessage[] }).messages
+  assertToolGroupsAnswered(wire, 'issue #37 eviction')
+  // The evicted result explains itself in place; the kept one still travels as
+  // a carrier message directly after the group, naming its own call.
+  const tools = wire.filter((m) => m.role === 'tool')
+  assert.equal(tools.length, 2)
+  const evictedOutput = ((tools[0]!.content as Record<string, unknown>[])[0]!.output as { value: string }).value
+  assert.match(evictedOutput, /^\[image omitted to fit request image limits; sha256:budget-image-0\./)
+  assert.equal(wire[wire.indexOf(tools[1]!) + 1]!.role, 'user')
+  assert.match(JSON.stringify(wire[wire.indexOf(tools[1]!) + 1]!), /call-b/)
+})
+
+test('openai protocol applies the same image budget (issue #37)', async () => {
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  const { bodies, error } = await runAttempts('openai', messages, images)
+
+  assert.equal(error, undefined)
+  const body = bodies[0]!
+  assert.deepEqual(survivingImageIndices(body, 'openai'), [...Array(61).keys()].slice(30))
+  assert.equal(placeholderTexts(body, 'openai').length, 30)
+  // Chat Completions carries the placeholder as an ordinary text part.
+  const evicted = userParts(body, 'openai')
+    .filter((p) => p.type === 'text' && (p.text as string).startsWith(PLACEHOLDER_PREFIX))
+  assert.match(evicted[0]!.text as string, /sha256:budget-image-0/)
+})
+
+test('stream() retries once with a tighter image budget when the gateway answers 413 (issue #37)', async () => {
+  // 61 images: attempt 1 keeps 31 under the standing budget, the 413 steps
+  // down to the retry rung (12 images / 8 MiB), which keeps 7.
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  const { bodies, error } = await runAttempts('cli', messages, images, (attempt) => (attempt === 1 ? 413 : 200))
+
+  assert.equal(error, undefined, 'the eviction retry must recover the session')
+  assert.equal(bodies.length, 2)
+  assert.deepEqual(survivingImageIndices(bodies[0]!, 'cli'), [...Array(61).keys()].slice(30))
+  assert.deepEqual(survivingImageIndices(bodies[1]!, 'cli'), [...Array(61).keys()].slice(54))
+  assert.ok(
+    placeholderTexts(bodies[1]!, 'cli').length > placeholderTexts(bodies[0]!, 'cli').length,
+    'the retry must drop strictly more images than the first attempt',
+  )
+  // The retry is a pre-stream resend of the SAME request: the key is not
+  // rotated and the account sees one logical call.
+  assert.equal(
+    (bodies[1]!.params as { model: string }).model,
+    (bodies[0]!.params as { model: string }).model,
+  )
+})
+
+test('stream() reports a 413 as a request-size failure and never resends an image-free body (issue #37)', async () => {
+  // No images: there is nothing for the budget to evict, so a second attempt
+  // would send a byte-identical body and only burn a round trip.
+  const { bodies, error } = await runAttempts('cli', [userMessage('hello there')], {}, () => 413)
+
+  assert.equal(bodies.length, 1)
+  const e = error as { code?: string; message?: string; failure?: { status?: number } }
+  assert.equal(e.code, 'PROVIDER_HTTP_ERROR')
+  assert.equal(e.failure?.status, 413)
+  assert.match(e.message ?? '', /413/)
+  assert.match(e.message ?? '', /size limit/)
+  // Bilingual, like the 401 branch: the harness renders it verbatim.
+  assert.match(e.message ?? '', /请求体超过服务端的体积上限/)
+})
+
+test('stream() fails after the eviction retry is also rejected with 413 (issue #37)', async () => {
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  const { bodies, error } = await runAttempts('cli', messages, images, () => 413)
+
+  // Bounded: one standing attempt plus exactly one eviction retry.
+  assert.equal(bodies.length, 2)
+  const e = error as { code?: string; failure?: { status?: number } }
+  assert.equal(e.code, 'PROVIDER_HTTP_ERROR')
+  assert.equal(e.failure?.status, 413)
+})
+
+// ---------------------------------------------------------------------------
 // Image capability advertisement
 // ---------------------------------------------------------------------------
 
@@ -2129,7 +2458,7 @@ test('stream() maps 429 to RATE_LIMIT', async () => {
   )
 })
 
-test('stream() keeps PROVIDER_HTTP_ERROR for other 4xx/5xx and includes provider code', async () => {
+test('stream() keeps PROVIDER_HTTP_ERROR for a permanent 4xx and includes provider code', async () => {
   const adapter = makeAdapter({
     fetchImpl: fetchReturning(403, JSON.stringify({ success: false, error: { code: 'MODEL_NOT_IN_PLAN', message: 'upgrade' } })),
   })
@@ -2140,6 +2469,36 @@ test('stream() keeps PROVIDER_HTTP_ERROR for other 4xx/5xx and includes provider
       return e.code === 'PROVIDER_HTTP_ERROR' && /MODEL_NOT_IN_PLAN/.test(e.message ?? '')
     },
   )
+})
+
+test('stream() classifies a pre-stream 5xx as retryable SERVER and a 408 as TIMEOUT', async () => {
+  // The gateway reports a temporarily unavailable upstream before the stream
+  // starts — 520 (Cloudflare's origin-error class) carrying only
+  // `error.type: "server_error"`, no `error.code`. dsh-llm-retry matches
+  // `failure.code` against the policy whitelist and nothing else, so as long
+  // as the status mapped to PROVIDER_HTTP_ERROR this class of failure was
+  // never retried, even though the identical status arriving as an in-band
+  // stream error event was. Pinned for a representative spread, with the
+  // provider's own message preserved in the error text.
+  const body = JSON.stringify({
+    error: { message: 'Upstream model provider is temporarily unavailable. Please try again in a moment.', type: 'server_error' },
+  })
+  for (const [status, code] of [[500, 'SERVER'], [502, 'SERVER'], [520, 'SERVER'], [408, 'TIMEOUT']] as const) {
+    const adapter = makeAdapter({ fetchImpl: fetchReturning(status, body) })
+    const policy = adapter.providerRetryPolicy('commandcode')
+    // The code only means "retried" if the policy whitelists it: assert the
+    // pair together, so neither half can drift away from the other.
+    assert.ok(policy.mode === 'normal' && policy.retryableCodes.includes(code))
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string; failure?: { status?: number } }
+        return e.code === code
+          && e.failure?.status === status
+          && /temporarily unavailable/.test(e.message ?? '')
+      },
+    )
+  }
 })
 
 test('stream() classifies a plain in-band error event as retryable SERVER', async () => {
@@ -2183,6 +2542,106 @@ test('stream() classifies a retryable HTTP status error event as SERVER', async 
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
     (err: unknown) => (err as { code?: string }).code === 'SERVER',
   )
+})
+
+test('stream() reports a long-context rejection as CONTEXT_WINDOW_EXCEEDED, never as a repeatable SERVER (issue #39)', async () => {
+  // At ~500k tokens a session that outgrew the model's window was rejected
+  // with wording this adapter did not recognize, so the failure fell into the
+  // transient path: retryable SERVER, resent byte-for-byte up to maxRetries
+  // (1000) with waits doubling to 15 minutes. /compact only appeared to fix
+  // it because it shrank the request. CONTEXT_WINDOW_EXCEEDED is what
+  // dsh-compaction-basic's agent/request-error hook consumes to compact the
+  // session and retry the reduced surface — the harness's own version of the
+  // official CLI's `truncated` -> compact-and-retry kind — and it must stay
+  // outside the retry whitelist so dsh-llm-retry hands it to that hook instead
+  // of looping.
+  const policy = makeAdapter().providerRetryPolicy('commandcode')
+  assert.ok(policy.mode === 'normal' && !policy.retryableCodes.includes('CONTEXT_WINDOW_EXCEEDED'))
+
+  const bodies = [
+    // The bare phrasing upstream uses, with no status at all.
+    { message: 'prompt is too long' },
+    // The canonical structured code, and the harness's own "maximum context
+    // length" wording.
+    { message: 'bad request', code: 'context_length_exceeded' },
+    { message: "This model's maximum context length is 1000000 tokens, however you requested 1200000 tokens." },
+    // A retryable status must not outvote the wording: resending the same
+    // oversized body cannot succeed, whatever the server says about itself.
+    { message: 'prompt is too long', statusCode: 500 },
+  ]
+  for (const error of bodies) {
+    const body = `data: ${JSON.stringify({ type: 'error', error })}\n\n`
+    const adapter = makeAdapter({ fetchImpl: fetchReturning(200, body) })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')] })),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string }
+        return e.code === 'CONTEXT_WINDOW_EXCEEDED'
+          && /上下文窗口/.test(e.message ?? '')
+      },
+    )
+  }
+})
+
+test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_EXCEEDED', async () => {
+  // The same rejection can arrive before the stream starts. As a plain
+  // PROVIDER_HTTP_ERROR it ended the turn with no recovery but a manual
+  // /compact; as CONTEXT_WINDOW_EXCEEDED the harness compacts and retries.
+  const cases = [
+    [400, JSON.stringify({ error: { message: 'prompt is too long: 512000 tokens > 500000 maximum' } })],
+    [413, JSON.stringify({ error: { code: 'context_length_exceeded', message: 'too large' } })],
+    [400, '{"error":{"code":"context_length_exceeded"}}'],
+  ] as const
+  for (const [status, body] of cases) {
+    const adapter = makeAdapter({ fetchImpl: fetchReturning(status, body) })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (err: unknown) => {
+        const e = err as { code?: string; failure?: { status?: number } }
+        return e.code === 'CONTEXT_WINDOW_EXCEEDED' && e.failure?.status === status
+      },
+    )
+  }
+  // A body-size 413 whose text does not name the context window keeps the
+  // issue #37 taxonomy and advice (pinned separately below).
+  const sizeOnly = makeAdapter({
+    fetchImpl: fetchReturning(413, JSON.stringify({ error: { message: 'request entity too large' } })),
+  })
+  await assert.rejects(
+    collect(sizeOnly.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'PROVIDER_HTTP_ERROR',
+  )
+  // A 5xx stays transient even if its message mentions the context window:
+  // only client-side rejections describe a request this adapter could shrink.
+  const serverError = makeAdapter({
+    fetchImpl: fetchReturning(500, JSON.stringify({ error: { message: 'prompt is too long' } })),
+  })
+  await assert.rejects(
+    collect(serverError.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'SERVER',
+  )
+})
+
+test('stream() classifies an in-band error on the Provider API transport like the CLI transport', async () => {
+  // The OpenAI-format SSE carries a failure as an `error` member of a chunk.
+  // Ignoring it let the stream end with no finish event, so the real cause was
+  // reported as a repeatable EMPTY_RESPONSE; both transports now share one
+  // classifier.
+  const cases = [
+    [{ error: { message: 'prompt is too long' } }, 'CONTEXT_WINDOW_EXCEEDED'],
+    [{ error: { message: 'boom' } }, 'SERVER'],
+    [{ error: { message: 'insufficient credits' } }, 'PROVIDER_STREAM_ERROR'],
+  ] as const
+  for (const [payload, code] of cases) {
+    const adapter = makeAdapter({
+      options: OPENAI_OPTIONS,
+      fetchImpl: fetchReturning(200, `data: ${JSON.stringify(payload)}\n\n`),
+    })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (err: unknown) => (err as { code?: string }).code === code,
+    )
+  }
 })
 
 test('stream() wraps a network-level fetch failure as TRANSPORT with the cause chain', async () => {

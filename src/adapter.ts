@@ -30,11 +30,15 @@ import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attac
 
 import {
   attributionHeaders,
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  isContextWindowExceededError,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
   ToolCallId,
   errorChain,
+  offloadRequestImagesWithPolicy,
+  offloadedImageText,
   resolveRetryPolicy,
   type ResolvedRetryPolicy,
   type ContentBlock,
@@ -140,6 +144,92 @@ const TERMINAL_STREAM_ERROR_MARKERS = [
 function hasTerminalStreamMarker(message: string): boolean {
   const lower = message.toLowerCase()
   return TERMINAL_STREAM_ERROR_MARKERS.some((marker) => lower.includes(marker))
+}
+
+/**
+ * Context-window wording the provider uses to reject a request that outgrew
+ * the model's window. `isContextWindowExceededError` is the harness's own
+ * provider-neutral classifier — and the contract `CONTEXT_WINDOW_EXCEEDED`
+ * exists for — so it decides; the official CLI's `truncated` pattern adds the
+ * phrasings Command Code's upstreams emit that the harness helper does not
+ * cover (a bare `prompt is too long`, or a complaint about `max_tokens`).
+ * The CLI matches these first and answers them by compacting and retrying —
+ * never by resending the request unchanged.
+ */
+const CLI_CONTEXT_OVERFLOW_PATTERN = /prompt is too long|context.*(length|window)|max_tokens|maximum.*tokens/i
+
+function isContextOverflowDetail(detail: string): boolean {
+  return isContextWindowExceededError(detail) || CLI_CONTEXT_OVERFLOW_PATTERN.test(detail)
+}
+
+/**
+ * Classify one in-band stream `error` payload into the failure the caller
+ * throws. Shared by both transports — the CLI transport delivers it as an
+ * `error` event (`{ type: 'error', error }`), the Provider API transport as a
+ * top-level `error` member of an SSE chunk — so the two cannot drift apart.
+ *
+ * The wording decides before the status does, mirroring the official CLI's
+ * `classifyKind` (which reads the message first) and the harness helpers
+ * (which exist so thrown and in-band delivery share one classifier). Order is
+ * load-bearing:
+ *
+ * - A context-window rejection is terminal for THIS request but recoverable by
+ *   the harness: `dsh-compaction-basic` listens on `agent/request-error` for
+ *   `CONTEXT_WINDOW_EXCEEDED` and answers it with a compaction + retry of the
+ *   reduced surface. That is what lets a long session survive a request that
+ *   outgrew the model's window, and it is what the official CLI does (its
+ *   non-retryable `truncated` kind). Reported as retryable `SERVER` — where
+ *   this wording landed before — the adapter resent the byte-identical
+ *   oversized request up to `maxRetries` times and the session could never
+ *   recover, which is exactly the endless-retry-at-long-context report
+ *   (issue #39).
+ * - Credits/plan wording is terminal, so an exhausted balance or a model
+ *   outside the plan is not retried as if it were a transient rate limit.
+ * - Only then does the status/`isRetryable` pair decide, as before.
+ */
+function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmError {
+  const record = isRecord(value) ? value : undefined
+  const message = record
+    ? (stringValue(record.message) ?? JSON.stringify(record))
+    : (stringValue(value) ?? fallbackMessage ?? 'Stream error')
+  const statusCode = record === undefined
+    ? undefined
+    : (numberValue(record.statusCode) ?? numberValue(record.status))
+  const isRetryable = record === undefined ? undefined : booleanValue(record.isRetryable)
+  // Every available provider code/type/message goes to the classifiers: the
+  // wording can live in any of them and both harness helpers document their
+  // input as the joined detail.
+  const detail = [stringValue(record?.code), stringValue(record?.type), message]
+    .filter((part): part is string => part !== undefined && part !== '')
+    .join(' ')
+  const statusOption = statusCode !== undefined ? { status: statusCode } : undefined
+
+  if (isContextOverflowDetail(detail)) {
+    // Bilingual — the harness renders this message verbatim in its retry
+    // chrome — and it names the recovery the harness is already performing.
+    return new LlmError(
+      `Command Code stream error: ${message}`
+      + '；Command Code API 拒绝了这次请求：内容超出模型上下文窗口。正在压缩上下文后重试；如仍失败，请新建会话或减少上下文',
+      CONTEXT_WINDOW_EXCEEDED_CODE,
+      statusOption,
+    )
+  }
+  const terminal = hasTerminalStreamMarker(detail)
+  const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
+  const retryable = isRetryable === true
+    || (statusCode !== undefined ? retryableStatus : (isRetryable !== false && !terminal))
+  if (!retryable) {
+    return new LlmError(
+      `Command Code stream error: ${message}`,
+      'PROVIDER_STREAM_ERROR',
+      statusOption,
+    )
+  }
+  return new LlmError(
+    `Command Code stream error: ${message}`,
+    'SERVER',
+    statusOption,
+  )
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {
@@ -593,6 +683,112 @@ function hasImageContent(message: Message): boolean {
       (b) => b.type === 'image' || (b.type === 'tool-result' && check(b.content)),
     )
   return check(message.content)
+}
+
+// ---------------------------------------------------------------------------
+// Request image budget (issue #37)
+//
+// Both transports inline EVERY historical image as base64, so a long session
+// — a vision self-check loop reading back dozens of screenshots — keeps
+// growing the body until it crosses the gateway's request cap (measured at
+// ~50.17 MB, undocumented). From that point on every request on this route
+// fails with HTTP 413 for the rest of the session, because history is never
+// reclaimed, even though the same conversation works on another provider.
+//
+// The harness core already ships the mechanism the two official adapters use
+// (`offloadRequestImagesWithPolicy` + `offloadedImageText`): the oldest images
+// beyond a budget are replaced, in whole quanta, by a model-visible
+// placeholder that names the attachment, so the recent tail keeps its pixels
+// and the session survives. The budget is accounted in the encoded form,
+// because it is the base64 the wire actually carries that has to fit.
+// ---------------------------------------------------------------------------
+
+/**
+ * Primary image budget for one request body. 32 MiB of base64 images leaves a
+ * wide margin under the measured ~50 MB cap for text, tool schemas, and JSON
+ * overhead, and the 16 MiB byte quantum means one eviction frees a real block
+ * of the budget instead of one image per request.
+ */
+const REQUEST_IMAGE_MAX_BASE64_BYTES = 32 * 1024 * 1024
+/** Primary image-count budget; a long screenshot loop stays well under it. */
+const REQUEST_IMAGE_MAX_COUNT = 60
+/** Byte step one eviction removes; keeps the removed prefix stable per request. */
+const REQUEST_IMAGE_BYTE_QUANTUM = 16 * 1024 * 1024
+/** Count step one eviction removes, so the prefix does not creep per request. */
+const REQUEST_IMAGE_COUNT_QUANTUM = 30
+
+/**
+ * The retry rung, used only after the gateway actually answered 413. The cap
+ * covers text and tool bytes too, so it cannot be budgeted exactly from here;
+ * this rung is aggressive on purpose — the alternative to a smaller request is
+ * a session that cannot continue at all.
+ */
+const REQUEST_IMAGE_RETRY_MAX_BASE64_BYTES = 8 * 1024 * 1024
+const REQUEST_IMAGE_RETRY_MAX_COUNT = 12
+const REQUEST_IMAGE_RETRY_BYTE_QUANTUM = 8 * 1024 * 1024
+const REQUEST_IMAGE_RETRY_COUNT_QUANTUM = 12
+
+/** One rung of the image budget ladder: what a request may keep, and in what steps. */
+interface RequestImageBudget {
+  maxBytes: number
+  maxImages: number
+  byteQuantum: number
+  countQuantum: number
+}
+
+/** The budget ladder: the primary rung first, the 413 eviction rung second. */
+const REQUEST_IMAGE_BUDGETS: readonly RequestImageBudget[] = [
+  {
+    maxBytes: REQUEST_IMAGE_MAX_BASE64_BYTES,
+    maxImages: REQUEST_IMAGE_MAX_COUNT,
+    byteQuantum: REQUEST_IMAGE_BYTE_QUANTUM,
+    countQuantum: REQUEST_IMAGE_COUNT_QUANTUM,
+  },
+  {
+    maxBytes: REQUEST_IMAGE_RETRY_MAX_BASE64_BYTES,
+    maxImages: REQUEST_IMAGE_RETRY_MAX_COUNT,
+    byteQuantum: REQUEST_IMAGE_RETRY_BYTE_QUANTUM,
+    countQuantum: REQUEST_IMAGE_RETRY_COUNT_QUANTUM,
+  },
+]
+
+/**
+ * Project request history under one image budget: the oldest images past it
+ * become placeholder text in place, the newest keep their bytes, and a history
+ * already inside the budget is returned as the SAME array — the caller uses
+ * that identity to tell "nothing evicted" from "evicted".
+ *
+ * Nested tool-result images ride the same core walk, which is exactly right
+ * for this adapter: an evicted `read_image` result surfaces its placeholder as
+ * the tool message's own text, so no carrier user message is emitted for it.
+ */
+function projectRequestImages(
+  messages: readonly Message[],
+  budget: RequestImageBudget,
+): readonly Message[] {
+  return offloadRequestImagesWithPolicy(messages, {
+    representation: 'base64',
+    maxBytes: budget.maxBytes,
+    maxImages: budget.maxImages,
+    byteQuantum: budget.byteQuantum,
+    countQuantum: budget.countQuantum,
+    // No execution-world path is resolvable from the adapter (it holds no
+    // filesystem provider), so the placeholder carries attachment identity and
+    // the re-attach advice, which is what the core helper emits for that case.
+    placeholder: (ref) => offloadedImageText(ref),
+  })
+}
+
+/**
+ * The request options one budget produced: the caller's own object when the
+ * history was already inside the budget, else a copy carrying the projection.
+ * The next rung of the ladder is applied to the CURRENT projection, never to
+ * the raw history — otherwise a retry could reintroduce images the first rung
+ * had already evicted.
+ */
+function withImageBudget(options: GenerateOptions, budget: RequestImageBudget): GenerateOptions {
+  const projected = projectRequestImages(options.messages, budget)
+  return projected === options.messages ? options : { ...options, messages: [...projected] }
 }
 
 /**
@@ -1978,10 +2174,16 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // Endpoint protocol: billing/cache may know Go plan -> CLI; unknown
     // accounts default to the documented Provider Chat Completions surface.
     let protocol: CommandCodeProtocol = this.resolveProtocol(apiKey)
+    // Image budget (issue #37): the body is built from the PROJECTED history,
+    // never the raw one, so the oldest images past the cap travel as
+    // placeholder text instead of a body the gateway refuses outright. Rung 0
+    // is the standing budget; a 413 below steps down the ladder.
+    let requestOptions = withImageBudget(options, REQUEST_IMAGE_BUDGETS[0]!)
+    let imageBudgetIndex = 0
     const buildBody = async (target: CommandCodeProtocol): Promise<Record<string, unknown>> =>
       target === 'cli'
-        ? buildCliBody(options, connection, { maxTokens, reasoningEffort, systemText, readImage })
-        : buildOpenAIBody(options, { maxTokens, reasoningEffort, systemText, readImage })
+        ? buildCliBody(requestOptions, connection, { maxTokens, reasoningEffort, systemText, readImage })
+        : buildOpenAIBody(requestOptions, { maxTokens, reasoningEffort, systemText, readImage })
     let body: Record<string, unknown> = await buildBody(protocol)
 
 
@@ -2013,6 +2215,21 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         this.rememberProtocol(apiKey, true)
         body = await buildBody('cli')
         continue
+      }
+      // Request too large (issue #37): the standing budget is only an
+      // estimate — the cap also covers text and tool bytes — so one 413 steps
+      // the image budget down and resends. Safe like the rotation below:
+      // nothing streamed, the same key stays in use, and a request with no
+      // images left to evict is not resent (the stricter rung returns the
+      // same options, so this branch cannot loop).
+      if (attempt.status === 413 && imageBudgetIndex + 1 < REQUEST_IMAGE_BUDGETS.length) {
+        const tightened = withImageBudget(requestOptions, REQUEST_IMAGE_BUDGETS[imageBudgetIndex + 1]!)
+        if (tightened !== requestOptions) {
+          imageBudgetIndex += 1
+          requestOptions = tightened
+          body = await buildBody(protocol)
+          continue
+        }
       }
       const rotate = this.deps.rotateApiKey
       if (
@@ -2151,23 +2368,57 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
  * Map a pre-stream generate HTTP failure onto a stable LlmError. Command
  * Code folds several business rejections into 403 (plan limits, CLI version,
  * model access): prefer the machine-readable `error.code` when present; the
- * status alone cannot distinguish them. A 429's `Retry-After` rides along as
+ * status alone cannot distinguish them. The status also decides the failure
+ * CODE via {@link httpErrorCode}, which is what the retry policy routes on —
+ * a transient 5xx must not be reported as a permanent provider rejection. A
+ * 429's `Retry-After` header rides along as
  * `providerRetryAfterMs` so dsh-llm-retry can wait exactly that long instead
  * of guessing at the backoff cadence — capped at RETRY_MAX_DELAY_MS, because
  * in normal mode a longer attached wait makes the executor abandon the retry
  * outright instead of falling back to local backoff.
+ *
+ * One body is read, not just its status: a client-side rejection whose
+ * `error.code`/`type`/`message` names the model context window is reported as
+ * `CONTEXT_WINDOW_EXCEEDED` (see the branch below), because that failure has a
+ * recovery the harness performs and a generic provider error does not.
  */
 function generateHttpError(status: number, errText: string, retryAfterMs?: number): LlmError {
   let providerCode: string | undefined
+  let providerDetail = ''
   try {
     const parsed: unknown = JSON.parse(errText)
     if (isRecord(parsed) && isRecord(parsed.error)) {
       providerCode = stringValue(parsed.error.code)
+      providerDetail = [stringValue(parsed.error.code), stringValue(parsed.error.type), stringValue(parsed.error.message)]
+        .filter((part): part is string => part !== undefined && part !== '')
+        .join(' ')
     }
   } catch {
     // Plain-text bodies: rely on the status mapping below.
   }
   const detail = providerCode ?? `HTTP ${status}`
+  // A context-window rejection is not a generic provider failure: the request
+  // is well-formed but larger than the model's window, and the harness knows
+  // how to recover — dsh-compaction-basic answers CONTEXT_WINDOW_EXCEEDED on
+  // `agent/request-error` with a compaction plus a retry of the reduced
+  // surface. Reported as a plain provider rejection it failed the turn with no
+  // way back but a manual /compact, and the same wording delivered in-band was
+  // retried unchanged (issue #39). Checked before the 413 branch so an
+  // over-context rejection that happens to carry that status gets the recovery
+  // rather than the body-size advice. Only client-side rejections (`status <
+  // 500`) are inspected, and the parsed provider fields are preferred over the
+  // raw body, so an HTML error page cannot mention its way into a compaction.
+  // Bilingual — the harness renders this message verbatim.
+  const overflowDetail = providerDetail !== '' ? providerDetail : errText.slice(0, 500)
+  if (status < 500 && isContextOverflowDetail(overflowDetail)) {
+    return new LlmError(
+      `Command Code API error ${status}: the request exceeds the model's context window`
+      + ' — this session is being compacted and the request retried'
+      + `；Command Code API 返回 ${status}：请求内容超出模型上下文窗口——正在压缩上下文后重试；如仍失败，请新建会话或减少上下文`,
+      CONTEXT_WINDOW_EXCEEDED_CODE,
+      { status },
+    )
+  }
   if (status === 401) {
     // An invalid or missing credential is a config problem, not a
     // transport failure: retrying it identically cannot succeed. Bilingual —
@@ -2180,9 +2431,28 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
       { status: 401 },
     )
   }
+  if (status === 413) {
+    // Request-body cap (issue #37). Command Code documents no 413 at all, so
+    // without this branch the reader sees a bare "HTTP 413" and no way to tell
+    // it apart from a generic provider failure. Reaching here means the
+    // adapter already dropped this request's oldest images as far as its
+    // budget ladder allows, or the body is large without images at all, so
+    // the advice is the only remaining lever the user has. Bilingual — the
+    // harness UI renders this message verbatim in its retry chrome.
+    return new LlmError(
+      'Command Code API error 413: the request body exceeds the provider\'s size limit'
+      + ' (the cap is undocumented, measured at about 50 MB) — the session history is too large'
+      + ' to send, usually because of accumulated image attachments. Start a new session, or'
+      + ' drop the image-heavy part of this one, and retry'
+      + '；Command Code API 返回 413：请求体超过服务端的体积上限（官方未公开，实测约 50 MB）'
+      + '——会话历史过大，通常是历史图片累积所致。请新建会话，或移除本会话中图片较多的部分后重试',
+      'PROVIDER_HTTP_ERROR',
+      { status: 413 },
+    )
+  }
   return new LlmError(
     `Command Code API error ${status}${detail === `HTTP ${status}` ? '' : ` (${detail})`}: ${errText.slice(0, 500)}`,
-    status === 429 ? 'RATE_LIMIT' : 'PROVIDER_HTTP_ERROR',
+    httpErrorCode(status),
     {
       status,
       ...(retryAfterMs !== undefined && retryAfterMs > 0 && retryAfterMs <= RETRY_MAX_DELAY_MS
@@ -2190,6 +2460,30 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
         : {}),
     },
   )
+}
+
+/**
+ * Classify a pre-stream HTTP status into the failure code the route's retry
+ * policy keys on. dsh-llm-retry matches `retryableCodes` only — never the
+ * status, never the provider's `error.type` — so a status that arrives here as
+ * a permanent code is never retried, whatever it says about itself.
+ *
+ * 5xx is the provider's own "we are temporarily unavailable" class (Cloudflare's
+ * 520-527 included; a 520 body says exactly that in words) and the only sane
+ * answer to it is the byte-identical resend the retry policy exists to make.
+ * Keeping it on `PROVIDER_HTTP_ERROR` — absent from the whitelist by design, so
+ * that a 403 plan rejection or a 400 shape error fails fast — made the one
+ * failure that asks to be retried the only one that never was, while the same
+ * status arriving as an in-band stream `error` event was classified retryable
+ * `SERVER` (see the `error` case of {@link handleCliEvent}). 408 is the same
+ * story for the request itself. Everything else stays permanent: a 400/403/404/
+ * 409/422 rejection repeats identically on every attempt.
+ */
+function httpErrorCode(status: number): string {
+  if (status === 429) return 'RATE_LIMIT'
+  if (status === 408) return 'TIMEOUT'
+  if (status >= 500) return 'SERVER'
+  return 'PROVIDER_HTTP_ERROR'
 }
 
 
@@ -2271,37 +2565,14 @@ function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
       break
     }
     case 'error': {
-      // Mirror the official CLI's stream-error classification
-      // (readStreamErrorEvent + isStreamErrorRetryable in command-code's
-      // cli.mjs): a stream error that is explicitly non-retryable, carries
-      // a terminal marker (quota/plan/credits), or reports a non-retryable
-      // HTTP status is a hard failure; anything else is a transient
-      // mid-stream drop that the harness's default retry policy should
-      // retry (SERVER is in the default retryable set, PROVIDER_STREAM_ERROR
-      // is not). Without this, a server-side blip that the official CLI
-      // silently recovers from fails the whole turn.
-      const err = isRecord(event.error) ? event.error : undefined
-      const detail = isRecord(event.error)
-        ? (stringValue(event.error.message) ?? JSON.stringify(event.error))
-        : (stringValue(event.error) ?? stringValue(event.message) ?? 'Stream error')
-      const statusCode = err ? numberValue(err.statusCode) : undefined
-      const isRetryable = err ? booleanValue(err.isRetryable) : undefined
-      const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
-      const terminal = hasTerminalStreamMarker(detail)
-      const retryable = isRetryable === true
-        || (statusCode !== undefined ? retryableStatus : (isRetryable !== false && !terminal))
-      if (!retryable) {
-        throw new LlmError(
-          `Command Code stream error: ${detail}`,
-          'PROVIDER_STREAM_ERROR',
-          statusCode !== undefined ? { status: statusCode } : undefined,
-        )
-      }
-      throw new LlmError(
-        `Command Code stream error: ${detail}`,
-        'SERVER',
-        statusCode !== undefined ? { status: statusCode } : undefined,
-      )
+      // Classification lives in streamErrorToLlmError, shared with the
+      // Provider API transport's own in-band error member so the two cannot
+      // drift: a stream error that is explicitly non-retryable, carries a
+      // terminal marker (quota/plan/credits), or reports a non-retryable HTTP
+      // status is a hard failure, and a context-window rejection is the
+      // harness's CONTEXT_WINDOW_EXCEEDED (compact and retry). Anything else
+      // is a transient mid-stream drop the retry policy should repeat.
+      throw streamErrorToLlmError(event.error, stringValue(event.message))
     }
   }
   return chunks
@@ -2315,6 +2586,13 @@ function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
 function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   const chunks: StreamChunk[] = []
   if (!isRecord(event)) return chunks
+  // The Provider API transport reports a mid-stream failure as an `error`
+  // member of an SSE chunk rather than as an event type of its own. Ignoring
+  // it — as this handler used to — let the stream end with no finish event, so
+  // a context-window or quota rejection surfaced only as a generic
+  // EMPTY_RESPONSE (which the retry policy repeats) and the real cause was
+  // lost. Route it through the classifier the CLI transport uses.
+  if (event.error !== undefined) throw streamErrorToLlmError(event.error, stringValue(event.message))
   const choices = event.choices
   if (!Array.isArray(choices) || choices.length === 0) {
     // A standalone usage chunk (some OpenAI-compatible servers send it
