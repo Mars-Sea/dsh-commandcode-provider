@@ -1,3 +1,4 @@
+import { withRequestFacts } from './cost-fixture.ts'
 /**
  * Session-cost calculation tests (node:test, zero deps). Run with `npm test`.
  *
@@ -66,13 +67,13 @@ const SELECTION = {
 }
 
 function input(overrides: Partial<SessionCostInput> = {}): SessionCostInput {
-  return {
+  return withRequestFacts({
     usage: { uncachedInputTokens: 1_000_000, outputTokens: 500_000, cacheReadTokens: 0, cacheWriteTokens: 0 },
     selection: SELECTION,
     table: FLAT,
     now: OFF_PEAK_AT,
     ...overrides,
-  }
+  })
 }
 
 test('a priced session totals each bucket at its own published rate', () => {
@@ -87,7 +88,7 @@ test('a priced session totals each bucket at its own published rate', () => {
   assert.ok(view)
   // 1M × $1 + 0.5M × $2 + 2M × $0.10 = $1 + $1 + $0.20
   assert.equal(view.total, 2.2)
-  assert.equal(view.value, '$2.20')
+  assert.equal(view.value, '≈$2.20')
   assert.equal(view.free, false)
 })
 
@@ -175,13 +176,13 @@ test('a free model reads as Free with zero rows priced', () => {
   assert.equal(view.value, SESSION_COST_COPY.free)
   assert.equal(view.total, 0)
   // A free session carries no rate-half note: there is no rate in force.
-  assert.equal(view.notes.length, 0)
+  assert.ok(!view.notes.includes(SESSION_COST_COPY.peakRates))
   for (const decoration of sessionCostRowDecorations(view)) {
     assert.equal(decoration.amount, undefined)
   }
 })
 
-test('a session served by more than one model marks its total approximate', () => {
+test('a pending model selection does not change the recorded request cost', () => {
   const view = buildSessionCostView(input({
     selection: {
       lastUsed: { provider: 'commandcode', model: 'commandcode/test-flat' },
@@ -191,10 +192,10 @@ test('a session served by more than one model marks its total approximate', () =
   assert.ok(view)
   assert.equal(view.approximate, true)
   assert.equal(view.value, `${SESSION_COST_COPY.approximate}$2.00`)
-  assert.ok(view.notes.includes(SESSION_COST_COPY.approximateNote))
+  assert.ok(view.notes.includes('estimate from published rates, not the provider invoice'))
 })
 
-test('a pending selection on the same model is not approximate', () => {
+test('published-rate totals remain labelled as estimates', () => {
   const view = buildSessionCostView(input({
     selection: {
       lastUsed: { provider: 'commandcode', model: 'commandcode/test-flat' },
@@ -202,7 +203,7 @@ test('a pending selection on the same model is not approximate', () => {
     },
   }))
   assert.ok(view)
-  assert.equal(view.approximate, false)
+  assert.equal(view.approximate, true)
 })
 
 test('the lookup index answers the page slug as a second key', () => {
@@ -230,7 +231,7 @@ test('sessionCostAmount() states a bound instead of a flat $0.0000', () => {
 test('the pill run keeps the separator node the shipped pill styles', () => {
   const view = buildSessionCostView(input())
   assert.ok(view)
-  assert.deepEqual(sessionCostPillRun(view), { separator: SESSION_COST_COPY.separator, value: '$2.00' })
+  assert.deepEqual(sessionCostPillRun(view), { separator: SESSION_COST_COPY.separator, value: '≈$2.00' })
 })
 
 test('dialog rows are decorated positionally, and unpriced rows stay untouched', () => {
@@ -276,7 +277,7 @@ test('an unpriced cache-write row is hidden rather than shown as a blank or $0.0
   assert.equal(cacheWrite.amount, undefined)
   // The tokens are still reported as unpriced, and the total stays a floor.
   assert.equal(view.unpricedCacheWriteTokens, 7)
-  assert.equal(view.approximate, false)
+  assert.equal(view.approximate, true)
 })
 
 test('a session whose every billed token is unpriced renders nothing, not $0.00', () => {
@@ -311,7 +312,7 @@ test('a priced session below a cent still shows a figure, not nothing', () => {
   const view = buildSessionCostView(input({ usage: { outputTokens: 100 } }))
   assert.ok(view)
   assert.equal(view.total, 0.0002)
-  assert.equal(view.value, '$0.0002')
+  assert.equal(view.value, '≈$0.0002')
   assert.equal(view.unpricedCacheWriteTokens, 0)
 })
 
@@ -319,5 +320,5 @@ test('spend too small for four decimals reads as a bound, not as $0.0000', () =>
   const view = buildSessionCostView(input({ usage: { outputTokens: 10 } }))
   assert.ok(view)
   assert.equal(view.total, 0.00002)
-  assert.equal(view.value, '<$0.0001')
+  assert.equal(view.value, '≈<$0.0001')
 })

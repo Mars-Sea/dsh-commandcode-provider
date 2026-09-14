@@ -30,6 +30,7 @@
  * @module dsh-commandcode-provider/client/session-cost
  */
 
+import { COST_TOKEN_KEYS, pricingKey, requestRates, peakHour, zeroCostTokens, type SessionCostFacts } from '../cost-facts.ts'
 import type { CommandCodeModelPrice, CommandCodeModelRates, CommandCodePriceTable } from '../usage-wire.ts'
 import { formatMoney, formatMoneyExact, formatTokensCompact } from './usage.ts'
 
@@ -58,7 +59,7 @@ export const SESSION_COST_COPY = {
   separator: '·',
   /** The heading the tooltip leads with. */
   panelTitle: 'Session cost',
-  /** Marks a total computed from a single model on a session that used more. */
+  /** Marks an estimate from published rates rather than an invoice. */
   approximate: '≈',
   /** Tooltip line for the unpriced cache-write tokens. */
   unpricedCacheWrite: 'cache write tokens have no published rate',
@@ -67,7 +68,7 @@ export const SESSION_COST_COPY = {
   /** Tooltip line naming the rate half in force. */
   offPeakRates: 'off-peak rates',
   /** Tooltip line explaining the approximate marker. */
-  approximateNote: 'this session has used more than one model',
+  approximateNote: 'estimate from published rates, not the provider invoice',
   /** Row/tooltip label for uncached prompt tokens. */
   uncachedInput: 'uncached input',
   /** Row/tooltip label for completion tokens. */
@@ -108,13 +109,15 @@ export interface SessionModelSelectionProjection {
 
 /** Everything the view needs, already read off the seats by the component. */
 export interface SessionCostInput {
+  /** Durable billing groups; absent on older Hosts means no trustworthy estimate. */
+  facts?: SessionCostFacts | undefined
   /** The durable cumulative token buckets, or undefined before any request. */
   usage: SessionUsageBuckets | undefined
   /** The session's model selection fold, or undefined on an older Host. */
   selection: SessionModelSelectionProjection | undefined
   /** The Host's price table, or undefined until it lands. */
   table: CommandCodePriceTable | undefined
-  /** Current wall-clock millis, injected so the peak-hour rule is testable. */
+  /** Legacy caller field; historical request timestamps alone determine rates. */
   now: number
 }
 
@@ -150,8 +153,7 @@ export interface SessionCostView {
   /** Cache-write tokens the table has no rate for (never guessed, so the
    *  total is a floor rather than an estimate). */
   unpricedCacheWriteTokens: number
-  /** The session has used more than one model, so a one-model total is
-   *  approximate. */
+  /** Published-rate totals are estimates rather than provider invoices. */
   approximate: boolean
 }
 
@@ -176,22 +178,6 @@ export function isPeakHour(now: number, peakHours: ReadonlyArray<readonly [numbe
 }
 
 /**
- * The rates in force for one model at `now`, and whether they are the peak
- * override. A row with no `peak` block is flat-priced — its top-level rates are
- * the off-peak rates, which is why the snapshot stores only the override.
- */
-function ratesAt(
-  price: CommandCodeModelPrice,
-  now: number,
-  peakHours: ReadonlyArray<readonly [number, number]>,
-): { rates: CommandCodeModelRates; peak: boolean } {
-  if (price.peak !== undefined && isPeakHour(now, peakHours)) {
-    return { rates: price.peak, peak: true }
-  }
-  return { rates: price, peak: false }
-}
-
-/**
  * Index a price table for lookup. Rows are keyed by catalog id and by pricing
  * slug, both exact and lowercased, because a session reports a catalog id while
  * a row no catalog model claims is served under the page's slug.
@@ -207,37 +193,6 @@ function indexTable(table: CommandCodePriceTable): Map<string, CommandCodeModelP
     }
   }
   return index
-}
-
-/**
- * The model whose rates price this session, plus whether the session has used
- * more than one.
- *
- * `lastUsed` is the selection the latest recorded request consumed, so it is
- * what the accumulated tokens were actually billed at; `next` differs only when
- * a newer selection is pending, which is precisely the signal that more than one
- * model has served this session.
- *
- * KNOWN LIMITATION, stated rather than hidden: this flag is a snapshot of the
- * pending switch, not a memory of one. The projection carries no per-model
- * history, so once the new model's first request lands, `lastUsed` becomes the
- * new model and the flag clears while the cumulative buckets still include the
- * tokens the OLD model served — priced here at the new model's rates, at which
- * point the total is approximate but unmarked. The pending window is the exact
- * opposite (marked while the totals are still pure). Making the marker honest
- * across the whole switch needs a history the seat does not carry, so it is a
- * follow-up rather than a fix in this function.
- */
-function resolveModel(
-  selection: SessionModelSelectionProjection | undefined,
-): { model: string; approximate: boolean } | undefined {
-  const lastUsed = selection?.lastUsed ?? null
-  const next = selection?.next ?? null
-  const chosen = lastUsed ?? next
-  if (chosen === null || typeof chosen.model !== 'string' || chosen.model === '') return undefined
-  if (chosen.provider !== COMMANDCODE_PROVIDER) return undefined
-  const approximate = lastUsed !== null && next !== null && lastUsed.model !== next.model
-  return { model: chosen.model, approximate }
 }
 
 /**
@@ -310,46 +265,62 @@ function clause(label: string, tokens: number): string | undefined {
  * that has not landed — the pill simply is not there.
  */
 export function buildSessionCostView(input: SessionCostInput): SessionCostView | undefined {
-  const { usage, table, now } = input
-  if (usage === undefined || table === undefined || table.models.length === 0) return undefined
-  const resolved = resolveModel(input.selection)
-  if (resolved === undefined) return undefined
-
-  const price = indexTable(table).get(resolved.model)
-  if (price === undefined) return undefined
-
-  const free = price.free === true
-  const { rates, peak } = ratesAt(price, now, table.peakHours)
-  const breakdown = costOf(usage, rates, free)
+  const { usage, table, facts } = input
+  if (!usage || !table || !facts || facts.pricingKey !== pricingKey(table)) return undefined
+  const totals = zeroCostTokens()
+  const index = indexTable(table)
+  const breakdown: SessionCostBreakdown = { uncachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, unpricedCacheWriteTokens: 0 }
+  let free = true
+  let peak = false
+  let partial = false
+  let priced = false
+  const notes: string[] = []
+  for (const group of facts.groups) {
+    for (const key of COST_TOKEN_KEYS) totals[key] += group.tokens[key]
+    if (group.provider !== COMMANDCODE_PROVIDER) { partial = true; continue }
+    const price = index.get(group.model)
+    if (!price) { partial = true; continue }
+    const isFree = price.free === true
+    free &&= isFree
+    if (price.peak && group.at === null) {
+      partial = true
+      notes.push('request time unavailable; off-peak lower bound')
+    }
+    const rates = requestRates(price, group.at, group.contextTokens, table)
+    const part = costOf(group.tokens, rates, isFree)
+    priced ||= isFree || part.total > 0
+    for (const key of ['uncachedInput', 'cacheRead', 'output', 'total', 'unpricedCacheWriteTokens'] as const) breakdown[key] += part[key]
+    breakdown.cacheWrite = (breakdown.cacheWrite ?? 0) + (part.cacheWrite ?? 0)
+    if (price.peak) {
+      const isPeak = group.at !== null && peakHour(group.at, table.peakHours)
+      peak ||= isPeak
+      notes.push(isPeak ? SESSION_COST_COPY.peakRates : SESSION_COST_COPY.offPeakRates)
+    }
+  }
+  // Both projections must describe the same durable cut. Never decorate token
+  // rows from a newer/older fold, and never price an old Host's cumulative usage.
+  if (COST_TOKEN_KEYS.some(key => totals[key] !== count(usage[key])) || !priced) return undefined
   const { total, unpricedCacheWriteTokens } = breakdown
-
-  const uncachedInput = count(usage.uncachedInputTokens)
-  const output = count(usage.outputTokens)
-  const cacheRead = count(usage.cacheReadTokens)
-  const cacheWrite = count(usage.cacheWriteTokens)
+  partial ||= unpricedCacheWriteTokens > 0
+  free &&= !partial
+  if (partial) notes.push('Command Code priced subtotal only; unpriced or other-provider usage excluded')
+  notes.push(SESSION_COST_COPY.approximateNote)
+  const uncachedInput = totals.uncachedInputTokens
+  const output = totals.outputTokens
+  const cacheRead = totals.cacheReadTokens
+  const cacheWrite = totals.cacheWriteTokens
   // No billed token of any kind means there is nothing to report yet: a `$0.00`
   // pill on a session that has not made a request would be noise, not
   // information, and on a free model it would be redundant.
   if (uncachedInput === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return undefined
 
-  // Same rule one step further in, and the distinction is subtler than "is the
-  // total zero". A non-zero bucket whose rate is MISSING is money we cannot
-  // price at all, and reporting it as `$0.00` would be exactly the confident
-  // figure this readout exists to refuse — that is the real cache-write-only
-  // case, and the honest answer is no pill. A bucket whose rate we DO have, even
-  // when the product rounds below a cent, is real priced spend: it keeps its
-  // bound (`<$0.0001`). So the guard is "unpriced tokens exist AND nothing was
-  // priced at all", never "the total rounds to zero".
-  const pricedCosts = free
-    ? []
-    : [breakdown.uncachedInput, breakdown.cacheRead, breakdown.cacheWrite, breakdown.output]
-  if (!free && unpricedCacheWriteTokens > 0 && !pricedCosts.some((cost) => cost !== undefined && cost > 0)) {
-    return undefined
-  }
+  // Free priced groups do not establish zero spending for unpriced groups.
+  // Keep the pure-Free label and real sub-cent amounts, but never a zero subtotal.
+  if (!free && total <= 0) return undefined
 
   const value = free
     ? SESSION_COST_COPY.free
-    : `${resolved.approximate ? SESSION_COST_COPY.approximate : ''}${sessionCostAmount(total)}`
+    : `${partial ? '≥' : SESSION_COST_COPY.approximate}${sessionCostAmount(total)}`
   const money = (amount: number | undefined): string | undefined =>
     amount === undefined ? undefined : sessionCostAmount(amount)
   // Reading order mirrors the prompt's own order: what was charged at the input
@@ -357,17 +328,10 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
   const rows: SessionCostBucketRow[] = [
     { key: 'uncachedInput', label: SESSION_COST_COPY.uncachedInput, tokens: uncachedInput, costText: money(breakdown.uncachedInput) },
     { key: 'cacheRead', label: SESSION_COST_COPY.cacheRead, tokens: cacheRead, costText: money(breakdown.cacheRead) },
-    { key: 'cacheWrite', label: SESSION_COST_COPY.cacheWrite, tokens: cacheWrite, costText: money(breakdown.cacheWrite) },
+    { key: 'cacheWrite', label: SESSION_COST_COPY.cacheWrite, tokens: cacheWrite, costText: unpricedCacheWriteTokens === cacheWrite && cacheWrite > 0 ? undefined : money(breakdown.cacheWrite) },
     { key: 'output', label: SESSION_COST_COPY.output, tokens: output, costText: money(breakdown.output) },
   ]
-  // Widened to `string | undefined` before filtering: the copy table is `as
-  // const`, so the array would otherwise infer a union of literal types that a
-  // `part is string` predicate is not assignable to.
-  const notes = ([
-    free ? undefined : (peak ? SESSION_COST_COPY.peakRates : SESSION_COST_COPY.offPeakRates),
-    unpricedCacheWriteTokens > 0 ? SESSION_COST_COPY.unpricedCacheWrite : undefined,
-    resolved.approximate ? SESSION_COST_COPY.approximateNote : undefined,
-  ] as Array<string | undefined>).filter((part): part is string => part !== undefined)
+  if (unpricedCacheWriteTokens > 0) notes.push(SESSION_COST_COPY.unpricedCacheWrite)
   // Empty clauses are dropped BEFORE joining: `clause()` returns undefined for a
   // bucket with no tokens, and joining the raw list would leave a `·  ·` gap for
   // every absent bucket — a tooltip that reads as a rendering bug.
@@ -385,11 +349,11 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
     value,
     title,
     rows,
-    notes,
+    notes: [...new Set(notes)],
     free,
     peak,
     unpricedCacheWriteTokens,
-    approximate: resolved.approximate,
+    approximate: !free,
   }
 }
 

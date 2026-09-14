@@ -316,8 +316,8 @@ function monthlyView(report: CommandCodeUsageReport): PanelMonthlyView | undefin
     limit: limitValue !== null ? money(limitValue) : UNREPORTED,
     used: known ? money(used) : UNREPORTED,
     remaining: remainingReported ? money(remaining) : UNREPORTED,
-    purchased: money(Math.max(0, credits?.purchasedCredits ?? 0)),
-    free: money(Math.max(0, credits?.freeCredits ?? 0)),
+    purchased: credits !== undefined && credits.purchasedReported !== false ? money(Math.max(0, credits.purchasedCredits)) : UNREPORTED,
+    free: credits !== undefined && credits.freeReported !== false ? money(Math.max(0, credits.freeCredits)) : UNREPORTED,
     percent,
     barPercent: barPercent(percent),
     exhausted: known && remaining <= 0,
@@ -465,7 +465,7 @@ export function buildPanelView(input: PanelViewInput): PanelView {
   const cost = totalCost === undefined ? '' : money(totalCost)
 
   let status = ''
-  if (!input.apiKeyConfigured) status = panelText('unconfigured')
+  if (entries.length > 0 && !entries.some(entry => entry.configured)) status = panelText('unconfigured')
   else if (selectedView?.mark !== undefined && selectedView.mark !== 'active') status = panelText(selectedView.mark)
   else if (selectedEntry === undefined) status = panelText('unavailable')
 
@@ -491,7 +491,7 @@ export function buildPanelView(input: PanelViewInput): PanelView {
     selectedId: selectedEntry?.id,
     selected: selectedView,
     loading: usage.status === 'loading' && usage.report === undefined,
-    noKey: !input.apiKeyConfigured,
+    noKey: entries.length > 0 && !entries.some(entry => entry.configured),
     failure: failureView(usage),
     staleError: usage.status === 'error' && usage.report !== undefined ? usage.error ?? '' : undefined,
     partial: (usage.report?.accounts.some((entry) => entry.report.failures.length > 0 && entry.report.blocked === undefined) ?? false)

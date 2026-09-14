@@ -303,3 +303,13 @@ test('prices descriptor targets the commandcodeUsage service and prices method',
   assert.equal(PRICES_DESCRIPTOR.method, 'prices')
   assert.equal(PRICES_REMOTE_CONTRIBUTION.descriptors[0], PRICES_DESCRIPTOR)
 })
+
+test('price wire retains all context bands and rejects gaps in ordered boundaries', () => {
+  const rate = { inputCost: 1, outputCost: 2, cacheReadCost: .1 }
+  const parse = (contextTiers: unknown) => pricesSchema.parse({ models: [{ id: 'tiered', slug: 'tiered', ...rate, contextTiers }], peakHours: [] })
+  const tiers = [{ ...rate, maxContext: 32000 }, { ...rate, inputCost: 4 }]
+  assert.deepEqual(parse(tiers).models[0]?.contextTiers, tiers)
+  for (const invalid of [[], [{ ...rate, maxContext: 32000 }], [{ ...rate }, { ...rate }], [{ ...rate, maxContext: 2 }, { ...rate, maxContext: 1 }, rate]]) {
+    assert.throws(() => parse(invalid), /contextTier/)
+  }
+})
