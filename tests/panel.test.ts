@@ -181,13 +181,17 @@ test('the accessible footer title carries the visible figures', () => {
 })
 
 test('monthly consumption is the CLI\'s limit-minus-remaining derivation', () => {
+  // The fixture deliberately makes the two halves DIFFERENT: the plan publishes
+  // a 30-credit limit while the billing endpoint reports 8.68 left, which is the
+  // shape the live API returns. A fixture where `remaining === limit` would let a
+  // hardcoded `$0.00` (and a swapped pair of fields) pass unchanged.
   const view = buildPanelView({
     usage: usage({
       report: {
         accounts: [entry({
           report: {
-            credits: CREDITS,
-            plan: { planId: 'individual-pro', name: 'Pro', status: 'active', monthlyCredits: 60, currentPeriodEnd: 0 },
+            credits: { ...CREDITS, monthlyCredits: 8.68 },
+            plan: { planId: 'individual-pro', name: 'Pro', status: 'active', monthlyCredits: 30, currentPeriodEnd: 0 },
           },
         })],
       },
@@ -197,12 +201,124 @@ test('monthly consumption is the CLI\'s limit-minus-remaining derivation', () =>
   const monthly = view.selected?.monthly
   assert.ok(monthly)
   assert.equal(monthly.known, true)
-  assert.equal(monthly.limit, '$60.00')
-  // 60 credit limit minus the 60 remaining the billing endpoint reported.
-  assert.equal(monthly.used, '$0.00')
-  assert.equal(monthly.percent, 0)
+  assert.equal(monthly.limit, '$30.00')
+  // 30 credit limit minus the 8.68 the billing endpoint reported left.
+  assert.equal(monthly.used, '$21.32')
+  assert.equal(monthly.remaining, '$8.68')
+  assert.equal(monthly.percent, 71)
+  assert.equal(monthly.exhausted, false)
   assert.equal(monthly.purchased, '$5.00')
   assert.equal(monthly.free, '$2.00')
+})
+
+test('a billing endpoint that reported nothing never reads as a consumed quota', () => {
+  // The regression this pins: `/alpha/billing/credits` is one of four endpoints
+  // the report fetches in parallel, so it fails ON ITS OWN while the plan still
+  // arrives. Reading the absent balance as 0 turned that partial failure into
+  // `limit - 0 = limit`, i.e. a confident "100% used, quota exhausted" — with
+  // the purchased/free tiles asserting balances that were never fetched.
+  const view = buildPanelView({
+    usage: usage({
+      report: {
+        accounts: [entry({
+          report: {
+            plan: { planId: 'individual-pro', name: 'Pro', status: 'active', monthlyCredits: 30, currentPeriodEnd: 0 },
+            failures: ['/alpha/billing/credits: service unavailable'],
+          },
+        })],
+      },
+    }),
+    apiKeyConfigured: true,
+  })
+  const monthly = view.selected?.monthly
+  assert.ok(monthly)
+  // No ratio, no bar, and above all no "exhausted".
+  assert.equal(monthly.known, false)
+  assert.equal(monthly.exhausted, false)
+  assert.equal(monthly.percent, 0)
+  assert.equal(monthly.barPercent, 0)
+  // Unreported figures read as a dash, never as a zero.
+  assert.equal(monthly.remaining, '—')
+  assert.equal(monthly.used, '—')
+  // The plan's own limit IS known from the subscriptions endpoint, so it shows.
+  assert.equal(monthly.limit, '$30.00')
+})
+
+test('an explicit unreported flag dashes the balance while an absent flag does not', () => {
+  const base = {
+    plan: { planId: 'individual-pro', name: 'Pro', status: 'active', monthlyCredits: 30, currentPeriodEnd: 0 },
+  }
+  const unreported = buildPanelView({
+    usage: usage({
+      report: {
+        accounts: [entry({
+          report: { ...base, credits: { ...CREDITS, monthlyCredits: 0, monthlyReported: false } },
+        })],
+      },
+    }),
+    apiKeyConfigured: true,
+  }).selected?.monthly
+  assert.ok(unreported)
+  assert.equal(unreported.known, false)
+  assert.equal(unreported.exhausted, false)
+  assert.equal(unreported.remaining, '—')
+
+  // `undefined` is a Host half older than the flag, which always sent a real
+  // number: it keeps rendering instead of dashing every balance.
+  const legacy = buildPanelView({
+    usage: usage({
+      report: {
+        accounts: [entry({ report: { ...base, credits: { ...CREDITS, monthlyCredits: 0 } } })],
+      },
+    }),
+    apiKeyConfigured: true,
+  }).selected?.monthly
+  assert.ok(legacy)
+  assert.equal(legacy.known, true)
+  assert.equal(legacy.remaining, '$0.00')
+  // A genuine zero balance IS an exhausted plan, and still says so.
+  assert.equal(legacy.exhausted, true)
+})
+
+test('only the quota windows the endpoint reported get a row', () => {
+  const unlimited = buildPanelView({
+    usage: usage({
+      report: {
+        accounts: [entry({ report: { credits: { monthlyCredits: 5, purchasedCredits: 0, freeCredits: 0 } } })],
+      },
+    }),
+    apiKeyConfigured: true,
+  }).selected
+  assert.ok(unlimited)
+  // No windowLimits at all: an unlimited plan. Drawing two zeroed rows for it
+  // would invent limits the account does not have.
+  assert.deepEqual(unlimited.windows, [])
+
+  // A window that WAS reported with a zero cap is uncapped spend, not an absent
+  // window, and it keeps its row.
+  const uncapped = buildPanelView({
+    usage: usage({
+      report: {
+        accounts: [entry({
+          report: {
+            credits: {
+              monthlyCredits: 5,
+              purchasedCredits: 0,
+              freeCredits: 0,
+              fiveHour: { used: 2.4, cap: 0, exceeded: false, resetAt: 0 },
+            },
+          },
+        })],
+      },
+    }),
+    apiKeyConfigured: true,
+  }).selected
+  assert.ok(uncapped)
+  assert.equal(uncapped.windows.length, 1)
+  assert.equal(uncapped.windows[0]?.capped, false)
+  // Spend only, with no `used / cap` it does not have; the row's percentage
+  // label reads "unlimited" instead of a fabricated 0%.
+  assert.equal(uncapped.windows[0]?.value, '$2.40')
 })
 
 test('an unknown limit draws no percentage rather than inventing a denominator', () => {

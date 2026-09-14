@@ -59,23 +59,23 @@ export interface PanelWindowView {
  */
 export interface PanelMonthlyView {
   /**
-   * A limit is known (`plan.monthlyCredits` > 0), so `used` / `limit` and the
-   * percentage are meaningful. When false the view still carries the balances
-   * the billing endpoint reported, but draws no bar: a percentage needs a
-   * denominator, and inventing one from a remaining balance would be wrong.
+   * A ratio is meaningful — the plan published a credit total AND the billing
+   * endpoint published the balance left of it. When false the view draws no
+   * bar: a percentage needs both halves, and inventing either one is how a
+   * failed billing call turns into a confident "100% used".
    */
   known: boolean
-  /** Plan credit total for the period (the limit). */
+  /** Plan credit total for the period (the limit); a dash when unreported. */
   limit: string
-  /** Consumed this period (`limit - remaining`). */
+  /** Consumed this period (`limit - remaining`); a dash until both are known. */
   used: string
-  /** Credits still available. */
+  /** Credits still available; a dash when the balance was not reported. */
   remaining: string
   /** Purchased top-up balance. */
   purchased: string
   /** Promotional balance. */
   free: string
-  /** Consumption as a percentage of the limit; 0 when there is no limit. */
+  /** Consumption as a percentage of the limit; 0 when there is no ratio. */
   percent: number
   /** Fill width for the bar, clamped to [0, 100]. */
   barPercent: number
@@ -221,6 +221,13 @@ function money(value: number): string {
   return Math.abs(value) < 0.01 ? formatMoneyExact(value) : formatMoney(value)
 }
 
+/**
+ * What a figure shows when the endpoint that carries it did not report one.
+ * A dash, never a zero: the panel exists to state what the account has spent,
+ * so "we were not told" has to look different from "nothing".
+ */
+const UNREPORTED = '—'
+
 /** Local reset time; empty when the endpoint reported none. */
 function resetText(ms: number): string {
   if (ms <= 0) return ''
@@ -260,6 +267,8 @@ function windowView(label: PanelKey, limit: WindowInput): PanelWindowView {
   const capped = limit.cap > 0
   return {
     label,
+    // Spend only: an uncapped window has no denominator, so its row pairs this
+    // figure with the "unlimited" label instead of a `used / cap` it lacks.
     value: capped ? `${money(limit.used)} / ${money(limit.cap)}` : money(limit.used),
     capped,
     percent,
@@ -277,28 +286,36 @@ function windowView(label: PanelKey, limit: WindowInput): PanelWindowView {
  * {@link PanelMonthlyView}). Unknown plans (no `monthlyCredits` on the plan
  * record) therefore still show their balances, just without a ratio.
  *
- * Caveat inherited from the wire: `parseCreditLimits` defaults an absent
- * `credits.monthlyCredits` to 0, so an account whose billing endpoint answered
- * only window limits reads as fully consumed. The official CLI reads it the
- * same way (`Math.max(0, s?.monthlyCredits ?? 0)`), and the alternative —
- * treating 0 as "unknown" — would hide a genuinely exhausted account.
+ * The trap this guards: a MISSING balance is not a consumed one. The billing
+ * endpoint is one of four the report fetches in parallel, so it fails on its
+ * own while the plan still arrives — and reading the absent balance as 0 would
+ * turn that partial failure into `limit - 0 = limit`, i.e. a confident "100%
+ * used, quota exhausted" for an account that may have spent nothing. The
+ * official CLI draws no meter unless the credits payload is present at all
+ * (`hasCreditsInfo`), so "unreported" is the upstream-faithful reading here
+ * too. Every derived figure stays a placeholder until the balance reported.
  */
 function monthlyView(report: CommandCodeUsageReport): PanelMonthlyView | undefined {
   const credits = report.credits
   const plan = report.plan
   if (credits === undefined && plan === undefined) return undefined
 
-  const remaining = Math.max(0, credits?.monthlyCredits ?? 0)
   const limitValue = plan?.monthlyCredits ?? null
-  const known = limitValue !== null && limitValue > 0
+  // Only an EXPLICIT `false` means the balance was omitted. An unset flag comes
+  // from a Host half older than the field, which always sent a real number, so
+  // it must keep rendering instead of turning into a dash everywhere.
+  const remainingReported = credits !== undefined && credits.monthlyReported !== false
+  const remaining = remainingReported ? Math.max(0, credits.monthlyCredits) : 0
+  // A ratio needs BOTH halves: the plan's total and the balance left of it.
+  const known = limitValue !== null && limitValue > 0 && remainingReported
   const used = known ? Math.max(0, limitValue - remaining) : 0
   const percent = known ? rawPercent(used, limitValue) : 0
 
   return {
     known,
-    limit: money(limitValue ?? 0),
-    used: money(used),
-    remaining: money(remaining),
+    limit: limitValue !== null ? money(limitValue) : UNREPORTED,
+    used: known ? money(used) : UNREPORTED,
+    remaining: remainingReported ? money(remaining) : UNREPORTED,
     purchased: money(Math.max(0, credits?.purchasedCredits ?? 0)),
     free: money(Math.max(0, credits?.freeCredits ?? 0)),
     percent,
@@ -337,10 +354,12 @@ function accountView(entry: CommandCodeAccountUsage): PanelAccountView {
   }
 
   const windows: PanelWindowView[] = []
-  if (credits !== undefined) {
-    windows.push(windowView('fiveHour', credits.fiveHour))
-    windows.push(windowView('weekly', credits.weekly))
-  }
+  // One row per window the endpoint actually REPORTED. An account on an
+  // unlimited plan reports none, and drawing two zero-cap rows for it would
+  // invent a limit the account does not have; a window that reported
+  // `cap === 0` is uncapped spend and does get a row, labelled as such.
+  if (credits?.fiveHour !== undefined) windows.push(windowView('fiveHour', credits.fiveHour))
+  if (credits?.weekly !== undefined) windows.push(windowView('weekly', credits.weekly))
 
   // Rotation/credential state: the serving account first, then the two marks
   // the pool can carry, then a cooldown whose end time is known.

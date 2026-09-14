@@ -560,11 +560,19 @@ function applyClientSurfaces(
   // deliberate limitation, not an oversight — the two quota labels are the
   // surface's whole point and the copy is reviewed as one block.
   //
-  // Both slots are declared by dsh 0.1.5's ui-layout / ui-sidebar (the layout's
-  // `main` slot is named `conversation` before 0.1.5), so on an older engine the
-  // declaration never exists, `slots.inject` never fires, and the panel simply
-  // does not appear — every other surface, the settings page included, is
-  // unaffected.
+  // Version reality, measured across 0.1.1-rc.2 … 0.1.5-rc.2 (see AGENTS.md):
+  // `sidebar.footer.action` and `conversation.composer.dock` exist and RENDER in
+  // every one of those releases, while the layout's keyed `main` slot and its
+  // `selectPanel` arrive in 0.1.5 (alpha.2 and rc.1 respectively). So the three
+  // slots do NOT share a version floor, and the honest boundary is the layout
+  // seam: without `selectPanel` the card would register, render, and do nothing
+  // when clicked — a dead button. The footer registration is therefore gated on
+  // the `layout` service, which arrives with the same package that owns `main`.
+  //
+  // The dashboard cell itself needs no such gate: registering a cell for a
+  // declaration that never arrives is a no-op by construction (the callback only
+  // runs while the declaration is live), so on an older engine it simply never
+  // registers. Only the always-declared footer seat needed an explicit guard.
   //
   // Shape notes:
   //   * The stylesheet gets its own `ctx.effect` rather than riding an `inject`
@@ -586,9 +594,9 @@ function applyClientSurfaces(
     // ui-layout is not a dependency of this bundle (its types are not imported
     // and its client module is never resolved), so a static `inject` would park
     // the whole client fiber — settings page included — on a service another
-    // profile may never mount. By the time a click is possible the footer slot
-    // itself is on screen, and ui-sidebar only activates with `layout` present,
-    // so the read always lands; the guard covers the impossible case anyway.
+    // profile may never mount. The footer registration is gated on that same
+    // seam, so by the time this runs the method exists; the guard stays as the
+    // last line of defence against a layout that renames it.
     open: () => {
       const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
       if (typeof layout?.selectPanel === 'function') layout.selectPanel(PANEL_ID)
@@ -606,19 +614,31 @@ function applyClientSurfaces(
     console.error('[dsh-commandcode-provider] could not register the plans & quota panel:', error)
   }
 
-  try {
-    ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(
-      // `order` is the only control over position inside a list slot, and the
-      // renderer sorts ascending. ui-cordis's footer chip registers at the
-      // default 0, so 1 makes this card the LAST action — the one directly on
-      // top of the Settings seat — regardless of which plugin's fiber mounts
-      // first.
-      { name: 'sidebar.footer.action', id: PANEL_ID, order: 1, inject: panelFace },
-      CommandCodeFooterEntry,
-    ))
-  } catch (error: unknown) {
-    console.error('[dsh-commandcode-provider] could not register the sidebar footer card:', error)
-  }
+  // The footer card is registered only where the layout can actually open the
+  // panel behind it. `ctx.inject(['layout'], …)` runs its body when that service
+  // is live and re-runs it if the service is replaced, mirroring how the Remote
+  // namespace is mounted — so a profile without ui-layout (the TUI, a headless
+  // client) never registers the card, and a pre-0.1.5 engine that mounts a
+  // layout lacking `selectPanel` is filtered out by the explicit capability
+  // check below. Without this gate the card would render and silently do
+  // nothing on click, which is worse than not being there.
+  ctx.inject(['layout'], (layoutCtx) => {
+    const layout = layoutCtx.get('layout') as LayoutSelectionSeam | undefined
+    if (typeof layout?.selectPanel !== 'function') return
+    try {
+      layoutCtx.slots.inject('sidebar.footer.action', () => layoutCtx.slots.register(
+        // `order` is the only control over position inside a list slot, and the
+        // renderer sorts ascending. ui-cordis's footer chip registers at the
+        // default 0, so 1 sorts after it — but any sibling passing an order ≥ 1
+        // lands between this card and Settings, so "directly above Settings" is
+        // a preference, not a guarantee.
+        { name: 'sidebar.footer.action', id: PANEL_ID, order: 1, inject: panelFace },
+        CommandCodeFooterEntry,
+      ))
+    } catch (error: unknown) {
+      console.error('[dsh-commandcode-provider] could not register the sidebar footer card:', error)
+    }
+  })
 
   // The composer's session-cost figure: an entry in the dock below the input
   // that renders NO surface of its own. The cost is injected into the harness's

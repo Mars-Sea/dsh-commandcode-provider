@@ -101,8 +101,9 @@ test('getUsage parses account, usage, and credits', async () => {
   assert.equal(report.usage?.totalCount, 935)
   assert.equal(report.usage?.totalCost, 1.3187)
   assert.equal(report.credits?.monthlyCredits, 8.68)
-  assert.equal(report.credits?.fiveHour.cap, 3)
-  assert.equal(report.credits?.weekly.used, 1.32)
+  assert.equal(report.credits?.monthlyReported, true)
+  assert.equal(report.credits?.fiveHour?.cap, 3)
+  assert.equal(report.credits?.weekly?.used, 1.32)
   assert.equal(report.plan?.name, 'Pro')
   assert.equal(report.plan?.status, 'active')
   assert.equal(report.plan?.monthlyCredits, 30)
@@ -326,7 +327,7 @@ test('command renders one section per pool account with rotation badges in zh', 
           report: {
             account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
             credits: {
-              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0,
+              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0, monthlyReported: true,
               fiveHour: { used: 3, cap: 3, exceeded: true, resetAt },
               weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
             },
@@ -381,7 +382,7 @@ test('command renders one section per pool account with rotation badges in en', 
           report: {
             account: { id: 'u1', name: 'Mars', userName: 'mars-sea' },
             credits: {
-              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0,
+              monthlyCredits: 8.68, purchasedCredits: 0, freeCredits: 0, monthlyReported: true,
               fiveHour: { used: 3, cap: 3, exceeded: true, resetAt },
               weekly: { used: 1.32, cap: 6, exceeded: false, resetAt: 0 },
             },

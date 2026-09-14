@@ -368,6 +368,13 @@ export class SessionCostDisplay {
     }
     for (const cell of [...this.dialogHidden]) {
       if (cell.parentNode === host) continue
+      // The dialog was re-rendered and this cell went with the old tree. Give
+      // the style back BEFORE dropping the reference: a detached node can be
+      // recycled by the next render (React reuses DOM nodes across a remount of
+      // the same shape), and a surviving `display: none` would hide a row of a
+      // dialog we are no longer decorating — with nothing left tracking it to
+      // restore it later.
+      if (cell.style.display === 'none') cell.style.display = ''
       this.dialogHidden.delete(cell)
     }
   }

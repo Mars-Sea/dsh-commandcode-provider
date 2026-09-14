@@ -1010,10 +1010,29 @@ export interface CommandCodeCredits {
   monthlyCredits: number
   purchasedCredits: number
   freeCredits: number
-  /** Five-hour rolling window limits. */
-  fiveHour: { used: number; cap: number; exceeded: boolean; resetAt: number }
-  /** Weekly window limits. */
-  weekly: { used: number; cap: number; exceeded: boolean; resetAt: number }
+  /**
+   * Whether the endpoint actually published a monthly balance. The scalar
+   * above defaults to 0 for shape stability, which is a LIE about an omitted
+   * field — and a false "0 left, fully consumed" on the dashboard. Consumers
+   * that render the figure must check this first: an explicit `false` means
+   * "not reported", not "nothing left".
+   *
+   * Optional on purpose. `undefined` means the flag itself was never recorded —
+   * an older Host half, or a frame from before this field existed — and is read
+   * as "assume reported", which is the behavior that shipped. Only an explicit
+   * `false` from a Host that knows the balance was omitted suppresses the
+   * figure, so a cross-version pair does not lose a real balance.
+   */
+  monthlyReported?: boolean
+  /**
+   * Five-hour rolling window limits, absent when the endpoint reported no such
+   * window. Absence is NOT "a window with no cap": a reported window with
+   * `cap === 0` is uncapped spend, while an absent one was never reported at
+   * all, and only the un-reported case must keep a figure off the dashboard.
+   */
+  fiveHour?: { used: number; cap: number; exceeded: boolean; resetAt: number }
+  /** Weekly window limits; absent under the same rule as {@link fiveHour}. */
+  weekly?: { used: number; cap: number; exceeded: boolean; resetAt: number }
 }
 
 /** Subscription plan state from `/alpha/billing/subscriptions`. */
@@ -1080,13 +1099,22 @@ function parseUsageTotals(usage: Record<string, unknown> | undefined): CommandCo
 }
 
 /** Parse one window-limit block (`fiveHour` / `weekly`). */
+/**
+ * Parse one window block into a window limit, or undefined when the endpoint
+ * reported no such window.
+ *
+ * Returning undefined (rather than a zeroed window) is load-bearing: the panel
+ * must not draw a quota row for a window the account never reported, and a
+ * zeroed window is indistinguishable from a genuinely uncapped one.
+ */
 function parseWindowLimit(value: unknown): CommandCodeCredits['fiveHour'] {
   const block = isRecord(value) ? value : undefined
+  if (block === undefined) return undefined
   return {
-    used: numberValue(block?.used) ?? 0,
-    cap: numberValue(block?.cap) ?? 0,
-    exceeded: block?.exceeded === true,
-    resetAt: numberValue(block?.resetAt) ?? 0,
+    used: numberValue(block.used) ?? 0,
+    cap: numberValue(block.cap) ?? 0,
+    exceeded: block.exceeded === true,
+    resetAt: numberValue(block.resetAt) ?? 0,
   }
 }
 
@@ -1101,13 +1129,22 @@ function parseCreditLimits(credits: Record<string, unknown> | undefined): Comman
   const fiveHour = windowLimits !== undefined && isRecord(windowLimits.fiveHour) ? windowLimits.fiveHour : undefined
   const weekly = windowLimits !== undefined && isRecord(windowLimits.weekly) ? windowLimits.weekly : undefined
   if (creditsData === undefined && fiveHour === undefined && weekly === undefined) return undefined
-  return {
+  const parsed: CommandCodeCredits = {
     monthlyCredits: numberValue(creditsData?.monthlyCredits) ?? 0,
     purchasedCredits: numberValue(creditsData?.purchasedCredits) ?? 0,
     freeCredits: numberValue(creditsData?.freeCredits) ?? 0,
-    fiveHour: parseWindowLimit(fiveHour),
-    weekly: parseWindowLimit(weekly),
+    // Recorded separately from the scalar: the panel must not report an
+    // omitted balance as a consumed one.
+    monthlyReported: numberValue(creditsData?.monthlyCredits) !== undefined,
   }
+  // Optional members are only present when reported, never present-but-undefined
+  // (`exactOptionalPropertyTypes`), so an absent window cannot be mistaken for a
+  // parsed one with zeroed numbers.
+  const fiveHourLimit = parseWindowLimit(fiveHour)
+  const weeklyLimit = parseWindowLimit(weekly)
+  if (fiveHourLimit !== undefined) parsed.fiveHour = fiveHourLimit
+  if (weeklyLimit !== undefined) parsed.weekly = weeklyLimit
+  return parsed
 }
 
 /**

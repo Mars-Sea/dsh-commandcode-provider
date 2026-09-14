@@ -21,7 +21,7 @@
  * @module dsh-commandcode-provider/usage-wire
  */
 
-import type { CommandCodeUsageReport, UsageBlockReason } from './adapter.ts'
+import type { CommandCodeCredits, CommandCodeUsageReport, UsageBlockReason } from './adapter.ts'
 
 export type { CommandCodeUsageReport, UsageBlockReason }
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
@@ -68,7 +68,19 @@ const { reject, record, stringField, numberField, booleanField } =
   makeBoundaryValidator('commandcode/report result:')
 
 /** Validate one window-limit block (`fiveHour` / `weekly`). */
-function windowLimit(value: unknown, field: string): { used: number; cap: number; exceeded: boolean; resetAt: number } {
+/**
+ * Parse one quota window, or undefined when the frame carries no such window.
+ *
+ * The distinction is load-bearing at this boundary: an ABSENT window means the
+ * billing endpoint reported none (an unlimited plan), while a present block with
+ * `cap: 0` means uncapped spend that was really reported. Collapsing the two
+ * would draw a zeroed quota row for an account that has no such limit.
+ */
+function windowLimit(
+  value: unknown,
+  field: string,
+): { used: number; cap: number; exceeded: boolean; resetAt: number } | undefined {
+  if (value === undefined) return undefined
   const source = record(value, field)
   return {
     used: numberField(source, 'used', `${field}.used`),
@@ -127,13 +139,29 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
 
   if (source.credits !== undefined) {
     const credits = record(source.credits, 'credits')
-    report.credits = {
+    const parsed: CommandCodeCredits = {
       monthlyCredits: numberField(credits, 'monthlyCredits', 'credits.monthlyCredits'),
       purchasedCredits: numberField(credits, 'purchasedCredits', 'credits.purchasedCredits'),
       freeCredits: numberField(credits, 'freeCredits', 'credits.freeCredits'),
-      fiveHour: windowLimit(credits.fiveHour, 'credits.fiveHour'),
-      weekly: windowLimit(credits.weekly, 'credits.weekly'),
     }
+    // OPTIONAL on the wire: a Host half that predates this field serves the
+    // scalar 0 for an omitted balance, which cannot be told from a real zero.
+    // An explicit `false` therefore means "not reported" and the panel keeps the
+    // figure off the dashboard; an absent flag (an older Host) stays unset and
+    // is read as "assume reported", so a real balance is not lost cross-version.
+    // A PRESENT value must still be a boolean, so a malformed frame is rejected
+    // here rather than coerced.
+    if (credits.monthlyReported !== undefined) {
+      parsed.monthlyReported = booleanField(credits, 'monthlyReported', 'credits.monthlyReported')
+    }
+    // Absent means the endpoint reported no such window. The window parsers
+    // return undefined for an absent block, and an optional member is only set
+    // when it was really there.
+    const fiveHour = windowLimit(credits.fiveHour, 'credits.fiveHour')
+    const weekly = windowLimit(credits.weekly, 'credits.weekly')
+    if (fiveHour !== undefined) parsed.fiveHour = fiveHour
+    if (weekly !== undefined) parsed.weekly = weekly
+    report.credits = parsed
   }
 
   if (source.plan !== undefined) {

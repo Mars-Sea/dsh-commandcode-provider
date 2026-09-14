@@ -126,15 +126,34 @@ interface CommandCodeCredits {
   monthlyCredits: number;
   purchasedCredits: number;
   freeCredits: number;
-  /** Five-hour rolling window limits. */
-  fiveHour: {
+  /**
+   * Whether the endpoint actually published a monthly balance. The scalar
+   * above defaults to 0 for shape stability, which is a LIE about an omitted
+   * field — and a false "0 left, fully consumed" on the dashboard. Consumers
+   * that render the figure must check this first: an explicit `false` means
+   * "not reported", not "nothing left".
+   *
+   * Optional on purpose. `undefined` means the flag itself was never recorded —
+   * an older Host half, or a frame from before this field existed — and is read
+   * as "assume reported", which is the behavior that shipped. Only an explicit
+   * `false` from a Host that knows the balance was omitted suppresses the
+   * figure, so a cross-version pair does not lose a real balance.
+   */
+  monthlyReported?: boolean;
+  /**
+   * Five-hour rolling window limits, absent when the endpoint reported no such
+   * window. Absence is NOT "a window with no cap": a reported window with
+   * `cap === 0` is uncapped spend, while an absent one was never reported at
+   * all, and only the un-reported case must keep a figure off the dashboard.
+   */
+  fiveHour?: {
     used: number;
     cap: number;
     exceeded: boolean;
     resetAt: number;
   };
-  /** Weekly window limits. */
-  weekly: {
+  /** Weekly window limits; absent under the same rule as {@link fiveHour}. */
+  weekly?: {
     used: number;
     cap: number;
     exceeded: boolean;
@@ -670,8 +689,11 @@ declare const KNOWN_DEALS: Readonly<Record<string, KnownDeal>>;
  * weekday, full price) **Monday to Friday only**; the other 17 hours of a
  * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
  * The V4 Flash Vision (exp) variant (command-code@1.32.0) shares the V4 Flash
- * windows and peak prices ($0.44/$1.32) — each row's hover annotation states
- * exactly 2× that row's displayed off-peak prices. The picker shows the
+ * rates exactly — $0.15/$0.60 off-peak and $0.30/$1.20 peak, per the page's own
+ * `timeOfDay` block, not merely 2× its own off-peak figures: a rate that is
+ * internally consistent can still be the wrong row, which is why the vendored
+ * price table (`./model-prices.ts`) is synced from the page and not hand-kept.
+ * The picker shows the
  * *current* state as a compact
  * label (`Peak`/`Half`) matching the English noun style of the other markers
  * (`Image`, `FREE`), so a developer can tell at a glance whether calling the

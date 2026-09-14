@@ -249,16 +249,75 @@ test('dialog rows are decorated positionally, and unpriced rows stay untouched',
   // The cache-hit row is a percentage, so it is never priced.
   assert.equal(rows[0]?.tokens, undefined)
   assert.equal(rows[0]?.amount, undefined)
-  // Cache-write tokens exist but have no published rate: the row is hidden
-  // rather than shown as `$0.00`.
-  assert.equal(rows[3]?.hidden, true)
-  assert.equal(rows[3]?.amount, undefined)
+  // Cache-write tokens exist AND this table publishes their rate, so the row is
+  // kept and priced: its cost is already inside the pill's total, and hiding it
+  // would leave the rows unable to explain the figure above them.
+  assert.equal(rows[3]?.hidden, false)
+  // 7 tokens at $1.25/1M is far below a cent, so it is stated as a bound.
+  assert.equal(rows[3]?.amount, '<$0.0001')
   // A priced row carries its own amount, formatted for its magnitude.
   assert.equal(rows[1]?.amount, '$1.00')
+})
+
+test('an unpriced cache-write row is hidden rather than shown as a blank or $0.00', () => {
+  // The HOURLY table publishes no cache-write rate, so those tokens cannot be
+  // priced: the row is hidden and the note explains it, rather than inventing a
+  // figure or leaving an empty cell in the dialog's grid.
+  const view = buildSessionCostView(input({
+    table: HOURLY,
+    selection: { lastUsed: { provider: 'commandcode', model: 'deepseek/deepseek-v4-pro' }, next: null },
+    usage: { uncachedInputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 7 },
+  }))
+  assert.ok(view)
+  const rows = sessionCostRowDecorations(view)
+  const cacheWrite = rows.find((row) => row.row === 'cacheWrite')
+  assert.ok(cacheWrite)
+  assert.equal(cacheWrite.hidden, true)
+  assert.equal(cacheWrite.amount, undefined)
+  // The tokens are still reported as unpriced, and the total stays a floor.
+  assert.equal(view.unpricedCacheWriteTokens, 7)
+  assert.equal(view.approximate, false)
+})
+
+test('a session whose every billed token is unpriced renders nothing, not $0.00', () => {
+  // The regression this pins: cache-write-only usage on a model with no
+  // published cache-write rate. The buckets are non-zero, so the old all-zero
+  // guard passed, every priced cost was 0 for LACK OF A RATE, and the pill
+  // announced a confident `$0.00`. Nothing to price means nothing to show.
+  const unpriced = buildSessionCostView(input({
+    table: HOURLY,
+    selection: { lastUsed: { provider: 'commandcode', model: 'deepseek/deepseek-v4-pro' }, next: null },
+    usage: { cacheWriteTokens: 500_000 },
+  }))
+  assert.equal(unpriced, undefined)
+
+  // The same shape on a table that DOES publish the rate is a real figure, so
+  // the guard is about pricing, not about which bucket was used.
+  const priced = buildSessionCostView(input({ usage: { cacheWriteTokens: 500_000 } }))
+  assert.ok(priced)
+  assert.equal(priced.total, 0.625)
 })
 
 test('the cache-hit row is absent when no prompt token was billed', () => {
   const view = buildSessionCostView(input({ usage: { outputTokens: 500_000 } }))
   assert.ok(view)
   assert.deepEqual(sessionCostRowDecorations(view).map((row) => row.row), ['uncachedInput', 'cacheRead', 'output'])
+})
+
+test('a priced session below a cent still shows a figure, not nothing', () => {
+  // The guard above must key on "no rate", never on "tiny amount": 100 output
+  // tokens on the flat table is $0.0002 — real priced spend. A guard written as
+  // `total > 0` would swallow it into a blank pill.
+  const view = buildSessionCostView(input({ usage: { outputTokens: 100 } }))
+  assert.ok(view)
+  assert.equal(view.total, 0.0002)
+  assert.equal(view.value, '$0.0002')
+  assert.equal(view.unpricedCacheWriteTokens, 0)
+})
+
+test('spend too small for four decimals reads as a bound, not as $0.0000', () => {
+  const view = buildSessionCostView(input({ usage: { outputTokens: 10 } }))
+  assert.ok(view)
+  assert.equal(view.total, 0.00002)
+  assert.equal(view.value, '<$0.0001')
 })

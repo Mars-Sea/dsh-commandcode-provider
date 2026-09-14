@@ -5,17 +5,24 @@
  *
  * Source: the model array embedded in
  * https://commandcode.ai/docs/resources/pricing-limits, read out of its
- * Next.js flight payload rather than off the rendered rows (the rows are a
- * trap — see the extraction note in AGENTS.md). Every figure is USD per
+ * Next.js flight payload. That payload is the only place the `timeOfDay` and
+ * `contextTiers` blocks exist, so it is what the generator parses — but it is
+ * NOT trusted on its own: the generator also reads the page's rendered table
+ * and reports any rate where the two disagree. A figure can be internally
+ * consistent and still be the wrong row (this table once carried
+ * `0.22 → 0.44` for a model the page prices `0.15 → 0.30` — exactly the 2× the
+ * peak/off-peak rule promises), so the cross-check exists to catch that class
+ * of error rather than to restate the invariant. Every figure is USD per
  * 1,000,000 tokens, which the page confirms itself: its Go-plan estimate for
  * DeepSeek V4 Flash (800 in / 200 out on a $10 budget) resolves to the ~42K
  * requests the page states, and ~26K once its typical 50K cache reads are
  * priced at the cacheRead rate.
  *
  * Three buckets are always published (inputCost, outputCost, cacheReadCost);
- * cacheWriteCost is published for a minority of models. A model without it
- * has UNPRICED cache-write tokens: never invent a multiplier for them, and
- * never fold them into the input rate.
+ * cacheWriteCost is published for a minority of models. A model without the
+ * key has UNPRICED cache-write tokens: never invent a multiplier for them, and
+ * never fold them into the input rate. A published `0` is a different fact and
+ * is kept as a real zero — see the note on the GPT rows below.
  *
  * Time-of-day models store a `peak` triplet only. The page repeats the flat
  * rates inside its own offPeak block, so the top-level rates ARE the off-peak
@@ -24,11 +31,21 @@
  * decided by `isPeakPricingHour()` in ./capabilities.ts, on the same
  * Monday-Friday UTC schedule the model picker labels.
  *
+ * Context-tiered models are stored at their BASE band only (the page's own
+ * "rates shown are the ≤ N tokens band" rule). The generator reports which
+ * models those are, because a session whose per-request context crosses the
+ * band is billed higher by Command Code than this table knows: those figures
+ * are a floor, not an exact quote. Carrying the tiers would mean the wire
+ * contract and the readout both learning a context dimension, which is a
+ * product decision rather than a sync detail — see AGENTS.md.
+ *
  * Do not hand-edit the table below: run `node scripts/sync-model-prices.mjs`,
- * which re-reads the page's embedded JSON, asserts it still duplicates its
- * rates into `offPeak`, and rewrites only the rows. Everything else in this
- * file — this doc, the types, the slug rules, the table builder — is written by
- * hand and survives that rewrite.
+ * which re-reads the page, asserts the structure and the off-peak equality,
+ * prints the context-tier and cross-check warnings for a human, and rewrites
+ * only the rows. `--check` reports drift without writing (exit 1 on drift,
+ * exit 2 when the page could not be read, so a network failure never reads as
+ * "up to date"). Everything else in this file — this doc, the types, the slug
+ * rules, the table builder — is written by hand and survives that rewrite.
  *
  * @module dsh-commandcode-provider/model-prices
  */
@@ -47,7 +64,18 @@ interface ModelPriceRow {
   readonly peak?: readonly number[]
 }
 
-/** Every price row the page publishes, ordered by its own slug. */
+/**
+ * Every price row the page publishes, ordered by its own slug.
+ *
+ * Note on the GPT rows: `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini` and
+ * `gpt-5.5` carry a LITERAL `cacheWriteCost: 0` — a different fact from a
+ * missing key, because `ratesOf()` keeps it and the readout then charges
+ * cache writes at zero instead of reporting them unpriced. That is what the
+ * page's JSON says; its rendered column shows `—` for exactly these four while
+ * rendering a genuine zero as `$0.00` elsewhere, so the page contradicts
+ * itself. The table stays faithful to the machine-readable source and the
+ * discrepancy is recorded in AGENTS.md rather than papered over here.
+ */
 const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'claude-fable-5', rates: [10, 50, 1, 12.5] },
   { id: 'claude-fable-5-1', rates: [10, 50, 0.25, 12.5] },
@@ -60,7 +88,7 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'claude-sonnet-5', rates: [2, 10, 0.2, 2.5] },
   { id: 'deepseek-v4-flash', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006] },
   { id: 'deepseek-v4-flash-fast', rates: [0.28, 0.56, 0.07] },
-  { id: 'deepseek-v4-flash-vision-exp', rates: [0.22, 0.66, 0.007], peak: [0.44, 1.32, 0.014] },
+  { id: 'deepseek-v4-flash-vision-exp', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006] },
   { id: 'deepseek-v4-pro', rates: [0.66, 1.98, 0.022], peak: [1.32, 3.96, 0.044] },
   { id: 'deepseek-v4.1-flash', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006] },
   { id: 'fugu-ultra', rates: [5, 30, 0.5] },

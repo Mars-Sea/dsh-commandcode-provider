@@ -150,7 +150,7 @@ test('schema rejects a window limit with a non-boolean exceeded flag', () => {
   const report = makeReport()
   const bad = wrap(makeAccount({
     ...report,
-    credits: { ...report.credits!, fiveHour: { ...report.credits!.fiveHour, exceeded: 'yes' as unknown as boolean } },
+    credits: { ...report.credits!, fiveHour: { ...report.credits!.fiveHour!, exceeded: 'yes' as unknown as boolean } },
   }))
   assert.throws(() => usageReportSchema.parse(bad), /fiveHour\.exceeded/)
 })

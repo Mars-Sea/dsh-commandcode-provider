@@ -15,8 +15,15 @@
  * @module dsh-commandcode-provider/client/panel-styles
  */
 
-/** Stylesheet id (the `data-plugin-css` value that makes injection idempotent). */
-export const PANEL_CSS_ID = '@xer-on/dsh-commandcode-provider/CommandCodePanel.module.css'
+/**
+ * Stylesheet id (the `data-plugin-css` value that makes injection idempotent).
+ *
+ * The package prefix must match the one the settings-page stylesheet uses
+ * (`injectPageCss` in `./index.ts`) and this package's real name: an id is the
+ * injection's identity, so a stale fork prefix would let a second copy of the
+ * plugin inject the same rules twice and would misreport the owner in the DOM.
+ */
+export const PANEL_CSS_ID = '@mars-sea/dsh-commandcode-provider/CommandCodePanel.module.css'
 
 /** The panel stylesheet. */
 export const PANEL_CSS = `

@@ -396,13 +396,14 @@ function UsageStat({ label, value, sub }: { label: string; value: string; sub?: 
 /** One window-limit row: label, used/cap, a fill bar, and the reset time. */
 function UsageWindow({
   label,
-  limit: { used, cap, exceeded, resetAt },
+  limit,
   t,
 }: {
   label: string
-  limit: CommandCodeCredits['fiveHour']
+  limit: NonNullable<CommandCodeCredits['fiveHour']>
   t: Translate<SettingsCommandCodeKey>
 }) {
+  const { used, cap, exceeded, resetAt } = limit
   const ratio = windowRatio(used, cap)
   const reset = formatResetAt(resetAt)
   return (
@@ -509,10 +510,14 @@ function AccountReport({ entry, fetchedAt, t, onRemove }: {
         </div>
       ) : null}
 
-      {credits !== undefined ? (
+      {credits?.fiveHour !== undefined || credits?.weekly !== undefined ? (
         <div className="cc-usageWindows">
-          <UsageWindow label={t('usageFiveHour')} limit={credits.fiveHour} t={t} />
-          <UsageWindow label={t('usageWeekly')} limit={credits.weekly} t={t} />
+          {credits.fiveHour !== undefined ? (
+            <UsageWindow label={t('usageFiveHour')} limit={credits.fiveHour} t={t} />
+          ) : null}
+          {credits.weekly !== undefined ? (
+            <UsageWindow label={t('usageWeekly')} limit={credits.weekly} t={t} />
+          ) : null}
         </div>
       ) : null}
 

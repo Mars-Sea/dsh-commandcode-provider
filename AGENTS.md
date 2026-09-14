@@ -38,9 +38,12 @@ src/wire-shared.ts    Shared boundary-validation + Remote-descriptor plumbing
                       for the hand-rolled Typert wire contracts (dependency-free;
                       imported by the wire files so the client can inline it).
 src/client/index.ts   Browser client entry: registers the "Command Code"
-                      settings page (settings.section, id `commandcode`) and
-                      the Models-page provider card
-                      (settings.models.provider-card, key `llm-commandcode`).
+                      settings page (settings.section, id `commandcode`), the
+                      Models-page provider card
+                      (settings.models.provider-card, key `llm-commandcode`), the
+                      plans & quota panel's `main` cell + gated
+                      `sidebar.footer.action` card, and the composer
+                      `conversation.composer.dock` session-cost entry.
 src/client/settings.ts  Settings-page controller (scope + credentials + staged
                       form; React-free so node tests can drive it).
 src/client/legacy-credentials.ts  Pre-0.1.2 ApiProxy-to-current credential face adapter.
@@ -59,6 +62,8 @@ src/client/panel-view.tsx  Sidebar footer card + center dashboard components.
 src/client/panel-copy.ts   English copy for the panel (deliberately NOT a locale
                       namespace — the panel is English on every harness).
 src/client/panel-slots.ts  SlotMap merge for `main` + `sidebar.footer.action`.
+src/client/panel-styles.ts  The panel stylesheet + its `data-plugin-css` id (the
+                      idempotence key `injectPanelCss` selects on).
 src/client/prices.ts   One-shot price-table controller over `commandcode/prices`.
 src/client/session-cost.ts  Session-cost calculation + copy (React-free).
 src/client/session-cost-view.tsx  The dock entry that feeds the injected cost.
@@ -118,6 +123,10 @@ tests/model-prices.test.ts  price table ↔ catalog join tests (fails when a
                       catalog model has no price).
 tests/session-cost.test.ts  session-cost calculation tests (peak/off-peak, a
                       missing rate, the invisible-when-unpriceable rules).
+tests/session-cost-display.test.ts  DOM-injection tests for the pill and the
+                      usage dialog, driven through the real class and its
+                      `doc`/`observe` seams against a fake DOM (confirmation,
+                      self-heal, hide/restore, disposal).
 tests/prices-client.test.ts  price-table controller tests (one-shot cache, a
                       Host without the endpoint).
 tests/package.test.ts package-metadata contract (Harness peers start at rc.1,
@@ -153,9 +162,13 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   leak into a settings document. The retained legacy credential adapter is
   defensive only; the published peer contract starts at 0.1.2-rc.1.
   `tests/settings.test.ts` and `tests/legacy-credentials.test.ts` pin these
-  internal faces. The panel/session-cost slots are a 0.1.5 addition (see the
-  panel bullet below): their declarations simply never exist on 0.1.2, so
-  `slots.inject` never fires and neither surface registers there.
+  internal faces. The panel and session-cost slots have PER-SLOT version floors,
+  not one shared one (see the panel bullet below): the composer dock and the
+  sidebar foot have existed since 0.1.1-rc.2, the keyed `main` seat arrives in
+  0.1.5-alpha.2, and `layout.selectPanel` in 0.1.5-rc.1. Never restate that as
+  "the panel needs 0.1.5" — that is true of the `main` seat only, and the
+  sidebar seat exists everywhere, which is why the footer registration is gated
+  on the layout seam instead of on a slot declaration.
 - **Isolated package install**: pnpm 10 auto-installs the package's DSH peers
   when a desktop marketplace prepares a fresh generation. Keep
   `@deepseek-ai/dsh-invariants` as an explicit `^0.1.2-rc.1` peer matching
@@ -200,7 +213,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   - Web search: `POST {apiBase}/alpha/web-search` — body `{ query, numResults, allowedDomains?, blockedDomains? }` → `{ results: [{ title, url, snippet }] }`; same `Authorization: Bearer <key>` + `x-command-code-version` as generate.
   - Defaults: `apiBase = https://api.commandcode.ai`, `COMMAND_CODE_CLI_VERSION = '1.53.1'`.
 - **API key resolution order** (in `src/index.ts`): `config.apiKey` → credential ref `apiKeyEnv` (default `COMMANDCODE_API_KEY`, via the dsh credentials seam) → launch environment → official CLI auth file `~/.commandcode/auth.json`. **pi/OMP auth files are intentionally NOT scanned** — keep it that way.
-- **Multi-account rotation** (`src/accounts.ts` + the adapter's connect loop): the top-level key forms the `default` slot; `Config.accounts` (`[{ label, apiKeyEnv | apiKey }]`) adds more, in rotation order. Rotation is **passive**: a key is marked only on a real pre-stream rejection (429 → `unknown` cooldown, 401 → `disabled`), and the adapter's `rotateApiKey` hook re-sends the same request with the next account's key (safe: nothing streamed, the body is account-independent, `threadId` random per request — mid-stream failures NEVER rotate). When every account is marked, the pool probes `/alpha/billing/credits` per key (`probeFiveHourWindow`) to revive reset windows, else throws `RATE_LIMIT` naming the earliest `resetAt` (all-401 → `INVALID_CREDENTIAL`). State is keyed by API key, not slot — shared credentials share one mark. **Manual selection**: `Config.activeAccount` (a slot id) pins the serving account via the pool's `preferredId` seam + `selectActiveAccount()` (shared with the usage view's active badge); a pinned-but-exhausted or unknown id falls back to rotation order. **Model routing**: `Config.modelAccountRules` (`[{ models: string[], account }]`) lists catalog model ids per account slot; the request's model reaches key resolution (`resolveApiKey(connection, model)`), the pool's `modelAccountRules` seam re-reads rules per resolution, and `matchModelRule()`/`selectAccountForModel()` serve the routed account before preferred/rotation — an unusable routed account falls back, so the router is a hint, never a hard gate. The rules editor's model list comes from a Host-side `commandcode/models` Remote (the FULL adapter catalog via `listModels(…, { unfiltered: true })`, sorted), so the browser never calls the Command Code API; `SettingsPageApi.models` is optional, so legacy transports degrade to the empty-catalog state. Extra-account slot ids are the credential reference itself (`COMMANDCODE_API_KEY_2`, …) so a stored selection survives list reorders/removals; only literal-only composition entries keep positional `account-N` ids. The settings page edits `activeAccount` through the generic section-field machinery (a `<select>` bound to a text field) and `modelAccountRules` through its own rules card (staged rows like `accounts`, one `modelAccountRules` write). The picker's billing-access cache is per key. The usage Remote result is `CommandCodeAccountsReport` (`{ accounts: [...] }`); host and client ship in one bundle, so wire-shape changes need no migration — only synced edits in `src/usage-wire.ts`, `src/usage-remote.ts`, `src/client/usage.ts`, and `src/commands.ts`.
+- **Multi-account rotation** (`src/accounts.ts` + the adapter's connect loop): the top-level key forms the `default` slot; `Config.accounts` (`[{ label, apiKeyEnv | apiKey }]`) adds more, in rotation order. Rotation is **passive**: a key is marked only on a real pre-stream rejection (429 → `unknown` cooldown, 401 → `disabled`), and the adapter's `rotateApiKey` hook re-sends the same request with the next account's key (safe: nothing streamed, the body is account-independent, `threadId` random per request — mid-stream failures NEVER rotate). When every account is marked, the pool probes `/alpha/billing/credits` per key (`probeFiveHourWindow`) to revive reset windows, else throws `RATE_LIMIT` naming the earliest `resetAt` (all-401 → `INVALID_CREDENTIAL`). State is keyed by API key, not slot — shared credentials share one mark. **Manual selection**: `Config.activeAccount` (a slot id) pins the serving account via the pool's `preferredId` seam + `selectActiveAccount()` (shared with the usage view's active badge); a pinned-but-exhausted or unknown id falls back to rotation order. **Model routing**: `Config.modelAccountRules` (`[{ models: string[], account }]`) lists catalog model ids per account slot; the request's model reaches key resolution (`resolveApiKey(connection, model)`), the pool's `modelAccountRules` seam re-reads rules per resolution, and `matchModelRule()`/`selectAccountForModel()` serve the routed account before preferred/rotation — an unusable routed account falls back, so the router is a hint, never a hard gate. The rules editor's model list comes from a Host-side `commandcode/models` Remote (the FULL adapter catalog via `listModels(…, { unfiltered: true })`, sorted), so the browser never calls the Command Code API; `SettingsPageApi.models` is optional, so legacy transports degrade to the empty-catalog state. Extra-account slot ids are the credential reference itself (`COMMANDCODE_API_KEY_2`, …) so a stored selection survives list reorders/removals; only literal-only composition entries keep positional `account-N` ids. The settings page edits `activeAccount` through the generic section-field machinery (a `<select>` bound to a text field) and `modelAccountRules` through its own rules card (staged rows like `accounts`, one `modelAccountRules` write). The picker's billing-access cache is per key. The usage Remote result is `CommandCodeAccountsReport` (`{ accounts: [...] }`); host and client ship in one bundle, so wire-shape changes need no migration — only synced edits in `src/usage-wire.ts`, `src/usage-remote.ts`, `src/client/usage.ts`, and `src/commands.ts`. **`report.credits` distinguishes "reported" from "zero", and that distinction is load-bearing**: `monthlyReported` is optional-tri-state (`undefined` = a pre-field Host, read as "assume reported"; explicit `false` = the endpoint omitted the balance, which the panel renders as `—` and never as a consumed quota), and `fiveHour`/`weekly` are OPTIONAL members that are absent when the endpoint reported no such window — a present window with `cap: 0` means uncapped spend and keeps its row, an absent one keeps no row at all. Reading an absent balance as `0` is what turned a transient `/alpha/billing/credits` failure into a confident "100% used, quota exhausted"; the official CLI gates its own meter on the credits payload being present (`hasCreditsInfo`) and computes no depletion percentage without it. The wire schema validates a PRESENT `monthlyReported` as a boolean, so a malformed frame is rejected rather than coerced.
 - **Web search (`src/web-search.ts` + the optional `web` seam)**: the model-facing `web_search` tool (from `@deepseek-ai/dsh-tool-web`) is served by a `CommandCodeSearchProvider` registered as `commandcode` on `ctx.web` — same `Authorization: Bearer <key>` + `x-command-code-version` chain, same `apiBase`, so DSH's web search needs NO separate key/endpoint config (unlike `dsh-web-search-deepseek`, which needs its own Anthropic-compatible base). It POSTs `{ query, numResults, allowedDomains?, blockedDomains? }` to `/alpha/web-search` and maps `{ title, url, snippet }` → `WebSearchSource`. Registration rides `ctx.inject(['web'], ...)` exactly like `commands`/`typert`: the provider is registered only when the profile mounts the web service, and the fiber never activates otherwise (this stays an LLM-provider-only plugin without web). The pool's `resolveKey()` (rotation + auth-file revived) is reused, so search benefits from the same multi-account selection; the search endpoint is account-independent so no mid-flight rotation happens. **Selection**: whether the `commandcode` provider WINS over the shipped `deepseek-official` (or a sibling search plugin's pin, e.g. modsearch's `searchProvider: modsearch`) is `Config.webSearch` (default on). The web seam has NO public runtime selector, so the plugin writes its private `searchProviderId` field (read per call by `web.search()`) via `applyCommandCodeSearchSelection()` in `src/web-search.ts` — applied at boot AND on every settings change (the `installSection` `onChange` hook), and restored on fiber unload. The tracked `CommandCodeSearchSelection` remembers the displaced backend id, so toggle-off (and unload) hands the selection back to it — it NEVER forces the factory default, because that is what silenced sibling plugins with Command Code search off (issue #26); a fresh boot straight into `webSearch: false` leaves the field untouched. Re-enables keep the original `displaced` (the field holds our own id then, which must not overwrite the memory), and a field already reading `commandcode` at first touch means "nothing to restore". That write depends on the runtime shape (a plain writable property, not `#private`); the durable alternative is the boot-time `searchProvider: commandcode` cordis patch. The legacy `selectCommandCodeSearchProvider()` stays exported for compatibility but always restores the factory default on disable — new code must not use it. `dsh-web` is a `^0.1.2-rc.1` peer (kept external in tsdown); `tests/web-search.test.ts` pins the wire body, header, result mapping, the `WEB_ABORTED`/`WEB_PROVIDER_CREDENTIAL_MISSING`/`WEB_PROVIDER_ERROR` taxonomy, the selection-field handoff (sibling-pin restore, re-enable memory, unload path via the real host `apply()`), and the legacy rewrite.
 - **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings. Historical reasoning blocks are replayed on BOTH transports for tool-loop continuity — as a `{ type: 'reasoning', text }` assistant part on `/alpha/generate` (the official CLI's shape) and as `reasoning_content` on `/provider/v1/chat/completions` (see the wire-protocol bullet; issue #34). Only tool calls with a paired tool result are replayed on both transports. **Tool-result images** (`read_image` returns text + a nested `image` block): neither wire can hold an image inside a tool result — the CLI's `tool-result.output` is text-only (the official CLI's own `toV2ToolOutput` filters out everything but text) and Chat Completions forbids non-text `role: 'tool'` content — so `toolResultMedia()` splits each result and both converters emit the bytes in a user message immediately after the tool message, led by the `Attached image(s) from tool result:` note (the shape `@deepseek-ai/dsh-llm-deepseek` uses). Deduplicated by attachment id per result; an image-only result gets a `(image returned; see the attached image)` tool text instead of an empty string; a result without a paired call drops its images with the result. Never flatten a tool result with `blockText` alone again — that is issue #30. The `hasImageContent` gate (model Vision capability + attachment seam) already recurses into tool results, so these images ride the same `readImage` resolver user attachments use.
 - **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 → `RATE_LIMIT`; other HTTP → `PROVIDER_HTTP_ERROR` (403 body's `error.code`, e.g. `MODEL_NOT_IN_PLAN`, is parsed into the message). Unsupported options (`stop`) and image input throw `UNSUPPORTED_OPTION` / `UNSUPPORTED_CONTENT` rather than silently dropping.
@@ -211,9 +224,11 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   dashboard it opens in the layout's keyed `main` slot both render one
   projection, `buildPanelView()` in `src/client/panel.ts`: plan, the 5-hour and
   weekly windows with their own spend/limits, monthly credits derived the CLI's
-  way (`limit - remaining`), and the purchased/free balances. Nothing fetches:
-  both read the usage controller's snapshot, and `startPanelAutoRefresh()` is a
-  refcounted 2-minute tick that no-ops while no credential is configured.
+  way (`limit - remaining`), and the purchased/free balances. The projections
+  fetch nothing themselves: both read the usage controller's snapshot, and
+  `startPanelAutoRefresh()` is a refcounted 2-minute tick that calls
+  `usage.refresh()` while a credential is configured (it is the panel's only
+  fetch, and it skips the call — never the timer — without one).
   (2) The composer readout (`conversation.composer.dock`, id
   `commandcode-session-cost` — never the shipped `stats` id, which would REPLACE
   the harness's token/cache-hit/throughput cell) renders NO surface of its own:
@@ -224,14 +239,30 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   number and string: it prices only `commandcode` sessions, never invents a
   cache-write rate the pricing page omits (those tokens are reported as
   unpriced and the total stays a floor), and returns `undefined` — no pill at
-  all — for no usage, no table, an unknown model, or all-zero buckets, because
-  a confident `$0.00` would be a lie. Both surfaces are English by construction
+  all — for no usage, no table, an unknown model, all-zero buckets, or a session
+  whose EVERY billed token is unpriced (the guard is "unpriced tokens and no
+  priced spend", never "the total rounds to zero": a real sub-cent session keeps
+  its `<$0.0001` bound). The dialog row for cache-write tokens is hidden only
+  when their rate is missing; when it is published the row stays, because its
+  cost is already inside the total and hiding it makes the rows unable to
+  explain the figure above them. Both surfaces are English by construction
   (`panel-copy.ts`, `SESSION_COST_COPY`) rather than through `ctx.locale`; that
-  is a deliberate, documented limitation. Both need dsh 0.1.5+: `main` does not
-  exist before it (the layout called it `conversation`), and the injection's DOM
-  anchors (`[data-composer-stats]`, `[data-session-stats-usage]`) are 0.1.5
-  markup — on an older engine the registrations silently do not happen and every
-  other surface is unaffected. The three slot declarations are re-stated locally
+  is a deliberate, documented limitation.
+  **Version floors are PER SLOT, and getting this wrong ships a dead button.**
+  Measured across 0.1.1-rc.2 … 0.1.5-rc.2: `sidebar.footer.action` and
+  `conversation.composer.dock` are declared AND rendered in every one of those
+  releases; the keyed `main` seat arrives in 0.1.5-alpha.2 and
+  `layout.selectPanel` in 0.1.5-rc.1. So "the panel needs 0.1.5" is true of the
+  `main` seat ONLY — on an older engine the sidebar seat still exists, so an
+  ungated `slots.inject` there would render a card that silently does nothing
+  when clicked. The footer registration is therefore gated on
+  `ctx.inject(['layout'], …)` plus a `typeof selectPanel === 'function'` check
+  (`src/client/index.ts`), and the dashboard cell needs no gate because
+  registering against an undeclared slot is a no-op by construction. The DOM
+  anchors (`[data-composer-stats]`, `[data-session-stats-usage]`) are the one
+  genuinely 0.1.5-alpha.1 marker. `tests/client-boot.test.ts` pins all of this by
+  modelling the declaration set and the layout seam separately.
+  The three slot declarations are re-stated locally
   (`panel-slots.ts`, `session-cost-slots.ts`) and must stay structurally
   identical to upstream's, exactly like the Models-card merge in `card.tsx`.
 - **Price table Remote (`commandcode/prices`)**: `src/model-prices.ts` vendors
@@ -250,7 +281,25 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   OPTIONAL because the Host and bundle can be a cross-version pair — a Host
   without the endpoint lands in a permanent "no prices" state instead of
   throwing. `tests/model-prices.test.ts` fails whenever a catalog model has no
-  price row, which is the visible decision point when upstream adds a model.
+  price row (free models are exempt, since they are served explicitly at zero),
+  which is the visible decision point when upstream adds a model.
+  **Syncing the table is a script, not a hand edit**: `node
+  scripts/sync-model-prices.mjs` re-reads the page's embedded model JSON, asserts
+  it still duplicates its base rates into `offPeak` and that peak ≥ off-peak,
+  prints a warning for every model carrying `contextTiers` (the row stores the
+  BASE band only, so those figures are a FLOOR for a session that crosses the
+  band), CROSS-CHECKS each rewritten row against the page's own rendered table,
+  and rewrites only the `MODEL_PRICE_ROWS` literal. `--check` reports drift
+  without writing (exit 1 on drift, exit 2 when the page could not be read, so a
+  network failure never reads as "up to date"). The cross-check is the point: a
+  row can be internally consistent and still be the wrong row, which is exactly
+  how `deepseek-v4-flash-vision-exp` shipped ~47% high. Two documented upstream
+  inconsistencies to leave alone rather than "fix" in the table: the four GPT
+  rows publish a literal `cacheWriteCost: 0` in the JSON while the rendered
+  column shows `—` (the table stays faithful to the machine-readable source),
+  and the browser restates the Mon–Fri rule that `isPeakPricingHour()` owns
+  (only the windows travel with the table), so a weekday-rule change is a
+  two-place edit.
 
 - **Usage Remote (`commandcode/report`)**: the settings page's account card
   fetches the usage report Host-side through the Typert Gateway — the browser

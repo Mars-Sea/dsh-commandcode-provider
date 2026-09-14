@@ -217,6 +217,16 @@ function indexTable(table: CommandCodePriceTable): Map<string, CommandCodeModelP
  * what the accumulated tokens were actually billed at; `next` differs only when
  * a newer selection is pending, which is precisely the signal that more than one
  * model has served this session.
+ *
+ * KNOWN LIMITATION, stated rather than hidden: this flag is a snapshot of the
+ * pending switch, not a memory of one. The projection carries no per-model
+ * history, so once the new model's first request lands, `lastUsed` becomes the
+ * new model and the flag clears while the cumulative buckets still include the
+ * tokens the OLD model served — priced here at the new model's rates, at which
+ * point the total is approximate but unmarked. The pending window is the exact
+ * opposite (marked while the totals are still pure). Making the marker honest
+ * across the whole switch needs a history the seat does not carry, so it is a
+ * follow-up rather than a fix in this function.
  */
 function resolveModel(
   selection: SessionModelSelectionProjection | undefined,
@@ -322,6 +332,21 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
   // information, and on a free model it would be redundant.
   if (uncachedInput === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return undefined
 
+  // Same rule one step further in, and the distinction is subtler than "is the
+  // total zero". A non-zero bucket whose rate is MISSING is money we cannot
+  // price at all, and reporting it as `$0.00` would be exactly the confident
+  // figure this readout exists to refuse — that is the real cache-write-only
+  // case, and the honest answer is no pill. A bucket whose rate we DO have, even
+  // when the product rounds below a cent, is real priced spend: it keeps its
+  // bound (`<$0.0001`). So the guard is "unpriced tokens exist AND nothing was
+  // priced at all", never "the total rounds to zero".
+  const pricedCosts = free
+    ? []
+    : [breakdown.uncachedInput, breakdown.cacheRead, breakdown.cacheWrite, breakdown.output]
+  if (!free && unpricedCacheWriteTokens > 0 && !pricedCosts.some((cost) => cost !== undefined && cost > 0)) {
+    return undefined
+  }
+
   const value = free
     ? SESSION_COST_COPY.free
     : `${resolved.approximate ? SESSION_COST_COPY.approximate : ''}${sessionCostAmount(total)}`
@@ -343,14 +368,17 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
     unpricedCacheWriteTokens > 0 ? SESSION_COST_COPY.unpricedCacheWrite : undefined,
     resolved.approximate ? SESSION_COST_COPY.approximateNote : undefined,
   ] as Array<string | undefined>).filter((part): part is string => part !== undefined)
-  const title = [
+  // Empty clauses are dropped BEFORE joining: `clause()` returns undefined for a
+  // bucket with no tokens, and joining the raw list would leave a `·  ·` gap for
+  // every absent bucket — a tooltip that reads as a rendering bug.
+  const title = ([
     `${SESSION_COST_COPY.panelTitle} ${free ? SESSION_COST_COPY.free : sessionCostAmount(total)}`,
     clause(SESSION_COST_COPY.uncachedInput, uncachedInput),
     clause(SESSION_COST_COPY.output, output),
     clause(SESSION_COST_COPY.cacheRead, cacheRead),
     clause(SESSION_COST_COPY.cacheWrite, cacheWrite),
     ...notes,
-  ].join(' · ')
+  ] as Array<string | undefined>).filter((part): part is string => part !== undefined).join(' · ')
 
   return {
     total,
@@ -450,7 +478,13 @@ export function sessionCostRowDecorations(view: SessionCostView): SessionCostRow
   plan.push({ row: 'uncachedInput', tokens: uncachedInput, amount: price('uncachedInput'), hidden: false })
   plan.push({ row: 'cacheRead', tokens: cacheRead, amount: price('cacheRead'), hidden: false })
   if (cacheWrite !== 0) {
-    plan.push({ row: 'cacheWrite', tokens: cacheWrite, amount: undefined, hidden: true })
+    // Hidden only when the page publishes NO cache-write rate: those tokens are
+    // genuinely unpriced, the note says so, and the row would otherwise show a
+    // blank cell. When the rate IS known its price is part of the total, so the
+    // row must stay — hiding a row whose cost the pill already counts leaves the
+    // visible rows unable to explain the figure above them.
+    const amount = price('cacheWrite')
+    plan.push({ row: 'cacheWrite', tokens: cacheWrite, amount, hidden: amount === undefined })
   }
   plan.push({ row: 'output', tokens: output, amount: price('output'), hidden: false })
   return plan

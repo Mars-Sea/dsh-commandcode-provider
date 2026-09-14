@@ -236,10 +236,23 @@ function AccountCard({ account, view }: { account: PanelAccountView; view: Panel
         />
       ) : (
         <div className="ccp-planRow">
+          {/* The plan is a fact the card already shows in its header badge; what
+              is missing here is the RATIO, so the row names the plan whenever
+              the report carries one and falls back to a placeholder only when
+              the report itself is silent. */}
           <span className="ccp-fieldLabel">{text('plan')}</span>
           <span className="ccp-planName">{account.planName !== '' ? account.planName : text('unavailable')}</span>
         </div>
       )}
+
+      {/* A balance the billing endpoint DID report, so a card without a ratio
+          still states something true instead of nothing. */}
+      {monthly !== undefined && monthly.remaining !== '—' ? (
+        <div className="ccp-planRow">
+          <span className="ccp-fieldLabel">{text('remaining')}</span>
+          <span className="ccp-planName">{monthly.remaining}</span>
+        </div>
+      ) : null}
 
       {account.windows.length > 0 ? (
         <div className="ccp-windows">

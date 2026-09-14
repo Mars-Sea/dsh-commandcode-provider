@@ -27,6 +27,8 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **Plan-aware picker** — models above your subscription tier are hidden by default (toggleable); an optional **Model allowlist** keeps only your favorites in the picker.
 - **Reasoning-effort support** — models with selectable reasoning effort levels expose them in the picker.
 - **Image input** — Vision-capable models accept images.
+- **Plans & quota panel** — a Command Code card at the bottom of the sidebar (directly above Settings) shows the serving account's plan and its 5-hour and weekly windows; clicking it opens a dashboard with the billing period, both windows as progress bars with reset times, monthly credit consumption, and the purchased/free balances. Needs dsh 0.1.5 (rc.1) or newer, and reads in English on every harness language.
+- **Session cost readout** — a session served by Command Code shows what it has cost, in dollars, next to the harness's own token counter under the composer, and the token-usage dialog gains a price per row. Rates come from Command Code's published price list, including the peak/off-peak halves of the hourly-priced DeepSeek models. The harness's own token/cache-hit/throughput figures are left exactly as they are, and no figure is shown when there is nothing honest to price (no usage yet, an unknown model, or a rate the price list does not publish). Also English on every harness language.
 - **Web search** — the dsh `web_search` tool is backed by the Command Code Provider API (`/alpha/web-search`) with the same key/endpoint as chat, so no separate search key or base URL is needed. See [Web search](#web-search).
 
 See [Screenshots](#screenshots) below for what the UI looks like.
