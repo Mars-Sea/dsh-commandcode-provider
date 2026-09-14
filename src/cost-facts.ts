@@ -31,8 +31,21 @@ export function peakHour(at: number, windows: ReadonlyArray<readonly [number, nu
     && windows.some(([start, end]) => time.getUTCHours() >= start && time.getUTCHours() < end)
 }
 
-/** All prompt billing buckets determine a request's band, never cumulative session input. */
+/**
+ * All prompt billing buckets determine a request's band, never cumulative session input.
+ *
+ * A tiered model returns the matching band and does NOT then apply `peak`: the
+ * page publishes those two dimensions independently, no row carries both today,
+ * and the generator would report a tiered row on every sync — so the combination
+ * becoming real is visible before it reaches a user. This ordering is a latent
+ * choice, not a verified upstream rule.
+ */
 export function requestRates(price: CommandCodeModelPrice, at: number | null, contextTokens: number, table: CommandCodePriceTable): CommandCodeModelRates {
+  // The first band whose bound accepts the prompt. ORDER IS LOAD-BEARING, and
+  // both producers enforce it: the generator refuses non-ascending bounds or a
+  // bounded last band, and the wire parser rejects the same shapes — so a
+  // conforming table cannot present bands out of order, and this `find` cannot
+  // select a band a later one should have won.
   const tier = price.contextTiers?.find(tier => tier.maxContext === undefined || contextTokens <= tier.maxContext)
   if (tier !== undefined) return tier
   return price.peak !== undefined && at !== null && peakHour(at, table.peakHours) ? price.peak : price

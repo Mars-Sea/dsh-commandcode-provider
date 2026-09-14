@@ -64,12 +64,18 @@ src/client/panel-copy.ts   English copy for the panel (deliberately NOT a locale
 src/client/panel-slots.ts  SlotMap merge for `main` + `sidebar.footer.action`.
 src/client/panel-styles.ts  The panel stylesheet + its `data-plugin-css` id (the
                       idempotence key `injectPanelCss` selects on).
-src/client/prices.ts   One-shot price-table controller over `commandcode/prices`.
+src/client/prices.ts   Price-table controller over `commandcode/prices` (cached,
+                      bounded transient retries, manual retry, rebind reload).
 src/client/session-cost.ts  Session-cost calculation + copy (React-free).
 src/client/session-cost-view.tsx  The dock entry that feeds the injected cost.
 src/client/session-cost-display.ts  DOM injection into the harness's token-usage
                       pill and usage dialog (browser only).
 src/client/session-cost-slots.ts  SlotMap merge for `conversation.composer.dock`.
+src/cost-facts.ts      JSON-only billing facts shared by the Host projection and
+                      the browser readout (groups, peak/hour rule, pricing key).
+src/cost-projection.ts  Durable `commandCodeCost` session projection: folds each
+                      request's model, attempt time and prompt band so the
+                      readout prices history instead of cumulative totals.
 src/client/version.ts  Plugin version for the settings-page footer (package.json import, inlined at build).
 src/client/update.ts   Update hint: throttled npm-registry `latest` check +
                        tolerant semver compare (React-free, storage/fetch/time
@@ -127,8 +133,11 @@ tests/session-cost-display.test.ts  DOM-injection tests for the pill and the
                       usage dialog, driven through the real class and its
                       `doc`/`observe` seams against a fake DOM (confirmation,
                       self-heal, hide/restore, disposal).
-tests/prices-client.test.ts  price-table controller tests (one-shot cache, a
-                      Host without the endpoint).
+tests/cost-projection.test.ts  durable cost-fact fold tests against the real
+                      projection registry (v1/v2 settlements, retries, history
+                      restore, tier boundaries, free/unpriced subtotals).
+tests/prices-client.test.ts  price-table controller tests (cache, bounded
+                      transient retries, a Host without the endpoint).
 tests/package.test.ts package-metadata contract (Harness peers start at rc.1,
                       no dsh-client-runtime).
 tests/config-schema.test.ts Config credential contract: literal apiKey fields
@@ -278,6 +287,30 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   Never price cumulative usage with `modelSelection.lastUsed` or current time.
   Missing projection means hidden cost; missing rates/other-provider usage
   produce a labeled subtotal. Published-rate estimates are not provider invoices.
+  **KNOWN LIMITATION — one fold rule cannot serve both log generations.** The
+  replacement semantics here are the 0.1.5 token-meter's (`llm/retry-started`
+  closes the replacement slot, so a retried attempt ADDS). The 0.1.2/0.1.3-era
+  fold instead replaced on `(turn, step)` alone and never handled that event
+  (`dsh-client-connection`'s fixture projection is exactly that rule). On those
+  engines the two folds therefore disagree by the retried attempt's tokens, and
+  because the client requires per-bucket EQUALITY against `tokenUsage`
+  (`src/client/session-cost.ts`), a session that retried there loses the readout
+  entirely rather than showing a wrong figure. Retries are routine on this route
+  (429 plus the near-unbounded retry policy) and 0.1.2-rc.1/0.1.3 are declared
+  compatible in `package.json`, so this is a real gap, not a theoretical one.
+  Closing it means recording which fold rule wrote a group (or versioning the
+  projection per engine generation). Until then, do NOT "fix" the equality gate
+  by loosening it: that gate is what keeps a mismatched fold from being priced.
+- **Settings usage card availability** (`usageCardState()` in
+  `src/client/usage.ts`): the card's auto-fetch, refresh button and "no key"
+  hint derive from the HOST report's `entry.configured`, never from a browser
+  credential reference. A composition literal (`Config.apiKey`) is a stripped
+  secret and the official CLI auth file is not in the credentials store, so both
+  are invisible to the browser while the Host happily serves requests with them
+  — `state.anyAccountConfigured` must not gate this card or the post-save
+  refresh trigger (`src/client/index.ts`). `shouldRefresh` is true only in
+  `status === 'idle'`, so a failed fetch never becomes an automatic request
+  loop, and the button stays enabled for a manual retry.
 - **Price table Remote (`commandcode/prices`)**: `src/model-prices.ts` vendors
   the official per-token rates and serves them Host-side over the SAME
   `commandcodeUsage` service and one combined contribution (report + catalog +
@@ -309,9 +342,14 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   inconsistencies to leave alone rather than "fix" in the table: the four GPT
   rows publish a literal `cacheWriteCost: 0` in the JSON while the rendered
   column shows `—` (the table stays faithful to the machine-readable source),
-  and the browser restates the Mon–Fri rule that `isPeakPricingHour()` owns
-  (only the windows travel with the table), so a weekday-rule change is a
-  two-place edit.
+  and the Mon–Fri rule is restated in the browser because only the WINDOWS
+  travel with the table. The live copies are `isPeakPricingHour()` in
+  `capabilities.ts` (Host picker labels) and `peakHour()` in `cost-facts.ts`
+  (the readout's path, imported by the client bundle) — a weekday-rule change
+  is a two-place edit across those two. `isPeakHour()` in
+  `src/client/session-cost.ts` is a leftover third copy that nothing calls:
+  only `tests/session-cost.test.ts` references it, and it is dead-code-eliminated
+  out of `lib/client.js`. Delete it (and that one test) rather than re-wiring it.
 
 - **Usage Remote (`commandcode/report`)**: the settings page's account card
   fetches the usage report Host-side through the Typert Gateway — the browser

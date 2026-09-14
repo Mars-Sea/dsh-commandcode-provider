@@ -56,8 +56,8 @@ export interface SessionCostPricesState {
 const IDLE: SessionCostPricesState = { status: 'idle', table: undefined, error: undefined }
 
 /**
- * One-shot cache over the `commandcode/prices` Remote. Public API mirrors
- * {@link CommandCodeUsageController}: `state()`, `subscribe`, and `ensure()`.
+ * Timer seam for the bounded retry backoff, so a node test can drive the
+ * schedule without waiting on it.
  */
 export interface PriceRetryTimer {
   set(callback: () => void, ms: number): unknown
@@ -68,6 +68,18 @@ const RETRY_TIMER: PriceRetryTimer = {
   clear(handle) { clearTimeout(handle as ReturnType<typeof setTimeout>) },
 }
 
+/**
+ * Cache over the `commandcode/prices` Remote, with a bounded transient-retry
+ * budget. Public API mirrors {@link CommandCodeUsageController}: `state()`,
+ * `subscribe`, and `ensure()`; `reload()` additionally drops the cache and
+ * restarts the budget when the Host namespace rebinds.
+ *
+ * Not a one-shot: the last fetch is cached until `reload()`, a transient
+ * failure is retried three times at 1/2/4 s (the delays are bounded, not a
+ * poll), and a MANUAL `ensure()` still fetches after that budget is spent. A
+ * PERMANENT failure — the Host serving no such endpoint — is terminal for the
+ * binding and is only cleared by `reload()`.
+ */
 export class CommandCodePricesController {
   private readonly remote: PricesRemote
   private readonly listeners = new Set<() => void>()
@@ -105,9 +117,13 @@ export class CommandCodePricesController {
   }
 
   /**
-   * Fetch the table unless it is already loaded or in flight. Safe to call from
-   * every mount point: the Remote namespace landing and the composer mounting
-   * are both triggers, in either order, and only one request is ever issued.
+   * Fetch the table unless it is already loaded, permanent, or in flight — and
+   * unless a bounded retry already owns the next attempt.
+   *
+   * The only callers are the client entry: `reload()` when the Remote namespace
+   * lands or rebinds, and a manual refresh. Nothing in the composer calls it, so
+   * a mounted readout does not trigger a fetch of its own — it renders whatever
+   * the table's state currently is.
    */
   ensure(): void {
     if (this.disposed || this.permanent || this.inFlight || this.current.status === 'ready') return
