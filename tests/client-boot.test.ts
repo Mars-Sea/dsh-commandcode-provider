@@ -83,8 +83,9 @@ function makeScope() {
  * @param options - whether to mount the `credentials` remote namespace. When
  *   `false`, the plugin must not register any surface (it parks on the
  *   `inject(['remote.credentials'])` gate).
- * @returns the registered slot surfaces, keyed by `id` (settings.section) or
- *   `key` (provider-card), after boot settles.
+ * @returns the registered slot surfaces, keyed by `id` (settings.section,
+ *   panel entries) or `key` (provider-card), after boot settles. Every
+ *   registration per key is kept, in registration order.
  */
 async function boot({ mountCredentials = true }: { mountCredentials?: boolean } = {}) {
   const ctx = new Context()
@@ -125,7 +126,7 @@ async function boot({ mountCredentials = true }: { mountCredentials?: boolean } 
     descriptors: [
       // The credentials namespace (dsh-api-settings-controller in alpha2).
       ...(mountCredentials ? [{ namespace: 'credentials', method: 'describe' }] : []),
-      // The plugin's own report/models/login namespace (mounted below).
+      // The plugin's own report/models/prices/login namespace (mounted below).
       { namespace: 'commandcode', method: 'report' },
     ],
   })
@@ -138,13 +139,22 @@ async function boot({ mountCredentials = true }: { mountCredentials?: boolean } 
   })
   ctx.provide('settingsScope', { bind: () => makeScope() })
 
-  const registered = new Map<string, { name: string }>()
+  // Keyed by slot id/key, but ACCUMULATING: the panel registers one `main`
+  // cell and one `sidebar.footer.action` row under the same id, so a
+  // last-write-wins map would hide the other registration.
+  const registered = new Map<string, Array<{ name: string; id?: string; key?: string }>>()
+  const record = (options: { name: string; id?: string; key?: string }): void => {
+    const key = options.id ?? options.key ?? options.name
+    const entries = registered.get(key) ?? []
+    entries.push(options)
+    registered.set(key, entries)
+  }
   ctx.provide('slots', {
     inject(_name: string, fn: () => void) {
       fn()
     },
     register(options: { id?: string; key?: string; name: string }, _component: unknown) {
-      registered.set(options.id ?? options.key!, options)
+      record(options)
       return () => {}
     },
   })
@@ -175,7 +185,7 @@ test('app registers the settings page and Models provider card when remote.crede
   // The "Command Code" settings page: a `settings.section` entry id `commandcode`.
   assert.equal(registered.has('commandcode'), true, 'settings.section id commandcode should register')
   assert.equal(
-    registered.get('commandcode')!.name,
+    registered.get('commandcode')![0]!.name,
     'settings.section',
     'the registered surface should be the settings section',
   )
@@ -183,10 +193,38 @@ test('app registers the settings page and Models provider card when remote.crede
   // The Models-page provider card for the `commandcode` adapter family.
   assert.equal(registered.has('llm-commandcode'), true, 'settings.models.provider-card key llm-commandcode should register')
   assert.equal(
-    registered.get('llm-commandcode')!.name,
+    registered.get('llm-commandcode')![0]!.name,
     'settings.models.provider-card',
     'the registered surface should be the provider card',
   )
+})
+
+test('the same apply() also seats the sidebar panel and the composer cost readout', async () => {
+  const registered = await boot()
+
+  // The plans & quota panel: one keyed `main` cell (the dashboard) and one
+  // `sidebar.footer.action` row (the card that opens it), sharing one id so
+  // `layout.selectPanel('commandcode-panel')` resolves the cell the card means.
+  const panel = registered.get('commandcode-panel') ?? []
+  assert.deepEqual(
+    panel.map((entry) => entry.name).sort(),
+    ['main', 'sidebar.footer.action'],
+    'the panel id must occupy both the layout cell and the sidebar row',
+  )
+  assert.equal(panel.find((entry) => entry.name === 'main')?.key, 'commandcode-panel')
+
+  // The session-cost entry exists for its SEATS: it renders nothing itself and
+  // must NOT take the shipped `stats` cell's id, which would replace the
+  // harness's own token/cache-hit/throughput readout instead of decorating it.
+  const dock = registered.get('commandcode-session-cost') ?? []
+  assert.equal(dock.length, 1)
+  assert.equal(dock[0]?.name, 'conversation.composer.dock')
+  assert.equal(registered.has('stats'), false, 'the shipped stats cell must keep its seat')
+
+  // Every registration above is keyed by its own slot, so the shipped
+  // settings/provider surfaces are still registered alongside them.
+  assert.equal(registered.get('commandcode')![0]!.name, 'settings.section')
+  assert.equal(registered.get('llm-commandcode')![0]!.name, 'settings.models.provider-card')
 })
 
 test('app registers no surface when remote.credentials is absent (the alpha2 gate holds)', async () => {

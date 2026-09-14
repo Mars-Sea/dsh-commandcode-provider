@@ -302,3 +302,153 @@ export const MODELS_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
   package: USAGE_REMOTE_PACKAGE,
   descriptors: [MODELS_DESCRIPTOR],
 }
+
+// ---------------------------------------------------------------------------
+// Model price table Remote (`commandcode/prices`)
+// ---------------------------------------------------------------------------
+
+/**
+ * One model's per-token rates, in USD per 1,000,000 tokens — the unit the
+ * official pricing page publishes in.
+ */
+export interface CommandCodeModelRates {
+  /** Uncached (billed) input tokens. */
+  inputCost: number
+  /** Completion tokens. */
+  outputCost: number
+  /** Input tokens served from the provider's cache. */
+  cacheReadCost: number
+  /**
+   * Input tokens written into the provider's cache. Present for a minority of
+   * models — the page publishes no cache-write rate for the rest, whose
+   * cache-write tokens are therefore UNPRICED. Do not substitute a multiple of
+   * the input rate for a missing value.
+   */
+  cacheWriteCost?: number
+}
+
+/** One model's rates plus the peak-hour override for time-of-day models. */
+export interface CommandCodeModelPrice extends CommandCodeModelRates {
+  /**
+   * Lookup key: the catalog model id when a catalog model maps to this row,
+   * otherwise the pricing page's own slug. A session reports catalog ids, so
+   * this is the primary key the browser looks up by.
+   */
+  id: string
+  /** The pricing page's slug for this row — the secondary lookup key. */
+  slug: string
+  /**
+   * Rates charged inside the peak windows. The row's own top-level rates are
+   * the off-peak rates, so a row WITH this block is time-of-day priced and a
+   * row without it is flat-priced.
+   */
+  peak?: CommandCodeModelRates
+  /**
+   * Whether the model costs nothing on every plan right now (a free deal or a
+   * `:free` catalog variant). Served explicitly at zero rates so a surface can
+   * say "free" rather than showing nothing.
+   */
+  free?: boolean
+}
+
+/** The price-table Remote result: every known model's rates. */
+export interface CommandCodePriceTable {
+  /**
+   * Every priced model, keyed by {@link CommandCodeModelPrice.id} (catalog id
+   * first, pricing slug as the fallback) and carrying its slug as a second
+   * lookup key. A model absent from this list has no known price and must
+   * render no cost at all rather than a guess.
+   */
+  models: CommandCodeModelPrice[]
+  /**
+   * Peak-pricing windows as `[startHour, endHour)` in UTC, end-exclusive,
+   * applying Monday–Friday only. Shipped with the table so the browser prices
+   * against the Host snapshot's schedule instead of restating it.
+   */
+  peakHours: Array<[number, number]>
+}
+
+/** Canonical `<namespace>/<method>` endpoint of the price-table Remote. */
+export const PRICES_ENDPOINT = 'commandcode/prices'
+
+/**
+ * The shared read/validate helpers for the price-table endpoint — its own
+ * instance so price boundary errors name `commandcode/prices`.
+ */
+const {
+  reject: priceReject,
+  record: priceRecord,
+  stringField: priceString,
+  numberField: priceNumber,
+  booleanField: priceBoolean,
+} = makeBoundaryValidator('commandcode/prices result:')
+
+/** Parse one rate block (`rates`, or a model's `peak` override). */
+function parseRates(source: Record<string, unknown>, field: string): CommandCodeModelRates {
+  const rates: CommandCodeModelRates = {
+    inputCost: priceNumber(source, 'inputCost', `${field}.inputCost`),
+    outputCost: priceNumber(source, 'outputCost', `${field}.outputCost`),
+    cacheReadCost: priceNumber(source, 'cacheReadCost', `${field}.cacheReadCost`),
+  }
+  // Optional on the wire: only a minority of models publish a cache-write
+  // rate, and a present non-number is a contract violation rather than a
+  // silent zero.
+  if (source.cacheWriteCost !== undefined) {
+    rates.cacheWriteCost = priceNumber(source, 'cacheWriteCost', `${field}.cacheWriteCost`)
+  }
+  return rates
+}
+
+/** Parse one untrusted boundary value into a {@link CommandCodeModelPrice}. */
+function parseModelPrice(value: unknown): CommandCodeModelPrice {
+  const source = priceRecord(value, 'model')
+  const price: CommandCodeModelPrice = {
+    id: priceString(source, 'id', 'model.id'),
+    slug: priceString(source, 'slug', 'model.slug'),
+    ...parseRates(source, 'model'),
+  }
+  if (source.peak !== undefined) price.peak = parseRates(priceRecord(source.peak, 'model.peak'), 'model.peak')
+  if (source.free !== undefined) price.free = priceBoolean(source, 'free', 'model.free')
+  return price
+}
+
+/** Parse the wire result into a {@link CommandCodePriceTable}. */
+function parsePriceTable(value: unknown): CommandCodePriceTable {
+  const source = priceRecord(value, 'result')
+  const models = source.models
+  if (!Array.isArray(models)) priceReject('models')
+  const peakHours = source.peakHours
+  if (!Array.isArray(peakHours)) priceReject('peakHours')
+  return {
+    models: (models as unknown[]).map(parseModelPrice),
+    peakHours: (peakHours as unknown[]).map((window) => {
+      if (!Array.isArray(window) || window.length !== 2) priceReject('peakHours[]')
+      const [start, end] = window as [unknown, unknown]
+      if (typeof start !== 'number' || typeof end !== 'number') priceReject('peakHours[]')
+      return [start, end] as [number, number]
+    }),
+  }
+}
+
+/** The strict result codec for the price-table Remote. */
+export const pricesSchema: TypertSchema<CommandCodePriceTable> = {
+  parse: parsePriceTable,
+}
+
+/**
+ * The price-table invocation descriptor, sharing the same `commandcodeUsage`
+ * service and `commandcode` namespace as the report and catalog endpoints.
+ */
+export const PRICES_DESCRIPTOR: InvocationDescriptor =
+  makeRemoteDescriptor<CommandCodePriceTable>(
+    PRICES_ENDPOINT,
+    'prices',
+    `${USAGE_REMOTE_PACKAGE}#CommandCodePriceTable`,
+    pricesSchema,
+  )
+
+/** The Client-face contribution for the price-table endpoint. */
+export const PRICES_REMOTE_CONTRIBUTION: TypertRemoteContribution = {
+  package: USAGE_REMOTE_PACKAGE,
+  descriptors: [PRICES_DESCRIPTOR],
+}

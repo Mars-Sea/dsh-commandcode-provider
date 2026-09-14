@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **A plans & quota card in the sidebar and a dashboard behind it.** The bottom of the sidebar now carries a Command Code card — directly above Settings — showing the serving account's plan and both quota windows (5-hour and weekly) with their spend and limits. Clicking it opens a dashboard in the center column with the plan badge and billing period, the two windows as progress bars with reset times, monthly credit consumption, and the purchased/free credit balances. Both surfaces are driven by the same Host-side usage report the settings page's account card already uses, so no key ever reaches the browser, and the panel refreshes itself in the background on a 2-minute tick while it is on screen. The card is English by construction rather than following the harness language, and it appears only on dsh 0.1.5 or newer — older engines have neither the sidebar-foot seat nor the layout panel slot, and nothing else about the plugin changes there. Ported from [#36](https://github.com/Mars-Sea/dsh-commandcode-provider/pull/36) by [@xer-on](https://github.com/xer-on).
+
+- **The composer now shows what the current session has cost, in dollars.** Under the input, next to the harness's own token counter, a session served by Command Code gains an amount (for example `1.2M tokens · Cache hit 87% · $0.02`), and the token-usage dialog the counter opens gains a price per row (uncached input, completion, cache read). The figures are computed from the session's own token buckets against Command Code's published per-token rates, including the peak/off-peak halves of the hourly-priced DeepSeek models. The readout decorates the harness's counter instead of replacing it, so the existing token/cache-hit/throughput figures and their translations stay exactly as they are. Three rules keep it honest: only Command Code sessions are priced, a model with no published cache-write rate says so rather than guessing a multiplier, and a session with nothing to price (no usage yet, an unknown model) renders no figure at all instead of a misleading `$0.00`. Ported from [#36](https://github.com/Mars-Sea/dsh-commandcode-provider/pull/36) by [@xer-on](https://github.com/xer-on).
+
+### Changed
+- **The model price table is served to the browser over a new `commandcode/prices` Remote.** The official per-token rates (input, output, cache-read, cache-write where published, plus the peak-hour override for the hourly-priced models) are vendored Host-side and reach the composer through the existing `commandcodeUsage` service, so the browser bundle carries no copy that could drift and a price row reaches an open page without a rebuild. A price row whose catalog name differs from the pricing page's slug (a vendor prefix, a dated suffix) is matched automatically, and a model the page does not price renders no cost rather than a guess. The table is pinned against the catalog by `tests/model-prices.test.ts`, which fails when a catalog model has no price — the visible decision point when upstream adds a model.
+
 ## [0.10.6] - 2026-09-12
 
 ### Fixed

@@ -53,10 +53,26 @@ src/client/card.tsx   The Models-page provider card (keyed-slot component +
                       the SlotMap merge for `settings.models.provider-card` /
                       `settings.models.footer` mirroring upstream 0.1.2).
 src/client/sessions.ts  selectModel friendly-error wrapper (React-free).
+src/client/panel.ts    Plans & quota panel view model + the shared background
+                      auto-refresh loop (React-free).
+src/client/panel-view.tsx  Sidebar footer card + center dashboard components.
+src/client/panel-copy.ts   English copy for the panel (deliberately NOT a locale
+                      namespace — the panel is English on every harness).
+src/client/panel-slots.ts  SlotMap merge for `main` + `sidebar.footer.action`.
+src/client/prices.ts   One-shot price-table controller over `commandcode/prices`.
+src/client/session-cost.ts  Session-cost calculation + copy (React-free).
+src/client/session-cost-view.tsx  The dock entry that feeds the injected cost.
+src/client/session-cost-display.ts  DOM injection into the harness's token-usage
+                      pill and usage dialog (browser only).
+src/client/session-cost-slots.ts  SlotMap merge for `conversation.composer.dock`.
 src/client/version.ts  Plugin version for the settings-page footer (package.json import, inlined at build).
 src/client/update.ts   Update hint: throttled npm-registry `latest` check +
                        tolerant semver compare (React-free, storage/fetch/time
                        seams); the page footer links to releases when newer.
+src/model-prices.ts    Vendored per-token price table (input/output/cache-read/
+                      cache-write, peak overrides) + the catalog-id → pricing-slug
+                      join, served to the browser through `commandcode/prices`.
+                      Generated rows; see the dsh-commandcode-upstream skill.
 src/login.ts           Host half of the browser login: loopback callback
                        server mirroring `command-code login` (POST /callback,
                        state token, whoami validation) → storeKey seam.
@@ -97,6 +113,13 @@ tests/login-client.test.ts login-panel controller poll lifecycle.
 tests/client.test.ts  selectModel friendly-error rewrite tests (real envelope shape).
 tests/client-boot.test.ts client-boot integration tests (real apply() against a
                       DSH 0.1.2 client assembly; settings page + provider card).
+tests/panel.test.ts   plans & quota projection + auto-refresh loop tests.
+tests/model-prices.test.ts  price table ↔ catalog join tests (fails when a
+                      catalog model has no price).
+tests/session-cost.test.ts  session-cost calculation tests (peak/off-peak, a
+                      missing rate, the invisible-when-unpriceable rules).
+tests/prices-client.test.ts  price-table controller tests (one-shot cache, a
+                      Host without the endpoint).
 tests/package.test.ts package-metadata contract (Harness peers start at rc.1,
                       no dsh-client-runtime).
 tests/config-schema.test.ts Config credential contract: literal apiKey fields
@@ -130,7 +153,9 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   leak into a settings document. The retained legacy credential adapter is
   defensive only; the published peer contract starts at 0.1.2-rc.1.
   `tests/settings.test.ts` and `tests/legacy-credentials.test.ts` pin these
-  internal faces.
+  internal faces. The panel/session-cost slots are a 0.1.5 addition (see the
+  panel bullet below): their declarations simply never exist on 0.1.2, so
+  `slots.inject` never fires and neither surface registers there.
 - **Isolated package install**: pnpm 10 auto-installs the package's DSH peers
   when a desktop marketplace prepares a fresh generation. Keep
   `@deepseek-ai/dsh-invariants` as an explicit `^0.1.2-rc.1` peer matching
@@ -180,6 +205,53 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
 - **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings. Historical reasoning blocks are replayed on BOTH transports for tool-loop continuity — as a `{ type: 'reasoning', text }` assistant part on `/alpha/generate` (the official CLI's shape) and as `reasoning_content` on `/provider/v1/chat/completions` (see the wire-protocol bullet; issue #34). Only tool calls with a paired tool result are replayed on both transports. **Tool-result images** (`read_image` returns text + a nested `image` block): neither wire can hold an image inside a tool result — the CLI's `tool-result.output` is text-only (the official CLI's own `toV2ToolOutput` filters out everything but text) and Chat Completions forbids non-text `role: 'tool'` content — so `toolResultMedia()` splits each result and both converters emit the bytes in a user message immediately after the tool message, led by the `Attached image(s) from tool result:` note (the shape `@deepseek-ai/dsh-llm-deepseek` uses). Deduplicated by attachment id per result; an image-only result gets a `(image returned; see the attached image)` tool text instead of an empty string; a result without a paired call drops its images with the result. Never flatten a tool result with `blockText` alone again — that is issue #30. The `hasImageContent` gate (model Vision capability + attachment seam) already recurses into tool results, so these images ride the same `readImage` resolver user attachments use.
 - **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 → `RATE_LIMIT`; other HTTP → `PROVIDER_HTTP_ERROR` (403 body's `error.code`, e.g. `MODEL_NOT_IN_PLAN`, is parsed into the message). Unsupported options (`stop`) and image input throw `UNSUPPORTED_OPTION` / `UNSUPPORTED_CONTENT` rather than silently dropping.
 - **Adapter is cordis-free** by design: `src/adapter.ts` takes a per-request `options()` thunk + `resolveApiKey()` from the plugin entry, so settings changes reach the next request without re-registration. It also accepts an injectable `fetchImpl` for tests.
+- **Plans & quota panel + composer session cost (ported from PR #36)**: two
+  client-only surfaces on top of the EXISTING Host facts. (1) The sidebar footer
+  card (`sidebar.footer.action`, order 1 — directly above Settings) and the
+  dashboard it opens in the layout's keyed `main` slot both render one
+  projection, `buildPanelView()` in `src/client/panel.ts`: plan, the 5-hour and
+  weekly windows with their own spend/limits, monthly credits derived the CLI's
+  way (`limit - remaining`), and the purchased/free balances. Nothing fetches:
+  both read the usage controller's snapshot, and `startPanelAutoRefresh()` is a
+  refcounted 2-minute tick that no-ops while no credential is configured.
+  (2) The composer readout (`conversation.composer.dock`, id
+  `commandcode-session-cost` — never the shipped `stats` id, which would REPLACE
+  the harness's token/cache-hit/throughput cell) renders NO surface of its own:
+  `src/client/session-cost-display.ts` injects the amount into the shipped pill
+  and a price per row into the shipped usage dialog, matched POSITIONALLY (the
+  labels are the `chat` locale's, so they are never read) and confirmed by the
+  token count each row must be showing. `buildSessionCostView()` owns every
+  number and string: it prices only `commandcode` sessions, never invents a
+  cache-write rate the pricing page omits (those tokens are reported as
+  unpriced and the total stays a floor), and returns `undefined` — no pill at
+  all — for no usage, no table, an unknown model, or all-zero buckets, because
+  a confident `$0.00` would be a lie. Both surfaces are English by construction
+  (`panel-copy.ts`, `SESSION_COST_COPY`) rather than through `ctx.locale`; that
+  is a deliberate, documented limitation. Both need dsh 0.1.5+: `main` does not
+  exist before it (the layout called it `conversation`), and the injection's DOM
+  anchors (`[data-composer-stats]`, `[data-session-stats-usage]`) are 0.1.5
+  markup — on an older engine the registrations silently do not happen and every
+  other surface is unaffected. The three slot declarations are re-stated locally
+  (`panel-slots.ts`, `session-cost-slots.ts`) and must stay structurally
+  identical to upstream's, exactly like the Models-card merge in `card.tsx`.
+- **Price table Remote (`commandcode/prices`)**: `src/model-prices.ts` vendors
+  the official per-token rates and serves them Host-side over the SAME
+  `commandcodeUsage` service and one combined contribution (report + catalog +
+  prices + login). Rows are keyed by CATALOG id wherever the two namespaces
+  reconcile (the page drops vendor prefixes and sometimes inserts a hyphen —
+  `priceSlugCandidates()` generates the plausible slugs and takes the first hit),
+  and a row no catalog model claims is still served under its slug; free models
+  are served explicitly at zero with `free: true`. The peak windows travel WITH
+  the table (`peakHours`), so the browser prices against this snapshot's schedule
+  instead of restating it; the model-independent half of that rule is
+  `isPeakPricingHour()` in `capabilities.ts`, which `peakPricingState()` now
+  delegates to. `CommandCodePricesController` (`src/client/prices.ts`) is a
+  one-shot cache, and both the namespace member and `UsageRemote.prices` are
+  OPTIONAL because the Host and bundle can be a cross-version pair — a Host
+  without the endpoint lands in a permanent "no prices" state instead of
+  throwing. `tests/model-prices.test.ts` fails whenever a catalog model has no
+  price row, which is the visible decision point when upstream adds a model.
+
 - **Usage Remote (`commandcode/report`)**: the settings page's account card
   fetches the usage report Host-side through the Typert Gateway — the browser
   never holds the API key. Host: `src/usage-remote.ts` registers a

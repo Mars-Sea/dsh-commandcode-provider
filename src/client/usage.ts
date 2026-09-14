@@ -13,7 +13,7 @@
  * @module dsh-commandcode-provider/client/usage
  */
 
-import type { CommandCodeAccountsReport, CommandCodeCatalog } from '../usage-wire.ts'
+import type { CommandCodeAccountsReport, CommandCodeCatalog, CommandCodePriceTable } from '../usage-wire.ts'
 import type { CommandCodeLoginStatus } from '../login-wire.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -23,19 +23,28 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
  * typert.remote-client files use), so `ctx.remote.commandcode.*()` is typed
  * once each contribution is mounted. The `commandcode` namespace member is
  * declared exactly once (interface merging forbids duplicate members), so
- * this one declaration carries the usage report, the model catalog, AND the
- * login endpoints — the endpoint-level declarations live beside their
- * controllers.
+ * this one declaration carries the usage report, the model catalog, the price
+ * table, AND the login endpoints — the endpoint-level declarations live beside
+ * their controllers.
  */
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteMap {
     'commandcode/report': () => Promise<RemoteResult<CommandCodeAccountsReport>>
     'commandcode/models': () => Promise<RemoteResult<CommandCodeCatalog>>
+    'commandcode/prices': () => Promise<RemoteResult<CommandCodePriceTable>>
   }
   interface TypertRemoteNamespaceMap {
     commandcode: {
       report: () => Promise<RemoteResult<CommandCodeAccountsReport>>
       models: () => Promise<RemoteResult<CommandCodeCatalog>>
+      /**
+       * Optional because the Host half and this browser bundle can be a
+       * cross-version pair: a Host older than the price table mounts no
+       * `commandcode/prices` descriptor, so the member is genuinely absent at
+       * runtime. The price controller reads a missing method as "no table"
+       * (see `./prices.ts`) instead of throwing.
+       */
+      prices?: () => Promise<RemoteResult<CommandCodePriceTable>>
       loginBegin: () => Promise<RemoteResult<CommandCodeLoginStatus>>
       loginStatus: () => Promise<RemoteResult<CommandCodeLoginStatus>>
       loginCancel: () => Promise<RemoteResult<CommandCodeLoginStatus>>
@@ -51,6 +60,15 @@ export interface UsageRemote {
   >
   models(): Promise<
     | { ok: true; value: CommandCodeCatalog }
+    | { ok: false; error: { message: string } }
+  >
+  /**
+   * Optional for the same cross-version reason as the namespace member above:
+   * an older Host serves no price table. `CommandCodePricesController` reads
+   * the absence as a permanent "no prices" state.
+   */
+  prices?(): Promise<
+    | { ok: true; value: CommandCodePriceTable }
     | { ok: false; error: { message: string } }
   >
 }

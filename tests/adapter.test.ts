@@ -28,6 +28,8 @@ import {
   KNOWN_PLANS,
   KNOWN_DEALS,
   KNOWN_PEAK_PRICING,
+  PEAK_HOUR_RANGES,
+  isPeakPricingHour,
   planLabel,
   dealLabel,
   formatContext,
@@ -2873,6 +2875,35 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
     }
   }
   assert.equal(weekPeakHours, 35)
+})
+
+test('isPeakPricingHour() answers the model-independent half of the same rule', () => {
+  // The composer's session-cost readout prices against the price table's own
+  // `peak` blocks, so it needs the hour test WITHOUT a model membership check.
+  // It must agree with `peakPricingState()` exactly on every hour the snapshot
+  // does place, or the picker's label and the composer's rate would disagree.
+  const peak = (h: number) => Date.parse(`2026-08-17T${String(h).padStart(2, '0')}:30:00Z`)
+  for (let h = 0; h < 24; h++) {
+    const expected = peakPricingState('deepseek/deepseek-v4-flash', peak(h)) === 'peak'
+    assert.equal(isPeakPricingHour(peak(h)), expected, `hour ${h}`)
+  }
+  // Weekends are off-peak for all 24 hours, exactly as above.
+  for (const day of ['2026-08-15', '2026-08-16']) {
+    for (let h = 0; h < 24; h++) {
+      const at = Date.parse(`${day}T${String(h).padStart(2, '0')}:30:00Z`)
+      assert.equal(isPeakPricingHour(at), false, `${day} hour ${h}`)
+    }
+  }
+  // End-exclusive on both edges, same boundaries the snapshot documents.
+  assert.equal(isPeakPricingHour(Date.parse('2026-08-17T00:59:59Z')), false)
+  assert.equal(isPeakPricingHour(Date.parse('2026-08-17T01:00:00Z')), true)
+  assert.equal(isPeakPricingHour(Date.parse('2026-08-17T03:59:59Z')), true)
+  assert.equal(isPeakPricingHour(Date.parse('2026-08-17T04:00:00Z')), false)
+  assert.equal(isPeakPricingHour(Date.parse('2026-08-17T09:59:59Z')), true)
+  assert.equal(isPeakPricingHour(Date.parse('2026-08-17T10:00:00Z')), false)
+  // The windows ship to the browser with the price table, so they are part of
+  // the wire contract rather than a private constant.
+  assert.deepEqual(PEAK_HOUR_RANGES, [[1, 4], [6, 10]])
 })
 
 test('CLI version and API base constants are stable', () => {
