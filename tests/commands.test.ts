@@ -429,3 +429,24 @@ test('partial credit payload distinguishes omitted balances from reported zero',
   assert.equal(report.credits?.freeReported, false)
   assert.equal(report.credits?.purchasedCredits, 0)
 })
+
+test('credit ratios require both balances and print exactly one percent sign', async () => {
+  for (const locale of ['en', 'zh'] as const) {
+    for (const patch of [
+      { purchasedReported: false }, { monthlyReported: false },
+      { monthlyCredits: 0, purchasedCredits: 0 }, {},
+    ]) {
+      const def = commandDefinition({
+        adapter: { getUsage: async () => ({ failures: [], credits: {
+          monthlyCredits: 5, purchasedCredits: 5, freeCredits: 0,
+          monthlyReported: true, purchasedReported: true, freeReported: false, ...patch,
+        } }) } as unknown as CommandCodeAdapter,
+        getLocale: () => locale,
+      })
+      const result = await invoke(def, '')
+      assert.doesNotMatch(result.text, /%%/)
+      if (Object.keys(patch).length === 0) assert.match(result.text, /50%/)
+      else assert.doesNotMatch(result.text, /%|[█░]/, 'missing or zero denominator must not render a ratio')
+    }
+  }
+})

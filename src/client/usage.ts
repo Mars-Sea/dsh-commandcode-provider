@@ -213,3 +213,13 @@ export function formatResetAt(ms: number): string {
   if (ms <= 0) return ''
   return new Date(ms).toLocaleString()
 }
+
+/** Host facts drive the usage card, including keys invisible to browser credentials. */
+export function usageCardState(usage: UsagePageState) {
+  const accounts = usage.report?.accounts ?? []
+  return {
+    loading: usage.status === 'loading',
+    shouldRefresh: usage.status === 'idle',
+    noKey: accounts.length > 0 && !accounts.some(account => account.configured),
+  }
+}

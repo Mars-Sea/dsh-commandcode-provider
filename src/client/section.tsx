@@ -28,7 +28,7 @@ import type { LoginPageState } from './login.ts'
 import { LoginRow } from './login-row.tsx'
 import { buildModelSelectOptions, catalogIsReady, groupModelSelectOptions, staleModelIds, tierHeadingFor, toggleModelSelection } from './model-select.ts'
 import type { UsagePageState } from './usage.ts'
-import { formatMoney, formatMoneyExact, formatResetAt, formatSuccessRate, formatTokensCompact, windowRatio } from './usage.ts'
+import { usageCardState, formatMoney, formatMoneyExact, formatResetAt, formatSuccessRate, formatTokensCompact, windowRatio } from './usage.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
 import { checkForUpdate, localStorageUpdateStore } from './update.ts'
 
@@ -573,10 +573,9 @@ function AccountTabDot({ entry }: { entry: CommandCodeAccountUsage }) {
  * management card are hidden here immediately. Data arrives through the
  * `commandcode/report` Remote; the API keys never leave the Host.
  */
-function UsageCard({ t, usage, apiKeyConfigured, removingIds, removableIds, canManage, onRefresh, onRemoveAccount }: {
+function UsageCard({ t, usage, removingIds, removableIds, canManage, onRefresh, onRemoveAccount }: {
   t: Translate<SettingsCommandCodeKey>
   usage: UsagePageState
-  apiKeyConfigured: boolean
   /** Ids of accounts staged for removal (hidden from the carousel). */
   removingIds: string[]
   /**
@@ -591,13 +590,13 @@ function UsageCard({ t, usage, apiKeyConfigured, removingIds, removableIds, canM
   onRefresh(): void
   onRemoveAccount(id: string): void
 }) {
-  // First paint with a configured key fetches automatically; later fetches
-  // are explicit (refresh button) or follow a landed save.
+  const { loading, shouldRefresh, noKey } = usageCardState(usage)
+  // Ask the Host on first paint: CLI auth and composition keys are not
+  // represented by browser credential references. Later failures retry manually.
   useEffect(() => {
-    if (apiKeyConfigured && usage.status === 'idle') onRefresh()
-  }, [apiKeyConfigured, usage.status, onRefresh])
+    if (shouldRefresh) onRefresh()
+  }, [shouldRefresh, onRefresh])
 
-  const loading = usage.status === 'loading'
   const report = usage.report
   // Locally remembered removals: the usage controller keeps the old report
   // until the post-save refresh lands, and removedRefs clears at save-land —
@@ -636,13 +635,13 @@ function UsageCard({ t, usage, apiKeyConfigured, removingIds, removableIds, canM
       <div className="cc-usageHead">
         <h3 className="cc-usageTitle">{t('usageTitle')}</h3>
         <span className="cc-usageMetaSpacer" />
-        <button type="button" className="cc-usageRefresh" disabled={loading || !apiKeyConfigured} onClick={onRefresh}>
+        <button type="button" className="cc-usageRefresh" disabled={loading} onClick={onRefresh}>
           {loading ? t('usageRefreshing') : t('usageRefresh')}
         </button>
       </div>
 
-      {!apiKeyConfigured ? <p className="cc-usageHint">{t('usageNoKey')}</p> : null}
-      {apiKeyConfigured && report === undefined && loading ? <p className="cc-usageHint">{t('usageLoading')}</p> : null}
+      {noKey ? <p className="cc-usageHint">{t('usageNoKey')}</p> : null}
+      {report === undefined && loading ? <p className="cc-usageHint">{t('usageLoading')}</p> : null}
       {usage.status === 'error' ? (
         <p className="cc-usageError" role="status">
           <span>{t('usageError')}{usage.error !== undefined && usage.error !== '' ? ` — ${usage.error}` : ''}</span>
@@ -1148,7 +1147,6 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
       <UsageCard
         t={t}
         usage={usage}
-        apiKeyConfigured={state.anyAccountConfigured}
         removingIds={state.accountsRemoving}
         removableIds={state.accounts.map((account) => account.id)}
         canManage={state.writable}

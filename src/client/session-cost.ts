@@ -314,20 +314,9 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
   // information, and on a free model it would be redundant.
   if (uncachedInput === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return undefined
 
-  // Same rule one step further in, and the distinction is subtler than "is the
-  // total zero". A non-zero bucket whose rate is MISSING is money we cannot
-  // price at all, and reporting it as `$0.00` would be exactly the confident
-  // figure this readout exists to refuse — that is the real cache-write-only
-  // case, and the honest answer is no pill. A bucket whose rate we DO have, even
-  // when the product rounds below a cent, is real priced spend: it keeps its
-  // bound (`<$0.0001`). So the guard is "unpriced tokens exist AND nothing was
-  // priced at all", never "the total rounds to zero".
-  const pricedCosts = free
-    ? []
-    : [breakdown.uncachedInput, breakdown.cacheRead, breakdown.cacheWrite, breakdown.output]
-  if (!free && unpricedCacheWriteTokens > 0 && !pricedCosts.some((cost) => cost !== undefined && cost > 0)) {
-    return undefined
-  }
+  // Free priced groups do not establish zero spending for unpriced groups.
+  // Keep the pure-Free label and real sub-cent amounts, but never a zero subtotal.
+  if (!free && total <= 0) return undefined
 
   const value = free
     ? SESSION_COST_COPY.free

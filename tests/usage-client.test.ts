@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 
 import {
   CommandCodeUsageController,
+  usageCardState,
   formatMoney,
   formatMoneyExact,
   formatResetAt,
@@ -175,4 +176,29 @@ test('formatResetAt renders a local time and empty for unset', () => {
   assert.equal(formatResetAt(0), '')
   assert.equal(formatResetAt(-5), '')
   assert.notEqual(formatResetAt(1_800_000_000_000), '')
+})
+
+test('usage card fetches Host facts without browser credentials and keeps manual retry available', async () => {
+  let calls = 0
+  const controller = new CommandCodeUsageController({ models: async () => ({ ok: true, value: { models: [] } }), report: async () => {
+    calls++
+    return { ok: true, value: makeReport() }
+  } })
+  const initial = usageCardState(controller.state())
+  assert.equal(initial.shouldRefresh, true)
+  assert.equal(initial.noKey, false, 'no report is not proof that no key exists')
+  if (initial.shouldRefresh) await controller.refresh()
+  assert.equal(calls, 1)
+  assert.equal(usageCardState(controller.state()).noKey, false, 'literal/CLI key availability comes from Host')
+  assert.equal(usageCardState(controller.state()).shouldRefresh, false)
+  const report = makeReport()
+  report.accounts[0]!.configured = false
+  const absent = usageCardState({ ...controller.state(), report })
+  assert.equal(absent.noKey, true)
+  assert.equal(absent.loading, false, 'refresh stays enabled even after a no-key report')
+  const failed = usageCardState({ ...controller.state(), report: undefined, status: 'error' })
+  assert.equal(failed.noKey, false)
+  assert.equal(failed.shouldRefresh, false, 'a failure must not cause an automatic request loop')
+  assert.equal(failed.loading, false)
+  controller.dispose()
 })

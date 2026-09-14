@@ -139,3 +139,18 @@ test('real registry replays history, checkpoints/forks and removes the optional 
   await projections.dispose()
   await store.dispose()
 })
+
+test('free usage does not turn unpriced groups into a confident zero subtotal', () => {
+  for (const [model, provider, extra] of [
+    ['cheap', 'other', {}],
+    ['unknown', 'commandcode', {}],
+    ['cheap', 'commandcode', { cacheWriteTokens: 100 }],
+  ] as const) {
+    const h = harness(); h.start('free'); h.usage(100)
+    assert.equal(h.view()!.value, 'Free')
+    h.start(model, 2, off, provider); h.usage(model === 'cheap' && provider === 'commandcode' ? 0 : 100, 2, extra)
+    assert.equal(h.view(), undefined, `${provider}/${model} cannot establish zero spending`)
+    h.start('cheap', 3); h.usage(1000, 3)
+    assert.ok(h.view()!.total > 0, 'a paid subtotal remains visible')
+  }
+})

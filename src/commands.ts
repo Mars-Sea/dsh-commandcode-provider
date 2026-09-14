@@ -161,18 +161,17 @@ function renderReport(report: CommandCodeUsageReport, locale: LocaleId, title?: 
 
   if (report.credits) {
     const c = report.credits
-    const monthlyPct = c.monthlyCredits > 0
-      ? `${((c.monthlyCredits / (c.monthlyCredits + c.purchasedCredits)) * 100).toFixed(0)}%`
-      : '—'
+    const balanceTotal = c.monthlyCredits + c.purchasedCredits
+    const ratioKnown = c.monthlyReported !== false && c.purchasedReported !== false && balanceTotal > 0
     lines.push(
       commandCopy(locale, 'creditsHeader'),
       commandCopy(locale, 'monthlyLine')
         .replace('{monthly}', (c.monthlyReported === false ? '—' : moneyShort(c.monthlyCredits)))
         .replace('{purchased}', (c.purchasedReported === false ? '—' : moneyShort(c.purchasedCredits)))
         .replace('{free}', (c.freeReported === false ? '—' : moneyShort(c.freeCredits))),
-      commandCopy(locale, 'barLine')
-        .replace('{bar}', bar(c.monthlyCredits, c.monthlyCredits + c.purchasedCredits))
-        .replace('{pct}', monthlyPct),
+      ...(ratioKnown ? [commandCopy(locale, 'barLine')
+        .replace('{bar}', bar(c.monthlyCredits, balanceTotal))
+        .replace('{pct}', ((c.monthlyCredits / balanceTotal) * 100).toFixed(0))] : []),
       '',
     )
     // Only the windows the endpoint actually reported: an unlimited account
