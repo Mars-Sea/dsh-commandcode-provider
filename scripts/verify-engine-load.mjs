@@ -263,7 +263,7 @@ function stageBundle(engineModules, scratch) {
 
 /** Check 1: the bundle links and evaluates with the engine's own peers. */
 async function checkLink(engineModules, scratch) {
-  stageBundle(engineModules, scratch)
+  const staged = stageBundle(engineModules, scratch)
   const probe = join(scratch, 'probe.mjs')
   writeFileSync(probe, [
     `const mod = await import('@mars-sea/dsh-commandcode-provider')`,
@@ -299,7 +299,7 @@ async function checkLink(engineModules, scratch) {
   if (plugin.name !== 'llm-commandcode') fail(`plugin name is ${String(plugin.name)}, expected llm-commandcode`)
   if (plugin.apply !== 'function') fail('the plugin entry exports no apply()')
   if (plugin.config !== 'function') fail('the plugin entry exports no Config schema')
-  return plugin
+  return staged
 }
 
 /** Check 2: every static named import exists on the engine. */
@@ -333,6 +333,66 @@ function checkClientRequires(engineModules) {
     const manifest = join(engineModules, ...specifier.split('/'), 'package.json')
     if (existsSync(manifest) && JSON.parse(readFileSync(manifest, 'utf8')).dsh?.client !== undefined) continue
     fail(`lib/client.js requires "${specifier}", which is neither a platform seed nor a mounted dsh.client row`)
+  }
+}
+
+/**
+ * Check 5: the staged bundle prices request images against THIS engine.
+ *
+ * More than the unit tests can cover: that this engine's `LlmAdapter` base
+ * accepts the adapter's `imageRequestPricing` override, that the symbols the
+ * pricing path imports still resolve on it, and that BOTH payload generations
+ * the harness has shipped are priced — the token meter throws unless exactly one
+ * price comes back per occurrence, so an unhandled shape is a broken meter
+ * rather than a wrong number.
+ */
+async function checkImagePricing(staged) {
+  if (staged === undefined) return
+  // Imported in-process from the STAGED tree, so its bare imports are the
+  // engine's: the child probe above proves the link, this holds the real class.
+  const plugin = await import(pathToFileURL(join(staged, 'lib', 'index.js')).href)
+  if (typeof plugin.CommandCodeAdapter !== 'function') {
+    fail('the bundle exports no CommandCodeAdapter, so its image pricing cannot be checked')
+    return
+  }
+  const adapter = new plugin.CommandCodeAdapter({
+    options: () => ({}),
+    resolveApiKey: async () => 'engine-load-probe',
+  })
+  const pricing = adapter.imageRequestPricing('commandcode', 'claude-sonnet-5')
+  if (pricing === undefined || typeof pricing.priceImages !== 'function') {
+    fail('imageRequestPricing() declared nothing for a Vision-capable model')
+    return
+  }
+  // A 3600x2400 source projects onto the documented 1568-px long edge: 1568x1045.
+  const ref = {
+    attachmentId: 'sha256:engine-load-probe',
+    mediaType: 'image/png',
+    bytes: 4096,
+    width: 3600,
+    height: 2400,
+  }
+  const asBlock = pricing.priceImages([{ type: 'image', attachment: ref }])
+  const asReference = pricing.priceImages([ref])
+  if (asBlock.length !== 1 || asReference.length !== 1) {
+    fail(`priceImages() must answer one price per occurrence, got ${asBlock.length} and ${asReference.length}`)
+    return
+  }
+  // Anthropic's published rule (one token per 750 px) at the request target.
+  const expected = Math.ceil((1568 * 1045) / 750)
+  if (asBlock[0].visualTokens !== expected) {
+    fail(`a retained image priced ${asBlock[0].visualTokens} tokens, expected ${expected} at the request target`)
+  }
+  if (asReference[0].visualTokens !== expected) {
+    fail('the bare-reference payload (<=0.1.5) priced differently from the block payload')
+  }
+  if (asBlock[0].text !== '') fail('a retained image on this route carries no model-visible text')
+  const [offloaded] = pricing.priceImages([{ type: 'image', attachment: ref, offloaded: true }])
+  if (offloaded.visualTokens !== 0) fail('an offloaded occurrence must cost no vision tokens')
+  const textOnly = adapter.imageRequestPricing('commandcode', 'deepseek/deepseek-v4-pro')
+  const [priced] = textOnly.priceImages([{ type: 'image', attachment: ref }])
+  if (priced.visualTokens !== 0 || priced.text === '') {
+    fail('a text-only route must price every occurrence as placeholder text')
   }
 }
 
@@ -377,9 +437,10 @@ async function verify(argv) {
     const engine = resolveEngine(engineRoot)
     process.stdout.write(`engine: dsh ${engine.version} at ${engine.root}\n`)
     scratch = mkdtempSync(join(tmpdir(), 'dsh-engine-load-tree-'))
-    await checkLink(engine.modules, scratch)
+    const staged = await checkLink(engine.modules, scratch)
     await checkNamedImports(engine.modules)
     checkClientRequires(engine.modules)
+    await checkImagePricing(staged)
     const policy = await checkImagePolicy(engine.modules)
     process.stdout.write(`request-image policy on this engine: ${policy}\n`)
     if (version !== undefined && engine.version !== version) {

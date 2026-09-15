@@ -1366,6 +1366,180 @@ test('stream() sends images in the official Command Code wire format', async () 
 })
 
 // ---------------------------------------------------------------------------
+// Request image versions and visual-token pricing (C2, C3)
+//
+// An attachment is stored NORMALIZED, not request-ready: `readImage()` answers
+// the admitted original, while a provider request should carry a REQUEST VERSION
+// encoded to the route target (`readImageRequest()`). On this route that is not
+// cosmetic — both transports inline every historical image as base64, so the
+// version's bytes are what the body, the context window and the gateway's ~50 MB
+// cap actually pay for. The same target is what the visual-token price is
+// computed at, so the meter tracks the bytes that travel rather than the ones
+// that are stored.
+// ---------------------------------------------------------------------------
+
+/** An AttachmentStore stub that answers a distinct request version and records every target. */
+function versionedAttachments(
+  images: Record<string, Uint8Array>,
+  versionBytes: Uint8Array,
+): { store: AttachmentStore; targets: { ref: ImageAttachmentRef; target: Record<string, number> }[] } {
+  const targets: { ref: ImageAttachmentRef; target: Record<string, number> }[] = []
+  const store = {
+    ...(fakeAttachments(images) as unknown as Record<string, unknown>),
+    async readImageRequest(ref: ImageAttachmentRef, target: Record<string, number>) {
+      targets.push({ ref, target })
+      return {
+        ref,
+        data: versionBytes,
+        mediaType: ref.mediaType,
+        bytes: versionBytes.length,
+        width: target.width,
+        height: target.height,
+      }
+    },
+  } as unknown as AttachmentStore
+  return { store, targets }
+}
+
+test('stream() sends the request version of an image at the documented target (C2)', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return okStream('cli')
+  }) as unknown as typeof fetch
+
+  // A 2880x1800 Retina screenshot whose stored payload and request version
+  // differ, so which one reached the wire is unambiguous.
+  const ref = { ...sizedImageRef(0, pngBytes.length), width: 2880, height: 1800 }
+  const version = Uint8Array.from([...pngBytes, 9])
+  const { store, targets } = versionedAttachments({ [ref.attachmentId]: sizedImageBytes(0) }, version)
+  const adapter = makeAdapter({ fetchImpl, resolveAttachments: () => store })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-sonnet-5',
+    messages: [{
+      id: messageId(),
+      role: 'user',
+      content: [{ type: 'text', text: 'shot' }, { type: 'image', attachment: ref }],
+      source: { kind: 'user' },
+    }],
+  }))
+
+  // 1568 px long edge with the aspect kept, the byte budget both attachment
+  // generations honour, and the projected area <=0.1.5 re-projects from.
+  assert.deepEqual(targets.map((call) => call.target), [{
+    maxPixels: 1568 * 980,
+    width: 1568,
+    height: 980,
+    maxBytes: 1024 * 1024,
+  }])
+  const wire = (capturedBody!.params as { messages: Record<string, unknown>[] }).messages
+  const part = (wire.find((m) => m.role === 'user')!.content as Record<string, unknown>[])[1]!
+  assert.equal((part.source as { data: string }).data, Buffer.from(version).toString('base64'))
+})
+
+test('openai protocol sends the request version too (C2)', async () => {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return okStream('openai')
+  }) as unknown as typeof fetch
+
+  const ref = { ...sizedImageRef(0, pngBytes.length), width: 2880, height: 1800 }
+  const version = Uint8Array.from([...pngBytes, 9])
+  const { store } = versionedAttachments({ [ref.attachmentId]: sizedImageBytes(0) }, version)
+  const adapter = makeAdapter({ fetchImpl, options: OPENAI_OPTIONS, resolveAttachments: () => store })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-sonnet-5',
+    messages: [{
+      id: messageId(),
+      role: 'user',
+      content: [{ type: 'text', text: 'shot' }, { type: 'image', attachment: ref }],
+      source: { kind: 'user' },
+    }],
+  }))
+
+  const part = userParts(capturedBody!, 'openai').find((entry) => entry.type === 'image_url')!
+  assert.equal(
+    (part.image_url as { url: string }).url,
+    `data:image/png;base64,${Buffer.from(version).toString('base64')}`,
+  )
+})
+
+test('a service that produces no request version still sends the stored original (C2)', async () => {
+  // The defensive path: a backend predating request versions must still serve
+  // images instead of failing the request outright.
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return okStream('cli')
+  }) as unknown as typeof fetch
+  const ref = sizedImageRef(0, pngBytes.length)
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: sizedImageBytes(0) }),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-sonnet-5',
+    messages: [{
+      id: messageId(),
+      role: 'user',
+      content: [{ type: 'image', attachment: ref }],
+      source: { kind: 'user' },
+    }],
+  }))
+
+  const wire = (capturedBody!.params as { messages: Record<string, unknown>[] }).messages
+  const part = (wire.find((m) => m.role === 'user')!.content as Record<string, unknown>[])[0]!
+  assert.equal(
+    (part.source as { data: string }).data,
+    Buffer.from(sizedImageBytes(0)).toString('base64'),
+  )
+})
+
+test('imageRequestPricing() prices a retained image at its request target (C3)', () => {
+  const pricing = makeAdapter().imageRequestPricing('commandcode', 'claude-sonnet-5')
+  assert.ok(pricing !== undefined)
+  const ref = { ...sizedImageRef(0, pngBytes.length), width: 2880, height: 1800 }
+  // The >=0.1.6 payload shape (blocks); the bare-reference shape this checkout
+  // compiles against is the last assertion.
+  const [price] = pricing!.priceImages([{ type: 'image', attachment: ref } as never])
+  // Anthropic's rule at the target this route would send: 1568x980.
+  assert.equal(price!.visualTokens, Math.ceil((1568 * 980) / 750))
+  // The pixels are inlined, so a retained occurrence carries no model-visible text.
+  assert.equal(price!.text, '')
+  // The token meter throws unless one price comes back per occurrence, in order.
+  assert.equal(pricing!.priceImages([ref as never, ref as never]).length, 2)
+})
+
+test('imageRequestPricing() prices an offloaded occurrence as its placeholder (C3)', () => {
+  const pricing = makeAdapter().imageRequestPricing('commandcode', 'claude-sonnet-5')!
+  const ref = sizedImageRef(0, pngBytes.length)
+  const [price] = pricing.priceImages([{ type: 'image', attachment: ref, offloaded: true } as never])
+  // The surface renders this one as text in every later request, so it costs no
+  // vision tokens and is priced by the caller's text estimator instead.
+  assert.equal(price!.visualTokens, 0)
+  assert.match(price!.text, /image omitted to fit request image limits/)
+  // A bare reference (the <=0.1.5 payload) is a retained occurrence, and a tiny
+  // image still costs at least one token rather than rounding to zero.
+  const [bare] = pricing.priceImages([ref as never])
+  assert.equal(bare!.visualTokens, 1)
+  assert.equal(bare!.text, '')
+})
+
+test('imageRequestPricing() prices a text-only route as placeholder text (C3)', () => {
+  const model = 'deepseek/deepseek-v4-pro'
+  assert.ok(!KNOWN_IMAGE_MODELS.has(model), 'the case under test needs a model outside the Vision snapshot')
+  const pricing = makeAdapter().imageRequestPricing('commandcode', model)!
+  const ref = sizedImageRef(0, pngBytes.length)
+  const [price] = pricing.priceImages([{ type: 'image', attachment: ref } as never])
+  assert.equal(price!.visualTokens, 0)
+  assert.match(price!.text, /accepts text only/)
+})
+
+// ---------------------------------------------------------------------------
 // Request image budget (issue #37)
 //
 // Both transports inline every historical image, and the gateway caps a whole

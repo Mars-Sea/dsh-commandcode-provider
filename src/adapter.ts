@@ -39,7 +39,11 @@ import {
   errorChain,
   offloadedImageText,
   resolveRetryPolicy,
+  textOnlyImageText,
+  type ImageBlock,
   type LlmErrorOptions,
+  type LlmImageRequestPrice,
+  type LlmImageRequestPricing,
   type ResolvedRetryPolicy,
   type ContentBlock,
   type FinishReason,
@@ -60,6 +64,8 @@ import {
 // `requiredImageOffload`/`projectOffloadedImages` do not exist before it.
 import * as dshLlm from '@deepseek-ai/dsh-llm'
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
+import { requestImageTarget } from './image-request.ts'
+import { commandCodeImageTokens } from './image-tokens.ts'
 
 import {
   KNOWN_EFFORTS,
@@ -941,6 +947,60 @@ function withSurfaceOffload(
   const missing = policy.requiredImageOffload(messages, coreBudget(budget), imageVersionBytes)
   if (missing > 0) throw imageOffloadRequired(missing)
   return messages === options.messages ? options : { ...options, messages }
+}
+
+/**
+ * One image's bytes for the wire: the attachment service's REQUEST VERSION when
+ * it can produce one, else the normalized original.
+ *
+ * `readImage()` answers the stored original, which is what admission accepted —
+ * not what a provider request should carry. `readImageRequest()` re-encodes to
+ * the route target in `./image-request.ts` and caches the result under it, so
+ * the same attachment costs one encode per target instead of one per occurrence,
+ * and the base64 the wire expands is bounded (both the pixel budget and, more to
+ * the point here, the encoded bytes). The fallback is for a backend that does
+ * not implement the abstract method; every engine this plugin declares support
+ * for does.
+ */
+async function readRequestImage(
+  attachments: AttachmentStore,
+  ref: ImageAttachmentRef,
+): Promise<Uint8Array> {
+  if (typeof attachments.readImageRequest === 'function') {
+    return (await attachments.readImageRequest(ref, requestImageTarget(ref))).data
+  }
+  return (await attachments.readImage(ref)).data
+}
+
+/**
+ * One occurrence as the token meter hands it over, in either generation's
+ * shape: a bare reference (≤0.1.5) or an image block that may also be marked
+ * `offloaded` (≥0.1.6).
+ */
+type PricedOccurrence = ImageAttachmentRef | ImageBlock
+
+/**
+ * Price one request occurrence.
+ *
+ * Two cases cost no vision tokens at all, and both are priced as their
+ * model-visible TEXT so the caller's estimator can charge that instead: a model
+ * that accepts text only (the harness projects those images to placeholder text
+ * before the request), and an occurrence the session surface has already
+ * offloaded (≥0.1.6 renders the same placeholder text in every later request).
+ * A retained occurrence on this route contributes no text at all — the pixels
+ * are inlined — so its price is the family's visual-token count and nothing else.
+ */
+function priceRequestImage(
+  occurrence: PricedOccurrence,
+  model: string,
+  imageCapable: boolean,
+): LlmImageRequestPrice {
+  const block = occurrence as { attachment?: ImageAttachmentRef; offloaded?: true }
+  const ref = block.attachment ?? (occurrence as ImageAttachmentRef)
+  if (!imageCapable) return { visualTokens: 0, text: textOnlyImageText(ref) }
+  if (block.offloaded === true) return { visualTokens: 0, text: offloadedImageText(ref) }
+  const target = requestImageTarget(ref)
+  return { visualTokens: commandCodeImageTokens(model, target.width, target.height), text: '' }
 }
 
 /**
@@ -1909,6 +1969,29 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     )
   }
 
+  /**
+   * Visual-token pricing for one exact model route (see `./image-tokens.ts`).
+   *
+   * Without this the token meter prices EVERY image with its structural
+   * heuristic — a handful of tokens for a full screenshot — so an image-heavy
+   * session reports far less context than it is actually carrying. The price is
+   * computed at the dimensions this route would send (the same request target
+   * `readImageRequest` encodes to), so the estimate tracks the wire rather than
+   * the stored original.
+   *
+   * Both payload generations are handled, because they disagree: ≤0.1.5 hands
+   * over bare `ImageAttachmentRef`s, ≥0.1.6 hands over `ImageBlock`s that also
+   * carry the surface's `offloaded` mark. Returning a price per occurrence, in
+   * order, is a hard requirement — the meter throws when the counts differ.
+   */
+  override imageRequestPricing(_provider: string, model: string): LlmImageRequestPricing | undefined {
+    const imageCapable = KNOWN_IMAGE_MODELS.has(model)
+    return {
+      priceImages: (images: readonly PricedOccurrence[]) =>
+        images.map((image) => priceRequestImage(image, model, imageCapable)),
+    }
+  }
+
   /** Refresh the catalog (live fetch, cache fallback) and return it. */
   private async loadCatalog(signal?: AbortSignal): Promise<CommandCodeModel[]> {
     const { apiBase, modelsCachePath } = this.deps.options()
@@ -2309,7 +2392,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           'UNSUPPORTED_CONTENT',
         )
       }
-      readImage = (ref) => attachments.readImage(ref).then((stored) => stored.data)
+      readImage = (ref) => readRequestImage(attachments, ref)
     }
 
     const connection = this.deps.options()

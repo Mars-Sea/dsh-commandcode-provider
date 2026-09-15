@@ -1,5 +1,5 @@
 import z from "@deepseek-ai/schemastery";
-import { GenerateOptions, LlmAdapter, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, Message, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
+import { GenerateOptions, LlmAdapter, LlmImageRequestPricing, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, Message, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { CredentialRef } from "@deepseek-ai/dsh-credentials";
 import { TypertRemoteService, TypertSchema } from "@deepseek-ai/dsh-typert-protocol";
 import { WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
@@ -269,6 +269,22 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * future config knob for it would apply on profile restart, not per request.
    */
   providerRetryPolicy(_provider: string): ResolvedRetryPolicy;
+  /**
+   * Visual-token pricing for one exact model route (see `./image-tokens.ts`).
+   *
+   * Without this the token meter prices EVERY image with its structural
+   * heuristic — a handful of tokens for a full screenshot — so an image-heavy
+   * session reports far less context than it is actually carrying. The price is
+   * computed at the dimensions this route would send (the same request target
+   * `readImageRequest` encodes to), so the estimate tracks the wire rather than
+   * the stored original.
+   *
+   * Both payload generations are handled, because they disagree: ≤0.1.5 hands
+   * over bare `ImageAttachmentRef`s, ≥0.1.6 hands over `ImageBlock`s that also
+   * carry the surface's `offloaded` mark. Returning a price per occurrence, in
+   * order, is a hard requirement — the meter throws when the counts differ.
+   */
+  imageRequestPricing(_provider: string, model: string): LlmImageRequestPricing | undefined;
   /** Refresh the catalog (live fetch, cache fallback) and return it. */
   private loadCatalog;
   listModels(provider: string, opts?: {
