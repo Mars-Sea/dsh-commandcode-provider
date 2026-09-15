@@ -18,6 +18,7 @@ import {
   type AutoRefreshTimer,
 } from '../src/client/panel.ts'
 import type { UsagePageState } from '../src/client/usage.ts'
+import { PANEL_COPY_EN, PANEL_COPY_ZH, PANEL_KEYS } from '../src/client/panel-copy.ts'
 import type { CommandCodeAccountUsage } from '../src/usage-wire.ts'
 import type { CommandCodeUsageReport } from '../src/adapter.ts'
 
@@ -67,6 +68,41 @@ test('credential-reference absence alone does not rule out Host fallback keys', 
   const view = buildPanelView({ usage: usage(), apiKeyConfigured: false })
   assert.equal(view.noKey, false)
   assert.equal(view.accounts.length, 0)
+})
+
+test('the panel follows the injected translator, so it reads in the harness language', () => {
+  const input = {
+    usage: usage({ report: { accounts: [entry({ report: { credits: CREDITS } })] } }),
+    apiKeyConfigured: true,
+  }
+  // No translator: the English fallback (what an engine without a locale face
+  // would render). Every label is resolved through it, not looked up here.
+  const english = buildPanelView(input)
+  assert.equal(english.text.monthly, 'Monthly')
+  assert.ok(english.footTitle.includes('5-hour'), english.footTitle)
+
+  const chinese = buildPanelView({ ...input, t: (key) => PANEL_COPY_ZH[key] })
+  assert.equal(chinese.text.monthly, '月额度')
+  // The tooltip is composed INSIDE the projection, so a translator that only
+  // reached `text` would leave it English.
+  assert.ok(chinese.footTitle.includes('5 小时'), chinese.footTitle)
+  assert.ok(!chinese.footTitle.includes('5-hour'), chinese.footTitle)
+  // Figures are locale-independent.
+  assert.deepEqual(chinese.footerBars.map((bar) => bar.detail), english.footerBars.map((bar) => bar.detail))
+
+  // `status` is a rotation-state word, and it is composed in the projection
+  // too: only a non-active mark reaches it (an active account shows its plan).
+  const cooling = {
+    usage: usage({ report: { accounts: [entry({ active: false, mark: 'rate-limit' })] } }),
+    apiKeyConfigured: true,
+  }
+  assert.equal(buildPanelView(cooling).status, 'Cooling down')
+  assert.equal(buildPanelView({ ...cooling, t: (key) => PANEL_COPY_ZH[key] }).status, '限额冷却中')
+})
+
+test('the zh and en panel dictionaries carry exactly the same keys', () => {
+  assert.deepEqual(Object.keys(PANEL_COPY_ZH).sort(), Object.keys(PANEL_COPY_EN).sort())
+  assert.deepEqual(PANEL_KEYS, Object.keys(PANEL_COPY_EN))
 })
 
 test('a first fetch with no data renders the loading state', () => {

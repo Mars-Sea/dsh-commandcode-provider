@@ -3,11 +3,11 @@
  * the sidebar footer card and the dashboard it opens in the center column.
  *
  * Both render one {@link PanelView} projected by `./panel.ts` — no fact is
- * derived here. Strings arrive as keys into `view.text`, and every one of them
- * is English, because the view is built from `./panel-copy.ts` rather than the
- * harness `ctx.locale` namespace (which follows the user's language and would
- * render this panel in Chinese on a Chinese harness — the thing this surface
- * exists to avoid).
+ * derived here. Strings arrive already localized in `view.text`: the slots
+ * declare the `panel.commandcode` locale namespace, so the renderer hands this
+ * component a `t` seat that is passed into `buildPanelView` — the panel follows
+ * the harness's active language (a language switch mints a new `t`, so the
+ * surfaces re-render without an extra channel).
  *
  * The footer card is the panel's home: the sidebar shell renders it in the foot
  * area directly above the Settings seat, so each quota window's own spend and
@@ -25,11 +25,13 @@
 
 import { useEffect, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from './snapshot-store.ts'
 import type { UsagePageState } from './usage.ts'
 import type { SettingsPageState } from './settings.ts'
 import { buildPanelView } from './panel.ts'
 import type { PanelAccountView, PanelStatView, PanelView, PanelWindowView } from './panel.ts'
+import { panelTextEN } from './panel-copy.ts'
 import type { PanelKey } from './panel-copy.ts'
 // SlotMap merge for `main` / `sidebar.footer.action` (load-bearing: the slots
 // this file's components register into are typed only by that augmentation).
@@ -66,6 +68,11 @@ export interface PanelInjected {
   }
   /** Fetch the report now (the dashboard's Refresh action). */
   refresh(): void
+  /**
+   * Leave the dashboard and show the Conversation again
+   * (`ctx.layout.selectPanel(null)`; the current Session is untouched).
+   */
+  close(): void
   /** Start the shared background poll for this mount; returns its disposer. */
   startAutoRefresh(): () => void
   /** Select this panel in the center column (`ctx.layout.selectPanel`). */
@@ -84,7 +91,14 @@ export interface PanelInjected {
 export interface PanelComponentProps {
   useCommandCodeUsage<T>(selector: (state: UsagePageState) => T): T
   useCommandCodeSettings<T>(selector: (state: SettingsPageState) => T): T
+  /**
+   * Locale seat for the `panel.commandcode` namespace, bound by the
+   * registration's own `locale` declaration. Optional so a missing locale face
+   * degrades to English instead of crashing the surface.
+   */
+  t?: Translate<PanelKey>
   refresh(): void
+  close(): void
   startAutoRefresh(): () => void
   open(): void
 }
@@ -100,6 +114,7 @@ function usePanelView(props: PanelComponentProps): PanelView {
     usage,
     apiKeyConfigured: settings.anyAccountConfigured,
     removingIds: settings.accountsRemoving,
+    t: props.t ?? panelTextEN,
   })
 }
 
@@ -334,6 +349,22 @@ export function CommandCodePanel(props: PanelComponentProps) {
             onClick={() => props.refresh()}
           >
             {view.loading ? text('refreshing') : text('refresh')}
+          </Button>
+          {/* The dashboard REPLACES the conversation in the center column, and
+              this panel is the only surface that selects it — without an exit
+              the user cannot get back to the session at all (issue #41), since
+              clicking the sidebar card only re-selects this same panel. The
+              glyph is the button's whole content, so its accessible name and
+              tooltip carry the meaning. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ccp-close"
+            aria-label={text('close')}
+            title={text('closeHint')}
+            onClick={() => props.close()}
+          >
+            <span aria-hidden="true">×</span>
           </Button>
         </header>
 

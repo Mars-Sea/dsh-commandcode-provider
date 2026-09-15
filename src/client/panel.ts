@@ -9,9 +9,10 @@
  * current). Node tests drive everything here without a DOM.
  *
  * Every displayed string is decided here, as a `PanelKey` plus a `text`
- * record resolved from `./panel-copy.ts` — so the components carry no
- * formatting, pluralization, or copy of their own, and the panel cannot
- * regress into the harness locale (see that module for why it is English-only).
+ * record resolved through the injected translator — so the components carry no
+ * formatting, pluralization, or copy of their own, and the panel follows the
+ * harness's active language (`./panel-copy.ts` owns both dictionaries and the
+ * `panel.commandcode` locale namespace; the slots hand the translator in).
  *
  * @module dsh-commandcode-provider/client/panel
  */
@@ -25,8 +26,8 @@ import {
   formatSuccessRate,
   formatTokensCompact,
 } from './usage.ts'
-import { panelText, PANEL_COPY } from './panel-copy.ts'
-import type { PanelKey } from './panel-copy.ts'
+import { PANEL_KEYS, panelTextEN } from './panel-copy.ts'
+import type { PanelKey, PanelTranslator } from './panel-copy.ts'
 
 /** One quota window (5-hour or weekly) in display form. */
 export interface PanelWindowView {
@@ -149,7 +150,7 @@ export interface PanelFailureView {
 
 /** The whole panel, in render order. */
 export interface PanelView {
-  /** Every English string this view references, by key. */
+  /** Every localized string this view references, by key. */
   text: Partial<Record<PanelKey, string>>
   /** Footer-card plan text (`Go`, `Pro`, …), or a state word. */
   planName: string
@@ -205,6 +206,14 @@ export interface PanelViewInput {
   apiKeyConfigured: boolean
   /** Account ids staged for removal; hidden here immediately, like the settings card. */
   removingIds?: readonly string[]
+  /**
+   * Locale translator for every label the view composes. The panel slots bind
+   * their `t` seat to the `panel.commandcode` namespace and pass it here, so
+   * the projection follows the harness language; omitting it falls back to
+   * English (the tests' default, and the defensive path when no locale face is
+   * installed).
+   */
+  t?: PanelTranslator
 }
 
 /** A quota window's state as the wire carries it. */
@@ -326,7 +335,7 @@ function monthlyView(report: CommandCodeUsageReport): PanelMonthlyView | undefin
 }
 
 /** Build one account's view. */
-function accountView(entry: CommandCodeAccountUsage): PanelAccountView {
+function accountView(entry: CommandCodeAccountUsage, t: PanelTranslator): PanelAccountView {
   const { report } = entry
   const account = report.account
   const plan = report.plan
@@ -338,7 +347,7 @@ function accountView(entry: CommandCodeAccountUsage): PanelAccountView {
     stats.push({
       label: 'requests',
       value: String(usage.completedCount),
-      sub: `${usage.failedCount} ${panelText('failed')}`,
+      sub: `${usage.failedCount} ${t('failed')}`,
     })
     stats.push({ label: 'successRate', value: `${formatSuccessRate(usage.successRate)}%`, sub: '' })
     stats.push({
@@ -349,7 +358,7 @@ function accountView(entry: CommandCodeAccountUsage): PanelAccountView {
     stats.push({
       label: 'tokens',
       value: formatTokensCompact(usage.totalTokensIn + usage.totalTokensOut),
-      sub: `${formatTokensCompact(usage.totalTokensIn)} ${panelText('tokensIn')} / ${formatTokensCompact(usage.totalTokensOut)} ${panelText('tokensOut')}`,
+      sub: `${formatTokensCompact(usage.totalTokensIn)} ${t('tokensIn')} / ${formatTokensCompact(usage.totalTokensOut)} ${t('tokensOut')}`,
     })
   }
 
@@ -406,15 +415,14 @@ function failureView(state: UsagePageState): PanelFailureView | undefined {
 }
 
 /**
- * Every panel string, resolved once per projection. One object with all keys
- * (rather than per-field lookups in the components) keeps the copy table and
- * the render sites in lockstep: a key cannot be read from `text` unless
- * {@link PANEL_COPY} declares it.
+ * Every panel string, resolved once per projection through the translator.
+ * One object with all keys (rather than per-field lookups in the components)
+ * keeps the copy table and the render sites in lockstep: a key cannot be read
+ * from `text` unless {@link PANEL_KEYS} declares it.
  */
-function panelStrings(): Record<PanelKey, string> {
-  const keys = Object.keys(PANEL_COPY) as PanelKey[]
+function panelStrings(t: PanelTranslator): Record<PanelKey, string> {
   const out = {} as Record<PanelKey, string>
-  for (const key of keys) out[key] = panelText(key)
+  for (const key of PANEL_KEYS) out[key] = t(key)
   return out
 }
 
@@ -427,6 +435,7 @@ function panelStrings(): Record<PanelKey, string> {
  */
 export function buildPanelView(input: PanelViewInput): PanelView {
   const { usage } = input
+  const t = input.t ?? panelTextEN
   const hidden = new Set(input.removingIds ?? [])
   const seen = new Set<string>()
   const entries = (usage.report?.accounts ?? []).filter((entry) => {
@@ -435,7 +444,7 @@ export function buildPanelView(input: PanelViewInput): PanelView {
     seen.add(entry.id)
     return true
   })
-  const accounts = entries.map(accountView)
+  const accounts = entries.map((entry) => accountView(entry, t))
   const selectedEntry = entries.find((entry) => entry.active) ?? entries[0]
   const selectedView = accounts.find((view) => view.id === selectedEntry?.id)
 
@@ -465,23 +474,23 @@ export function buildPanelView(input: PanelViewInput): PanelView {
   const cost = totalCost === undefined ? '' : money(totalCost)
 
   let status = ''
-  if (entries.length > 0 && !entries.some(entry => entry.configured)) status = panelText('unconfigured')
-  else if (selectedView?.mark !== undefined && selectedView.mark !== 'active') status = panelText(selectedView.mark)
-  else if (selectedEntry === undefined) status = panelText('unavailable')
+  if (entries.length > 0 && !entries.some(entry => entry.configured)) status = t('unconfigured')
+  else if (selectedView?.mark !== undefined && selectedView.mark !== 'active') status = t(selectedView.mark)
+  else if (selectedEntry === undefined) status = t('unavailable')
 
-  const planName = selectedView !== undefined && selectedView.planName !== '' ? selectedView.planName : panelText('nav')
+  const planName = selectedView !== undefined && selectedView.planName !== '' ? selectedView.planName : t('nav')
   // `planName` falls back to the panel name, so it is only a second part when it
   // actually names a plan — otherwise the title would read `Command Code ·
   // Command Code`.
-  const titleParts = planName === panelText('nav') ? [planName] : [panelText('nav'), planName]
+  const titleParts = planName === t('nav') ? [planName] : [t('nav'), planName]
   for (const bar of footerBars) {
     const figures = bar.detail === '' ? '' : ` ${bar.detail}`
-    titleParts.push(`${panelText(bar.label)}${figures} (${bar.percent})`)
+    titleParts.push(`${t(bar.label)}${figures} (${bar.percent})`)
   }
-  if (cost !== '') titleParts.push(`${panelText('spend')} ${cost}`)
+  if (cost !== '') titleParts.push(`${t('spend')} ${cost}`)
 
   return {
-    text: panelStrings(),
+    text: panelStrings(t),
     planName,
     status,
     footerBars,

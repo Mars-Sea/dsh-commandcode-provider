@@ -65,8 +65,8 @@ src/client/card.tsx   The Models-page provider card (keyed-slot component +
 src/client/panel.ts    Plans & quota panel view model + the shared background
                       auto-refresh loop (React-free).
 src/client/panel-view.tsx  Sidebar footer card + center dashboard components.
-src/client/panel-copy.ts   English copy for the panel (deliberately NOT a locale
-                      namespace — the panel is English on every harness).
+src/client/panel-copy.ts   Bilingual (zh/en) panel copy + the `panel.commandcode`
+                      locale namespace the panel slots bind their `t` seat to.
 src/client/panel-slots.ts  SlotMap merge for `main` + `sidebar.footer.action`.
 src/client/panel-styles.ts  The panel stylesheet + its `data-plugin-css` id (the
                       idempotence key `injectPanelCss` selects on).
@@ -290,6 +290,16 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   the card hidden it simply has no trigger. Never move that gate into
   `slots.inject`: a registration-time switch cannot follow a settings change
   without a re-register dance.
+  **The dashboard must stay escapable** (issue #41): the `main` cell occupies
+  the center column in place of the Conversation and `open()` is the only other
+  panel selection this plugin makes, so `panelFace` also carries `close()` —
+  wired to the dashboard header's `×` button (an icon-sized control whose
+  accessible name and tooltip carry the words) — as
+  `ctx.layout.selectPanel(null)` ("show the Conversation", current Session
+  untouched), falling back to the reserved `conversation` main key on a layout
+  whose `selectPanel` predates that `null` form. Both calls go through the same
+  reflective `ctx.get('layout')` seam and are contained; never let the panel
+  become a one-way door.
   (2) The composer readout (`conversation.composer.dock`, id
   `commandcode-session-cost` — never the shipped `stats` id, which would REPLACE
   the harness's token/cache-hit/throughput cell) renders NO surface of its own:
@@ -306,9 +316,18 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   its `<$0.0001` bound). The dialog row for cache-write tokens is hidden only
   when their rate is missing; when it is published the row stays, because its
   cost is already inside the total and hiding it makes the rows unable to
-  explain the figure above them. Both surfaces are English by construction
-  (`panel-copy.ts`, `SESSION_COST_COPY`) rather than through `ctx.locale`; that
-  is a deliberate, documented limitation.
+  explain the figure above them. **Locale split, do not blur it**: the PANEL
+  follows the harness language (both panel registrations declare
+  `locale: PANEL_LOCALE_NS` = `panel.commandcode`, registered in `apply` from
+  `PANEL_COPY_ZH`/`PANEL_COPY_EN`, and the bound `t` seat is passed into
+  `buildPanelView({ …, t })` — every label, status word and the footer tooltip
+  is composed through it, so a translator that only reached `view.text` would
+  leave half the surface English; a language switch mints a new `t` identity,
+  which is what re-renders the memoized surfaces). The COMPOSER session-cost
+  readout stays English by construction (`SESSION_COST_COPY`) rather than
+  through `ctx.locale`; that is a deliberate, documented limitation, and
+  `tests/panel.test.ts` pins the panel's zh/en resolution plus dictionary
+  key parity.
   **Version floors are PER SLOT, and getting this wrong ships a dead button.**
   Measured across 0.1.1-rc.2 … 0.1.5-rc.2: `sidebar.footer.action` and
   `conversation.composer.dock` are declared AND rendered in every one of those

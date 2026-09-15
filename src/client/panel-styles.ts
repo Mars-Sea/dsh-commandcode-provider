@@ -85,6 +85,11 @@ export const PANEL_CSS = `
 .ccp-subtitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .ccp-spacer{flex:1}
 .ccp-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5;font-variant-numeric:tabular-nums}
+/* The dashboard's exit: an icon-sized glyph button. The primitive's own
+   geometry is kept (size="sm"); only the glyph is enlarged and optically
+   centred, so it reads as a dismiss control rather than a text button. */
+.ccp-close{min-width:28px;justify-content:center;padding-left:0;padding-right:0}
+.ccp-close span{font-size:16px;line-height:1}
 .ccp-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
 
 /* Notices: the no-key guidance, a blocked report, and a stale-data error. */

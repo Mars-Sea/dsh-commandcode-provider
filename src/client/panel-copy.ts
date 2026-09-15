@@ -1,23 +1,32 @@
 /**
- * English copy for the Command Code **plans & quota panel** (the sidebar
+ * Bilingual copy for the Command Code **plans & quota panel** (the sidebar
  * footer card and the center-column dashboard it opens).
  *
- * Deliberately NOT part of the `settings.commandcode` locale namespace: that
- * namespace follows the harness's active language, and this surface is
- * specified to read in English regardless of it. Keeping the strings out of
- * the locale registry is what makes that a fact rather than a preference —
- * there is no dictionary lookup that could resolve to Chinese.
+ * The panel follows the harness's active language: `PANEL_LOCALE_NS` is a
+ * registered locale namespace (`ctx.locale.register`), both panel slot
+ * registrations declare it, and the renderer hands the component a `t` seat
+ * whose identity changes on a language switch (so a memoized panel re-renders).
+ * {@link buildPanelView} takes that translator as an input and builds every
+ * string through it — the projection stays React-free and testable, and no
+ * component carries copy of its own.
  *
- * The settings page keeps its own bilingual `settings.commandcode` namespace
- * (see `./locales.ts`); the two never mix.
+ * The settings page keeps its own `settings.commandcode` namespace (see
+ * `./locales.ts`); the two never mix.
  *
  * @module dsh-commandcode-provider/client/panel-copy
  */
 
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** Copy of the plans & quota panel (footer card + dashboard). */
+    'panel.commandcode': PanelKey
+  }
+}
+
 /**
- * The plans & quota panel key set. `zh` in the settings namespace is the
- * source of truth there; here English is the only locale, so this union is
- * the key set.
+ * The plans & quota panel key set. `zh` is the source of truth for the key set
+ * (repo convention); en must carry the exact same keys — a mismatch is a
+ * compile error at the register site.
  */
 export type PanelKey =
   /** Footer card title and panel heading. */
@@ -27,6 +36,9 @@ export type PanelKey =
   /** Refresh button / in-flight label. */
   | 'refresh'
   | 'refreshing'
+  /** Dashboard exit: the button's accessible name and its tooltip. */
+  | 'close'
+  | 'closeHint'
   /** First-paint fetch. */
   | 'loading'
   /** No credential at all: how to get one. */
@@ -82,12 +94,73 @@ export type PanelKey =
   /** A fetch that failed for any other reason. */
   | 'errorGeneric'
 
-/** The panel's literal string table. */
-export const PANEL_COPY: Record<PanelKey, string> = {
+/** The locale namespace both panel slots bind their `t` seat to. */
+export const PANEL_LOCALE_NS = 'panel.commandcode'
+
+/** A panel translator: one key in, one localized string out. */
+export type PanelTranslator = (key: PanelKey) => string
+
+/** The panel's Simplified Chinese string table (the key-set source of truth). */
+export const PANEL_COPY_ZH: Record<PanelKey, string> = {
+  nav: 'Command Code',
+  subtitle: '套餐、额度与配额窗口',
+  refresh: '刷新',
+  refreshing: '刷新中…',
+  close: '关闭',
+  closeHint: '返回会话',
+  loading: '正在获取账户用量…',
+  noKey: '尚未配置 API 密钥',
+  noKeyHint: '在 设置 → Command Code 中粘贴密钥或登录后，点击刷新。',
+  plan: '套餐',
+  credits: '额度',
+  limits: '配额窗口',
+  usage: '用量',
+  monthly: '月额度',
+  monthlyLimit: '月额度上限',
+  monthlyUsed: '本月已用',
+  remaining: '剩余',
+  purchased: '已购',
+  free: '赠送',
+  fiveHour: '5 小时窗口',
+  weekly: '每周窗口',
+  fiveHourShort: '5 小时',
+  weeklyShort: '每周',
+  windowUnlimited: '不限',
+  exceeded: '已超限',
+  exhausted: '已用尽',
+  resets: '重置于',
+  requests: '请求',
+  failed: '失败',
+  successRate: '成功率',
+  spend: '花费',
+  tokens: 'Token',
+  tokensIn: '入',
+  tokensOut: '出',
+  periodEnds: '账期截止',
+  updated: '更新于',
+  partial: '部分端点数据不可用',
+  active: '当前使用',
+  coolingDown: '限额冷却中',
+  invalidKey: '密钥无效',
+  unconfigured: '未配置',
+  unavailable: '无数据',
+  errorInvalidKey: 'API 密钥无效或已过期',
+  errorInvalidKeyHint: '服务端拒绝了全部请求（401）。请检查该账户的密钥，或到 commandcode.ai 控制台重新生成。',
+  errorServiceUnavailable: 'Command Code 服务暂时不可用',
+  errorServiceUnavailableHint: '服务端返回错误（5xx），请稍后点击刷新重试。',
+  errorNetwork: '无法连接 Command Code 服务',
+  errorNetworkHint: '所有请求都没有到达服务端。请检查网络连接或 API 地址设置。',
+  errorGeneric: '用量获取失败',
+}
+
+/** The panel's English string table (must mirror {@link PANEL_COPY_ZH}). */
+export const PANEL_COPY_EN: Record<PanelKey, string> = {
   nav: 'Command Code',
   subtitle: 'Plans, credits and quota windows',
   refresh: 'Refresh',
   refreshing: 'Refreshing…',
+  close: 'Close',
+  closeHint: 'Back to the conversation',
   loading: 'Loading account usage…',
   noKey: 'No API key configured',
   noKeyHint: 'Paste a key — or sign in — under Settings → Command Code, then refresh.',
@@ -133,7 +206,14 @@ export const PANEL_COPY: Record<PanelKey, string> = {
   errorGeneric: 'Could not fetch account usage',
 }
 
-/** Look up one panel string. The fallback key keeps a bad call visible, never blank. */
-export function panelText(key: PanelKey): string {
-  return PANEL_COPY[key] ?? key
+/** Every panel key, in the English table's declaration order. */
+export const PANEL_KEYS: readonly PanelKey[] = Object.keys(PANEL_COPY_EN) as PanelKey[]
+
+/**
+ * The English translator. Used as the fallback when no locale seat is
+ * available (a defensive path: every supported engine supplies one) and as the
+ * default in tests that only assert the projection's figures.
+ */
+export function panelTextEN(key: PanelKey): string {
+  return PANEL_COPY_EN[key] ?? key
 }

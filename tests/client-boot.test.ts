@@ -96,6 +96,12 @@ async function boot(
     mountCredentials = true,
     mountLayout = true,
     layoutSelectPanel = true,
+    // Whether that `selectPanel` accepts layout's `null` "show the
+    // Conversation" selection. Every release that has `selectPanel` at all
+    // accepts it; `false` models a hypothetical engine that only accepts a
+    // registered key, which is what the dashboard's Close action falls back
+    // from.
+    layoutSelectPanelNull = true,
     // The slots the engine declares. The default is the 0.1.5 set; a pre-0.1.5
     // engine declares the composer dock and the sidebar foot (both since
     // 0.1.1-rc.2) but has no keyed `main` — the centre column is `conversation`
@@ -112,11 +118,12 @@ async function boot(
     mountCredentials?: boolean
     mountLayout?: boolean
     layoutSelectPanel?: boolean
+    layoutSelectPanelNull?: boolean
     declaredSlots?: Set<string>
   } = {},
 ) {
   const ctx = new Context()
-  const selectedPanels: string[] = []
+  const selectedPanels: Array<string | null> = []
 
   // A faithful stand-in for the api-gateway `ClientRemoteService`: mounting a
   // contribution installs each namespace as a Cordis `remote.<ns>` service, so
@@ -160,8 +167,12 @@ async function boot(
   })
 
   ctx.provide('connection', {})
+  const localeNamespaces: string[] = []
   ctx.provide('locale', {
-    register: () => () => {},
+    register: (ns: string) => {
+      localeNamespaces.push(ns)
+      return () => {}
+    },
     bind: (ns: string) => (key: string) => `${ns}:${key}`,
     getLocale: () => ({ active: 'en' }),
   })
@@ -172,7 +183,18 @@ async function boot(
   // service but no way to select a panel.
   if (mountLayout) {
     ctx.provide('layout', layoutSelectPanel
-      ? { selectPanel: (id: string) => selectedPanels.push(id) }
+      ? {
+          selectPanel: (id: string | null) => {
+            // The real controller throws on a key the `main` registry does not
+            // hold; `null` is the "show the Conversation" selection. An engine
+            // without that form rejects `null` the same way it would reject an
+            // unregistered id.
+            if (id === null && !layoutSelectPanelNull) {
+              throw new Error('layout.selectPanel: main panel "null" is not registered')
+            }
+            selectedPanels.push(id)
+          },
+        }
       : {})
   }
 
@@ -181,8 +203,8 @@ async function boot(
   // last-write-wins map would hide the other registration. Each entry keeps the
   // registration's `inject` factory so a test can build the face the component
   // receives — which is how the card's click path is driven below.
-  const registered = new Map<string, Array<{ name: string; id?: string; key?: string; inject?: () => object }>>()
-  const record = (options: { name: string; id?: string; key?: string; inject?: () => object }): void => {
+  const registered = new Map<string, Array<{ name: string; id?: string; key?: string; locale?: string; inject?: () => object }>>()
+  const record = (options: { name: string; id?: string; key?: string; locale?: string; inject?: () => object }): void => {
     const key = options.id ?? options.key ?? options.name
     const entries = registered.get(key) ?? []
     entries.push(options)
@@ -197,7 +219,7 @@ async function boot(
     inject(name: string, fn: () => void) {
       if (declaredSlots.has(name)) fn()
     },
-    register(options: { id?: string; key?: string; name: string; inject?: () => object }, _component: unknown) {
+    register(options: { id?: string; key?: string; name: string; locale?: string; inject?: () => object }, _component: unknown) {
       record(options)
       return () => {}
     },
@@ -216,7 +238,7 @@ async function boot(
   // a `setImmediate`), so flush a few timer rounds before asserting.
   for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
 
-  return { registered, selectedPanels }
+  return { registered, selectedPanels, localeNamespaces }
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +384,45 @@ test('the footer card opens the panel cell it shares an id with', async () => {
   // The id the card selects must be the id the `main` cell registered under,
   // or `selectPanel` would throw and the click would be a dead end.
   assert.deepEqual(selectedPanels, ['commandcode-panel'])
+})
+
+test('the dashboard has an exit: close returns to the conversation', async () => {
+  // Issue #41: the dashboard replaces the Conversation in the center column and
+  // the sidebar card only re-selects it, so without this action the panel is a
+  // one-way door. `null` is layout's "show the Conversation" selection — the
+  // current Session is untouched.
+  const { registered, selectedPanels } = await boot()
+  const cell = registered.get('commandcode-panel')?.find((entry) => entry.name === 'main')
+  assert.ok(cell?.inject, 'the main cell carries its inject face')
+  const face = cell.inject() as { close: () => void }
+  face.close()
+  assert.deepEqual(selectedPanels, [null])
+})
+
+test('close falls back to the reserved conversation key on a pre-null layout', async () => {
+  // A layout whose `selectPanel` only accepts a registered key must still have
+  // a way back: ui-conversation's reserved `main` seat is the exit.
+  const { registered, selectedPanels } = await boot({ layoutSelectPanelNull: false })
+  const cell = registered.get('commandcode-panel')?.find((entry) => entry.name === 'main')
+  assert.ok(cell?.inject, 'the main cell carries its inject face')
+  const face = cell.inject() as { close: () => void }
+  face.close()
+  assert.deepEqual(selectedPanels, ['conversation'])
+})
+
+test('both panel seats bind the panel locale namespace, which is registered', async () => {
+  // The panel follows the harness language through a `t` seat, and a seat only
+  // exists when the registration declares the namespace — a missing
+  // declaration silently leaves the surfaces English, which is exactly the bug
+  // this pins. The namespace itself must be registered or the renderer throws
+  // when it tries to build the seat.
+  const { registered, localeNamespaces } = await boot()
+  assert.deepEqual(localeNamespaces, ['settings.commandcode', 'panel.commandcode'])
+  const panel = registered.get('commandcode-panel') ?? []
+  assert.deepEqual(
+    panel.map((entry) => [entry.name, entry.locale]),
+    [['main', 'panel.commandcode'], ['sidebar.footer.action', 'panel.commandcode']],
+  )
 })
 
 test('the client apply takes exactly the alpha2 service identities', () => {
