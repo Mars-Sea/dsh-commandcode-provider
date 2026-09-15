@@ -27,7 +27,7 @@
 - **按套餐过滤**：默认隐藏超出订阅套餐的模型，可一键关闭；「模型白名单」可进一步只保留常用模型。
 - **推理强度支持**：支持推理强度的模型可在选择器中选择档位。
 - **图片输入**：Vision 模型支持发送图片。
-- **套餐与配额面板**：侧边栏底部（Settings 正上方）新增 Command Code 卡片，显示当前服务账号的套餐与 5 小时 / 每周两个配额窗口；点击后在中间栏打开面板，包含计费周期、两个窗口的进度条与重置时间、月度额度消耗，以及已购买 / 赠送余额。需要 dsh 0.1.5（rc.1）或更高版本；无论 Harness 语言如何，该面板固定为英文。
+- **套餐与配额面板**：可选的 Command Code 卡片位于侧边栏底部（Settings 正上方），显示当前服务账号的套餐与 5 小时 / 每周两个配额窗口；点击后在中间栏打开面板，包含计费周期、两个窗口的进度条与重置时间、月度额度消耗，以及已购买 / 赠送余额。**默认关闭**——在 **设置 → Command Code → 高级设置** 中打开「在侧边栏显示额度卡片」即可显示，同一开关也能随时隐藏（隐藏时左侧不渲染任何内容，也不会为其后台刷新用量）。需要 dsh 0.1.5（rc.1）或更高版本；无论 Harness 语言如何，该面板固定为英文。
 - **会话费用估算**：在输入框下方的 token 计数旁及用量对话框中显示估算金额（`≈`），根据持久化历史中每次请求的模型、请求时间和上下文阶梯分别计价。切换模型或稍后查看不会重新定价之前的请求。混合供应商或缺少费率时显示已定价部分的小计（`≥`）；缺少历史事实或完全无法定价时不显示金额。结果基于插件内的价格快照，不等同于供应商账单。同样固定为英文。
 - **联网搜索**：dsh 的 `web_search` 工具由 Command Code Provider API（`/alpha/web-search`）承载，复用聊天同一个 key 与端点，无需单独配置搜索 key 或地址。详见[联网搜索](#联网搜索)。
 
@@ -52,7 +52,7 @@
 **pnpm 11 会拦下刚发布的新版本。** 它的 `minimumReleaseAge` 默认为 1440 分钟，发布不足一天的版本会被跳过，`@latest` 解析到**上一个**版本 —— 而且是静默的，命令照样以成功退出。想装 24 小时内发布的版本，必须写精确版本号：
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.0
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.1
 ```
 
 这一点对每个 profile 都成立，包括下面的终端界面。
@@ -71,7 +71,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 每个 profile 各自更新 —— 终端界面有独立的插件列表（见下文）：
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.0
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.1
 ```
 
 要更新到发布不足 24 小时的版本，和上面的安装一样写精确版本号；pnpm 11 的年龄门禁会把 `@latest` 解析成上一个版本。
@@ -100,7 +100,7 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 插件同样支持终端前端。**每个 dsh profile 有独立的插件列表**，所以上面那条 Web 安装命令不会装到终端里 —— 还要把插件装进 `dsh-tui` profile：
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.0
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.1
 ```
 
 这里请写精确版本号。新版本发布后的 24 小时内，只写包名（或 `@latest`）会被静默解析到上一个版本 —— 安装命令照样成功，但 profile 里拿到的是旧版本，结果就是全新的终端安装里既没有 **`/settings` → Command Code** 页面，也看不到任何 `commandcode` 模型。
@@ -186,7 +186,7 @@ llm-commandcode:
 
 ## 配置
 
-**设置 → Command Code** 可配置 API key、API 地址、工作目录与请求/流超时；配置好 key 后，页面顶部会显示实时「账户用量」卡片。
+**设置 → Command Code** 可配置 API key、API 地址、工作目录与请求/流超时；配置好 key 后，页面顶部会显示实时「账户用量」卡片。**高级设置**卡片里集中了各个开关：隐藏套餐外模型、用 Command Code 承载联网搜索，以及在侧边栏显示额度卡片（默认关闭）。
 
 同一组选项也位于 `$DSH_HOME/settings.yaml`（修改即刻生效，无需重启）：
 
@@ -198,6 +198,7 @@ llm-commandcode:
   modelsCachePath: ~/.commandcode/models-cache.json
   requestTimeoutMs: 60000          # 默认 60s
   streamIdleTimeoutMs: 300000      # 默认 300s
+  showSidebarQuota: true           # 可选：在侧边栏显示套餐与配额卡片（默认关闭）
 ```
 
 ## 联网搜索

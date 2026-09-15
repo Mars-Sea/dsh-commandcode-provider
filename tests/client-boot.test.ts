@@ -337,6 +337,17 @@ test('the sidebar card is withheld when the layout cannot open the panel', async
   assert.equal(older.registered.get('llm-commandcode')![0]!.name, 'settings.models.provider-card')
 })
 
+test('the footer card reads the sidebar-quota toggle through its inject face', async () => {
+  // The card gates its own render on `showSidebarQuota`, so the settings
+  // snapshot must reach it through the same inject face that carries `open()`.
+  // Without this seat the component could not tell hidden from shown.
+  const { registered } = await boot()
+  const footer = registered.get('commandcode-panel')?.find((entry) => entry.name === 'sidebar.footer.action')
+  assert.ok(footer?.inject, 'the footer row carries its inject face')
+  const face = footer.inject() as { hooks?: { commandCodeSettings?: unknown } }
+  assert.ok(face.hooks?.commandCodeSettings, 'the card needs the settings snapshot to gate itself')
+})
+
 test('the footer card opens the panel cell it shares an id with', async () => {
   const { registered, selectedPanels } = await boot()
 

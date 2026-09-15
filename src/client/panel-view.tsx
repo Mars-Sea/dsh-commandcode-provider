@@ -401,12 +401,31 @@ export function CommandCodePanel(props: PanelComponentProps) {
  * matching the shell's own rail geometry. `wide` comes from the shell as an
  * owner prop — unlike the old `sidebar.panellist` row, this slot really does
  * supply it.
+ *
+ * Rendering is gated on the settings page's `showSidebarQuota` toggle, which
+ * defaults OFF: a fresh install shows no quota surface in the sidebar and runs
+ * no background poll. The gate reads the STORED document (the settings
+ * controller's `sidebarQuota` fact), so an unsaved draft cannot show the card,
+ * while a landed save flips it live. The entry is still REGISTERED — this is a
+ * render decision, not a slot registration, so nothing churns the slot ledger.
  */
 export function CommandCodeFooterEntry(props: CommandCodeFooterEntryProps) {
+  // The card is opt-in (`showSidebarQuota`, default off) and follows the
+  // STORED document, never the settings page's staged draft — see
+  // `SettingsPageState.sidebarQuota`. While it is hidden this component renders
+  // NOTHING — no expanded card, no rail icon — and starts no background usage
+  // poll; the dashboard cell stays registered but has no trigger, which is
+  // exactly what "hide the quota display" means.
+  const visible = props.useCommandCodeSettings((snapshot) => snapshot.sidebarQuota)
   const view = usePanelView(props)
 
   const startAutoRefresh = props.startAutoRefresh
-  useEffect(() => startAutoRefresh(), [startAutoRefresh])
+  useEffect(() => {
+    if (!visible) return undefined
+    return startAutoRefresh()
+  }, [visible, startAutoRefresh])
+
+  if (!visible) return null
 
   const text = (key: PanelKey): string => view.text[key] ?? key
   // The ring tracks the tightest window — the 5-hour one whenever it is capped,

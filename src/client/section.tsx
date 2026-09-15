@@ -59,7 +59,7 @@ export interface CommandCodeSettingsProps {
 }
 
 /** The section fields folded into the collapsible Advanced card. */
-type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'filterModelsByPlan' | 'webSearch'
+type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'filterModelsByPlan' | 'webSearch' | 'showSidebarQuota'
 const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'apiBase',
   'workingDir',
@@ -67,6 +67,7 @@ const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'streamIdleTimeoutMs',
   'filterModelsByPlan',
   'webSearch',
+  'showSidebarQuota',
 ]
 
 /** One labelled field row in the page body. */
@@ -127,11 +128,12 @@ function invalidCopy(reason: StagedField['invalidReason'], t: Translate<Settings
 }
 
 /**
- * The collapsed "Advanced" card: API base, working dir, both timeouts, and
- * the plan filter live here so the page leads with the facts a user actually
- * touches. Starts collapsed on every visit; expands on demand. While
- * collapsed, a badge names the customized count so a nonzero override stays
- * visible (a number field's error blocks save and must be reachable).
+ * The collapsed "Advanced" card: API base, working dir, both timeouts, the
+ * plan filter, the web-search backend and the sidebar quota card live here so
+ * the page leads with the facts a user actually touches. Starts collapsed on
+ * every visit; expands on demand. While collapsed, a badge names the
+ * customized count so a nonzero override stays visible (a number field's error
+ * blocks save and must be reachable).
  */
 function AdvancedSection({
   state,
@@ -238,6 +240,19 @@ function AdvancedSection({
             defaultChecked
             onEdit={(text) => onEdit('webSearch', text)}
             onReset={() => onReset('webSearch')}
+            t={t}
+          />
+          {/* Opt-in, and off by default: the sidebar quota card is a display
+              surface, so an unset document shows nothing on the left. */}
+          <ToggleField
+            id="cc-show-sidebar-quota"
+            label={t('showSidebarQuota')}
+            hint={t('showSidebarQuotaHint')}
+            state={state.showSidebarQuota}
+            disabled={disabled}
+            defaultChecked={false}
+            onEdit={(text) => onEdit('showSidebarQuota', text)}
+            onReset={() => onReset('showSidebarQuota')}
             t={t}
           />
         </div>

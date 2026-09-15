@@ -192,6 +192,23 @@ export interface SettingsPageState {
    */
   webSearch: StagedField
   /**
+   * showSidebarQuota draft, staged as `'true'`/`'false'`/`''` (unset). The
+   * component renders it as a toggle; `''` means "inherit the default" (off —
+   * the sidebar quota card is opt-in, so an unset document shows nothing on
+   * the left).
+   */
+  showSidebarQuota: StagedField
+  /**
+   * Whether the STORED document turns the sidebar quota card on
+   * (`showSidebarQuota === true`). This is the fact the sidebar card itself
+   * follows — deliberately NOT the staged draft above: the page has an explicit
+   * Save, and a card that appeared from an unsaved draft would outlive a
+   * discarded edit (the staging lives as long as the client does) until the
+   * next page load. The stored fact flips the moment a save lands, so the card
+   * still appears/disappears without a reload.
+   */
+  sidebarQuota: boolean
+  /**
    * The manually selected active account, staged as a slot id (`default`
    * or an extra account's credential reference); `''` means "auto — first
    * usable account". The component renders it as a select.
@@ -317,6 +334,7 @@ const SECTION_FIELDS: FieldSpec[] = [
   numberField('streamIdleTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
   booleanField('filterModelsByPlan'),
   booleanField('webSearch'),
+  booleanField('showSidebarQuota'),
   textField('activeAccount'),
 ]
 
@@ -485,6 +503,8 @@ export class CommandCodeSettingsController {
       streamIdleTimeoutMs: this.field('streamIdleTimeoutMs'),
       filterModelsByPlan: this.field('filterModelsByPlan'),
       webSearch: this.field('webSearch'),
+      showSidebarQuota: this.field('showSidebarQuota'),
+      sidebarQuota: this.sectionValue('showSidebarQuota') === true,
       activeAccount: this.field('activeAccount'),
       accounts,
       accountsRemoving: [...this.removedRefs],

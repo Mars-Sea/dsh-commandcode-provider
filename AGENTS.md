@@ -240,6 +240,17 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `usage.refresh()` while mounted. The Host report determines configuration,
   including composition literals and CLI-auth fallback; browser credential
   references must never gate this read. Unreported credit fields stay dashes.
+  **The sidebar card is OPT-IN** (`Config.showSidebarQuota`, default false, the
+  settings page's Advanced toggle): `CommandCodeFooterEntry` gates its own
+  RENDER on the controller's STORED fact (`SettingsPageState.sidebarQuota`,
+  `sectionValue('showSidebarQuota') === true` — never the form's staged draft,
+  which would outlive a discarded edit) and starts no auto-refresh while
+  hidden. The entry stays REGISTERED, so a landed save shows/hides the card
+  live with no slot-ledger churn, while a fresh install renders no card, no
+  rail icon and runs no poll. The dashboard `main` cell is unaffected, so with
+  the card hidden it simply has no trigger. Never move that gate into
+  `slots.inject`: a registration-time switch cannot follow a settings change
+  without a re-register dance.
   (2) The composer readout (`conversation.composer.dock`, id
   `commandcode-session-cost` — never the shipped `stats` id, which would REPLACE
   the harness's token/cache-hit/throughput cell) renders NO surface of its own:

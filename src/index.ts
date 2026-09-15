@@ -234,6 +234,15 @@ export interface Config {
    */
   webSearch?: boolean
   /**
+   * Whether the Web sidebar shows the plans & quota card
+   * (`sidebar.footer.action`). Defaults to false: the card is opt-in, so an
+   * unset document renders no quota surface in the sidebar and mounts no
+   * background usage poll for it. Only the sidebar entry is affected — the
+   * dashboard cell behind it stays registered, it simply has no trigger until
+   * the toggle is on. Read by the browser client; the adapter ignores it.
+   */
+  showSidebarQuota?: boolean
+  /**
    * Language override for the `/commandcode` Host-side command's user-facing
    * copy. Host commands cannot read the client's `ctx.locale`, so this is
    * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
@@ -274,6 +283,7 @@ export const Config: z<Config> = z.object({
    */
   modelVisibility: z.dict(z.boolean()),
   webSearch: z.boolean().default(true),
+  showSidebarQuota: z.boolean().default(false),
   accounts: z.array(z.object({
     label: z.string(),
     apiKeyEnv: z.string().role('credential-ref'),

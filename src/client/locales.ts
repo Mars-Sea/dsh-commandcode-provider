@@ -40,6 +40,8 @@ export type SettingsCommandCodeKey =
   | 'filterModelsByPlanHint'
   | 'webSearch'
   | 'webSearchHint'
+  | 'showSidebarQuota'
+  | 'showSidebarQuotaHint'
   | 'accountsTitle'
   | 'accountsHint'
   | 'accountAdd'
@@ -166,7 +168,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   streamIdleTimeoutMs: '流空闲超时（毫秒）',
   streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300000（长思考模型可静默数分钟，默认值刻意放宽）。',
   advancedSettings: '高级设置',
-  advancedSettingsHint: 'API 地址、工作目录、超时与模型过滤等不常修改的选项。',
+  advancedSettingsHint: 'API 地址、工作目录、超时、模型过滤、联网搜索与侧边栏额度卡片等不常修改的选项。',
   advancedOverriddenOne: '已自定义 1 项',
   advancedOverriddenMany: '已自定义 {count} 项',
   advancedInvalid: '高级设置中有未填好的数字，请展开修正后再保存。',
@@ -174,6 +176,8 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   filterModelsByPlanHint: '开启后，模型选择器只列出当前套餐可用的模型；账户持有按需余额时会显示全部。',
   webSearch: '用 Command Code 承载联网搜索',
   webSearchHint: '开启后，dsh 的 web_search 工具由 Command Code 承担（复用同一个 API key 与地址），并优先于其他搜索后端；关闭则把选择权交还给之前的后端（如 modsearch），而不是强制回退到 DeepSeek 搜索。',
+  showSidebarQuota: '在侧边栏显示额度卡片',
+  showSidebarQuotaHint: '开启后，侧边栏底部（Settings 上方）显示 Command Code 套餐与配额卡片，点击可在中间栏打开完整仪表盘。默认关闭：左侧不显示任何额度信息，也不会为其后台刷新用量。保存后立即生效。',
   accountsTitle: '多账户轮换',
   accountsHint: '当前账户达到用量限额（429）或密钥失效（401）时，请求自动切换到下一个账户；全部耗尽时会提示最早的重置时间。',
   accountAdd: '添加账户',
@@ -307,7 +311,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 300000'
     + ' (deliberately generous — long-thinking models can stay silent for minutes).',
   advancedSettings: 'Advanced',
-  advancedSettingsHint: 'Rarely touched options: API base URL, working directory, timeouts, and model filtering.',
+  advancedSettingsHint: 'Rarely touched options: API base URL, working directory, timeouts, model filtering, web search, and the sidebar quota card.',
   advancedOverriddenOne: '1 customized',
   advancedOverriddenMany: '{count} customized',
   advancedInvalid: 'A number in Advanced settings is not ready to save; expand to fix it.',
@@ -319,6 +323,11 @@ export const en: Record<SettingsCommandCodeKey, string> = {
     + ' (same API key and base URL as chat), winning over other search backends.'
     + ' Off hands the selection back to the previous backend (e.g. modsearch)'
     + ' instead of forcing the shipped DeepSeek search.',
+  showSidebarQuota: 'Show the quota card in the sidebar',
+  showSidebarQuotaHint: 'When on, a Command Code plan & quota card sits at the bottom of the'
+    + ' sidebar (above Settings) and opens the full dashboard in the centre column.'
+    + ' Off by default: nothing is shown on the left, and no background usage poll'
+    + ' runs for it. Applies on save.',
   accountsTitle: 'Account rotation',
   accountsHint: 'When the active account hits its usage limit (429) or its key'
     + ' fails (401), requests switch to the next account; when every account is'

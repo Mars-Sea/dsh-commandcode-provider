@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-15
+
+### Changed
+- **The sidebar plans & quota card is now off by default, with a switch to show it** ([#42](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/42)). The card used to render unconditionally at the bottom of the sidebar. It is now opt-in: **Settings → Command Code → Advanced** carries a *"Show the quota card in the sidebar"* toggle (`showSidebarQuota`, default off). While hidden the card renders nothing at all — no card in the expanded sidebar and no icon in the 56px rail — and starts no background usage poll, so an unused panel costs nothing. The dashboard behind the card stays registered; with the card hidden it simply has no trigger. Saving the switch on shows the card again immediately, with no restart; an unsaved edit never moves it.
+
 ## [0.11.0] - 2026-09-15
 
 ### Added

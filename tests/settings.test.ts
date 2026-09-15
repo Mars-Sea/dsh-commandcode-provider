@@ -403,6 +403,52 @@ test('resetField() on webSearch clears it back to the inherited default', async 
   assert.equal(controller.state().webSearch.text, '')
 })
 
+test('save() writes the sidebar quota toggle as a real boolean, off when unset', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  // Unset is the fresh-install shape, and unset means hidden (the sidebar
+  // quota card is opt-in; the Host schema defaults it to false).
+  assert.equal(controller.state().showSidebarQuota.text, '')
+  controller.edit('showSidebarQuota', 'true')
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.equal(scope.state.value.showSidebarQuota, true)
+  assert.equal(controller.state().showSidebarQuota.text, 'true')
+})
+
+test('the sidebar card follows the SAVED toggle, never the staged draft', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  // The panel surface reads `sidebarQuota` (the stored fact), so an unsaved
+  // edit cannot show or hide the card: the staging outlives a discarded edit,
+  // and a card driven by it would survive until the client reloaded.
+  assert.equal(controller.state().sidebarQuota, false)
+  controller.edit('showSidebarQuota', 'true')
+  assert.equal(controller.state().showSidebarQuota.text, 'true')
+  assert.equal(controller.state().sidebarQuota, false, 'a staged edit must not show the card')
+  await controller.save()
+  assert.equal(controller.state().sidebarQuota, true, 'a landed save flips the card without a reload')
+  controller.edit('showSidebarQuota', 'false')
+  assert.equal(controller.state().sidebarQuota, true, 'staging it off must not hide the card either')
+  await controller.save()
+  assert.equal(controller.state().sidebarQuota, false)
+})
+
+test('resetField() on showSidebarQuota clears it back to the inherited default', async () => {
+  const scope = makeScope({
+    value: { showSidebarQuota: true },
+    user: { showSidebarQuota: true },
+  })
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().showSidebarQuota.text, 'true')
+  assert.equal(controller.state().sidebarQuota, true)
+  controller.resetField('showSidebarQuota')
+  await controller.save()
+  assert.equal(scope.state.user?.showSidebarQuota, undefined)
+  assert.equal(controller.state().showSidebarQuota.text, '')
+  assert.equal(controller.state().sidebarQuota, false)
+})
+
 // ---------------------------------------------------------------------------
 // Failure handling
 // ---------------------------------------------------------------------------
