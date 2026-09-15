@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- **A pre-release engine smoke test** (`npm run test:engine`, [#43](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/43)). It installs the newest release `package.json` declares compatible, stages this checkout's published surface in a scratch tree whose peers ARE that engine's, and imports the bundle there — the only check that can see a bundle which cannot link against the engine it will run on, because a `link:`-installed profile resolves the plugin's peers from the plugin's own `node_modules` instead. It also audits every static named import, the client bundle's `require()` calls, and the request-image policy the engine exposes (including that `LlmError` carries the offload count back).
+
+### Changed
+- **The declared Harness range now admits every release the manifest supports.** A caret on a prerelease (`^0.1.2-rc.1`) can only ever resolve to `0.1.2-rc.1`, because semver admits a prerelease only inside the same `major.minor.patch` tuple — so a fresh generation installed a second, older copy of the Harness beside the running engine instead of pairing with it. The peer range is now an exact-version disjunction covering `0.1.2-rc.1` through `0.1.6-alpha.1`, repeated verbatim in `dsh.compatibility.dsh` and `engines.dsh`, and `dsh.compatibility.dshReleases` records `0.1.6-alpha.1` as compatible so the catalog keeps listing the plugin for the current release.
+
+### Fixed
+- **The plugin loads on dsh `0.1.6-alpha.1` again** ([#43](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/43)). dsh-llm 0.1.6 removed `offloadRequestImagesWithPolicy`, which the adapter imported by name, so the built bundle failed at ESM link time and the host half never instantiated: no `commandcode` route, no settings page, no panel — and 0.1.6 reports an optional plugin's failure far more quietly than 0.1.5 did. The request-image policy is now reached through a namespace import and selected at runtime, so one build serves both engine generations. On 0.1.2–0.1.5 nothing changes: the adapter still projects its own history under the same 32 MiB / 60-image budget. On 0.1.6 the offload set belongs to the session surface: the adapter renders the surface's durable `offloaded` marks as placeholder text, and an over-budget history fails with `IMAGE_OFFLOAD_REQUIRED` + the count to offload, which the default `dsh-compaction-image-offload` plugin records as one `image/offload` event before retrying. An omission therefore survives session restore and fork, and the token meter stops counting evicted images as context. A 413 asks for the stricter rung's shortfall through the same channel; when nothing is left to offload, the existing bilingual request-size diagnosis stands.
+
 ## [0.11.1] - 2026-09-15
 
 ### Changed
