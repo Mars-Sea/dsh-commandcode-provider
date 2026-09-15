@@ -46,7 +46,6 @@ export type CommandCodeCommandKey =
   | 'partialFailures'         // "⚠️  部分端点失败: {list}"
   | 'noData'                  // "(no data — check your API key)"
   | 'errorText'               // "Could not fetch Command Code usage: {message}"
-  | 'imageGate'               // image-gate rejection rewrite (with {model})
 
 export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, string>> = {
   zh: {
@@ -82,9 +81,6 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
     partialFailures: '⚠️  部分端点失败: {list}',
     noData: '（无数据 — 请检查 API 密钥）',
     errorText: '获取 Command Code 用量失败：{message}',
-    imageGate:
-      '当前会话已包含图片，而模型 {model} 不支持图片输入；'
-      + '请选择支持图片的模型，或先移除会话中的图片。',
   },
   en: {
     title: '📊 Command Code usage{account}',
@@ -119,10 +115,6 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
     partialFailures: '⚠️  some endpoints failed: {list}',
     noData: '(no data — check your API key)',
     errorText: 'Could not fetch Command Code usage: {message}',
-    imageGate:
-      'This session already contains images, and model {model} does not accept'
-      + ' image input; please select an image-capable model, or remove the'
-      + ' images from the session first.',
   },
 }
 

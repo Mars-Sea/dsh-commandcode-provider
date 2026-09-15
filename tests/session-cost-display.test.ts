@@ -213,13 +213,29 @@ const asDocument = (fake: FakeDocument): Document => fake as unknown as Document
 // ---------------------------------------------------------------------------
 
 /**
- * The shipped token pill as it really nests: a `[data-composer-stats]` root
- * wrapping the button (`StatsPills`), whose last `aria-haspopup` child is the
- * token pill. The wrapper matters — the display scopes its lookup to it.
+ * The shipped stats row as it really nests: a `[data-composer-stats]` root
+ * wrapping the pills (`StatsPills`), of which the LAST `aria-haspopup` child is
+ * the token pill. The wrapper matters — the display scopes its lookup to it —
+ * and so does the PRECEDING trigger: once a step carries timing the row starts
+ * with the time pill, which is also a `button[aria-haspopup="dialog"]`, so a
+ * lookup that took the first trigger instead of the last would decorate the
+ * clock. Both shapes are modelled here for that reason.
  */
-function shippedPill(parent: FakeElement): { root: FakeElement; button: FakeElement; label: FakeElement } {
+function shippedPill(parent: FakeElement): {
+  root: FakeElement
+  button: FakeElement
+  label: FakeElement
+  timeButton: FakeElement
+  timeLabel: FakeElement
+} {
   const root = new FakeElement('div')
   root.setAttribute('data-composer-stats', '')
+  const timeButton = new FakeElement('button')
+  timeButton.setAttribute('aria-haspopup', 'dialog')
+  const timeLabel = new FakeElement('span')
+  timeLabel.textContent = '12.4s'
+  timeButton.appendChild(timeLabel)
+  root.appendChild(timeButton)
   const button = new FakeElement('button')
   button.setAttribute('aria-haspopup', 'dialog')
   const label = new FakeElement('span')
@@ -227,7 +243,7 @@ function shippedPill(parent: FakeElement): { root: FakeElement; button: FakeElem
   button.appendChild(label)
   root.appendChild(button)
   parent.appendChild(root)
-  return { root, button, label }
+  return { root, button, label, timeButton, timeLabel }
 }
 
 /**
@@ -348,6 +364,33 @@ test("a shipped aria-describedby is never overwritten or taken away", () => {
     'harness-own-description',
     'and is still there after we leave',
   )
+})
+
+test("the figure lands on the token pill, never on the time pill beside it", () => {
+  // Both pills announce a dialog, so `button[aria-haspopup="dialog"]` matches
+  // two nodes once a step carries timing. The rule is "the LAST one", and this
+  // is the only shape that can fail it: with a single trigger, first and last
+  // are the same node and a wrong rule still passes.
+  const composer = new FakeElement('div')
+  const { button, timeButton } = shippedPill(composer)
+  const { display } = makeDisplay(composer)
+
+  display.sync(view({ uncachedInputTokens: 1_000_000, outputTokens: 500_000 }))
+
+  assert.ok(button.querySelector('[data-composer-session-cost]'), 'the cost joins the token pill')
+  assert.equal(button.getAttribute('aria-describedby'), 'dsh-commandcode-session-cost')
+  assert.equal(
+    timeButton.querySelector('[data-composer-session-cost]'),
+    null,
+    'the time pill keeps the shipped markup',
+  )
+  assert.equal(timeButton.hasAttribute('aria-describedby'), false)
+
+  // Disposal is symmetric: it must clean the pill it decorated and leave the
+  // other one exactly as it found it.
+  display.dispose()
+  assert.equal(button.hasAttribute('aria-describedby'), false)
+  assert.equal(timeButton.querySelector('[data-composer-session-cost]'), null)
 })
 
 test('a re-rendered pill is re-decorated instead of losing the figure', () => {

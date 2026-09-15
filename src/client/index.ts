@@ -13,11 +13,8 @@
  *    `llm-commandcode` settings namespace, so a saved key or endpoint reaches
  *    the very next request.
  *
- * 2. The Models-page provider card (settings.models.provider-card) and the
- *    friendly image-gate error wrapper — see `./card.tsx` / `./sessions.ts`.
- *    The wrapper is deliberately narrow: only the `model-unavailable` code is
- *    rewritten, only when the message matches the image-session gate, and only
- *    the message text changes.
+ * 2. The Models-page provider card (settings.models.provider-card) — see
+ *    `./card.tsx`.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -29,8 +26,6 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import { installFriendlyImageError } from './sessions.ts'
-import type { ConnectionLike } from './sessions.ts'
 import { CommandCodeSettingsController, COMMANDCODE_NS, type SettingsPageState } from './settings.ts'
 import type { HostDescriptionSource, SettingsPageApi } from './settings.ts'
 import { adaptLegacyCredentials, type LegacyCredentialsApi } from './legacy-credentials.ts'
@@ -53,8 +48,8 @@ import { PANEL_CSS, PANEL_CSS_ID } from './panel-styles.ts'
 // `./panel-view.tsx` value import above, which imports `./panel-slots.ts`.
 import type {} from './session-cost-slots.ts'
 import { zh, en } from './locales.ts'
+import { PANEL_COPY_EN, PANEL_COPY_ZH, PANEL_LOCALE_NS } from './panel-copy.ts'
 
-export { isImageSessionRejection, withFriendlyImageError } from './sessions.ts'
 
 /** CSS for the settings page, injected once (harness bundle convention). */
 const PAGE_CSS = `
@@ -224,6 +219,16 @@ function injectPanelCss(): () => void {
 const PANEL_ID = 'commandcode-panel'
 
 /**
+ * ui-conversation's reserved `main` key, used only as the exit fallback for a
+ * layout whose `selectPanel` predates the `null` "show the Conversation"
+ * selection (see `close` in {@link applyClientSurfaces}). Declared locally for
+ * the same reason as {@link PANEL_ID}: ui-conversation is not a dependency of
+ * this bundle, and the key is a published contract of the layout (its README
+ * names `conversation` as reserved for the Conversation).
+ */
+const CONVERSATION_PANEL_ID = 'conversation'
+
+/**
  * The composer figure's entry id in `conversation.composer.dock`. Its own id,
  * not the shipped `stats` cell's: reusing `stats` would REPLACE the tokens /
  * cache-hit / throughput readout rather than inject into it, and that readout
@@ -241,12 +246,16 @@ const SESSION_COST_ID = 'commandcode-session-cost'
  * client fiber (settings page included) on a service some profiles never mount.
  */
 interface LayoutSelectionSeam {
-  selectPanel(id: string): void
+  /** `null` shows the Conversation again; a string selects that registered `main` key. */
+  selectPanel(id: string | null): void
 }
 
-/** Connection fields retained by pre-0.1.2 clients and absent from the current transport handle. */
-interface LegacyConnectionLike extends ConnectionLike {
-  api?: ConnectionLike['api'] & { credentials?: LegacyCredentialsApi }
+/**
+ * Connection fields retained by pre-0.1.2 clients and absent from the current
+ * transport handle. Only the credential face and the host description are read.
+ */
+interface LegacyConnectionLike {
+  api?: { credentials?: LegacyCredentialsApi }
   hostDescription?: HostDescriptionSource
 }
 
@@ -259,23 +268,23 @@ interface LegacyConnectionLike extends ConnectionLike {
 export function apply(ctx: Context): void {
   injectPageCss()
 
-  const connection = ctx.get('connection') as LegacyConnectionLike | undefined
-  if (connection !== undefined) {
-    // The wrapper is reached from a non-React path that has no `t` in scope;
-    // it reads the active client locale at call time, so a language switch
-    // immediately applies to the next selectModel failure. On legacy builds
-    // it wraps `connection.api.sessions`; 0.1.2 replaced that façade with
-    // `remote.session`, so the helper safely skips this UX-only rewrite there
-    // instead of preventing the whole plugin from activating.
-    installFriendlyImageError(connection, () => ctx.locale.getLocale().active === 'zh' ? 'zh' : 'en')
-  }
-
   // The "Command Code" settings page: register the section once the
   // `settings.section` declaration is on the ledger (ui-settings-general
   // owns the shell; registration order relative to it is not constrained —
   // `slots.inject` waits for the declaration).
   ctx.effect(() => ctx.locale.register('settings.commandcode', { zh, en }), 'dsh-commandcode-provider: page copy')
 
+  // The plans & quota panel's copy is a namespace of its own: the panel is not
+  // part of the settings page, but it follows the SAME active language (both
+  // panel registrations declare it below, which is what binds their `t` seat).
+  // Registered here rather than next to those registrations so the namespace
+  // exists even on the legacy credential path, which returns early below.
+  ctx.effect(
+    () => ctx.locale.register(PANEL_LOCALE_NS, { zh: PANEL_COPY_ZH, en: PANEL_COPY_EN }),
+    'dsh-commandcode-provider: panel copy',
+  )
+
+  const connection = ctx.get('connection') as LegacyConnectionLike | undefined
   const legacyApi = adaptLegacyCredentials(connection?.api?.credentials)
   if (legacyApi !== undefined) {
     applyClientSurfaces(ctx, legacyApi, connection?.hostDescription)
@@ -555,10 +564,11 @@ function applyClientSurfaces(
   // because the shell caches a panellist entry's label), and it selects the
   // panel itself through the `open` action below.
   //
-  // Neither registration declares a `locale` namespace: the panel is English by
-  // construction, from `./panel-copy.ts`, not by locale lookup. That is a
-  // deliberate limitation, not an oversight — the two quota labels are the
-  // surface's whole point and the copy is reviewed as one block.
+  // Both registrations declare the panel's own `locale` namespace
+  // (`panel.commandcode`, registered in `apply` above), which is what binds the
+  // `t` seat the components feed into `buildPanelView` — so the panel follows
+  // the harness's active language and a switch re-renders it (the renderer
+  // mints a fresh `t` per revision, and its identity is the invalidation).
   //
   // Version reality, measured across 0.1.1-rc.2 … 0.1.5-rc.2 (see AGENTS.md):
   // `sidebar.footer.action` and `conversation.composer.dock` exist and RENDER in
@@ -601,13 +611,34 @@ function applyClientSurfaces(
       const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
       if (typeof layout?.selectPanel === 'function') layout.selectPanel(PANEL_ID)
     },
+    // The dashboard's way out (issue #41). It occupies the center column in
+    // place of the Conversation, and `open()` above is the ONLY other panel
+    // selection this plugin makes — so without an exit the panel is a one-way
+    // door: clicking the sidebar card just re-selects it. `selectPanel(null)`
+    // is layout's "show the Conversation" selection and leaves the current
+    // Session untouched. A layout whose `selectPanel` predates that `null`
+    // form accepts only a registered key, so fall back to ui-conversation's
+    // reserved `main` seat; a failure here must not take the surface down.
+    close: () => {
+      const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
+      if (typeof layout?.selectPanel !== 'function') return
+      try {
+        layout.selectPanel(null)
+      } catch {
+        try {
+          layout.selectPanel(CONVERSATION_PANEL_ID)
+        } catch (error: unknown) {
+          console.error('[dsh-commandcode-provider] could not close the plans & quota panel:', error)
+        }
+      }
+    },
   })
 
   ctx.effect(() => injectPanelCss(), 'dsh-commandcode-provider: panel styles')
 
   try {
     ctx.slots.inject('main', () => ctx.slots.register(
-      { name: 'main', key: PANEL_ID, inject: panelFace },
+      { name: 'main', key: PANEL_ID, locale: PANEL_LOCALE_NS, inject: panelFace },
       CommandCodePanel,
     ))
   } catch (error: unknown) {
@@ -632,7 +663,7 @@ function applyClientSurfaces(
         // default 0, so 1 sorts after it — but any sibling passing an order ≥ 1
         // lands between this card and Settings, so "directly above Settings" is
         // a preference, not a guarantee.
-        { name: 'sidebar.footer.action', id: PANEL_ID, order: 1, inject: panelFace },
+        { name: 'sidebar.footer.action', id: PANEL_ID, order: 1, locale: PANEL_LOCALE_NS, inject: panelFace },
         CommandCodeFooterEntry,
       ))
     } catch (error: unknown) {

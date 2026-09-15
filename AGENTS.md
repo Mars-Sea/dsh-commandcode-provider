@@ -34,8 +34,8 @@ src/index.ts          Plugin entry: Config schema, credential resolution,
                       settings namespace, route + directory registration,
                       /commandcode command wiring, usage-Remote wiring.
 src/commands.ts       The /commandcode usage dashboard command.
-src/command-locales.ts  zh/en copy for the /commandcode command + the image-gate
-                      error rewrite (Host-side plain constants, no ctx.locale).
+src/command-locales.ts  zh/en copy for the /commandcode command (Host-side
+                      plain constants, no ctx.locale).
 src/usage-wire.ts     Shared `commandcode/report` Remote contract: hand-rolled
                       strict result schema + the one descriptor object both
                       halves register (dependency-free; the client inlines it).
@@ -62,7 +62,6 @@ src/client/section.tsx  The settings page React component (settings form +
 src/client/card.tsx   The Models-page provider card (keyed-slot component +
                       the SlotMap merge for `settings.models.provider-card` /
                       `settings.models.footer` mirroring upstream 0.1.2).
-src/client/sessions.ts  selectModel friendly-error wrapper (React-free).
 src/client/panel.ts    Plans & quota panel view model + the shared background
                       auto-refresh loop (React-free).
 src/client/panel-view.tsx  Sidebar footer card + center dashboard components.
@@ -128,7 +127,6 @@ tests/login.test.ts   browser-login flow integration tests (real loopback
                       server driven with fetch; every failure reason).
 tests/login-wire.test.ts login descriptor uniformity + status parser.
 tests/login-client.test.ts login-panel controller poll lifecycle.
-tests/client.test.ts  selectModel friendly-error rewrite tests (real envelope shape).
 tests/client-boot.test.ts client-boot integration tests (real apply() against a
                       DSH 0.1.2 client assembly; settings page + provider card).
 tests/panel.test.ts   plans & quota projection + auto-refresh loop tests.
