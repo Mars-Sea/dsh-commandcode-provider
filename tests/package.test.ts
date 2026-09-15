@@ -7,8 +7,9 @@ import { readFileSync } from 'node:fs'
 interface PackageManifest {
   dsh?: {
     client?: { platform?: string }
-    compatibility?: { dshReleases?: Record<string, string> }
+    compatibility?: { dshReleases?: Record<string, string>; dsh?: string }
   }
+  engines?: { node?: string; dsh?: string }
   peerDependencies?: Record<string, string>
   devDependencies?: Record<string, string>
 }
@@ -17,23 +18,38 @@ const pkg = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ) as PackageManifest
 
-test('every Harness peer and direct development package starts at 0.1.2-rc.1', () => {
+test('every Harness peer and development package shares one supported release range', () => {
   const peers = pkg.peerDependencies ?? {}
   const dev = pkg.devDependencies ?? {}
   const harnessPeers = Object.keys(peers).filter((name) => name.startsWith('@deepseek-ai/dsh-'))
 
   assert.ok(harnessPeers.length > 0)
+  const ranges = new Set(harnessPeers.map((name) => peers[name]))
+  assert.equal(ranges.size, 1, 'one range for every Harness package, never a per-package drift')
+  const range = [...ranges][0]!
   for (const name of harnessPeers) {
-    assert.equal(peers[name], '^0.1.2-rc.1', `${name} peer range`)
-    assert.equal(dev[name], '^0.1.2-rc.1', `${name} development range`)
+    assert.equal(dev[name], range, `${name} development range`)
+  }
+  // Why an exact-version disjunction rather than a caret: semver only admits a
+  // prerelease inside the SAME major.minor.patch tuple as the comparator, so
+  // `^0.1.2-rc.1` resolves to 0.1.2-rc.1 alone — it never admits 0.1.3-alpha.1,
+  // 0.1.5-rc.2 or 0.1.6-alpha.1, which is how a broken engine pairing stayed
+  // invisible (issue #43).
+  assert.ok(!range.includes('x') && !range.includes('>='), 'no compact comparator form can express this')
+  for (const version of Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})) {
+    assert.ok(
+      range.split(' || ').includes(`^${version}`),
+      `peer range must admit declared-compatible ${version}`,
+    )
   }
 })
 
-test('per-release DSH compatibility is declared for the latest releases', () => {
+test('per-release DSH compatibility is declared for every supported release', () => {
   // DSH STORE only restores a listing from exact per-release records under
-  // dsh.compatibility.dshReleases; a peer range alone is not evidence.
-  // Records are additive: each release keeps its own entry, so the catalog can
-  // still list the plugin for a user who has not moved to the newest engine.
+  // dsh.compatibility.dshReleases; a peer range alone is not evidence, and a
+  // release with no record reads as `unknown`. Records are additive: each
+  // release keeps its own entry, so the catalog can still list the plugin for a
+  // user who has not moved to the newest engine.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
   for (const version of [
     '0.1.2-rc.1',
@@ -41,9 +57,21 @@ test('per-release DSH compatibility is declared for the latest releases', () => 
     '0.1.3-alpha.2',
     '0.1.5-alpha.1',
     '0.1.5-rc.1',
+    '0.1.5-rc.2',
+    '0.1.6-alpha.1',
   ]) {
     assert.equal(releases[version], 'compatible', `dshReleases[${version}]`)
   }
+})
+
+test('the manifest declares the same engine range it supports', () => {
+  // `compatibility.dsh` and `engines.dsh` are declarative: dsh itself reads
+  // neither, but a catalog that finds no explicit engine range falls back to a
+  // peer range, so leaving them out lets the two drift apart silently.
+  const supported = pkg.peerDependencies?.['@deepseek-ai/dsh-llm']
+  assert.equal(pkg.dsh?.compatibility?.dsh, supported)
+  assert.equal(pkg.engines?.dsh, supported)
+  assert.equal(pkg.engines?.node, '>=22')
 })
 
 test('the rc.1 Web client remains enabled without dsh-client-runtime', () => {
