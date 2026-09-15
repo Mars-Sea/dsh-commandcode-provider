@@ -38,7 +38,7 @@ import {
   peakPricingState,
   compareByPlan,
 } from '../src/capabilities.ts'
-import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions } from '../src/adapter.ts'
+import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CoreImagePolicy } from '../src/adapter.ts'
 import type { ContentBlock, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {
@@ -1438,6 +1438,7 @@ async function runAttempts(
   messages: Message[],
   images: Record<string, Uint8Array>,
   status: (attempt: number) => number = () => 200,
+  imageOffload?: CoreImagePolicy,
 ): Promise<{ bodies: Record<string, unknown>[]; error?: unknown }> {
   const bodies: Record<string, unknown>[] = []
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1450,6 +1451,7 @@ async function runAttempts(
   const adapter = makeAdapter({
     fetchImpl,
     resolveAttachments: () => fakeAttachments(images),
+    ...(imageOffload === undefined ? {} : { imageOffload }),
     ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
   })
   let error: unknown
@@ -1692,6 +1694,187 @@ test('stream() fails after the eviction retry is also rejected with 413 (issue #
   const e = error as { code?: string; failure?: { status?: number } }
   assert.equal(e.code, 'PROVIDER_HTTP_ERROR')
   assert.equal(e.failure?.status, 413)
+})
+
+// ---------------------------------------------------------------------------
+// Request image offload on the >=0.1.6 durable contract (issue #43)
+//
+// dsh 0.1.6 moved the offload set from the adapter to the session surface:
+// `projectOffloadedImages` renders the durable marks, and an over-budget
+// history FAILS with `IMAGE_OFFLOAD_REQUIRED` + the count to offload instead of
+// being edited inside the adapter. A default profile answers that failure with
+// `dsh-compaction-image-offload`, which records one `image/offload` event,
+// marks the oldest occurrences, and retries the step.
+//
+// These tests drive that branch by injecting the two helpers: this checkout
+// compiles against the 0.1.2 peers, which have neither (and the helper pair
+// must never be imported statically — see the adapter's import comment). They
+// pin the CONTRACT the adapter speaks — which rung it reports, in what
+// encoding, with which byte callback, and that it never evicts on its own
+// there — rather than re-deriving the core arithmetic, which is exactly what
+// the injected fake deliberately does not implement.
+// ---------------------------------------------------------------------------
+
+/** Recorded calls of {@link makeSurfacePolicy}, so a test can assert the contract. */
+interface SurfacePolicyCalls {
+  projected: number
+  required: number
+  budgets: Record<string, unknown>[]
+  versionBytes: number[]
+}
+
+/**
+ * Stand-in for the >=0.1.6 core helpers. `count` is what
+ * `requiredImageOffload` answers (a number, or a function of the rung's budget
+ * so the 413 ladder can answer differently per rung); every call's arguments
+ * are recorded.
+ */
+function makeSurfacePolicy(
+  count: number | ((budget: Record<string, unknown>) => number) = 0,
+): { policy: CoreImagePolicy; calls: SurfacePolicyCalls } {
+  const calls: SurfacePolicyCalls = { projected: 0, required: 0, budgets: [], versionBytes: [] }
+  const policy: CoreImagePolicy = {
+    projectOffloadedImages(messages, placeholder) {
+      calls.projected += 1
+      return messages.map((message) => {
+        const content = message.content.map((block) =>
+          block.type === 'image' && (block as { offloaded?: true }).offloaded === true
+            ? { type: 'text' as const, text: placeholder(block.attachment) }
+            : block)
+        return content.every((block, index) => block === message.content[index])
+          ? message
+          : { ...message, content }
+      })
+    },
+    requiredImageOffload(messages, budget, versionBytes) {
+      calls.required += 1
+      calls.budgets.push(budget)
+      for (const message of messages) {
+        for (const block of message.content) {
+          if (block.type === 'image' && (block as { offloaded?: true }).offloaded !== true) {
+            calls.versionBytes.push(versionBytes(block))
+          }
+        }
+      }
+      return typeof count === 'function' ? count(budget) : count
+    },
+  }
+  return { policy, calls }
+}
+
+test('stream() asks the surface to offload when a 0.1.6 engine reports an over-budget history (issue #43)', async () => {
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  const { policy, calls } = makeSurfacePolicy(30)
+  const { bodies, error } = await runAttempts('cli', messages, images, () => 200, policy)
+
+  // Nothing was sent: the route reports the shortfall instead of guessing, so
+  // the harness can record the omission and retry with the surface updated.
+  assert.equal(bodies.length, 0)
+  const e = error as { code?: string; message?: string }
+  assert.equal(e.code, 'IMAGE_OFFLOAD_REQUIRED')
+  // The count travels twice: in `failure.offloadImages`, which is what
+  // `dsh-compaction-image-offload` reads, and in the message. Only the second
+  // is observable here — the 0.1.2 peers this checkout compiles against
+  // predate the field and drop it from `failure` (0.1.6 copies it at
+  // dsh-llm/lib/index.js:1609). The field itself is pinned against a real
+  // engine by scripts/verify-engine-load.mjs.
+  assert.match(e.message ?? '', /30 more oldest occurrence/)
+  // The adapter speaks the STANDING rung, in the encoded form the wire carries,
+  // and hands the counter the declared normalized size it would inline.
+  assert.equal(calls.projected, 1)
+  assert.equal(calls.required, 1)
+  assert.deepEqual(calls.budgets[0], {
+    representation: 'base64',
+    maxBytes: 32 * 1024 * 1024,
+    maxImages: 60,
+    byteQuantum: 16 * 1024 * 1024,
+    countQuantum: 30,
+  })
+  assert.deepEqual([...new Set(calls.versionBytes)], [pngBytes.length])
+})
+
+test("stream() renders the surface's durable offload marks as placeholders (issue #43)", async () => {
+  // One image the surface already offloaded, one still retained. The marked
+  // one must travel as placeholder text even though the history is far inside
+  // the budget — a mark the adapter ignored would re-send evicted pixels.
+  const goneRef = sizedImageRef(0, pngBytes.length)
+  const keptRef = sizedImageRef(1, pngBytes.length)
+  const gone = { type: 'image', attachment: goneRef, offloaded: true } as unknown as ContentBlock
+  const messages: Message[] = [
+    { id: messageId(), role: 'user', content: [{ type: 'text', text: 'first' }, gone], source: { kind: 'user' } },
+    {
+      id: messageId(),
+      role: 'user',
+      content: [{ type: 'text', text: 'second' }, { type: 'image', attachment: keptRef }],
+      source: { kind: 'user' },
+    },
+  ]
+  const { policy } = makeSurfacePolicy(0)
+  const { bodies, error } = await runAttempts('cli', messages, {
+    [goneRef.attachmentId]: sizedImageBytes(0),
+    [keptRef.attachmentId]: sizedImageBytes(1),
+  }, () => 200, policy)
+
+  assert.equal(error, undefined)
+  assert.equal(bodies.length, 1)
+  assert.deepEqual(survivingImageIndices(bodies[0]!, 'cli'), [1])
+  const placeholders = placeholderTexts(bodies[0]!, 'cli')
+  assert.equal(placeholders.length, 1)
+  assert.match(placeholders[0]!, /sha256:budget-image-0/)
+})
+
+test('stream() keeps the adapter-owned eviction when the engine exposes only the legacy helper (issue #43)', async () => {
+  // The generation selection must key on the DURABLE pair, not on "the engine
+  // has an image policy": a <=0.1.5 engine has the legacy helper alone, and
+  // the adapter then owns the eviction exactly as before.
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  let seen: Record<string, unknown> | undefined
+  const legacy: CoreImagePolicy = {
+    offloadRequestImagesWithPolicy: (history, policy) => {
+      seen = policy
+      return history.slice(-1)
+    },
+  }
+  const { bodies, error } = await runAttempts('cli', messages, images, () => 200, legacy)
+
+  assert.equal(error, undefined)
+  assert.equal(seen?.representation, 'base64')
+  assert.equal(seen?.maxImages, 60)
+  assert.equal(seen?.countQuantum, 30)
+  assert.deepEqual(survivingImageIndices(bodies[0]!, 'cli'), [60], 'the helper output is what travels')
+})
+
+test('stream() asks for the stricter rung when a 413 arrives on a 0.1.6 engine (issue #43)', async () => {
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  // Rung 0 fits (the fake answers 0); the gateway refuses the body anyway, so
+  // the retry rung's shortfall is what the surface is asked to offload. The
+  // omission is recorded on the session instead of being a local edit, which
+  // is why the request is NOT resent from here.
+  const { policy, calls } = makeSurfacePolicy((budget) => (budget.maxImages === 12 ? 47 : 0))
+  const { bodies, error } = await runAttempts('cli', messages, images, () => 413, policy)
+
+  assert.equal(bodies.length, 1)
+  const e = error as { code?: string; message?: string }
+  assert.equal(e.code, 'IMAGE_OFFLOAD_REQUIRED')
+  // The stricter rung's count, not the standing one (see the note above on why
+  // the count is read from the message in this checkout).
+  assert.match(e.message ?? '', /47 more oldest occurrence/)
+  assert.deepEqual(calls.budgets.map((budget) => budget.maxImages), [60, 12])
+})
+
+test('stream() reports the 413 itself when a 0.1.6 surface has nothing left to offload (issue #43)', async () => {
+  // Once the surface reports no shortfall at the strictest rung, the body is
+  // simply too large (text and tool bytes share the gateway cap), and asking
+  // for another offload would loop. The existing bilingual diagnosis stands.
+  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
+  const { policy } = makeSurfacePolicy(0)
+  const { bodies, error } = await runAttempts('cli', messages, images, () => 413, policy)
+
+  assert.equal(bodies.length, 1)
+  const e = error as { code?: string; failure?: { status?: number }; message?: string }
+  assert.equal(e.code, 'PROVIDER_HTTP_ERROR')
+  assert.equal(e.failure?.status, 413)
+  assert.match(e.message ?? '', /请求体超过服务端的体积上限/)
 })
 
 // ---------------------------------------------------------------------------
@@ -3567,6 +3750,10 @@ test('providerRetryPolicy() pins the near-unbounded transient-only retry policy'
   assert.equal(policy.mode, 'normal')
   assert.equal(policy.maxRetries, 1000)
   assert.deepEqual([...policy.retryableCodes], ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
+  // IMAGE_OFFLOAD_REQUIRED is deliberately outside the whitelist (issue #43):
+  // the harness mutates the session surface and retries, so a byte-identical
+  // resend from dsh-llm-retry could never succeed.
+  assert.ok(!(policy.retryableCodes as readonly string[]).includes('IMAGE_OFFLOAD_REQUIRED'))
   assert.equal(policy.initialDelayMs, 500)
   assert.equal(policy.maxDelayMs, 900000)
   assert.equal(policy.jitterRatio, 0.1)

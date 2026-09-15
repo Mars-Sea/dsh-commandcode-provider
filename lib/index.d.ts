@@ -1,10 +1,10 @@
 import z from "@deepseek-ai/schemastery";
-import { GenerateOptions, LlmAdapter, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
+import { GenerateOptions, LlmAdapter, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, Message, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
 import { CredentialRef } from "@deepseek-ai/dsh-credentials";
 import { TypertRemoteService, TypertSchema } from "@deepseek-ai/dsh-typert-protocol";
 import { WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
 import { Context } from "@deepseek-ai/cordis";
-import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
+import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
 declare const COMMAND_CODE_CLI_VERSION = "1.54.0";
@@ -22,6 +22,27 @@ declare const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000;
 declare function projectSlugFromPath(pathName: string): string;
 /** Read a usable Command Code credential from the official CLI auth file. */
 declare function resolveAuthFileApiKey(): string | undefined;
+/** One occurrence's exact request-version byte length, as the core counter wants it. */
+type ImageVersionBytes = (block: {
+  attachment: ImageAttachmentRef;
+}) => number;
+/**
+ * The installed engine's request-image policy, whichever generation it is.
+ *
+ * Every member is optional because the two generations never coexist: a
+ * ≤0.1.5 engine has only `offloadRequestImagesWithPolicy`, a ≥0.1.6 engine has
+ * only the other two. `CORE_IMAGE_POLICY` is the namespace object viewed
+ * through this shape, and `surfaceImagePolicy()` is the ONE place that decides
+ * which contract this process speaks.
+ */
+interface CoreImagePolicy {
+  /** ≤0.1.5: project history under a byte/count budget, adapter-owned and transient. */
+  offloadRequestImagesWithPolicy?: (messages: readonly Message[], policy: Record<string, unknown>) => readonly Message[];
+  /** ≥0.1.6: render the surface's durable offload marks as placeholder text. */
+  projectOffloadedImages?: (messages: readonly Message[], placeholder: (ref: ImageAttachmentRef) => string) => readonly Message[];
+  /** ≥0.1.6: how many more leading retained occurrences must be offloaded. */
+  requiredImageOffload?: (messages: readonly Message[], budget: Record<string, unknown>, versionBytes: ImageVersionBytes) => number;
+}
 /** Connection facts resolved fresh per request by the plugin entry. */
 interface CommandCodeConnectionOptions {
   /** API base; the Provider API lives under it (`/alpha/generate`, `/provider/v1/chat/completions`, `/provider/v1/models`). */
@@ -102,6 +123,13 @@ interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = Comman
   fetchImpl?: typeof fetch;
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
   resolveAttachments?: ResolveAttachments;
+  /**
+   * Request-image policy override (tests); defaults to the installed engine's
+   * own helpers, whichever generation they belong to. Injecting it is the only
+   * way to exercise the ≥0.1.6 durable-offload contract while this checkout
+   * still compiles against the 0.1.2 peers.
+   */
+  imageOffload?: CoreImagePolicy;
 }
 /** Account identity from `/alpha/whoami`. */
 interface CommandCodeAccount {
@@ -202,6 +230,15 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   private catalog;
   private readonly fetchImpl;
   private readonly resolveAttachments;
+  /** The engine's request-image policy, resolved once (tests may inject one). */
+  private readonly imagePolicy;
+  /**
+   * The ≥0.1.6 durable contract, or `undefined` on a ≤0.1.5 engine — where the
+   * adapter must evict its own history. Resolved once: the contract a process
+   * speaks cannot change while it runs, and resolving here keeps every request
+   * on the same branch (see {@link surfaceImagePolicy}).
+   */
+  private readonly surfaceOffload;
   private readonly billingAccess;
   private readonly billingAccessInflight;
   private readonly protocolCache;

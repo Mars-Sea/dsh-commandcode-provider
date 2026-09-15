@@ -37,9 +37,9 @@ import {
   ReasoningEffortId,
   ToolCallId,
   errorChain,
-  offloadRequestImagesWithPolicy,
   offloadedImageText,
   resolveRetryPolicy,
+  type LlmErrorOptions,
   type ResolvedRetryPolicy,
   type ContentBlock,
   type FinishReason,
@@ -51,6 +51,14 @@ import {
   type StreamChunk,
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
+// Namespace import, on purpose: the request-image policy is the ONE part of
+// dsh-llm's surface that changed shape between the supported engines (see
+// `CoreImagePolicy`). Every generation is reached through this object and
+// probed at runtime, because a static named import of an export the installed
+// engine does not have is an ESM link-time failure that takes the whole plugin
+// down — `offloadRequestImagesWithPolicy` was removed in 0.1.6, and
+// `requiredImageOffload`/`projectOffloadedImages` do not exist before it.
+import * as dshLlm from '@deepseek-ai/dsh-llm'
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 
 import {
@@ -695,12 +703,28 @@ function hasImageContent(message: Message): boolean {
 // fails with HTTP 413 for the rest of the session, because history is never
 // reclaimed, even though the same conversation works on another provider.
 //
-// The harness core already ships the mechanism the two official adapters use
-// (`offloadRequestImagesWithPolicy` + `offloadedImageText`): the oldest images
-// beyond a budget are replaced, in whole quanta, by a model-visible
-// placeholder that names the attachment, so the recent tail keeps its pixels
-// and the session survives. The budget is accounted in the encoded form,
-// because it is the base64 the wire actually carries that has to fit.
+// The budget, the two rungs, and the byte accounting below are unchanged. What
+// changed is WHO performs the eviction, because the harness moved it from the
+// adapter to the session surface (issue #43):
+//
+//   ≤ 0.1.5 — the adapter projects its own history with
+//             `offloadRequestImagesWithPolicy`: the oldest images beyond the
+//             budget become placeholder text for THIS request only. The
+//             harness never learns that they were omitted.
+//   ≥ 0.1.6 — the offload set is a DURABLE surface fact. The adapter renders
+//             the surface's `offloaded` marks with `projectOffloadedImages`,
+//             and when the history still exceeds the budget it does NOT evict:
+//             it fails with `IMAGE_OFFLOAD_REQUIRED` + `offloadImages`, which
+//             the default `dsh-compaction-image-offload` plugin turns into one
+//             `image/offload` session event and a retry. Every later request on
+//             the session then carries the same placeholder text, across
+//             restore and fork, and the token meter stops counting the evicted
+//             images as context.
+//
+// Both halves are reached through the `dshLlm` namespace and picked at runtime,
+// so one build serves both engine generations. The budget is accounted in the
+// encoded form, because it is the base64 the wire actually carries that has to
+// fit. Nothing anywhere may statically import either generation's helper names.
 // ---------------------------------------------------------------------------
 
 /**
@@ -753,10 +777,10 @@ const REQUEST_IMAGE_BUDGETS: readonly RequestImageBudget[] = [
 ]
 
 /**
- * Project request history under one image budget: the oldest images past it
- * become placeholder text in place, the newest keep their bytes, and a history
- * already inside the budget is returned as the SAME array — the caller uses
- * that identity to tell "nothing evicted" from "evicted".
+ * Project request history under one image budget (≤0.1.5 engines only): the
+ * oldest images past it become placeholder text in place, the newest keep their
+ * bytes, and a history already inside the budget is returned as the SAME array
+ * — the caller uses that identity to tell "nothing evicted" from "evicted".
  *
  * Nested tool-result images ride the same core walk, which is exactly right
  * for this adapter: an evicted `read_image` result surfaces its placeholder as
@@ -765,8 +789,14 @@ const REQUEST_IMAGE_BUDGETS: readonly RequestImageBudget[] = [
 function projectRequestImages(
   messages: readonly Message[],
   budget: RequestImageBudget,
+  policy: CoreImagePolicy,
 ): readonly Message[] {
-  return offloadRequestImagesWithPolicy(messages, {
+  const offload = policy.offloadRequestImagesWithPolicy
+  // Unreachable while `surfaceImagePolicy` gates this branch; kept so a future
+  // engine that drops BOTH shapes surfaces as "no budget" rather than a
+  // TypeError from calling undefined.
+  if (typeof offload !== 'function') return messages
+  return offload(messages, {
     representation: 'base64',
     maxBytes: budget.maxBytes,
     maxImages: budget.maxImages,
@@ -775,7 +805,7 @@ function projectRequestImages(
     // No execution-world path is resolvable from the adapter (it holds no
     // filesystem provider), so the placeholder carries attachment identity and
     // the re-attach advice, which is what the core helper emits for that case.
-    placeholder: (ref) => offloadedImageText(ref),
+    placeholder: (ref: ImageAttachmentRef) => offloadedImageText(ref),
   })
 }
 
@@ -786,9 +816,131 @@ function projectRequestImages(
  * the raw history — otherwise a retry could reintroduce images the first rung
  * had already evicted.
  */
-function withImageBudget(options: GenerateOptions, budget: RequestImageBudget): GenerateOptions {
-  const projected = projectRequestImages(options.messages, budget)
+function withImageBudget(
+  options: GenerateOptions,
+  budget: RequestImageBudget,
+  policy: CoreImagePolicy,
+): GenerateOptions {
+  const projected = projectRequestImages(options.messages, budget, policy)
   return projected === options.messages ? options : { ...options, messages: [...projected] }
+}
+
+// ---------------------------------------------------------------------------
+// The ≥0.1.6 durable-offload contract
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable provider-neutral code for "a request still carries more images than
+ * this route will send; offload N of them and retry". Declared locally rather
+ * than imported: the constant does not exist on the 0.1.2–0.1.5 peers this
+ * plugin still supports, and importing it statically is the link-time failure
+ * described above the budget constants.
+ */
+const IMAGE_OFFLOAD_REQUIRED_CODE = 'IMAGE_OFFLOAD_REQUIRED'
+
+/** One occurrence's exact request-version byte length, as the core counter wants it. */
+type ImageVersionBytes = (block: { attachment: ImageAttachmentRef }) => number
+
+/**
+ * The installed engine's request-image policy, whichever generation it is.
+ *
+ * Every member is optional because the two generations never coexist: a
+ * ≤0.1.5 engine has only `offloadRequestImagesWithPolicy`, a ≥0.1.6 engine has
+ * only the other two. `CORE_IMAGE_POLICY` is the namespace object viewed
+ * through this shape, and `surfaceImagePolicy()` is the ONE place that decides
+ * which contract this process speaks.
+ */
+export interface CoreImagePolicy {
+  /** ≤0.1.5: project history under a byte/count budget, adapter-owned and transient. */
+  offloadRequestImagesWithPolicy?: (
+    messages: readonly Message[],
+    policy: Record<string, unknown>,
+  ) => readonly Message[]
+  /** ≥0.1.6: render the surface's durable offload marks as placeholder text. */
+  projectOffloadedImages?: (
+    messages: readonly Message[],
+    placeholder: (ref: ImageAttachmentRef) => string,
+  ) => readonly Message[]
+  /** ≥0.1.6: how many more leading retained occurrences must be offloaded. */
+  requiredImageOffload?: (
+    messages: readonly Message[],
+    budget: Record<string, unknown>,
+    versionBytes: ImageVersionBytes,
+  ) => number
+}
+
+/** The installed engine's image policy; see {@link CoreImagePolicy}. */
+const CORE_IMAGE_POLICY = dshLlm as unknown as CoreImagePolicy
+
+/** The ≥0.1.6 half, once both members are known to be functions. */
+interface SurfaceImagePolicy {
+  projectOffloadedImages: NonNullable<CoreImagePolicy['projectOffloadedImages']>
+  requiredImageOffload: NonNullable<CoreImagePolicy['requiredImageOffload']>
+}
+
+/**
+ * The durable-offload contract this engine speaks, or undefined on ≤0.1.5.
+ *
+ * Both members are required together: a half-populated engine would either
+ * lose the surface's marks (re-sending evicted images as pixels) or lose the
+ * count (silently sending an over-budget body), and neither is worth a partial
+ * opt-in. Absent, the adapter keeps its own transient projection instead.
+ */
+export function surfaceImagePolicy(api: CoreImagePolicy = CORE_IMAGE_POLICY): SurfaceImagePolicy | undefined {
+  return typeof api.projectOffloadedImages === 'function' && typeof api.requiredImageOffload === 'function'
+    ? { projectOffloadedImages: api.projectOffloadedImages, requiredImageOffload: api.requiredImageOffload }
+    : undefined
+}
+
+/**
+ * The failure a route raises instead of evicting on its own (≥0.1.6). The
+ * count is the ONE thing the harness needs: `dsh-compaction-image-offload`
+ * records it as an `image/offload` event, marks that many oldest retained
+ * occurrences, and retries the step.
+ *
+ * Deliberately outside `providerRetryPolicy()`'s whitelist: a byte-identical
+ * resend cannot succeed, so the retry belongs to the surface mutation, not to
+ * dsh-llm-retry. On a profile that does not mount that plugin the failure is
+ * terminal — every shipped profile reaches it through dsh-base.
+ */
+function imageOffloadRequired(missing: number): LlmError {
+  const options: LlmErrorOptions & { offloadImages: number } = { offloadImages: missing }
+  return new LlmError(
+    `commandcode request images exceed the route budget; ${missing} more oldest occurrence(s) must be offloaded.`,
+    IMAGE_OFFLOAD_REQUIRED_CODE,
+    options,
+  )
+}
+
+/** The budget in the shape the core counter takes (representation + the rung). */
+function coreBudget(budget: RequestImageBudget): Record<string, unknown> {
+  return { representation: 'base64', ...budget }
+}
+
+/**
+ * Exact request-version bytes of one retained occurrence. The declared
+ * normalized size IS what this adapter inlines (the body is built from
+ * `attachments.readImage`, base64-encoded), so the accounting matches the wire
+ * byte for byte, and the core helper expands it for `base64` on its own.
+ */
+const imageVersionBytes: ImageVersionBytes = (block) => block.attachment.bytes
+
+/**
+ * ≥0.1.6 request options: the surface's durable marks become placeholder text,
+ * and an over-budget history FAILS with the count to offload instead of being
+ * evicted here. Throws rather than returning, so no caller can accidentally
+ * send a body this route already knows is too large.
+ */
+function withSurfaceOffload(
+  options: GenerateOptions,
+  policy: SurfaceImagePolicy,
+  budget: RequestImageBudget,
+): GenerateOptions {
+  const marked = policy.projectOffloadedImages(options.messages, (ref) => offloadedImageText(ref))
+  const messages = marked === options.messages ? options.messages : [...marked]
+  const missing = policy.requiredImageOffload(messages, coreBudget(budget), imageVersionBytes)
+  if (missing > 0) throw imageOffloadRequired(missing)
+  return messages === options.messages ? options : { ...options, messages }
 }
 
 /**
@@ -1179,6 +1331,13 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
   fetchImpl?: typeof fetch
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
   resolveAttachments?: ResolveAttachments
+  /**
+   * Request-image policy override (tests); defaults to the installed engine's
+   * own helpers, whichever generation they belong to. Injecting it is the only
+   * way to exercise the ≥0.1.6 durable-offload contract while this checkout
+   * still compiles against the 0.1.2 peers.
+   */
+  imageOffload?: CoreImagePolicy
 }
 
 /** Account identity from `/alpha/whoami`. */
@@ -1678,6 +1837,15 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   private catalog: CommandCodeModel[] = []
   private readonly fetchImpl: typeof fetch
   private readonly resolveAttachments: ResolveAttachments | undefined
+  /** The engine's request-image policy, resolved once (tests may inject one). */
+  private readonly imagePolicy: CoreImagePolicy
+  /**
+   * The ≥0.1.6 durable contract, or `undefined` on a ≤0.1.5 engine — where the
+   * adapter must evict its own history. Resolved once: the contract a process
+   * speaks cannot change while it runs, and resolving here keeps every request
+   * on the same branch (see {@link surfaceImagePolicy}).
+   */
+  private readonly surfaceOffload: SurfaceImagePolicy | undefined
   // Billing facts are per account: with a multi-account pool each key has its
   // own subscription tier, so the cache and the in-flight dedupe are keyed by
   // the resolved API key (process-local only, never logged). Entries are
@@ -1697,6 +1865,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     super()
     this.fetchImpl = deps.fetchImpl ?? fetch
     this.resolveAttachments = deps.resolveAttachments
+    this.imagePolicy = deps.imageOffload ?? CORE_IMAGE_POLICY
+    this.surfaceOffload = surfaceImagePolicy(this.imagePolicy)
   }
 
   /**
@@ -2178,7 +2348,14 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // never the raw one, so the oldest images past the cap travel as
     // placeholder text instead of a body the gateway refuses outright. Rung 0
     // is the standing budget; a 413 below steps down the ladder.
-    let requestOptions = withImageBudget(options, REQUEST_IMAGE_BUDGETS[0]!)
+    //
+    // Which projection that is depends on the engine: a ≥0.1.6 harness owns the
+    // offload set (this throws `IMAGE_OFFLOAD_REQUIRED` when more must go, and
+    // the retry arrives with the surface already updated), while a ≤0.1.5 one
+    // has no such ledger and gets the adapter's own transient eviction.
+    let requestOptions = this.surfaceOffload === undefined
+      ? withImageBudget(options, REQUEST_IMAGE_BUDGETS[0]!, this.imagePolicy)
+      : withSurfaceOffload(options, this.surfaceOffload, REQUEST_IMAGE_BUDGETS[0]!)
     let imageBudgetIndex = 0
     const buildBody = async (target: CommandCodeProtocol): Promise<Record<string, unknown>> =>
       target === 'cli'
@@ -2220,15 +2397,29 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       // estimate — the cap also covers text and tool bytes — so one 413 steps
       // the image budget down and resends. Safe like the rotation below:
       // nothing streamed, the same key stays in use, and a request with no
-      // images left to evict is not resent (the stricter rung returns the
-      // same options, so this branch cannot loop).
+      // images left to evict is not resent (the stricter rung reports nothing
+      // more to drop, so this branch cannot loop).
       if (attempt.status === 413 && imageBudgetIndex + 1 < REQUEST_IMAGE_BUDGETS.length) {
-        const tightened = withImageBudget(requestOptions, REQUEST_IMAGE_BUDGETS[imageBudgetIndex + 1]!)
-        if (tightened !== requestOptions) {
-          imageBudgetIndex += 1
-          requestOptions = tightened
-          body = await buildBody(protocol)
-          continue
+        if (this.surfaceOffload !== undefined) {
+          // ≥0.1.6: the stricter rung becomes another offload request rather
+          // than a local edit, so the extra omissions are recorded on the
+          // session and survive the retry. Zero here means the images are
+          // already gone and the body is simply too big — fall through to the
+          // 413 diagnosis instead of asking for an offload that cannot happen.
+          const missing = this.surfaceOffload.requiredImageOffload(
+            requestOptions.messages,
+            coreBudget(REQUEST_IMAGE_BUDGETS[imageBudgetIndex + 1]!),
+            imageVersionBytes,
+          )
+          if (missing > 0) throw imageOffloadRequired(missing)
+        } else {
+          const tightened = withImageBudget(requestOptions, REQUEST_IMAGE_BUDGETS[imageBudgetIndex + 1]!, this.imagePolicy)
+          if (tightened !== requestOptions) {
+            imageBudgetIndex += 1
+            requestOptions = tightened
+            body = await buildBody(protocol)
+            continue
+          }
         }
       }
       const rotate = this.deps.rotateApiKey
