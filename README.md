@@ -54,7 +54,7 @@ Pick the release line that matches your DeepSeek Harness version:
 **pnpm 11 holds back new releases.** Its `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly:
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.10.6
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.0
 ```
 
 The same applies to every profile you install into, including the terminal UI below.
@@ -73,7 +73,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 Each profile updates separately — the terminal UI owns its own plugin list (see below):
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.10.6
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.0
 ```
 
 To move to a version published less than 24 hours ago, name it exactly as in Install above; pnpm 11's age gate resolves `@latest` to the previous release instead.
@@ -102,7 +102,7 @@ After restart, enter your API key in **Settings → Command Code** and save; **S
 The plugin also works under a terminal front door. **Each dsh profile owns its own plugin list**, so the web install above does not reach the terminal — add the plugin to the `dsh-tui` profile as well:
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.10.6
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.0
 ```
 
 Pin the exact version here. For the first 24 hours after a release, a bare package name (or `@latest`) is silently resolved to the previous one: the install succeeds, but the profile gets the older build — which is how a fresh terminal install ends up with no **`/settings` → Command Code** page and no `commandcode` models at all.

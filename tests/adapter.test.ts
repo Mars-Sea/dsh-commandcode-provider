@@ -3366,6 +3366,16 @@ test('isPeakPricingHour() answers the model-independent half of the same rule', 
 })
 
 test('CLI version and API base constants are stable', () => {
+  // command-code@1.54.0 (2026-09-13): the CLI changelog lists exactly one
+  // CLI-local item — first-class herdr support (a `/herdr` command plus
+  // idle/working/blocked reporting to a herdr pane over its UNIX socket, live
+  // only when HERDR_ENV/HERDR_SOCKET_PATH/HERDR_PANE_ID are all set, with
+  // CMD_HERDR=0 to disable). The whole 1.53.1 -> 1.54.0 bundle difference is
+  // that feature plus the version constant: the model registry (75 entries),
+  // effort map, subscription plan maps, endpoints and request shapes are
+  // byte-identical, and the public catalog still serves the same 69 models
+  // (`gpt-6-astra` remains a CLI/pricing/docs-only model, absent from the
+  // public Provider catalog, as before).
   // command-code@1.53.1 (2026-09-12): the CLI changelog lists four CLI-local
   // items (default compaction model set to DeepSeek V4.1 Flash in /config, a
   // BYOK reasoning-effort fix, and two /usage summary-line changes — Extra
@@ -3389,7 +3399,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.53.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.54.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
