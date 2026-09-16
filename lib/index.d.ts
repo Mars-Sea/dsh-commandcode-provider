@@ -327,6 +327,19 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * wins; otherwise a cached (not network-fetched) billing tier of Go is
    * treated as CLI-only. Unknown accounts default to Provider API and fall
    * back only after an `upgrade_required` rejection.
+   *
+   * Models the Provider API serves ONLY through `/provider/v1/messages` (the
+   * Claude family — `requiresMessagesEndpoint()`) always take the CLI
+   * transport, on any tier and even under a forced `'openai'` preference:
+   * that option is documented as "prefer the Provider API, still fall back",
+   * and the 400 these models answer with is not a preference to be honoured
+   * but a hard refusal. `/alpha/generate` routes every one of them, so this
+   * costs nothing.
+   *
+   * That decision is deliberately NOT written to `protocolCache`. The cache is
+   * keyed by API key alone, so remembering it would pin the whole ACCOUNT to
+   * the CLI transport and drag every other model — DeepSeek, GLM, Qwen, all of
+   * which the Provider API serves correctly — off it until the entry expired.
    */
   private resolveProtocol;
   /**
@@ -1544,6 +1557,18 @@ interface Config {
   requestTimeoutMs?: number;
   /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 300s. */
   streamIdleTimeoutMs?: number;
+  /**
+   * Transport failures one request absorbs before the failure is surfaced;
+   * defaults to 5. The route's retry policy is near-unbounded on purpose (1000
+   * attempts, waits doubling to 15 minutes) because that shape is for the
+   * failures a provider asks to have retried — an exhausted rate-limit window,
+   * a gateway 520. A transport failure is not one of those: the first attempts
+   * recover an ordinary blip (the default 5 retries are scheduled 0.5/1/2/4/8 s
+   * after the failures before them, so ~15.5 s of grace), and after that the
+   * wait is pure stall, so the retries are capped here. Raise it on a genuinely
+   * flaky link; 0 surfaces every transport failure immediately.
+   */
+  transportMaxRetries?: number;
   /**
    * Whether the model picker hides models above the account's subscription
    * tier; defaults to true. The filter fails open (unknown plan, billing

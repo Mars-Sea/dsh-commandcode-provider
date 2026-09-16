@@ -4,8 +4,16 @@
  *
  * Returned as a string rather than injected here so the modules stay free of
  * DOM side effects at import time — the client entry installs it once, keyed
- * by the same `data-plugin-css` attribute the settings-page stylesheet uses,
- * and removes it again when the plugin's fiber unwinds.
+ * by the same `data-plugin-css` attribute the settings-page stylesheet
+ * (`./page-styles.ts`) uses, and removes it again when the plugin's fiber
+ * unwinds.
+ *
+ * These rules are GLOBAL CSS: every selector in here can match markup this
+ * plugin did not render. So each one is either qualified by a `ccp-` class of
+ * our own, or anchored to the sidebar region it has to lay out — and the one
+ * foreign anchor carries its justification in place (see the footer card
+ * block; issue #48). `tests/styles.test.ts` audits that containment for both
+ * stylesheets and simulates it against the real foreign class stems.
  *
  * Every colour comes from a harness theme alias with a neutral fallback, so
  * the panel follows the active theme (light/dark and any brand pack) without
@@ -19,9 +27,12 @@
  * Stylesheet id (the `data-plugin-css` value that makes injection idempotent).
  *
  * The package prefix must match the one the settings-page stylesheet uses
- * (`injectPageCss` in `./index.ts`) and this package's real name: an id is the
- * injection's identity, so a stale fork prefix would let a second copy of the
- * plugin inject the same rules twice and would misreport the owner in the DOM.
+ * (`PAGE_CSS_ID` in `./page-styles.ts`) and this package's real name: an id is
+ * the injection's identity, so a stale fork prefix would let a second copy of
+ * the plugin inject the same rules twice and would misreport the owner in the
+ * DOM. The two ids must also stay distinct from each other — they key two
+ * separate style tags, and a shared id would make the second injection a no-op
+ * that silently drops one stylesheet.
  */
 export const PANEL_CSS_ID = '@mars-sea/dsh-commandcode-provider/CommandCodePanel.module.css'
 
@@ -36,11 +47,28 @@ export const PANEL_CSS = `
 
    The shell's container is a flex ROW whose occupants (this card and ui-cordis's
    footer chip) each declare a full-width line and shrink-proof flex, so as a row
-   it would overflow the column. Both were written for a full-width line, which
-   is exactly what a column gives them. Matched by the CSS-module class STEM —
-   never a hashed name — so a dsh that renames it degrades to the shell's own
-   row rather than breaking. */
-[class*="_footerActions"]{flex-direction:column}
+   it would overflow the column: this card's flex:0 0 auto cannot shrink, and the
+   chip's width:100% basis would absorb the whole overflow and collapse to
+   nothing. Both were written for a full-width line, which is exactly what a
+   column gives them. Matched by the CSS-module class STEM — never a hashed name
+   — so a dsh that renames it degrades to the shell's own row rather than
+   breaking.
+
+   THE ANCHOR IS LOAD-BEARING, and it is the whole reason this selector is not
+   just [class*="_footerActions"] (issue #48). "footerActions" is NOT a stem this
+   shell owns alone: @deepseek-ai/dsh-client-ui-user-questions renders the
+   ask-user-question dialog's button row as Mbwy4a_footerActions, so the
+   unanchored rule forced THAT row into a column too and stacked the dialog's
+   side-by-side buttons on every page. "footArea" is declared by
+   dsh-client-ui-sidebar alone — verified against every client bundle of the
+   0.1.6-alpha.1 engine, and against our own cc-/ccp- class names, which collide
+   with no engine class — so anchoring under it keeps the sidebar layout fix and
+   cannot reach another component's markup. The descendant combinator (rather
+   than a child one) deliberately survives a wrapper element appearing between
+   the two: a renamed or restructured shell should degrade to its own row, not
+   lose the fix. tests/styles.test.ts pins both halves of this — the dialog row
+   is no longer matched, the sidebar row still is. */
+[class*="_footArea"] [class*="_footerActions"]{flex-direction:column}
 .ccp-foot{box-sizing:border-box;flex:0 0 auto;width:100%;min-width:0;font:inherit;color:var(--dsw-alias-label-secondary);text-align:left;cursor:pointer;background:0 0;border:1px solid transparent;border-radius:10px;flex-direction:column;gap:6px;margin:0 0 4px;padding:8px;display:flex}
 .ccp-foot:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}
 .ccp-foot:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}

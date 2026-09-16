@@ -31,6 +31,8 @@ export type SettingsCommandCodeKey =
   | 'requestTimeoutMsHint'
   | 'streamIdleTimeoutMs'
   | 'streamIdleTimeoutMsHint'
+  | 'transportMaxRetries'
+  | 'transportMaxRetriesHint'
   | 'advancedSettings'
   | 'advancedSettingsHint'
   | 'advancedOverriddenOne'
@@ -167,6 +169,9 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   requestTimeoutMsHint: '等待响应首个字节的超时；默认 60000。',
   streamIdleTimeoutMs: '流空闲超时（毫秒）',
   streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300000（长思考模型可静默数分钟，默认值刻意放宽）。',
+  transportMaxRetries: '网络失败重试次数',
+  transportMaxRetriesHint: '连接失败时自动重试几次，默认 5（各次等待 0.5+1+2+4+8 秒，合计约 15 秒）。'
+    + '超过后直接报错，不再按指数退避长时间等待；填 0 表示不重试。限流、5xx 等由服务端要求重试的失败不受此项影响。',
   advancedSettings: '高级设置',
   advancedSettingsHint: 'API 地址、工作目录、超时、模型过滤、联网搜索与侧边栏额度卡片等不常修改的选项。',
   advancedOverriddenOne: '已自定义 1 项',
@@ -310,6 +315,11 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   streamIdleTimeoutMs: 'Stream idle timeout (ms)',
   streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 300000'
     + ' (deliberately generous — long-thinking models can stay silent for minutes).',
+  transportMaxRetries: 'Transport retries',
+  transportMaxRetriesHint: 'How many times a failed connection is retried automatically; default 5'
+    + ' (waits of 0.5+1+2+4+8s, ~15s in total). After that the failure is reported instead of waiting'
+    + ' on the exponential backoff. 0 disables the retries. Rate limits and 5xx answers keep their'
+    + ' own, longer retry window.',
   advancedSettings: 'Advanced',
   advancedSettingsHint: 'Rarely touched options: API base URL, working directory, timeouts, model filtering, web search, and the sidebar quota card.',
   advancedOverriddenOne: '1 customized',

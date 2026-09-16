@@ -31,6 +31,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { RequestErrorAction } from '@deepseek-ai/dsh-agent'
 import type { WebRuntime } from '@deepseek-ai/dsh-web'
 import z from '@deepseek-ai/schemastery'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
@@ -51,6 +52,15 @@ import type { CommandCodeLoginCredentials } from './login.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
 import { applyCommandCodeTuiSettings } from './tui-settings.ts'
+import {
+  DEFAULT_TRANSPORT_MAX_RETRIES,
+  MAX_TRANSPORT_MAX_RETRIES,
+  TRANSPORT_FAILURE_CODE,
+  absorbTransportFailure,
+  resetTransportFailures,
+  transportBudgetMessage,
+  transportResetAction,
+} from './transport-retry.ts'
 import { KNOWN_PLANS } from './capabilities.ts'
 
 export {
@@ -170,6 +180,18 @@ export interface Config {
   /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 300s. */
   streamIdleTimeoutMs?: number
   /**
+   * Transport failures one request absorbs before the failure is surfaced;
+   * defaults to 5. The route's retry policy is near-unbounded on purpose (1000
+   * attempts, waits doubling to 15 minutes) because that shape is for the
+   * failures a provider asks to have retried — an exhausted rate-limit window,
+   * a gateway 520. A transport failure is not one of those: the first attempts
+   * recover an ordinary blip (the default 5 retries are scheduled 0.5/1/2/4/8 s
+   * after the failures before them, so ~15.5 s of grace), and after that the
+   * wait is pure stall, so the retries are capped here. Raise it on a genuinely
+   * flaky link; 0 surfaces every transport failure immediately.
+   */
+  transportMaxRetries?: number
+  /**
    * Whether the model picker hides models above the account's subscription
    * tier; defaults to true. The filter fails open (unknown plan, billing
    * endpoint failure, or a positive on-demand credit balance all keep the
@@ -271,6 +293,7 @@ export const Config: z<Config> = z.object({
   modelsCachePath: z.string(),
   requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
+  transportMaxRetries: z.number().min(0).max(MAX_TRANSPORT_MAX_RETRIES),
   filterModelsByPlan: z.boolean(),
   visibleModels: z.array(z.string()),
   /**
@@ -486,6 +509,81 @@ export function apply(ctx: Context, config: Config): void {
   ])
   // The live route: this is what makes models requestable under `commandcode`.
   ctx.llm.registerAdapter([PROVIDER], adapter)
+
+  // Bounded retry for TRANSPORT failures (issue #39, second report). The route
+  // policy is near-unbounded on purpose (see `providerRetryPolicy`), because
+  // an exhausted rate-limit window or a gateway 520 is a failure that ASKS to
+  // be retried — but a connection that cannot be established is not, and at the
+  // long-context sizes this plugin serves the unbounded cadence turned a
+  // 10-second TCP connect timeout into an ~8-minute stall (the reporter's
+  // 11/1000 row, whose "482s" is the wait before the 11th attempt). So the
+  // first few transport failures are absorbed here and the rest surface with a
+  // diagnosis. `dsh-llm-retry` keeps its window for every other code.
+  //
+  // The failure is surfaced by THROWING out of the waterfall: the agent loop
+  // wraps the rejection into the turn's error, so the retry chain stops here.
+  // The failure's own message is carried in the thrown message (the loop may
+  // re-wrap with the original), and the diagnostic also goes to the log, which
+  // nothing can rewrite.
+  const transportMaxRetries = (): number => {
+    const value = current().transportMaxRetries
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return DEFAULT_TRANSPORT_MAX_RETRIES
+    return Math.min(Math.trunc(value), MAX_TRANSPORT_MAX_RETRIES)
+  }
+  // `async` is a type-level requirement, not a behavior change: the waterfall's
+  // listener contract is `=> Promise<RequestErrorAction>`, so a handler that
+  // returns `next()`'s promise on one path and a bare decision on another does
+  // not type-check (`Promise<RequestErrorAction> | { kind: 'retry' }` is not
+  // assignable, even though the runtime accepts both).
+  //
+  // The session → agent map exists for the reset below: `session/event` carries
+  // the session, and the agent is the natural budget key (it is what the
+  // request-error payload hands over). Weak on BOTH sides so a long-lived Host
+  // cannot be held open by sessions whose turn never appended a `turn/end`.
+  const sessionAgents = new WeakMap<object, object>()
+  ctx.on('agent/request-error', async ({ agent, failure, signal }, next) => {
+    // Checked BEFORE the budget: a cancelled turn is the user's own stop, so it
+    // must neither be answered with a retry nor consume the slot a later live
+    // failure needs.
+    if (signal.aborted) return next()
+    const session: unknown = Reflect.get(agent, 'session')
+    if (typeof session === 'object' && session !== null) sessionAgents.set(session, agent)
+    const decision = absorbTransportFailure(agent, failure.code, transportMaxRetries())
+    if (decision === 'ignored') return next()
+    // The literal is spelled as the event's own decision type; the union this
+    // handler returns (`RequestErrorAction | Promise<RequestErrorAction>`) is
+    // what the waterfall accepts, and `{ kind: 'retry' }` alone widens to
+    // `string` and stops matching it.
+    if (decision === 'retry') return { kind: 'retry' } satisfies RequestErrorAction
+    const message = transportBudgetMessage(failure.message, transportMaxRetries())
+    ctx.logger.warn(`llm-commandcode: transport retry budget exhausted for ${PROVIDER} (${TRANSPORT_FAILURE_CODE})`)
+    throw new Error(message)
+  })
+  // Reset the budget at each new STEP — one step is exactly one model request
+  // (`step/start` is appended immediately before the call), so this is what
+  // makes the cap "per logical request" and gives the next step of the same
+  // turn its own grace. `agent/status` → `idle` is deliberately NOT the reset
+  // signal: `setPhase` emits it only on a status CHANGE, and a turn's steps run
+  // inside one `running` phase, so it never fires between them — a budget reset
+  // only there would be per-turn, and a network outage would fail every later
+  // step of that turn instantly instead of retrying each. `assistant/attempt`
+  // is wrong for the opposite reason: the loop appends it for the FAILED
+  // attempt before dispatching `agent/request-error`, so resetting on it would
+  // clear the budget on every failure. `idle` still clears the agent's count,
+  // and the WeakMap drops a finished session on its own.
+  ctx.on('session/event', (session, event) => {
+    const action = transportResetAction(event.type)
+    if (action === 'forget') {
+      sessionAgents.delete(session)
+      return
+    }
+    if (action !== 'reset') return
+    const agent = sessionAgents.get(session)
+    if (agent !== undefined) resetTransportFailures(agent)
+  })
+  ctx.on('agent/status', ({ agent, status }) => {
+    if (status === 'idle') resetTransportFailures(agent)
+  })
 
   // Per-account usage for the /commandcode dashboard and the settings
   // page's account card: every pool account (configured or not) gets one

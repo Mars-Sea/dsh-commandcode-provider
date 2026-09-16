@@ -28,6 +28,7 @@ import {
   KNOWN_PLANS,
   KNOWN_DEALS,
   KNOWN_PEAK_PRICING,
+  MESSAGES_ONLY_MODELS,
   PEAK_HOUR_RANGES,
   isPeakPricingHour,
   planLabel,
@@ -37,6 +38,7 @@ import {
   peakPricingLabel,
   peakPricingState,
   compareByPlan,
+  requiresMessagesEndpoint,
 } from '../src/capabilities.ts'
 import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CoreImagePolicy } from '../src/adapter.ts'
 import type { ContentBlock, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -1130,6 +1132,112 @@ test('both transports drop a user message that converted to nothing', async () =
   }
 })
 
+/**
+ * A message as a third-party producer can actually emit it: `Message.source` is
+ * declared required in dsh-llm's type, but the field is producer-supplied and
+ * the runtime never validates it, so an untagged message is a real runtime shape
+ * (issue #47) that the type system cannot express — hence the cast.
+ */
+function untaggedMessage(role: 'user' | 'assistant', content: ContentBlock[]): Message {
+  return { id: messageId(), role, content } as unknown as Message
+}
+
+test('both transports convert an untagged message instead of crashing on it (issue #47)', async () => {
+  // `messagesToCC` read `message.source.kind` at four sites. A producer that
+  // omits `source` — legal nowhere, survivable everywhere else, because the
+  // shipped adapters never read the field — made the FIRST of them throw
+  // `TypeError: Cannot read properties of undefined (reading 'kind')` in the
+  // serialization phase: the whole stream died 0–8 ms in, before a request was
+  // sent, with an error that named neither the message nor the adapter. Both
+  // transports must now treat an untagged message as the plain user message its
+  // content says it is.
+  for (const protocol of ['cli', 'openai'] as const) {
+    const messages = await captureWire(
+      protocol,
+      [untaggedMessage('user', [{ type: 'text', text: 'from a producer that forgot the tag' }]), userMessage('tagged')],
+      {},
+    )
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      ['user', 'user'],
+      `${protocol}: an untagged user message must survive as a user message`,
+    )
+    assert.match(JSON.stringify(messages[0]), /forgot the tag/)
+  }
+})
+
+test('an untagged tool result stays a tool result, so its call is not left unanswered (issue #47)', async () => {
+  // The untagged fallback is not just "assume user". `pairedToolCalls()` counts
+  // a `tool-result` block from ANY message, so classifying an untagged tool
+  // result as a plain user message would drop it at emission while its call
+  // still counted as paired — the wire would carry an assistant `tool_calls`
+  // entry with no answer, which the gateway rejects outright. Content shape
+  // settles it: a `user` message whose first block is a tool result IS one by
+  // the harness's own definition.
+  for (const protocol of ['cli', 'openai'] as const) {
+    const callId = ToolCallId('call-untagged')
+    const messages = await captureWire(
+      protocol,
+      [
+        userMessage('read the file'),
+        {
+          id: messageId(),
+          role: 'assistant',
+          content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
+          source: { kind: 'model', provider: 'commandcode', model: 'm' },
+        },
+        untaggedMessage('user', [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'ok' }] }]),
+        userMessage('and now?'),
+      ],
+      {},
+    )
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      ['user', 'assistant', 'tool', 'user'],
+      `${protocol}: the untagged tool result must still answer its call`,
+    )
+    assert.equal(wireAnswers(messages[2]!), 'call-untagged')
+    assertToolGroupsAnswered(messages, `${protocol}: untagged tool result`)
+  }
+})
+
+test('a present source tag stays authoritative over the content shape (issue #47)', async () => {
+  // The fallback above is only for an ABSENT tag. A message that declares who
+  // produced it is taken at its word — a `kind: 'user'` message carrying a
+  // tool-result block is still not replayed as a tool answer, which keeps the
+  // rule "the tag answers who produced this" intact.
+  for (const protocol of ['cli', 'openai'] as const) {
+    const callId = ToolCallId('call-tagged-user')
+    const messages = await captureWire(
+      protocol,
+      [
+        userMessage('read the file'),
+        {
+          id: messageId(),
+          role: 'assistant',
+          content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
+          source: { kind: 'model', provider: 'commandcode', model: 'm' },
+        },
+        // Tagged `user` while shaped like a tool result: dropped at emission on
+        // both transports today, and that must not change.
+        {
+          id: messageId(),
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'ok' }] }],
+          source: { kind: 'user' },
+        } as unknown as Message,
+        userMessage('and now?'),
+      ],
+      {},
+    )
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      ['user', 'assistant', 'user'],
+      `${protocol}: a tagged non-tool message must not be replayed as a tool answer`,
+    )
+  }
+})
+
 test('the tool-group invariant detects the interleaving it exists for', () => {
   // A validator that can never fail would pass every history below for the
   // wrong reason, so feed it the two orderings that matter: the pre-fix #33
@@ -1451,7 +1559,12 @@ test('openai protocol sends the request version too (C2)', async () => {
   const adapter = makeAdapter({ fetchImpl, options: OPENAI_OPTIONS, resolveAttachments: () => store })
   await collect(adapter.stream({
     provider: 'commandcode',
-    model: 'claude-sonnet-5',
+    // Not a Claude id: those are Messages-only, so they take the CLI transport
+    // even under a forced `'openai'` preference (see `resolveProtocol()`), and
+    // this test is about the OpenAI transport's request-version handling. Its
+    // CLI counterpart above keeps `claude-sonnet-5`, which is where Claude
+    // genuinely goes.
+    model: 'gpt-5.4',
     messages: [{
       id: messageId(),
       role: 'user',
@@ -2689,6 +2802,45 @@ test('openai protocol parses reasoning + content SSE into separate blocks', asyn
   assert.equal(finish.reason.kind, 'stop')
 })
 
+test('openai protocol reads thinking from reasoning_details when no scalar field is present', async () => {
+  // DeepSeek answers with the scalar `reasoning` AND an OpenRouter-shaped
+  // `reasoning_details` array; GLM/Qwen/Kimi answer with `reasoning_content`.
+  // This pins the third branch: an array-only delta (the shape the gateway
+  // would leave if it ever stopped sending the scalar) still yields a block.
+  const sse = [
+    'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"think ","format":"unknown","index":0}]}}]}',
+    'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"more","format":"unknown","index":0}]}}]}',
+    // Sibling OpenRouter shapes carry no `text` and must contribute nothing.
+    'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"c2ln"},{"type":"reasoning.summary","summary":"short"}]}}]}',
+    'data: {"choices":[{"delta":{"content":"391"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    'data: [DONE]',
+    '',
+  ].join('\n')
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: fetchReturning(200, sse, { 'content-type': 'text/event-stream' }),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')] }))
+
+  const reasoningDeltas = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text)
+  assert.deepEqual(reasoningDeltas, ['think ', 'more'])
+  const reasoningBlocks = chunks.filter((c) => c.type === 'block-start' && (c as { blockType: string }).blockType === 'reasoning')
+  assert.equal(reasoningBlocks.length, 1)
+  const text = chunks.find((c) => c.type === 'text-delta') as { text: string }
+  assert.equal(text.text, '391')
+  // The reasoning block must close before the text block opens.
+  const order = chunks.map((c) => c.type).filter((t) => t === 'block-start' || t === 'block-end')
+  assert.deepEqual(order, ['block-start', 'block-end', 'block-start', 'block-end'])
+})
+
 test('openai protocol assembles streamed tool-call fragments', async () => {
   const sse = [
     'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":""}}]}}]}',
@@ -2788,6 +2940,59 @@ test('auto protocol falls back to CLI on 403 upgrade_required and caches per acc
   assert.ok(secondChunks.some((c) => c.type === 'text-delta'))
   assert.equal(calls.length, 3)
   assert.ok(calls[2]!.includes('/alpha/generate'))
+})
+
+test('Messages-only (Claude) models take the CLI transport without poisoning the account protocol cache', async () => {
+  // The Provider API answers every Claude model with HTTP 400 "must be called
+  // via /provider/v1/messages". `/alpha/generate` serves them, so they are
+  // routed there up front — and because `protocolCache` is keyed by API key
+  // alone, that must not be remembered, or the whole account would be pinned
+  // to the CLI transport and drag the models the Provider API DOES serve along
+  // with it.
+  const calls: string[] = []
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    calls.push(url)
+    if (url.includes('/provider/v1/chat/completions')) {
+      return new Response('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    }
+    return new Response('data: {"type":"text-delta","text":"hi"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  // No `protocol` override: this is the auto path a real profile takes.
+  const options = () => ({
+    apiBase: 'https://api.commandcode.ai',
+    workingDir: '/tmp/project',
+    modelsCachePath: '/tmp/cc-models-cache.json',
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  })
+  const adapter = new CommandCodeAdapter({
+    options,
+    resolveApiKey: async () => 'user_test_key',
+    fetchImpl,
+  })
+
+  await collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-4-8', messages: [userMessage('hi')] }))
+  assert.equal(calls.length, 1)
+  assert.ok(calls[0]!.includes('/alpha/generate'), 'a Claude model must never be posted to chat/completions')
+
+  // A model added upstream after this plugin shipped is covered by the
+  // `claude-*` prefix rule rather than needing a new snapshot entry.
+  await collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-6', messages: [userMessage('hi')] }))
+  assert.equal(calls.length, 2)
+  assert.ok(calls[1]!.includes('/alpha/generate'), 'an unknown claude-* id must take the same route')
+
+  // The account itself is still on the Provider API for every other model.
+  await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')] }))
+  assert.equal(calls.length, 3)
+  assert.ok(calls[2]!.includes('/provider/v1/chat/completions'), 'the Claude route must not pin the account to CLI')
 })
 
 // ---------------------------------------------------------------------------
@@ -3375,6 +3580,35 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(!KNOWN_THINKING_MODELS.has('claude-opus-5'))
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.5'))
+})
+
+test('Messages-only snapshot covers the Claude family and stays forward-compatible', () => {
+  // Every Claude model in the catalog as measured 2026-09-16 (all 69 models
+  // posted to /provider/v1/chat/completions; exactly these eight refused with
+  // "must be called via /provider/v1/messages").
+  for (const id of [
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-fable-5-1',
+    'claude-fable-5',
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-haiku-4-5-20251001',
+  ]) {
+    assert.ok(requiresMessagesEndpoint(id), `${id} must route to the CLI transport`)
+  }
+  // The snapshot list and the predicate must not drift apart.
+  for (const id of MESSAGES_ONLY_MODELS) assert.ok(requiresMessagesEndpoint(id))
+  // A Claude id that ships after this plugin was built is still routed right.
+  assert.ok(requiresMessagesEndpoint('claude-opus-6'))
+  // Non-Claude models must stay on the Provider API: the predicate is what
+  // sends a request to /alpha/generate, and a false positive there silently
+  // downgrades a working model to the legacy transport.
+  assert.ok(!requiresMessagesEndpoint('deepseek/deepseek-v4.1-flash'))
+  assert.ok(!requiresMessagesEndpoint('zai-org/GLM-5.3'))
+  assert.ok(!requiresMessagesEndpoint('gpt-5.6-sol'))
+  assert.ok(!requiresMessagesEndpoint(''))
 })
 
 test('known image models snapshot has stable anchor entries', () => {

@@ -269,6 +269,50 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * Catalog models the Provider API serves ONLY through `/provider/v1/messages`
+ * (Anthropic Messages shape). Every other model in the catalog answers on
+ * `/provider/v1/chat/completions`; these reject it outright with HTTP 400
+ * `Model "<id>" must be called via /provider/v1/messages (Anthropic Messages
+ * shape)`.
+ *
+ * Measured 2026-09-16 against the live catalog (command-code@1.54.0): all 69
+ * models were posted to `/provider/v1/chat/completions`; exactly these eight
+ * — the whole Claude family — refused, and every one of them is routed
+ * normally by `/alpha/generate` (a lower-plan key gets the ordinary
+ * `MODEL_NOT_IN_PLAN` 403 there, never a routing error). So the CLI transport
+ * is a complete fallback and the adapter does not need a Messages transport.
+ *
+ * Note what this list is NOT: it is not a plan gate. `claude-sonnet-5` is
+ * Pro-tier and `claude-opus-4-8` Provider-tier, so the accounts entitled to
+ * these models are exactly the non-Go ones, which `resolveProtocol()` sends to
+ * the Provider API by default — picking any Claude model there failed every
+ * request before this snapshot existed.
+ *
+ * Keep in sync when models ship (see the dsh-commandcode-upstream skill).
+ * `requiresMessagesEndpoint()` additionally treats any `claude-*` id as
+ * Messages-only, so a Claude model added upstream is routed correctly by an
+ * un-updated plugin instead of hard-failing with the 400 above; the worst case
+ * of that rule going stale the other way (upstream teaching
+ * `/provider/v1/chat/completions` to serve Claude) is one model riding the CLI
+ * transport it already works on.
+ */
+export const MESSAGES_ONLY_MODELS: ReadonlySet<string> = new Set([
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-fable-5-1',
+  'claude-fable-5',
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-haiku-4-5-20251001',
+])
+
+/** True when the Provider API will only serve `modelId` via `/provider/v1/messages`. */
+export function requiresMessagesEndpoint(modelId: string): boolean {
+  return MESSAGES_ONLY_MODELS.has(modelId) || modelId.startsWith('claude-')
+}
+
+/**
  * The minimum subscription plan a model is included in, per the official plan
  * pages (`/docs/plans/go`, `/docs/plans/goat`, `/docs/plans/pro`, `/docs/plans/max`
  * and `/docs/resources/pricing-limits`). Each plan's model list is a superset of

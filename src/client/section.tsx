@@ -59,12 +59,13 @@ export interface CommandCodeSettingsProps {
 }
 
 /** The section fields folded into the collapsible Advanced card. */
-type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'filterModelsByPlan' | 'webSearch' | 'showSidebarQuota'
+type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'transportMaxRetries' | 'filterModelsByPlan' | 'webSearch' | 'showSidebarQuota'
 const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'apiBase',
   'workingDir',
   'requestTimeoutMs',
   'streamIdleTimeoutMs',
+  'transportMaxRetries',
   'filterModelsByPlan',
   'webSearch',
   'showSidebarQuota',
@@ -218,6 +219,17 @@ function AdvancedSection({
             numeric
             onEdit={(text) => onEdit('streamIdleTimeoutMs', text)}
             onReset={() => onReset('streamIdleTimeoutMs')}
+            t={t}
+          />
+          <Field
+            id="cc-transport-max-retries"
+            label={t('transportMaxRetries')}
+            hint={t('transportMaxRetriesHint')}
+            state={state.transportMaxRetries}
+            disabled={disabled}
+            numeric
+            onEdit={(text) => onEdit('transportMaxRetries', text)}
+            onReset={() => onReset('transportMaxRetries')}
             t={t}
           />
           <ToggleField

@@ -181,6 +181,14 @@ export interface SettingsPageState {
   /** streamIdleTimeoutMs draft. */
   streamIdleTimeoutMs: StagedField
   /**
+   * transportMaxRetries draft: how many transport failures one request absorbs
+   * before the failure surfaces (issue #39's second report — the retry policy's
+   * 1000-attempt, 15-minute cadence turned a 10-second TCP connect timeout into
+   * an ~8-minute stall). Unset means the Host default, so it stages like the
+   * timeout fields above rather than as a toggle with an implicit default.
+   */
+  transportMaxRetries: StagedField
+  /**
    * filterModelsByPlan draft, staged as `'true'`/`'false'`/`''` (unset). The
    * component renders it as a toggle; `''` means "inherit the default" (on).
    */
@@ -332,6 +340,14 @@ const SECTION_FIELDS: FieldSpec[] = [
   textField('workingDir'),
   numberField('requestTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
   numberField('streamIdleTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
+  // A COUNT of retries, not a millisecond wait: it shares the Host schema's
+  // 0..50 bounds (`MAX_TRANSPORT_MAX_RETRIES` in src/transport-retry.ts, applied
+  // to `transportMaxRetries` in src/index.ts) rather than the timer ceiling
+  // above, so a draft can never be saved in a shape the Host rejects. The Host
+  // stays the final gate, and the client bundle cannot import that node-side
+  // module — `tests/transport-retry.test.ts` pins the schema's bound against
+  // the constant so this mirrored literal cannot drift unnoticed.
+  numberField('transportMaxRetries', { min: 0, max: 50 }),
   booleanField('filterModelsByPlan'),
   booleanField('webSearch'),
   booleanField('showSidebarQuota'),
@@ -501,6 +517,7 @@ export class CommandCodeSettingsController {
       defaultWorkingDir: this.defaultWorkingDir,
       requestTimeoutMs: this.field('requestTimeoutMs'),
       streamIdleTimeoutMs: this.field('streamIdleTimeoutMs'),
+      transportMaxRetries: this.field('transportMaxRetries'),
       filterModelsByPlan: this.field('filterModelsByPlan'),
       webSearch: this.field('webSearch'),
       showSidebarQuota: this.field('showSidebarQuota'),

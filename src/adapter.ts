@@ -73,6 +73,7 @@ import {
   capabilityDescription,
   compareByPlan,
   modelVisibleInPlan,
+  requiresMessagesEndpoint,
   subscriptionPlanInfo,
   type CommandCodeBillingAccess,
 } from './capabilities.ts'
@@ -132,6 +133,29 @@ function numberValue(value: unknown): number | undefined {
 
 function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
+}
+
+/**
+ * Thinking text carried by an OpenRouter-shaped `reasoning_details` array
+ * (`[{ type: 'reasoning.text', text, format, index }]`), concatenated in the
+ * order the gateway sent it.
+ *
+ * Entries are read by their `text` member alone rather than filtered on
+ * `type === 'reasoning.text'`: the sibling shapes in that protocol carry
+ * `summary` or an encrypted blob instead of `text`, so a plain read already
+ * ignores them, while a type filter would silently drop a text-bearing variant
+ * added later — and losing thinking is the failure this exists to prevent.
+ * Returns undefined when the array yields nothing, so the caller's `??` chain
+ * keeps falling through instead of treating "no text" as a reasoning delta.
+ */
+function reasoningDetailsText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  let text = ''
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    text += stringValue(entry.text) ?? ''
+  }
+  return text === '' ? undefined : text
 }
 
 /** Parse a billing-period timestamp (ISO string or millis) into millis; 0 when absent/invalid. */
@@ -533,6 +557,45 @@ async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): 
 // are in play (issue #34). Only tool calls with a paired tool result are
 // replayed on both transports.
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether an inbound message is a tool RESULT — a `user`-role message the
+ * producer tagged with `source: { kind: 'tool' }`.
+ *
+ * The tag is read defensively because it is PRODUCER-supplied and nothing
+ * validates it: dsh-llm's `Message` type declares `source` required, but the
+ * runtime never checks it and every adapter shipped before this one ignored the
+ * field outright (`dsh-llm-deepseek` never reads it). A third-party plugin that
+ * assembles its own history can therefore omit it and run correctly everywhere
+ * else — dsh-mneme's memory pipeline did — which made this adapter, the first
+ * to actually read the field, the first to crash on such a message with
+ * `TypeError: Cannot read properties of undefined (reading 'kind')` in the
+ * serialization phase, 0–8 ms in, before any request left the machine and with
+ * nothing in the error naming the message or the producer (issue #47).
+ *
+ * Two rules keep an untagged message from costing the turn:
+ *
+ *  - A PRESENT tag is authoritative. `kind: 'user'`, `'model'`, `'plugin'` or
+ *    any producer-added kind means "not a tool result", whatever the content
+ *    looks like — the tag answers *who produced this*.
+ *  - An ABSENT tag falls back to the content shape. A `user` message whose
+ *    first block is a `tool-result` is a tool result by the harness's own
+ *    definition (`ToolResultMessage` is exactly that shape with a
+ *    `ToolMessageSource`), and the fallback is not cosmetic: `pairedToolCalls()`
+ *    counts a `tool-result` block from ANY message, so classifying such a
+ *    message as a plain user message would drop it at emission while its call
+ *    still counted as paired — leaving the assistant's tool call unanswered on
+ *    the wire, which the gateway rejects outright. FIRST block, not "any block":
+ *    the tool-result branch reads `content[0]` and skips anything else, so
+ *    claiming a mixed message as a tool result would discard its other blocks
+ *    instead of sending them.
+ */
+function isToolResultMessage(message: Message): boolean {
+  if (message.role !== 'user') return false
+  const kind: string | undefined = message.source?.kind
+  if (kind !== undefined) return kind === 'tool'
+  return message.content?.[0]?.type === 'tool-result'
+}
 
 /**
  * Collect the tool calls that have a paired tool result, plus each call's
@@ -1049,7 +1112,7 @@ async function messagesToCC(
   for (const message of messages) {
     if (message.role === 'system') continue // folded into params.system by the caller
 
-    if (message.role === 'user' && message.source.kind !== 'tool') {
+    if (message.role === 'user' && !isToolResultMessage(message)) {
       flushPendingImages()
       const parts: unknown[] = []
       for (const block of message.content) {
@@ -1108,7 +1171,7 @@ async function messagesToCC(
     }
 
     // tool-result message (user role, single tool-result block)
-    if (message.role === 'user' && message.source.kind === 'tool') {
+    if (isToolResultMessage(message)) {
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
       const media = toolResultMedia(block)
@@ -1208,7 +1271,7 @@ async function messagesToOpenAI(
     // the caller, matching the existing adapter's conversation folding.
     if (message.role === 'system') continue
 
-    if (message.role === 'user' && message.source.kind !== 'tool') {
+    if (message.role === 'user' && !isToolResultMessage(message)) {
       flushPendingImages()
       const parts: unknown[] = []
       for (const block of message.content) {
@@ -1273,7 +1336,7 @@ async function messagesToOpenAI(
     }
 
     // tool-result message (user role, single tool-result block)
-    if (message.role === 'user' && message.source.kind === 'tool') {
+    if (isToolResultMessage(message)) {
       const block = message.content[0]
       if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
       const media = toolResultMedia(block)
@@ -2236,10 +2299,25 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * wins; otherwise a cached (not network-fetched) billing tier of Go is
    * treated as CLI-only. Unknown accounts default to Provider API and fall
    * back only after an `upgrade_required` rejection.
+   *
+   * Models the Provider API serves ONLY through `/provider/v1/messages` (the
+   * Claude family — `requiresMessagesEndpoint()`) always take the CLI
+   * transport, on any tier and even under a forced `'openai'` preference:
+   * that option is documented as "prefer the Provider API, still fall back",
+   * and the 400 these models answer with is not a preference to be honoured
+   * but a hard refusal. `/alpha/generate` routes every one of them, so this
+   * costs nothing.
+   *
+   * That decision is deliberately NOT written to `protocolCache`. The cache is
+   * keyed by API key alone, so remembering it would pin the whole ACCOUNT to
+   * the CLI transport and drag every other model — DeepSeek, GLM, Qwen, all of
+   * which the Provider API serves correctly — off it until the entry expired.
    */
-  private resolveProtocol(apiKey: string): CommandCodeProtocol {
+  private resolveProtocol(apiKey: string, model: string): CommandCodeProtocol {
     const forced = this.deps.options().protocol
-    if (forced === 'cli' || forced === 'openai') return forced
+    if (forced === 'cli') return forced
+    if (requiresMessagesEndpoint(model)) return 'cli'
+    if (forced === 'openai') return forced
     const cached = this.cachedProtocolUseCli(apiKey)
     if (cached !== undefined) return cached ? 'cli' : 'openai'
     if (this.cachedBillingTierWeight(apiKey) === GO_TIER_WEIGHT) {
@@ -2426,7 +2504,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     // Endpoint protocol: billing/cache may know Go plan -> CLI; unknown
     // accounts default to the documented Provider Chat Completions surface.
-    let protocol: CommandCodeProtocol = this.resolveProtocol(apiKey)
+    // A Messages-only model (Claude) forces the CLI transport regardless —
+    // see `resolveProtocol()`.
+    let protocol: CommandCodeProtocol = this.resolveProtocol(apiKey, options.model)
     // Image budget (issue #37): the body is built from the PROJECTED history,
     // never the raw one, so the oldest images past the cap travel as
     // placeholder text instead of a body the gateway refuses outright. Rung 0
@@ -2879,7 +2959,20 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   const choice = isRecord(choices[0]) ? choices[0] : {}
   const delta = isRecord(choice.delta) ? choice.delta : {}
 
-  const reasoningDelta = stringValue(delta.reasoning) ?? stringValue(delta.reasoning_content) ?? ''
+  // Thinking text arrives under a different field per model family, and the
+  // gateway does not normalize the spelling: DeepSeek answers with the scalar
+  // `reasoning` PLUS an OpenRouter-shaped `reasoning_details` array, while
+  // GLM/Qwen/Kimi answer with the DeepSeek-native `reasoning_content`. All
+  // three are read here, in that order, so no family's thinking is dropped —
+  // measured against the live API 2026-09-16 (see `MESSAGES_ONLY_MODELS` for
+  // the same sweep's other finding). The `reasoning_details` branch is a
+  // forward guard rather than a live path today: DeepSeek always sends the
+  // scalar alongside it, so it only carries the text if that ever stops.
+  const reasoningDelta =
+    stringValue(delta.reasoning)
+    ?? stringValue(delta.reasoning_content)
+    ?? reasoningDetailsText(delta.reasoning_details)
+    ?? ''
   if (reasoningDelta !== '') {
     chunks.push(...closeText(asm))
     if (asm.reasoningIndex < 0) {
