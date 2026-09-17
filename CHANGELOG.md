@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-09-17
+
+### Fixed
+- **The Command Code Remotes keep registering on the next Harness generation** ([#49](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/49)). The Typert protocol changed the strict result codec's shape inside the same `mode: 'strict'` tag: every released engine (`0.1.2-rc.1` … `0.1.6-alpha.1`, all 21 published versions) declares `schema: TypertSchema` and refuses registration with `strict codec has no parse() method` without it, while master after `e459e3263` replaced that member with the lazy factory `create: () => TypertSchema` and refuses with `strict codec has no create() factory`. All six Command Code Remotes (`report`, `models`, `prices`, `loginBegin`, `loginStatus`, `loginCancel`) come from one descriptor factory that carried `schema` alone, so on that newer generation none of them registers: the settings page's account card, the plans & quota panel, the price table and the browser login all lose their Host data. `makeRemoteDescriptor()` now carries both members, where `create: () => schema` names the same hand-rolled validator rather than a second copy, so the two generations can never validate against different rules. This is a version-agnostic fix instead of a runtime probe: neither generation inspects the member it does not know, and the member the running engine ignores is inert — which matters because a single-member codec is broken in either direction, and the one-line patch the issue proposed (`schema` → `create`) would have fixed unreleased master by breaking every install that exists today. `tests/wire-shared.test.ts` pins it by running both generations' real validators over every shipped descriptor, with negative controls proving that a codec carrying only one member is rejected by the other generation. The helper is inlined into both `lib/index.js` and `lib/client.js`, so a fix is dead until the bundle is rebuilt — hence the rebuilt bundles in this release.
+
 ## [0.11.3] - 2026-09-16
 
 ### Added

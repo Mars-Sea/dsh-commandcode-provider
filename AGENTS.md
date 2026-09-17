@@ -132,6 +132,10 @@ tests/snapshot-store.test.ts  Snapshot-store notification and disposal tests.
 tests/update.test.ts  update-hint tests (semver compare, payload parse,
                       throttle cache, failure semantics).
 tests/usage-wire.test.ts usage-Remote schema + descriptor tests.
+tests/wire-shared.test.ts cross-generation strict-codec contract: both engine
+                      generations' real validators run over every shipped
+                      descriptor, plus negative controls for a single-member
+                      codec (issue #49).
 tests/usage-client.test.ts account-card controller tests.
 tests/login.test.ts   browser-login flow integration tests (real loopback
                       server driven with fetch; every failure reason).
@@ -469,6 +473,7 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `ctx.remote.commandcode` access throws `cannot get property ... without
   inject`), and a static inject would deadlock because the namespace service
   exists only after our own mount. Keep that pattern when touching the mount.
+- **The strict result codec carries BOTH Typert generations' members** (`makeRemoteDescriptor()` in `src/wire-shared.ts`; issue #49). The protocol swapped the strict branch's shape inside the SAME `mode: 'strict'` tag: every RELEASED engine (`0.1.2-rc.1` … `0.1.6-alpha.1`, all 21 published versions) declares `schema: TypertSchema`, refuses registration with `strict codec has no parse() method` unless `codec.schema.parse` is a function, and validates with `codec.schema.parse(value)`; master after `e459e3263` (`perf(typert): materialize generated schemas on first use`) replaced that member with the lazy factory `create: () => TypertSchema`, refuses with `strict codec has no create() factory` unless `typeof codec.create === 'function'`, and validates with `codec.create().parse(value)`. Neither validator inspects the member it does not know, so ONE codec object carries `schema` AND `create: () => schema` (the same hand-rolled validator, never a second copy) and both generations accept it with no runtime probe. **Carrying only one member is the bug, in either direction**: the issue's proposed `-schema, +create` fixes unreleased master by breaking every install that exists today, and dropping `create` again would break master. That is why the two members live in one local `StrictResultCodec` interface rather than the protocol typings — no published `@deepseek-ai/dsh-typert-protocol` carries `create` yet, and the older generation's excess-property check would reject an inline literal — and the assignment to `InvocationDescriptor` needs no cast in either direction. All 6 endpoints (`report`/`models`/`prices`/`loginBegin`/`loginStatus`/`loginCancel`) come from that one factory, and the helper is INLINED into both `lib/index.js` and `lib/client.js`, so a fix is dead until the bundle is rebuilt and force-added. `tests/wire-shared.test.ts` drives both generations' real validators — transcribed from each `dsh-typert-registry` — over every descriptor gathered from the contributions, with negative controls pinning that a single-member codec fails the other generation; `npm run test:engine` cannot see any of this, because `scripts/verify-engine-load.mjs` registers no Remotes at all.
 - **Browser login (`commandcode/loginBegin|loginStatus|loginCancel`)**: the
   settings page's key field can start the official `command-code login` flow
   instead of pasting a key — reverse-engineered from the CLI bundle's
