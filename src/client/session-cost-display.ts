@@ -59,13 +59,26 @@ import {
   sessionCostRowDecorations,
 } from './session-cost.ts'
 
-/** The shipped composer stats row (dsh-client-ui-chat `StatsPills`). */
+/**
+ * The shipped composer stats row (dsh-client-ui-chat `StatsPills`).
+ *
+ * A PREFERENCE, not a requirement: 0.1.6-alpha.2 dropped this attribute from the
+ * row's root while leaving the rest of the markup identical, so a lookup that
+ * insisted on it would silently stop finding the row on that engine. When it is
+ * absent the search falls back to the dock OUTLET — deliberately the outlet and
+ * never the outlet's parent, because from 0.1.6-alpha.2 the parent is the new
+ * composer footer, which holds the `ContextMeter` as well, and that meter's
+ * trigger is itself a `button[aria-haspopup="dialog"]` rendered AFTER the dock.
+ * A parent-scoped "last trigger wins" would therefore append the cost to the
+ * context ring instead of the token pill.
+ */
 const STATS_ROOT = '[data-composer-stats]'
 
 /**
- * The shipped token-usage dialog's `<dl>`. Unique in the whole of
- * `dsh-client-ui-chat`: the per-message turn-usage panel has its own dialog with
- * different markup, so the composer's is unambiguous.
+ * The shipped token-usage dialog's `<dl>`. Unique WITHIN one `StatsPills`
+ * render: the per-message turn-usage panel has its own dialog with different
+ * markup, so a single composer's usage dialog is unambiguous. It is not unique
+ * across the document once two composers are live — see {@link resolveDialog}.
  */
 const USAGE_DIALOG = '[data-session-stats-usage]'
 
@@ -206,7 +219,7 @@ export class SessionCostDisplay {
         this.pillMisses += 1
         if (this.pillMisses === MISSES_BEFORE_WARNING) {
           console.warn(
-            `[dsh-commandcode-provider] no ${STATS_ROOT} row to append the session cost to; the figure stays in the usage dialog only`,
+            '[dsh-commandcode-provider] no shipped token pill in this composer\'s dock outlet to append the session cost to; the figure stays in the usage dialog only',
           )
         }
         return
@@ -233,11 +246,24 @@ export class SessionCostDisplay {
     }
   }
 
-  /** The shipped token pill, scoped to this entry's own composer. */
+  /**
+   * The shipped token pill, scoped to this entry's own composer.
+   *
+   * The scope is the dock OUTLET (`display: contents`, one per slot), which holds
+   * exactly that slot's entries — the shipped `stats` cell and ours, in their
+   * registration order. {@link STATS_ROOT} narrows that to the stats row on the
+   * engines that still mark it; on the engines that do not, the outlet is
+   * already the narrowest correct container, because the composer footer's
+   * `ContextMeter` sits BESIDE the outlet rather than inside it.
+   *
+   * A missing scope is "no pill", never a document-wide search: the outlet is
+   * what makes this lookup per-composer, and a second composer can be live at
+   * once (0.1.6-alpha.2 mounts an embedded Conversation in the sidebar).
+   */
   private resolvePillButton(): Element | null {
-    const scope = this.scope() ?? this.doc
-    const root = scope.querySelector(STATS_ROOT)
-    if (root === null) return null
+    const scope = this.scope()
+    if (scope === null) return null
+    const root = scope.querySelector(STATS_ROOT) ?? scope
     const triggers = root.querySelectorAll(DIALOG_TRIGGER)
     return triggers.length === 0 ? null : (triggers[triggers.length - 1] ?? null)
   }
@@ -403,20 +429,32 @@ export class SessionCostDisplay {
   }
 
   /**
-   * The shipped usage dialog, or null while it is closed.
+   * The shipped usage dialog, or null while it is closed (or ambiguous).
    *
    * The dialog is portaled onto `body`, so unlike the pill it cannot be scoped
-   * from this entry; DSH renders one composer, and the attribute is unique in
-   * the chat client, so a document-level lookup is exact. Should a future build
-   * mount two composers at once, both dialogs would describe whichever session
-   * this entry belongs to — noted rather than defended against.
+   * from this entry, and the attribute is unique per DIALOG rather than per
+   * document. While one composer was guaranteed, a document-level lookup was
+   * exact. 0.1.6-alpha.2 ends that guarantee: it mounts an embedded Conversation
+   * in the sidebar, so a second composer — with its own session, its own dock
+   * and its own dialog — can be live and open at the same time.
+   *
+   * There is no DOM link from a dialog back to its trigger (the portaled panel
+   * carries no id and no `aria-controls`), so with two dialogs open document
+   * order says nothing about ownership. The shape confirmation in
+   * {@link dialogShapeMatches} would usually reject the stranger, but it compares
+   * against THIS entry's counts, so a coincidentally matching dialog would be
+   * priced with another session's figures. Ambiguity is therefore answered by
+   * declining to decorate at all — the same rule the shape check already
+   * follows, applied one level up: a dialog we cannot prove is ours is left
+   * alone.
    */
   private resolveDialog(): Element | null {
     if (this.dialogHost?.isConnected === true) return this.dialogHost
     // The dialog we injected into is gone: our nodes went with it, so only the
     // bookkeeping is left to drop.
     this.clearDialog()
-    return this.doc.querySelector(USAGE_DIALOG)
+    const dialogs = this.doc.querySelectorAll(USAGE_DIALOG)
+    return dialogs.length === 1 ? (dialogs[0] ?? null) : null
   }
 
   /** Give the dialog back: every price removed, every hidden row restored. */

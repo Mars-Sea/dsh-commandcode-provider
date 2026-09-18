@@ -49,7 +49,17 @@ import {
   type SessionUsageBuckets,
 } from './session-cost.ts'
 
-/** The dock outlet this entry renders inside, i.e. what it can scope itself from. */
+/**
+ * The dock outlet this entry renders inside, i.e. what it scopes itself from.
+ *
+ * The OUTLET itself, not its parent. The outlet is one `display:contents` div
+ * holding exactly this slot's entries (the shipped `stats` cell and ours), so it
+ * is the narrowest container that is still per-composer. Its parent is NOT:
+ * from 0.1.6-alpha.2 the composer stacks the dock inside a footer that also
+ * holds the `ContextMeter`, whose trigger is another
+ * `button[aria-haspopup="dialog"]` rendered after the dock — scoping to the
+ * parent would let the cost land on the context ring.
+ */
 const DOCK_ANCHOR = '[data-slot="conversation.composer.dock"]'
 
 /** Module-level constant so the marker's `style` prop never diffs. */
@@ -135,7 +145,7 @@ function SessionCostEntry(props: SessionCostComponentProps) {
     if (typeof document === 'undefined') return
     const display = new SessionCostDisplay({
       doc: document,
-      scope: () => markerRef.current?.closest(DOCK_ANCHOR)?.parentElement ?? null,
+      scope: () => markerRef.current?.closest(DOCK_ANCHOR) ?? null,
     })
     displayRef.current = display
     display.start()

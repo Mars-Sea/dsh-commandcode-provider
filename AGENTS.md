@@ -328,7 +328,30 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `src/client/session-cost-display.ts` injects the amount into the shipped pill
   and a price per row into the shipped usage dialog, matched POSITIONALLY (the
   labels are the `chat` locale's, so they are never read) and confirmed by the
-  token count each row must be showing. `buildSessionCostView()` owns every
+  token count each row must be showing. **Both anchors are version-dependent,
+  and the pill's scope is the OUTLET.** The pill's row carried
+  `data-composer-stats` from 0.1.2 through 0.1.6-alpha.1, and 0.1.6-alpha.2
+  DELETED it while leaving that row's markup otherwise identical — so
+  `STATS_ROOT` is a PREFERENCE, and the lookup falls back to the dock outlet
+  (`[data-slot="conversation.composer.dock"]`, a `display:contents` div holding
+  exactly that slot's entries: the shipped `stats` cell and ours). The fallback
+  is the outlet and NEVER the outlet's parent, because 0.1.6-alpha.2 stacks the
+  outlet inside a new composer footer that also holds the `ContextMeter`, whose
+  trigger is itself a `button[aria-haspopup="dialog"]` rendered AFTER the dock:
+  a parent-scoped "last trigger wins" would append the cost to the context ring
+  instead of the token pill. The same release ends the one-composer assumption
+  behind the DIALOG's document-level lookup — it mounts an embedded Conversation
+  in the sidebar, so a second composer (its own session, dock and dialog) can be
+  live and open at once, and a portaled dialog carries no id or `aria-controls`
+  tying it back to its trigger. `resolveDialog()` therefore decorates only while
+  the document holds EXACTLY ONE `[data-session-stats-usage]`; ambiguity is
+  answered by declining, the same rule the shape check already follows one level
+  down. `tests/session-cost-display.test.ts` fences all of it: the unmarked
+  0.1.6-alpha.2 row, an outlet whose footer sibling is a `ContextMeter` that must
+  NOT be the host, and two open dialogs that must both stay unpriced until only
+  one remains. That suite's earlier form built its own marked row and treated a
+  missing anchor as an acceptable no-op, which is exactly why the alpha.2
+  deletion could go dark with every check green. `buildSessionCostView()` owns every
   number and string: it prices only `commandcode` sessions, never invents a
   cache-write rate the pricing page omits (those tokens are reported as
   unpriced and the total stays a floor), and returns `undefined` — no pill at
@@ -361,8 +384,9 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `ctx.inject(['layout'], …)` plus a `typeof selectPanel === 'function'` check
   (`src/client/index.ts`), and the dashboard cell needs no gate because
   registering against an undeclared slot is a no-op by construction. The DOM
-  anchors (`[data-composer-stats]`, `[data-session-stats-usage]`) are the one
-  genuinely 0.1.5-alpha.1 marker. `tests/client-boot.test.ts` pins all of this by
+  anchor `[data-session-stats-usage]` is the one genuinely 0.1.5-alpha.1 marker;
+  its sibling `[data-composer-stats]` was 0.1.2…0.1.6-alpha.1 ONLY (see the
+  session-cost bullet below). `tests/client-boot.test.ts` pins all of this by
   modelling the declaration set and the layout seam separately.
   The three slot declarations are re-stated locally
   (`panel-slots.ts`, `session-cost-slots.ts`) and must stay structurally

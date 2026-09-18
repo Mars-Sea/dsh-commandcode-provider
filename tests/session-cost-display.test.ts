@@ -202,6 +202,16 @@ class FakeDocument extends FakeNode {
   querySelector(selector: string): FakeElement | null {
     return this.body.querySelector(selector)
   }
+
+  /**
+   * The document-level collection the ambiguity guard reads: a second composer
+   * (0.1.6-alpha.2's embedded sidebar Conversation) can put a second usage
+   * dialog in the page at the same time, and only the COUNT distinguishes that
+   * case from the ordinary one.
+   */
+  querySelectorAll(selector: string): FakeElement[] {
+    return this.body.querySelectorAll(selector)
+  }
 }
 
 const doc = (): FakeDocument => new FakeDocument()
@@ -213,15 +223,21 @@ const asDocument = (fake: FakeDocument): Document => fake as unknown as Document
 // ---------------------------------------------------------------------------
 
 /**
- * The shipped stats row as it really nests: a `[data-composer-stats]` root
- * wrapping the pills (`StatsPills`), of which the LAST `aria-haspopup` child is
- * the token pill. The wrapper matters — the display scopes its lookup to it —
- * and so does the PRECEDING trigger: once a step carries timing the row starts
- * with the time pill, which is also a `button[aria-haspopup="dialog"]`, so a
- * lookup that took the first trigger instead of the last would decorate the
- * clock. Both shapes are modelled here for that reason.
+ * The shipped stats row as it really nests: the pills (`StatsPills`), of which
+ * the LAST `aria-haspopup` child is the token pill, inside the row's root div.
+ * The wrapper matters — the display scopes its lookup to it — and so does the
+ * PRECEDING trigger: once a step carries timing the row starts with the time
+ * pill, which is also a `button[aria-haspopup="dialog"]`, so a lookup that took
+ * the first trigger instead of the last would decorate the clock. Both shapes
+ * are modelled here for that reason.
+ *
+ * `marker: false` models dsh 0.1.6-alpha.2, which DELETED
+ * `data-composer-stats` from this root while leaving every other part of the
+ * markup identical. The row must still be found there — that deletion is what
+ * took the readout dark, and a lookup that insists on the attribute is exactly
+ * the bug.
  */
-function shippedPill(parent: FakeElement): {
+function shippedPill(parent: FakeElement, options: { marker?: boolean } = {}): {
   root: FakeElement
   button: FakeElement
   label: FakeElement
@@ -229,7 +245,7 @@ function shippedPill(parent: FakeElement): {
   timeLabel: FakeElement
 } {
   const root = new FakeElement('div')
-  root.setAttribute('data-composer-stats', '')
+  if (options.marker !== false) root.setAttribute('data-composer-stats', '')
   const timeButton = new FakeElement('button')
   timeButton.setAttribute('aria-haspopup', 'dialog')
   const timeLabel = new FakeElement('span')
@@ -244,6 +260,27 @@ function shippedPill(parent: FakeElement): {
   root.appendChild(button)
   parent.appendChild(root)
   return { root, button, label, timeButton, timeLabel }
+}
+
+/**
+ * The composer footer's context meter, as 0.1.6-alpha.2 introduces it: a ring
+ * whose trigger is itself a `button[aria-haspopup="dialog"]`, rendered AFTER the
+ * dock outlet as the outlet's SIBLING inside the composer's dock row.
+ *
+ * It is the reason the scope stops at the outlet. It is out of reach for an
+ * outlet-scoped lookup, and it would be the WINNER of a parent-scoped "last
+ * trigger wins" — which is how the session cost would end up hanging off the
+ * context ring instead of the token pill.
+ */
+function contextMeter(parent: FakeElement): FakeElement {
+  const root = new FakeElement('span')
+  const button = new FakeElement('button')
+  button.setAttribute('aria-haspopup', 'dialog')
+  button.setAttribute('aria-label', '45% of context used')
+  button.appendChild(new FakeElement('svg'))
+  root.appendChild(button)
+  parent.appendChild(root)
+  return button
 }
 
 /**
@@ -443,12 +480,66 @@ test('an unpriceable session removes the injected figure', () => {
   assert.equal(button.hasAttribute('aria-describedby'), false)
 })
 
-test('a missing shipped pill is a no-op that never throws', () => {
-  const composer = new FakeElement('div')
-  const { display } = makeDisplay(composer)
-  // No `[data-composer-stats]` anywhere: an engine whose markup moved.
+// The next three tests are the regression fence for dsh 0.1.6-alpha.2, which
+// deleted `data-composer-stats` AND moved the composer's context meter into a
+// footer beside the dock outlet. The old suite built its own marked root and
+// treated an unmarked row as an acceptable no-op, so the readout could go dark
+// on a real engine with every check green.
+
+test('an unmarked stats row (dsh 0.1.6-alpha.2) still gets the cost', () => {
+  const outlet = new FakeElement('div')
+  const { button, timeButton } = shippedPill(outlet, { marker: false })
+  const { display } = makeDisplay(outlet)
+
+  display.sync(view({ uncachedInputTokens: 1_000_000 }))
+
+  const injected = button.querySelector('[data-composer-session-cost]')
+  assert.ok(injected, 'the token pill is found without the attribute')
+  assert.equal(timeButton.querySelector('[data-composer-session-cost]'), null, 'still never the clock')
+  display.dispose()
+})
+
+test('the dock outlet scopes the lookup away from the footer context meter', () => {
+  // The real 0.1.6-alpha.2 shape: `div.dock > [data-slot=…dock] + ContextMeter`.
+  const footer = new FakeElement('div')
+  const outlet = new FakeElement('div')
+  outlet.setAttribute('data-slot', 'conversation.composer.dock')
+  const { button } = shippedPill(outlet, { marker: false })
+  footer.appendChild(outlet)
+  const meter = contextMeter(footer)
+  const page = doc()
+  page.body.appendChild(footer)
+
+  const trigger = { fire: (): void => {} }
+  const display = new SessionCostDisplay({
+    doc: asDocument(page),
+    scope: () => outlet as unknown as ParentNode,
+    observe: (_target, listener) => {
+      trigger.fire = listener
+      return () => {
+        trigger.fire = (): void => {}
+      }
+    },
+  })
+  display.start()
+  display.sync(view({ uncachedInputTokens: 1_000_000 }))
+
+  assert.ok(button.querySelector('[data-composer-session-cost]'), 'the cost lands on the token pill')
+  assert.equal(
+    meter.querySelector('[data-composer-session-cost]'),
+    null,
+    'the context meter is a SIBLING of the outlet, so it is never the host',
+  )
+  display.dispose()
+})
+
+test('a composer with no shipped pill is a no-op that never throws', () => {
+  const outlet = new FakeElement('div')
+  const { display } = makeDisplay(outlet)
+  // An empty outlet: no pills at all, so there is nothing to append to. This is
+  // the "markup moved somewhere we cannot see" case, and it stays a no-op.
   assert.doesNotThrow(() => display.sync(view({ uncachedInputTokens: 1_000_000 })))
-  assert.equal(composer.querySelector('[data-composer-session-cost]'), null)
+  assert.equal(outlet.querySelector('[data-composer-session-cost]'), null)
   display.dispose()
 })
 
@@ -489,6 +580,49 @@ test('a dialog whose counts do not confirm is left exactly as it shipped', () =>
   const dl = shippedDialog(fake.body, ['0%', '999 tok', '0 tok', '500,000 tok'])
   display.sync(view({ uncachedInputTokens: 1_000_000, outputTokens: 500_000 }))
   assert.equal(dl.querySelectorAll('[data-session-cost-price]').length, 0)
+})
+
+// Two live composers are reachable from dsh 0.1.6-alpha.2 (the sidebar mounts an
+// embedded Conversation), and the dialog is portaled onto `body`, so a
+// document-wide lookup can no longer tell whose dialog it is looking at. The
+// count is the only honest discriminator: with two open, neither may be priced.
+
+test('two open usage dialogs are both left alone rather than mispriced', () => {
+  const composer = new FakeElement('div')
+  shippedPill(composer)
+  const { display, fake } = makeDisplay(composer)
+
+  // The other session's composer and its dialog, with counts that WOULD confirm
+  // against this entry's view — the coincidence the shape check cannot catch.
+  const other = new FakeElement('div')
+  shippedPill(other)
+  fake.body.appendChild(other)
+  const ours = shippedDialog(fake.body, ['0%', '1,000,000 tok', '0 tok', '500,000 tok'])
+  const theirs = shippedDialog(fake.body, ['0%', '1,000,000 tok', '0 tok', '500,000 tok'])
+
+  display.sync(view({ uncachedInputTokens: 1_000_000, outputTokens: 500_000 }))
+
+  assert.equal(theirs.querySelectorAll('[data-session-cost-price]').length, 0, 'never the stranger')
+  assert.equal(ours.querySelectorAll('[data-session-cost-price]').length, 0, 'and not a guess at ours either')
+})
+
+test('the ambiguity clears once only one dialog remains', () => {
+  const composer = new FakeElement('div')
+  shippedPill(composer)
+  const { display, fake, trigger } = makeDisplay(composer)
+
+  const survivor = shippedDialog(fake.body, ['0%', '1,000,000 tok', '0 tok', '500,000 tok'])
+  const departing = shippedDialog(fake.body, ['0%', '1,000,000 tok', '0 tok', '500,000 tok'])
+  display.sync(view({ uncachedInputTokens: 1_000_000, outputTokens: 500_000 }))
+  assert.equal(survivor.querySelectorAll('[data-session-cost-price]').length, 0)
+
+  // The other composer closes its dialog (its portal unmounts) and the observer
+  // re-runs the sync: the remaining dialog is unambiguous again and is priced.
+  departing.parentNode?.removeChild(departing)
+  trigger.fire()
+  display.sync(view({ uncachedInputTokens: 1_000_000, outputTokens: 500_000 }))
+  assert.ok(survivor.querySelectorAll('[data-session-cost-price]').length > 0, 'priced once it is alone')
+  display.dispose()
 })
 
 test('a dialog that opens later is decorated when the observer fires', () => {
