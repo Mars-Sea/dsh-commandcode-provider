@@ -215,7 +215,36 @@ tsdown.config.ts      Build config (tsdown -> lib/, ESM, .d.ts + client.js).
   `dsh-llm`, rewrites the prerelease range to an unsatisfiable stable range,
   and aborts with `ERR_PNPM_NO_MATCHING_VERSION`. Do not move it to
   `dependencies`: the active profile owns Harness packages. Run
-  `npm run test:install` after changing DSH peer metadata.
+  `npm run test:install` after changing DSH peer metadata. **Client-only UI
+  peers the Web frontend already seeds are the ONE exception, and they must stay
+  optional AND stay in `devDependencies`** (PR #52). The shipped
+  `dsh-web-frontend` hands every client bundle a `staticModules` table —
+  `react`, `react/jsx-runtime`, `react-dom`, `react-dom/client`,
+  `@deepseek-ai/cordis`, `@deepseek-ai/dsh-client-store`,
+  `@deepseek-ai/dsh-client-ui-slots`, `@deepseek-ai/dsh-client-ui-primitives`
+  (read out of the 0.1.2-rc.1, 0.1.5-rc.2 and 0.1.6-alpha.2 engines alike) — so
+  the three `require()` targets `lib/client.js` carries resolve in the webview
+  with no installed copy, which is why `react`,
+  `@deepseek-ai/dsh-client-ui-primitives` and
+  `@deepseek-ai/dsh-client-ui-slots` are the only peers carrying
+  `peerDependenciesMeta.optional: true`. That marking is not cosmetic: an older
+  Desktop release validates the entire peer closure of every active plugin
+  (`apps/desktop/src/profile-packages.ts`, which honours exactly this field) and
+  its runtime tree ships host packages only, so a non-optional client-only peer
+  is a hard startup failure there (`desktop profile: … requires missing …`);
+  note that current DSH master no longer performs that walk, so the fix unblocks
+  the released Desktop builds rather than the newest one. Every OTHER peer stays
+  required — a `dsh.client` row is resolved and served by the Host, and a
+  harness peer a fresh generation does not install is a bundle that cannot load.
+  The second half is the trap the marking opens: **npm and pnpm auto-install only
+  NON-optional peers**, so each optional name must also be a `devDependency` or
+  the authortime tree silently loses it — `tests/client-boot.test.ts` imports
+  the React component tree, so an absent `react` is a red `npm test` the moment
+  `package-lock.json` is next refreshed (the committed lock still carries it only
+  because `dsh-client-ui-primitives@0.1.2-rc.1` depends on it, while
+  0.1.6-alpha.2 declares no dependencies). `tests/package.test.ts` pins the exact
+  optional set, that every optional name is a declared peer, and that it stays a
+  development package.
 - **The Harness peer range is an exact-version disjunction, and that is
   load-bearing.** Semver admits a prerelease only inside the same
   `major.minor.patch` tuple as the comparator, so `^0.1.2-rc.1` resolves to

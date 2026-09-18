@@ -143,6 +143,7 @@
     "@deepseek-ai/schemastery": "^3.18.2",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.1",
+    "react": "^18.2.0",
     "tsdown": "^0.22.2",
     "tsx": "^4.23.12",
     "typescript": "^6.0.3"

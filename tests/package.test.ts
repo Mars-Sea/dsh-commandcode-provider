@@ -11,6 +11,7 @@ interface PackageManifest {
   }
   engines?: { node?: string; dsh?: string }
   peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean } | undefined>
   devDependencies?: Record<string, string>
 }
 
@@ -79,4 +80,53 @@ test('the rc.1 Web client remains enabled without dsh-client-runtime', () => {
   assert.equal(pkg.dsh?.client?.platform, 'web')
   assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-runtime'], undefined)
   assert.equal(pkg.devDependencies?.['@deepseek-ai/dsh-client-runtime'], undefined)
+})
+
+test('only the client-seeded UI peers are optional, and each stays a development package', () => {
+  // The Web frontend hands every client bundle a `staticModules` seed table —
+  // react, react/jsx-runtime, react-dom, react-dom/client,
+  // @deepseek-ai/cordis, @deepseek-ai/dsh-client-store,
+  // @deepseek-ai/dsh-client-ui-slots, @deepseek-ai/dsh-client-ui-primitives,
+  // read out of the 0.1.2-rc.1, 0.1.5-rc.2 and 0.1.6-alpha.2 engines alike — and
+  // lib/client.js requires exactly three of them: react, react/jsx-runtime (both
+  // from the `react` package) and @deepseek-ai/dsh-client-ui-primitives. No
+  // installed copy is therefore needed at runtime, while an older Desktop
+  // release — which validates the whole peer closure of every active plugin and
+  // ships host packages only — refuses to start unless those three are optional
+  // (`desktop profile: … requires missing …`).
+  //
+  // The set is load-bearing in BOTH directions, which is why it is pinned as an
+  // exact list rather than merely checked for well-formedness:
+  //   - an optional peer is NEVER installed (npm and pnpm both auto-install only
+  //     missing non-optional peers), so every name here must also be a
+  //     devDependency or the authortime tree silently loses it. `react` is the
+  //     live case: tests/client-boot.test.ts imports the React component tree at
+  //     runtime, and the committed lock still carries react only because
+  //     @deepseek-ai/dsh-client-ui-primitives@0.1.2-rc.1 depends on it — the
+  //     0.1.6-alpha.2 line declares no dependencies at all, so the next
+  //     package-lock.json refresh would drop it.
+  //   - a host-required peer marked optional here would stop being installed in a
+  //     fresh marketplace generation, and no other check can see that:
+  //     test:engine stages the ENGINE's own peers, and test:install only asserts
+  //     that @deepseek-ai/dsh-invariants resolves.
+  const optional = Object.entries(pkg.peerDependenciesMeta ?? {})
+    .filter(([, meta]) => meta?.optional === true)
+    .map(([name]) => name)
+    .sort()
+
+  assert.deepEqual(optional, [
+    '@deepseek-ai/dsh-client-ui-primitives',
+    '@deepseek-ai/dsh-client-ui-slots',
+    'react',
+  ])
+  for (const name of optional) {
+    assert.ok(
+      pkg.peerDependencies?.[name] !== undefined,
+      `${name} is marked optional but declares no peer range, which makes that entry inert`,
+    )
+    assert.ok(
+      pkg.devDependencies?.[name] !== undefined,
+      `${name} is an optional peer, so no package manager installs it: keep it in devDependencies`,
+    )
+  }
 })
