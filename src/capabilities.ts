@@ -63,6 +63,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'Qwen/Qwen3.8-Max-0902': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Flash': ['low', 'medium', 'xhigh'],
+  // command-code@1.56.0 added Qwen 3.8 Omni Flash — the only model-registry
+  // change across 1.54.0 -> 1.56.0, and the only catalog model with no local
+  // snapshot entry before this. Omni-modal (text+image), 1M context, reasoning
+  // with the same ['low', 'medium', 'xhigh'] set as its Qwen 3.8 siblings.
+  'Qwen/Qwen3.8-Omni-Flash': ['low', 'medium', 'xhigh'],
   'claude-fable-5-1': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-7': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -157,6 +162,10 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // registry ("Text input, Vision, Reasoning") and the CLI's
   // inputModalities:["text","image"].
   'Qwen/Qwen3.8-Max-0902',
+  // command-code@1.56.0 added Qwen 3.8 Omni Flash; Vision per the official
+  // registry and the CLI's inputModalities:["text","image"] (the pricing page
+  // also carries caps.vision: true).
+  'Qwen/Qwen3.8-Omni-Flash',
   'claude-fable-5-1',
   'claude-fable-5',
   'claude-haiku-4-5-20251001',
@@ -327,7 +336,8 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
  * (GOAT) plus its Contributor sibling (Go); command-code@1.52.0 added the
  * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
- * added `deepseek/deepseek-v4.1-flash` (Go).
+ * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
+ * `Qwen/Qwen3.8-Omni-Flash` (Go).
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -338,7 +348,7 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (44) ---
+  // --- Go (45) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -352,6 +362,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.8-Max': 'go',
   // command-code@1.41.0 added Qwen 3.8 Max 0902; it sits on the Go plan page.
   'Qwen/Qwen3.8-Max-0902': 'go',
+  // command-code@1.56.0 added Qwen 3.8 Omni Flash; the pricing page's embedded
+  // availability grants every tier (individual-go through teams-pro) — the
+  // same "all":true shape as the rest of the Qwen 3.8 family.
+  'Qwen/Qwen3.8-Omni-Flash': 'go',
   // command-code@1.39.0 added DeepSeek V4 Flash Fast; it is a Go-tier model
   // alongside the rest of the DeepSeek V4 family.
   'deepseek/deepseek-v4-flash-fast': 'go',
@@ -556,6 +570,27 @@ export function modelVisibleInPlan(modelId: string, access: CommandCodeBillingAc
   const weight = PLAN_ORDER[tier]
   if (weight === undefined) return true
   return weight <= access.tierWeight
+}
+
+/**
+ * Whether the picker lists `modelId` for a whole POOL of accounts: true when
+ * at least one of them includes it. The picker's plan filter is asked this
+ * rather than {@link modelVisibleInPlan} for a single account because the pool
+ * — not any one account — is what serves a request: keying the list on
+ * whichever account rotation happened to reach made models appear and vanish
+ * as accounts rotated, and hid models the user's other accounts could run.
+ *
+ * An account whose facts are unknown counts as "may include it" (the same
+ * fail-open rule `modelVisibleInPlan` applies one level down), and an empty
+ * pool is "show everything": hiding a model somebody can run is the one
+ * failure this filter must never cause.
+ */
+export function modelVisibleForAnyAccount(
+  modelId: string,
+  accounts: readonly (CommandCodeBillingAccess | undefined)[] | undefined,
+): boolean {
+  if (accounts === undefined || accounts.length === 0) return true
+  return accounts.some((access) => modelVisibleInPlan(modelId, access))
 }
 
 /**

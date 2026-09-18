@@ -449,7 +449,7 @@ export function apply(ctx: Context, config: Config): void {
     authFileKey: resolveAuthFileApiKey,
     // The adapter reference is assigned right below; the probe runs only at
     // request time, never during plugin startup.
-    probeWindow: (apiKey: string) => adapter.probeFiveHourWindow(apiKey),
+    probeWindow: (apiKey: string) => adapter.probeWindowLimits(apiKey),
     preferredId,
     // Model → account routing rules, re-read per resolution like every
     // settings-backed fact.
@@ -474,19 +474,35 @@ export function apply(ctx: Context, config: Config): void {
   const adapter: CommandCodeAdapter<ResolvedCommandCodeOptions> = new CommandCodeAdapter({
     options,
     resolveApiKey,
-    // Pre-stream 429/401: mark the rejected key and hand the adapter the next
-    // account's key. When every account is exhausted the pool throws the
-    // RATE_LIMIT/INVALID_CREDENTIAL error that names the earliest reset —
-    // that error, not the raw 429, is what the caller sees.
-    rotateApiKey: async (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential', _connection: ResolvedCommandCodeOptions, model?: string): Promise<string | undefined> => {
-      pool.markRejected(rejectedKey, rejection)
-      // Exclude the just-rejected key from probe-revival: a probe clearing its
-      // window must not re-offer the same key within this request (the
-      // adapter refuses already-tried keys); the next request picks it up.
-      // The model rides along so model-routing rules pick the next account
-      // for the same model.
+    // Pre-stream account-scoped rejection: mark the rejected key when the
+    // reason warrants it and hand the adapter the next account's key. When
+    // every account is exhausted the pool throws the RATE_LIMIT /
+    // INVALID_CREDENTIAL error that names the earliest reset — that error, not
+    // the raw provider rejection, is what the caller sees.
+    rotateApiKey: async (
+      rejectedKey: string,
+      rejection: 'rate-limit' | 'invalid-credential' | 'unavailable',
+      _connection: ResolvedCommandCodeOptions,
+      model?: string,
+      rotation?: { tried: readonly string[]; resetAtMs?: number },
+    ): Promise<string | undefined> => {
+      // Only the two account-health reasons become marks: an `unavailable`
+      // rejection (no credits, a model outside this account's plan) says
+      // nothing durable about the key, so the pool rotates past it without
+      // remembering — a `:free` model is still served by a credits-empty
+      // account. The provider's own `resetAtMs`, when the body carried one,
+      // turns the rate-limit mark into a cooldown that expires by itself.
+      if (rejection !== 'unavailable') pool.markRejected(rejectedKey, rejection, rotation?.resetAtMs)
+      // The whole tried set, not just the rejected key, reaches the pool: a
+      // rejection that does not mark the key would otherwise be re-offered on
+      // every attempt and a four-account pool could never reach the accounts
+      // behind it. The model rides along so model-routing rules pick the next
+      // account for the same model. An EMPTY set must not be forwarded — the
+      // pool reads it as "nothing was tried" and drops the filter this set
+      // exists for, so it falls back to the rejected key like a missing one.
+      const tried = rotation?.tried?.length ? rotation.tried : [rejectedKey]
       const resolved = await pool.resolveKey(
-        model === undefined ? { exclude: rejectedKey } : { exclude: rejectedKey, model },
+        model === undefined ? { tried } : { tried, model },
       )
       // Normalize like the initial resolution does: the pool keys its state
       // by the resolved key, so the adapter must send (and report back) the
@@ -500,6 +516,16 @@ export function apply(ctx: Context, config: Config): void {
     resolveAttachments: () => {
       const attachments = ctx.get('attachments')
       return attachments === undefined ? undefined : attachments
+    },
+    // The picker's plan filter asks about the whole pool, not just the account
+    // that would serve right now: with several accounts on different plans,
+    // keying the list on the serving one made models appear and vanish as
+    // rotation moved between them (and hid models the other accounts could
+    // run). Read live, so adding or removing an account applies to the next
+    // picker load.
+    resolveAccountKeys: async (): Promise<readonly string[]> => {
+      const accounts = await pool.resolvedAccounts()
+      return accounts.map((account) => account.key)
     },
   })
   // The Models page card: a configurable provider with a settings address.

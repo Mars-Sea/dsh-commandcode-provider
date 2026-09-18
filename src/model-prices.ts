@@ -138,6 +138,7 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'qwen-3.8-flash', rates: [0.16, 0.47, 0.016] },
   { id: 'qwen-3.8-max', rates: [2, 6, 0.25, 2.5] },
   { id: 'qwen-3.8-max-0902', rates: [2, 6, 0.25] },
+  { id: 'qwen-3.8-omni-flash', rates: [0.15, 0.47, 0.016] },
   { id: 'step-3.5-flash', rates: [0.1, 0.3, 0.02] },
   { id: 'step-3.7-flash', rates: [0.2, 1.15, 0.04] },
   { id: 'tencent/hy3-paid', rates: [0.14, 0.58, 0.035] },

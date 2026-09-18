@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.54.0 — endpoints, request shape, and
+ * re-verified against command-code@1.56.0 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -72,7 +72,7 @@ import {
   KNOWN_IMAGE_MODELS,
   capabilityDescription,
   compareByPlan,
-  modelVisibleInPlan,
+  modelVisibleForAnyAccount,
   requiresMessagesEndpoint,
   subscriptionPlanInfo,
   type CommandCodeBillingAccess,
@@ -82,7 +82,7 @@ import {
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.54.0'
+export const COMMAND_CODE_CLI_VERSION = '1.56.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -136,15 +136,22 @@ function booleanValue(value: unknown): boolean | undefined {
 }
 
 /**
- * Thinking text carried by an OpenRouter-shaped `reasoning_details` array
- * (`[{ type: 'reasoning.text', text, format, index }]`), concatenated in the
- * order the gateway sent it.
+ * Thinking text carried by an OpenRouter-shaped `reasoning_details` array,
+ * concatenated in the order the gateway sent it.
  *
- * Entries are read by their `text` member alone rather than filtered on
- * `type === 'reasoning.text'`: the sibling shapes in that protocol carry
- * `summary` or an encrypted blob instead of `text`, so a plain read already
- * ignores them, while a type filter would silently drop a text-bearing variant
- * added later — and losing thinking is the failure this exists to prevent.
+ * Entries are read by their own text members rather than filtered on `type`:
+ * DeepSeek sends `{ type: 'reasoning.text', text }` while the OpenAI family
+ * sends `{ type: 'reasoning.summary', summary, format: 'openai-responses-v1' }`
+ * — the same summary text the scalar `delta.reasoning` carries, in the
+ * Responses protocol's vocabulary. A `type` filter would drop one family or the
+ * other, and losing thinking is the failure this exists to prevent.
+ *
+ * `text` wins per entry, but an EMPTY `text` must not shadow a populated
+ * `summary` (the Responses wire emits `text: ''` placeholders), so the fallback
+ * tests for non-empty rather than merely present. Entries carrying neither
+ * member — the encrypted blobs — contribute nothing, and no entry contributes
+ * both, so a summary is never counted twice.
+ *
  * Returns undefined when the array yields nothing, so the caller's `??` chain
  * keeps falling through instead of treating "no text" as a reasoning delta.
  */
@@ -153,9 +160,24 @@ function reasoningDetailsText(value: unknown): string | undefined {
   let text = ''
   for (const entry of value) {
     if (!isRecord(entry)) continue
-    text += stringValue(entry.text) ?? ''
+    const exact = stringValue(entry.text)
+    const summary = stringValue(entry.summary)
+    text += exact !== undefined && exact !== '' ? exact : (summary ?? '')
   }
   return text === '' ? undefined : text
+}
+
+/**
+ * One SCALAR thinking delta, treating an empty string as "this chunk carries
+ * none" — the same rule {@link reasoningDetailsText} applies inside the array.
+ * The scalar and the array describe the same thinking, so an empty spelling of
+ * one must not shadow populated text in the other (the Responses wire pads with
+ * `text: ''`). `??` alone cannot express this: an empty string is not nullish,
+ * so `reasoning: ''` beside a populated `reasoning_details` used to drop the
+ * whole chunk's thinking.
+ */
+function nonEmptyText(value: string | undefined): string | undefined {
+  return value === undefined || value === '' ? undefined : value
 }
 
 /** Parse a billing-period timestamp (ISO string or millis) into millis; 0 when absent/invalid. */
@@ -1431,6 +1453,24 @@ export interface CommandCodeConnectionOptions {
  */
 export type ResolveAttachments = () => AttachmentStore | undefined
 
+/**
+ * Why a pre-stream rejection rotates to another account. `rate-limit` and
+ * `invalid-credential` are the two the pool records as marks; `unavailable` is
+ * an account-scoped rejection that must NOT become a mark — the account's key
+ * is valid and its windows may be open, the ACCOUNT just cannot serve THIS
+ * request (no credits, a model outside its plan) — so the pool moves on
+ * without remembering anything.
+ */
+export type AccountRotationReason = 'rate-limit' | 'invalid-credential' | 'unavailable'
+
+/** What the rotation hook knows about the request it is rotating within. */
+export interface AccountRotationContext {
+  /** Every API key this request has already used, just-rejected key included. */
+  tried: readonly string[]
+  /** The provider's own reset time for a `rate-limit` rejection, in millis. */
+  resetAtMs?: number
+}
+
 /** Everything the adapter needs beyond the request itself. */
 export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
   /** Resolve the current connection facts (fresh per request, settings-aware). */
@@ -1443,13 +1483,39 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
   resolveApiKey: (connection: C, model?: string) => Promise<string>
   /**
    * Multi-account rotation hook: the request sent with `rejectedKey` was
-   * refused with 429 (`rate-limit`) or 401 (`invalid-credential`) before
-   * any response body streamed. The host marks that key and returns the next
-   * account's key to retry with, or `undefined` to surface the failure.
-   * Only pre-stream rejections rotate — a mid-stream failure never replays a
-   * partially consumed generation against another account.
+   * refused before any response body streamed, for an account-scoped reason
+   * (see {@link AccountRotationReason}). The host marks that key when the
+   * reason warrants it and returns the next account's key to retry with, or
+   * `undefined` to surface the failure. Only pre-stream rejections rotate — a
+   * mid-stream failure never replays a partially consumed generation against
+   * another account.
+   *
+   * `rotation.tried` lists every key this request has already used (the
+   * just-rejected one included). The host must not offer one of them again:
+   * with several accounts a rejection that does not mark the key (a plan or
+   * balance rejection is model-specific, not account-fatal) would otherwise
+   * re-offer the same account on every attempt and the pool could never reach
+   * the accounts behind it.
+   *
+   * `rotation.resetAtMs` carries the provider's own reset time when the
+   * rejection body published one, so the host can hold the key out until then
+   * instead of waiting for a billing probe to learn the same fact.
    */
-  rotateApiKey?: (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential', connection: C, model?: string) => Promise<string | undefined>
+  rotateApiKey?: (
+    rejectedKey: string,
+    rejection: AccountRotationReason,
+    connection: C,
+    model?: string,
+    rotation?: AccountRotationContext,
+  ) => Promise<string | undefined>
+  /**
+   * Every API key the host can serve from, in rotation order and deduplicated
+   * — the multi-account pool's own list. The picker's plan filter asks all of
+   * them, because the pool (not any single account) is what serves a request;
+   * a host without a pool omits this seam and the filter falls back to the key
+   * that would serve the current request.
+   */
+  resolveAccountKeys?: () => Promise<readonly string[]>
   /** HTTP transport override (tests); defaults to the global `fetch`. */
   fetchImpl?: typeof fetch
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
@@ -2099,14 +2165,25 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // Unfiltered: the settings page's catalog endpoint serves the full catalog
     // so the filter editor can always offer every model.
     if (opts?.unfiltered === true) return catalog.map(toInfo).sort(compareByPlan)
-    // Plan filter: hide models above the account's subscription tier. Fails
-    // open — a billing-fetch problem, an unknown plan, or a positive
-    // on-demand balance all keep the full catalog visible, and the server
-    // remains the final gate (403 MODEL_NOT_IN_PLAN). The catalog itself is
-    // never filtered: resolveModel still serves every model.
-    const access = this.deps.options().filterModelsByPlan === false
+    // Plan filter: hide models no account in the pool can run. Fails open —
+    // a billing-fetch problem, an unknown plan, or a positive on-demand
+    // balance all keep the catalog visible, and the server remains the final
+    // gate (403 MODEL_NOT_IN_PLAN). The catalog itself is never filtered:
+    // resolveModel still serves every model.
+    //
+    // EVERY account's entitlement is consulted, not just the one that happens
+    // to serve right now (issue #51's follow-up: 《卡片会切换》). Keying the
+    // filter on the serving account made the picker's contents depend on which
+    // account rotation had reached — a Pro model vanished while a Go account
+    // served and came back later — and it hid models the user's OTHER accounts
+    // could run, which no request could ever fix. The union is the honest
+    // question for a pool, and it only works together with the entitlement
+    // rotation in the connect loop: a model offered here because SOME account
+    // includes it is served there by that account, after at most one rejected
+    // attempt.
+    const accesses = this.deps.options().filterModelsByPlan === false
       ? undefined
-      : await this.loadBillingAccess()
+      : await this.loadPoolBillingAccess()
     // Visible-model allowlist: empty/unset means "show everything".
     const visible = this.deps.options().visibleModels
     const allow = Array.isArray(visible) && visible.length > 0
@@ -2119,7 +2196,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // a composition-config allowlist and the web page keep working untouched.
     const overrides = this.deps.options().modelVisibility
     return catalog
-      .filter((model) => modelVisibleInPlan(model.id, access))
+      .filter((model) => modelVisibleForAnyAccount(model.id, accesses))
       .filter((model) => {
         const override = overrides?.[model.id]
         if (typeof override === 'boolean') return override
@@ -2204,17 +2281,49 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /**
-   * The billing facts behind the picker's plan filter, cached for
-   * {@link BILLING_ACCESS_TTL_MS} and shared across concurrent callers.
-   * `undefined` means "unknown — show everything" (fail-open).
+   * Every account's billing facts behind the picker's plan filter, in the
+   * pool's rotation order and cached per key for {@link BILLING_ACCESS_TTL_MS}
+   * (so the extra accounts cost their three requests once per TTL, not once
+   * per picker load). `undefined` means the filter cannot be evaluated at all
+   * — no key resolved — which {@link modelVisibleForAnyAccount} reads as
+   * "show everything".
+   *
+   * The serving account is only the first entry: with several accounts the
+   * model list must not depend on which of them rotation happens to be using.
    */
-  private async loadBillingAccess(): Promise<CommandCodeBillingAccess | undefined> {
-    let apiKey: string
+  private async loadPoolBillingAccess(): Promise<readonly (CommandCodeBillingAccess | undefined)[] | undefined> {
+    const keys = await this.poolAccountKeys()
+    if (keys.length === 0) return undefined
+    return Promise.all(keys.map((key) => this.loadBillingAccessForKey(key)))
+  }
+
+  /**
+   * The API keys the picker's plan filter must consult: every account the host
+   * can serve from, in rotation order, when the host exposes one. A host
+   * without a pool (or without the seam) reports just the key that would serve
+   * this request — exactly the pre-pool behaviour.
+   */
+  private async poolAccountKeys(): Promise<readonly string[]> {
     try {
-      apiKey = await this.deps.resolveApiKey(this.deps.options())
+      const keys = await this.deps.resolveAccountKeys?.()
+      const usable = (keys ?? []).filter((key) => typeof key === 'string' && key !== '')
+      if (usable.length > 0) return usable
     } catch {
-      return undefined
+      // Fall through to the single-key answer below.
     }
+    try {
+      return [await this.deps.resolveApiKey(this.deps.options())]
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * One account's billing facts, cached for {@link BILLING_ACCESS_TTL_MS} and
+   * shared across concurrent callers. `undefined` means "unknown — show
+   * everything" (fail-open).
+   */
+  private async loadBillingAccessForKey(apiKey: string): Promise<CommandCodeBillingAccess | undefined> {
     const cached = this.billingAccess.get(apiKey)
     if (cached !== undefined && Date.now() - cached.at < BILLING_ACCESS_TTL_MS) return cached.value
     const existing = this.billingAccessInflight.get(apiKey)
@@ -2411,14 +2520,29 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /**
-   * Probe one account's five-hour window from `/alpha/billing/credits`. The
+   * Probe one account's real usage windows from `/alpha/billing/credits`. The
    * multi-account pool calls this when every account is marked exhausted: an
-   * account whose window no longer reports `exceeded` is revived, and the
-   * `resetAt` values feed the "earliest reset" error message. Returns
-   * `undefined` when the probe itself failed (transport, non-200, or a
-   * payload without window limits) — a failed probe never changes pool state.
+   * account whose windows no longer report `exceeded` is revived, and the
+   * `resetAt` values feed the "earliest reset" error message.
+   *
+   * BOTH windows the endpoint publishes are read, not just `fiveHour`. An
+   * account can have an open five-hour window and an exhausted WEEKLY quota at
+   * the same time (the two are metered separately), and reading only the
+   * shorter one revived such an account as "usable" — the pool then handed it
+   * out, the provider rejected the request again, and the next all-marked pass
+   * revived it once more, so a used-up account kept coming back (issue #51's
+   * follow-up: "切到一个不可用账号"). `exceeded` is therefore true when ANY
+   * published window is exceeded, and `resetAt` is the LATEST reset among the
+   * exceeded ones — the binding constraint, because a clear five-hour window
+   * buys nothing while the weekly quota is spent.
+   *
+   * Returns `undefined` when the probe itself failed (transport, non-200, or a
+   * payload with no window limits at all) — a failed probe never changes pool
+   * state. The monthly/purchased/free credit balances are deliberately NOT part
+   * of this answer: they are balances rather than windows, they carry no reset
+   * time, and the server remains the final gate on them.
    */
-  async probeFiveHourWindow(apiKey: string): Promise<{ exceeded: boolean; resetAt: number } | undefined> {
+  async probeWindowLimits(apiKey: string): Promise<{ exceeded: boolean; resetAt: number } | undefined> {
     try {
       const connection = this.deps.options()
       const response = await this.fetchImpl(`${connection.apiBase}/alpha/billing/credits`, {
@@ -2429,9 +2553,22 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       const parsed: unknown = await response.json()
       if (!isRecord(parsed)) return undefined
       const windowLimits = isRecord(parsed.windowLimits) ? parsed.windowLimits : undefined
-      const fiveHour = windowLimits && isRecord(windowLimits.fiveHour) ? windowLimits.fiveHour : undefined
-      if (fiveHour === undefined) return undefined
-      return { exceeded: fiveHour.exceeded === true, resetAt: numberValue(fiveHour.resetAt) ?? 0 }
+      if (windowLimits === undefined) return undefined
+      let reported = false
+      let exceeded = false
+      let resetAt = 0
+      for (const raw of [windowLimits.fiveHour, windowLimits.weekly]) {
+        const window = isRecord(raw) ? parseWindowLimit(raw) : undefined
+        if (window === undefined) continue
+        reported = true
+        if (!window.exceeded) continue
+        exceeded = true
+        resetAt = Math.max(resetAt, window.resetAt)
+      }
+      // No window in the payload at all: nothing can be concluded, so the
+      // caller keeps the mark (fail-safe, exactly like a failed probe).
+      if (!reported) return undefined
+      return { exceeded, resetAt: exceeded ? resetAt : 0 }
     } catch {
       return undefined
     }
@@ -2586,17 +2723,52 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         }
       }
       const rotate = this.deps.rotateApiKey
+      // Account-scoped rejection (429/RATE_LIMITED, 401, or "this account
+      // cannot serve"): retry the same body with another account when the host
+      // has one. The tried set travels along so a rejection that does not mark
+      // the key cannot make the pool re-offer it forever.
+      const rejection = classifyAccountRejection(attempt.status, attempt.errText)
       if (
-        (attempt.status === 429 || attempt.status === 401)
+        rejection !== undefined
         && rotate !== undefined
         && options.signal?.aborted !== true
         && tried.size < MAX_ACCOUNT_ROTATIONS
       ) {
-        const next = await rotate(apiKey, attempt.status === 429 ? 'rate-limit' : 'invalid-credential', connection, options.model)
+        const next = await rotate(apiKey, rejection.reason, connection, options.model, {
+          tried: [...tried],
+          ...(rejection.resetAtMs !== undefined && { resetAtMs: rejection.resetAtMs }),
+        })
         if (next !== undefined && !tried.has(next)) {
           apiKey = next
           continue
         }
+      }
+      // The provider named a window limit and no other account could serve. The
+      // turn must fail as a RATE_LIMIT carrying that reset rather than as the
+      // generic `PROVIDER_HTTP_ERROR` this status maps to: the CLI accepts the
+      // `RATE_LIMITED` code on ANY status (a 400 is pinned by a test above), and
+      // `PROVIDER_HTTP_ERROR` sits outside dsh-llm-retry's whitelist — so
+      // without this the turn dies on the spot even though the provider said
+      // exactly when the same request would work again.
+      //
+      // A plain 429 keeps the mapping it already had: `generateHttpError` owns
+      // the `Retry-After` header's cap and finiteness rules there, and its tests
+      // pin them. Only a body that names its own reset — or a status that does
+      // not already map to RATE_LIMIT — takes this branch.
+      if (rejection?.reason === 'rate-limit' && (rejection.resetAtMs !== undefined || attempt.status !== 429)) {
+        const reset = rejection.resetAtMs
+        const wait = reset === undefined
+          ? 0
+          : Math.min(Math.max(1000, reset - Date.now()), RETRY_MAX_DELAY_MS)
+        const when = reset === undefined ? undefined : new Date(reset).toISOString()
+        throw new LlmError(
+          'llm-commandcode: the Command Code account is rate limited'
+            + (when === undefined ? '' : ` — the provider reports it resets at ${when}`)
+            + '；当前 Command Code 账户已被限流'
+            + (when === undefined ? '' : `，服务商给出的重置时间为 ${when}`),
+          'RATE_LIMIT',
+          wait > 0 ? { providerRetryAfterMs: wait } : undefined,
+        )
       }
       throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs)
     }
@@ -2961,16 +3133,21 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
 
   // Thinking text arrives under a different field per model family, and the
   // gateway does not normalize the spelling: DeepSeek answers with the scalar
-  // `reasoning` PLUS an OpenRouter-shaped `reasoning_details` array, while
-  // GLM/Qwen/Kimi answer with the DeepSeek-native `reasoning_content`. All
-  // three are read here, in that order, so no family's thinking is dropped —
-  // measured against the live API 2026-09-16 (see `MESSAGES_ONLY_MODELS` for
-  // the same sweep's other finding). The `reasoning_details` branch is a
-  // forward guard rather than a live path today: DeepSeek always sends the
-  // scalar alongside it, so it only carries the text if that ever stops.
+  // `reasoning` PLUS an OpenRouter-shaped `reasoning_details` array, GLM/Qwen/
+  // Kimi answer with the DeepSeek-native `reasoning_content`, and the OpenAI
+  // family answers with the scalar `reasoning` PLUS a `reasoning_details` array
+  // whose entry is `{ type: 'reasoning.summary', summary }`. All three
+  // spellings are read here, in that order, so no family's thinking is dropped
+  // (measured live 2026-09-18, gpt-5.6-luna, 6/6 rounds: the scalar and the
+  // array's `summary` carried the identical text every time). The
+  // `reasoning_details` branch is a forward guard rather than the live path for
+  // any family — every family that sends the array also sends a scalar
+  // alongside it — so it only carries the text if that ever stops; it reads
+  // `summary` as well as `text` precisely so the guard covers the family whose
+  // array uses the other member.
   const reasoningDelta =
-    stringValue(delta.reasoning)
-    ?? stringValue(delta.reasoning_content)
+    nonEmptyText(stringValue(delta.reasoning))
+    ?? nonEmptyText(stringValue(delta.reasoning_content))
     ?? reasoningDetailsText(delta.reasoning_details)
     ?? ''
   if (reasoningDelta !== '') {
@@ -3086,6 +3263,121 @@ function mapFinishReason(reason: unknown): FinishReason {
  * back to the CLI /alpha/generate transport; other 4xx/5xx must surface as
  * ordinary errors so real account/model problems are not masked.
  */
+/**
+ * Classify a pre-stream rejection that is about the ACCOUNT rather than about
+ * the request, using the official CLI's own rules (command-code@1.56.0:
+ * `parseWindowLimitError`, `isInsufficientCreditsRequestError`,
+ * `parseSpendCapError` and the terminal-marker list
+ * `["premium_credits_exhausted", "model_not_in_plan", "insufficient credits"]`).
+ * Undefined means "not an account-scoped rejection": a malformed request, an
+ * oversized body or a context overflow must fail fast instead of walking the
+ * whole account pool.
+ *
+ * Issue #51's follow-up is why this exists. Only 429/401 used to rotate, so
+ * every other account-scoped rejection was terminal AND invisible to the pool:
+ * an account that could not pay, or could not run the model, stayed "usable",
+ * was handed out again on the next request, and produced the same error again
+ * ("切到一个不可用账号后就报 400，还挺频繁"). The three reasons differ in what
+ * the host should do with them, which is the caller's decision, not this
+ * function's:
+ *
+ *   - `rate-limit`: a usage window is spent. The code `RATE_LIMITED` is the
+ *     authoritative signal — the CLI accepts the code OR a 429 status — and the
+ *     body's `error.rateLimit` names the window and its `reset` (in seconds),
+ *     so the host can hold the account out until the provider's own reset time.
+ *   - `invalid-credential`: 401; the key itself is bad.
+ *   - `unavailable`: the key is fine but this account cannot serve: no credits
+ *     (`400 Insufficient credits`, the codes `INSUFFICIENT_CREDITS`,
+ *     `USAGE_EXCEEDED`, `PREMIUM_CREDITS_EXHAUSTED`, or a spend-cap wording)
+ *     or a model outside its plan (`MODEL_NOT_IN_PLAN`). Rotating must NOT mark
+ *     the account: the fact is about the model or the balance, it can change
+ *     without the key changing, and a `:free` model can still be served by an
+ *     account with an empty balance.
+ */
+function classifyAccountRejection(status: number, errText: string): { reason: AccountRotationReason; resetAtMs?: number } | undefined {
+  if (status === 429 || readProviderErrorCode(errText)?.toUpperCase() === 'RATE_LIMITED') {
+    const resetAtMs = readWindowResetAtMs(errText)
+    return resetAtMs === undefined ? { reason: 'rate-limit' } : { reason: 'rate-limit', resetAtMs }
+  }
+  if (status === 401) return { reason: 'invalid-credential' }
+  // The code check above deliberately runs BEFORE this status guard, mirroring
+  // the CLI's `parseWindowLimitError`, which accepts `RATE_LIMITED` on ANY
+  // status: a gateway that proxies the provider's own window-limit body under a
+  // 5xx is still a window limit, and that body's `reset` says for how long. So
+  // this guard covers only the rejections that carry NO such code — a 5xx (or a
+  // status below 400) without it is the provider being unavailable, and must
+  // keep its retry cadence for every account instead of being remembered
+  // against one. `tests/adapter.test.ts` pins both halves.
+  if (status < 400 || status >= 500) return undefined
+  // Underscored and spaced spellings are the same words: a JSON body carries
+  // `insufficient_credits` / `model_not_in_plan`, while the CLI's own marker
+  // list is written with spaces. Normalizing the separator keeps both wire
+  // spellings classified, and the explicit code list below covers a body that
+  // carries a code and no message at all — which is exactly how the code-only
+  // `INSUFFICIENT_CREDITS` body slipped through before.
+  const lower = errText.toLowerCase().replaceAll('_', ' ')
+  const code = readProviderErrorCode(errText)?.toUpperCase()
+  if (
+    code === 'USAGE_EXCEEDED'
+    || code === 'INSUFFICIENT_CREDITS'
+    || code === 'PREMIUM_CREDITS_EXHAUSTED'
+    || code === 'MODEL_NOT_IN_PLAN'
+    || lower.includes('insufficient credits')
+    || lower.includes('premium credits exhausted')
+    || lower.includes('model not in plan')
+    || /insufficient (credit|balance)/.test(lower)
+    || /out of credit/.test(lower)
+    || /not (available|included)[^.]{0,40}plan/.test(lower)
+    || lower.includes('upgrade your plan')
+  ) {
+    return { reason: 'unavailable' }
+  }
+  return undefined
+}
+
+/** The machine-readable `error.code`/`error.type` of a pre-stream failure body. */
+function readProviderErrorCode(errText: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(errText)
+    if (!isRecord(parsed)) return undefined
+    const error = isRecord(parsed.error) ? parsed.error : parsed
+    return stringValue(error.code) ?? stringValue(error.type)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The exact reset time carried by a window-limit rejection body, in millis.
+ * The CLI reads `error.rateLimit.reset` as SECONDS (`1e3 * reset`) and falls
+ * back to a `resets at <ISO>` stamp in the message; both are honored here so a
+ * 429 does not need a billing probe to learn a fact the provider already told
+ * us. Undefined when the body carries neither.
+ */
+function readWindowResetAtMs(errText: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(errText)
+    if (isRecord(parsed)) {
+      const error = isRecord(parsed.error) ? parsed.error : parsed
+      const rateLimit = isRecord(error.rateLimit) ? error.rateLimit : undefined
+      const seconds = numberValue(rateLimit?.reset)
+      if (seconds !== undefined && seconds > 0) return Math.round(seconds * 1000)
+      const message = stringValue(error.message) ?? ''
+      const stamp = /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(message)?.[1]
+      if (stamp !== undefined) {
+        const at = Date.parse(stamp)
+        if (!Number.isNaN(at)) return at
+      }
+    }
+  } catch {
+    // Plain-text bodies carry no structured reset.
+  }
+  const stamp = /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(errText)?.[1]
+  if (stamp === undefined) return undefined
+  const at = Date.parse(stamp)
+  return Number.isNaN(at) ? undefined : at
+}
+
 function isUpgradeRequiredError(status: number, errText: string): boolean {
   if (status !== 403) return false
   const lower = errText.toLowerCase()

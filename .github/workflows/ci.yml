@@ -18,6 +18,12 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The published bundle IS lib/ (`files` + `main`), so a src change that is
+      # never rebuilt ships dead code — the failure CHANGELOG 0.11.4 records —
+      # and nothing else here can see it: the tests run src through tsx, and the
+      # engine smoke only proves the staged bundle LOADS. tsdown output is
+      # byte-reproducible, so a diff after a fresh build means "stale bundle".
+      - run: git diff --exit-code -- lib/
       # Publish-content check: the tarball must carry lib/, the bundle patch,
       # README, and LICENSE.
       - run: npm pack --dry-run

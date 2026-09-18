@@ -2274,6 +2274,28 @@ function fetchRouting(paths: Record<string, { status: number; body: unknown }>):
   return { fetchImpl, calls }
 }
 
+/** A fetch stub routing by (API key, path), so a pool of accounts can be scripted. */
+function fetchRoutingByKey(byKey: Record<string, Record<string, { status: number; body: unknown }>>): {
+  fetchImpl: typeof fetch
+  calls: Array<{ key: string; path: string }>
+} {
+  const calls: Array<{ key: string; path: string }> = []
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : String(input)
+    const path = new URL(url).pathname
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    const key = (headers.Authorization ?? '').replace(/^Bearer /, '')
+    calls.push({ key, path })
+    const canned = byKey[key]?.[path]
+    if (!canned) return new Response('not found', { status: 404 })
+    return new Response(JSON.stringify(canned.body), {
+      status: canned.status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  return { fetchImpl, calls }
+}
+
 /** Catalog fixture spanning the Go / Pro / Provider tiers plus an unknown model. */
 const PLAN_FILTER_CATALOG = {
   object: 'list',
@@ -2388,6 +2410,90 @@ test('listModels() caches the billing access across picker loads', async () => {
   assert.equal(calls.get('/alpha/billing/credits'), 1)
   // Pro account: Provider-tier model hidden, Go/Pro/unknown visible.
   assert.deepEqual(ids.sort(), ['claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model'])
+})
+
+test('listModels() lists a model only another account in the pool includes', async () => {
+  // Issue #51's follow-up (《卡片会切换》): keyed on the account that happened
+  // to serve, the picker's contents changed as rotation moved between accounts
+  // — a Pro model vanished while the Go account served — and a model only the
+  // other account could run was hidden outright, which no request could fix.
+  const catalog = { '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG } }
+  const { fetchImpl } = fetchRoutingByKey({
+    'key-go': { ...catalog, ...subscriptionStubs('individual-go', 'active'), '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) } },
+    'key-pro': { ...catalog, ...subscriptionStubs('individual-pro', 'active'), '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) } },
+  })
+  const adapter = makeAdapter({
+    fetchImpl,
+    // The serving account is the Go one; the Pro model still belongs in the
+    // list, and the connect loop serves it from the account that has it.
+    resolveApiKey: async () => 'key-go',
+    resolveAccountKeys: async () => ['key-go', 'key-pro'],
+  })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.deepEqual(ids.sort(), ['claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model'])
+  // The union is the BEST account, not "everything": a Provider-tier model no
+  // account reaches stays hidden.
+  assert.ok(!ids.includes('claude-opus-4-8'))
+})
+
+test('listModels() shows a Provider-tier model once one account reaches that tier', async () => {
+  const catalog = { '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG } }
+  const goOrPro = (planId: string) => ({
+    ...catalog,
+    ...subscriptionStubs(planId, 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const { fetchImpl } = fetchRoutingByKey({
+    'key-go': goOrPro('individual-go'),
+    'key-pro': goOrPro('individual-pro'),
+    'key-provider': goOrPro('individual-provider'),
+  })
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-go',
+    resolveAccountKeys: async () => ['key-go', 'key-pro', 'key-provider'],
+  })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.deepEqual(ids.sort(), ['claude-opus-4-8', 'claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model'])
+})
+
+test('listModels() fails open when one account’s billing facts are unknown', async () => {
+  // An account whose facts cannot be read counts as "may include it" — the
+  // same fail-open rule the single-account filter already follows: hiding a
+  // model somebody can run is the one failure this filter must never cause.
+  const catalog = { '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG } }
+  const { fetchImpl } = fetchRoutingByKey({
+    'key-go': { ...catalog, ...subscriptionStubs('individual-go', 'active'), '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) } },
+    // Every billing endpoint 404s for this key: its access is unknown.
+    'key-unknown': catalog,
+  })
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-go',
+    resolveAccountKeys: async () => ['key-go', 'key-unknown'],
+  })
+  const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
+  assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
+})
+
+test('listModels() reads each account’s billing facts once per TTL', async () => {
+  const catalog = { '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG } }
+  const plan = (planId: string) => ({
+    ...catalog,
+    ...subscriptionStubs(planId, 'active'),
+    '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+  })
+  const { fetchImpl, calls } = fetchRoutingByKey({ 'key-go': plan('individual-go'), 'key-pro': plan('individual-pro') })
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-go',
+    resolveAccountKeys: async () => ['key-go', 'key-pro'],
+  })
+  await adapter.listModels('commandcode')
+  await adapter.listModels('commandcode')
+  // One whoami per ACCOUNT (not per picker load): the extra accounts cost
+  // their three requests once per BILLING_ACCESS_TTL_MS.
+  assert.deepEqual(calls.filter((call) => call.path === '/alpha/whoami').map((call) => call.key).sort(), ['key-go', 'key-pro'])
 })
 
 // Visible-model allowlist (listModels narrows the picker; unfiltered serves the page catalog)
@@ -2806,11 +2912,14 @@ test('openai protocol reads thinking from reasoning_details when no scalar field
   // DeepSeek answers with the scalar `reasoning` AND an OpenRouter-shaped
   // `reasoning_details` array; GLM/Qwen/Kimi answer with `reasoning_content`.
   // This pins the third branch: an array-only delta (the shape the gateway
-  // would leave if it ever stopped sending the scalar) still yields a block.
+  // would leave if it ever stopped sending the scalar) still yields a block,
+  // for BOTH array vocabularies — DeepSeek's `reasoning.text` entries and the
+  // OpenAI family's `reasoning.summary` ones.
   const sse = [
     'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"think ","format":"unknown","index":0}]}}]}',
     'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"more","format":"unknown","index":0}]}}]}',
-    // Sibling OpenRouter shapes carry no `text` and must contribute nothing.
+    // An encrypted sibling carries neither member and must contribute nothing;
+    // the summary sibling beside it is real text and must be read.
     'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"c2ln"},{"type":"reasoning.summary","summary":"short"}]}}]}',
     'data: {"choices":[{"delta":{"content":"391"}}]}',
     'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
@@ -2831,7 +2940,7 @@ test('openai protocol reads thinking from reasoning_details when no scalar field
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')] }))
 
   const reasoningDeltas = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text)
-  assert.deepEqual(reasoningDeltas, ['think ', 'more'])
+  assert.deepEqual(reasoningDeltas, ['think ', 'more', 'short'])
   const reasoningBlocks = chunks.filter((c) => c.type === 'block-start' && (c as { blockType: string }).blockType === 'reasoning')
   assert.equal(reasoningBlocks.length, 1)
   const text = chunks.find((c) => c.type === 'text-delta') as { text: string }
@@ -2839,6 +2948,104 @@ test('openai protocol reads thinking from reasoning_details when no scalar field
   // The reasoning block must close before the text block opens.
   const order = chunks.map((c) => c.type).filter((t) => t === 'block-start' || t === 'block-end')
   assert.deepEqual(order, ['block-start', 'block-end', 'block-start', 'block-end'])
+})
+
+test('the OpenAI family reasoning.summary carrier is read, and an empty text never shadows it', async () => {
+  // Measured live 2026-09-18 against gpt-5.6-luna: the gateway puts the GPT
+  // family's thinking in `reasoning_details` as
+  //   { type: 'reasoning.summary', summary: '…', format: 'openai-responses-v1' }
+  // and duplicates it in the scalar `delta.reasoning`. `text` is absent (or an
+  // empty placeholder) for this family, so a guard that read `text` alone would
+  // carry nothing the moment the scalar stopped — which is exactly the case
+  // this pins, one entry shape at a time.
+  const sse = [
+    // The captured gateway shape: summary only.
+    'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"**Providing a number**","id":"rs_05d4","format":"openai-responses-v1","index":0}]}}]}',
+    // An EMPTY `text` placeholder beside a populated `summary`: the fallback
+    // must test for non-empty, not merely for the member's presence.
+    'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","text":"","summary":" visible","format":"openai-responses-v1","index":0}]}}]}',
+    // Both members present: `text` wins, and the summary is NOT added again.
+    'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","text":" exact","summary":" exact","format":"openai-responses-v1","index":0}]}}]}',
+    'data: {"choices":[{"delta":{"content":"391"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    'data: [DONE]',
+    '',
+  ].join('\n')
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: fetchReturning(200, sse, { 'content-type': 'text/event-stream' }),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'gpt-5.6-luna', messages: [userMessage('hi')] }))
+
+  const reasoningDeltas = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text)
+  assert.deepEqual(reasoningDeltas, ['**Providing a number**', ' visible', ' exact'])
+})
+
+test('a scalar reasoning field beside reasoning_details is not counted twice', async () => {
+  // The live gateway sends the SAME summary text in `delta.reasoning` and in
+  // `delta.reasoning_details[0].summary` (6/6 rounds, gpt-5.6-luna). The `??`
+  // chain takes the scalar first, so the array must not append a duplicate.
+  const sse = [
+    'data: {"choices":[{"delta":{"reasoning":"same text","reasoning_details":[{"type":"reasoning.summary","summary":"same text","format":"openai-responses-v1","index":0}]}}]}',
+    'data: {"choices":[{"delta":{"content":"ok"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    'data: [DONE]',
+    '',
+  ].join('\n')
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: fetchReturning(200, sse, { 'content-type': 'text/event-stream' }),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'gpt-5.6-luna', messages: [userMessage('hi')] }))
+
+  const reasoningDeltas = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text)
+  assert.deepEqual(reasoningDeltas, ['same text'])
+})
+
+test('an EMPTY scalar thinking field does not hide a populated reasoning_details array', async () => {
+  // The array layer already treats an empty `text` as "no text here" (pinned by
+  // the summary carrier above); the scalar layer has to agree, because both
+  // spellings describe the same thinking. `??` cannot express that on its own —
+  // an empty string is not nullish — so `reasoning: ''` beside a populated
+  // array used to drop that chunk's thinking, and with it the tool-loop
+  // continuity issue #34 depends on.
+  const sse = [
+    'data: {"choices":[{"delta":{"reasoning":"","reasoning_details":[{"type":"reasoning.summary","summary":"real thinking","format":"openai-responses-v1","index":0}]}}]}',
+    'data: {"choices":[{"delta":{"reasoning_content":"","reasoning_details":[{"type":"reasoning.text","text":" more","index":0}]}}]}',
+    'data: {"choices":[{"delta":{"content":"ok"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    'data: [DONE]',
+    '',
+  ].join('\n')
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: fetchReturning(200, sse, { 'content-type': 'text/event-stream' }),
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'gpt-5.6-luna', messages: [userMessage('hi')] }))
+
+  const reasoningDeltas = chunks.filter((c) => c.type === 'reasoning-delta').map((c) => (c as { text: string }).text)
+  assert.deepEqual(reasoningDeltas, ['real thinking', ' more'])
 })
 
 test('openai protocol assembles streamed tool-call fragments', async () => {
@@ -3957,6 +4164,23 @@ test('isPeakPricingHour() answers the model-independent half of the same rule', 
 })
 
 test('CLI version and API base constants are stable', () => {
+  // command-code@1.56.0 (2026-09-18, npm `latest`; no changelog/RSS entry as of
+  // this check — the feed stops at 1.55.0): the model registry grows 75 -> 76
+  // with exactly one addition, `Qwen/Qwen3.8-Omni-Flash` (chatComplete,
+  // inputModalities ["text","image"], 1M context, efforts ['low','medium',
+  // 'xhigh']); the eight responses-spec models are unchanged, so the 1.55.0
+  // "OpenAI Responses endpoint on the provider API and BYOK CLI wire" item is
+  // a new API surface, not a routing change. Static inspection confirms no
+  // transport drift for this adapter: the /alpha/* endpoint set and the
+  // /alpha/generate + /alpha/web-search request shapes are byte-identical to
+  // 1.54.0. The docs meanwhile document `POST /provider/v1/responses` (OpenAI
+  // models and open models; Claude stays /messages-only) and a per-model
+  // `supported_endpoints` field on the catalog (54 x chat/completions +
+  // responses, the same 8 Claude ids x messages-only, 8 x chat/completions) —
+  // neither needs an adapter change, because both existing transports still
+  // serve every model. The live catalog serves 70 models now (Qwen 3.8 Omni
+  // Flash is in it; `gpt-6-astra` is still a CLI/pricing/docs-only model,
+  // absent from the public Provider catalog, as before).
   // command-code@1.54.0 (2026-09-13): the CLI changelog lists exactly one
   // CLI-local item — first-class herdr support (a `/herdr` command plus
   // idle/working/blocked reporting to a herdr pane over its UNIX socket, live
@@ -3964,9 +4188,7 @@ test('CLI version and API base constants are stable', () => {
   // CMD_HERDR=0 to disable). The whole 1.53.1 -> 1.54.0 bundle difference is
   // that feature plus the version constant: the model registry (75 entries),
   // effort map, subscription plan maps, endpoints and request shapes are
-  // byte-identical, and the public catalog still serves the same 69 models
-  // (`gpt-6-astra` remains a CLI/pricing/docs-only model, absent from the
-  // public Provider catalog, as before).
+  // byte-identical, and the public catalog still serves the same 69 models.
   // command-code@1.53.1 (2026-09-12): the CLI changelog lists four CLI-local
   // items (default compaction model set to DeepSeek V4.1 Flash in /config, a
   // BYOK reasoning-effort fix, and two /usage summary-line changes — Extra
@@ -3990,7 +4212,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.54.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.56.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -4109,6 +4331,225 @@ test('stream() never retries with a key it already tried', async () => {
   assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
 })
 
+test('stream() rotates past an account-scoped 400 (insufficient credits)', async () => {
+  // Issue #51's follow-up: the pool kept handing out an account that could not
+  // pay, and the 400 was terminal as well as invisible — the turn failed on an
+  // account whose three siblings were fine. The official CLI reads this one as
+  // `isInsufficientCreditsRequestError` (status 400 + the wording), so the
+  // adapter rotates.
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': {
+      status: 400,
+      body: JSON.stringify({ error: { code: 'INSUFFICIENT_CREDITS', message: 'Insufficient credits' } }),
+    },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const rotated: Array<{ key: string; reason: string; tried: readonly string[] }> = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (rejected, reason, _connection, _model, rotation) => {
+      rotated.push({ key: rejected, reason, tried: rotation?.tried ?? [] })
+      return 'key-2'
+    },
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.equal(rotated[0]?.reason, 'unavailable')
+  // The tried set travels with the rejection: a reason that marks nothing must
+  // not let the pool re-offer the same key on the next attempt.
+  assert.deepEqual(rotated[0]?.tried, ['key-1'])
+  assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+})
+
+test('stream() rotates on a code-only account-scoped body, with no wording to read', async () => {
+  // The test above passes with the message "Insufficient credits" present, so it
+  // would stay green with an empty code list — the fixture never proves the code
+  // branch. This is the body the official CLI's
+  // `isInsufficientCreditsRequestError` actually reads (the CODE, no message),
+  // and the shape #51's follow-up reports: the account that cannot pay must be
+  // rotated past, never handed out again.
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': { status: 400, body: JSON.stringify({ error: { code: 'INSUFFICIENT_CREDITS' } }) },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const reasons: string[] = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (_rejected, reason) => {
+      reasons.push(reason)
+      return 'key-2'
+    },
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.deepEqual(reasons, ['unavailable'])
+  assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+})
+
+test('stream() does not blame an account for a 5xx that carries no window-limit code', async () => {
+  // The status guard's job: a provider outage keeps its retry cadence for EVERY
+  // account instead of being remembered against one. (A 5xx that does carry the
+  // code is the deliberate exception pinned by the next test.)
+  const { fetchImpl } = fetchByKey({
+    'key-1': { status: 500, body: JSON.stringify({ error: { code: 'INTERNAL_ERROR' } }) },
+  })
+  let rotateCalls = 0
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async () => {
+      rotateCalls += 1
+      return 'key-2'
+    },
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => (error as { code?: string }).code === 'SERVER',
+  )
+  assert.equal(rotateCalls, 0)
+})
+
+test('stream() treats a 5xx carrying the RATE_LIMITED code as the window limit it is', async () => {
+  // Deliberate, and mirroring the CLI's `parseWindowLimitError`, which accepts
+  // the code on ANY status: a gateway that proxies the provider's own limit body
+  // under a 5xx is still reporting a window limit, and that body's `reset` says
+  // for how long. It is the reason the code check runs before the status guard.
+  const resetSeconds = Math.floor(Date.now() / 1000) + 1800
+  const { fetchImpl } = fetchByKey({
+    'key-1': {
+      status: 503,
+      body: JSON.stringify({ error: { code: 'RATE_LIMITED', rateLimit: { window: 'fiveHour', reset: resetSeconds } } }),
+    },
+  })
+  const seen: Array<{ reason: string; resetAtMs: number | undefined }> = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (_rejected, reason, _connection, _model, rotation) => {
+      seen.push({ reason, resetAtMs: rotation?.resetAtMs })
+      return undefined
+    },
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => (error as { code?: string }).code === 'RATE_LIMIT',
+  )
+  assert.equal(seen[0]?.reason, 'rate-limit')
+  assert.ok((seen[0]?.resetAtMs ?? 0) > Date.now(), 'the provider’s own reset rides the rejection')
+})
+
+test('stream() ends an unroutable window limit as a retryable RATE_LIMIT, not a dead 4xx', async () => {
+  // No hook to rotate with (a host that does not wire the pool), so the turn
+  // ends here — but it must end as a RETRYABLE RATE_LIMIT carrying the
+  // provider's reset. A 400 maps to `PROVIDER_HTTP_ERROR`, which sits outside
+  // dsh-llm-retry's whitelist, so the turn would die on the spot even though the
+  // provider said exactly when the same request works again.
+  const resetSeconds = Math.floor(Date.now() / 1000) + 1800
+  const { fetchImpl } = fetchByKey({
+    'key-1': {
+      status: 400,
+      body: JSON.stringify({ error: { code: 'RATE_LIMITED', rateLimit: { window: 'weekly', reset: resetSeconds } } }),
+    },
+  })
+  const adapter = makeAdapter({ fetchImpl, resolveApiKey: async () => 'key-1' })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      const caught = error as { code?: string; failure?: { providerRetryAfterMs?: number } }
+      assert.equal(caught.code, 'RATE_LIMIT')
+      const wait = caught.failure?.providerRetryAfterMs
+      assert.ok(wait !== undefined && wait > 0 && wait <= 900_000, `expected a bounded wait, got ${String(wait)}`)
+      return true
+    },
+  )
+})
+
+test('stream() reads the RATE_LIMITED code on a non-429 status and its own reset time', async () => {
+  // The CLI's `parseWindowLimitError` accepts the code OR the status, and reads
+  // `error.rateLimit.reset` as SECONDS. The provider's own reset is what keeps
+  // an exhausted account out of rotation for exactly as long as it said.
+  const resetSeconds = Math.floor(Date.now() / 1000) + 3600
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': {
+      status: 400,
+      body: JSON.stringify({ error: { code: 'RATE_LIMITED', rateLimit: { window: 'weekly', reset: resetSeconds } } }),
+    },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const rotated: Array<{ reason: string; resetAtMs: number | undefined }> = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (_rejected, reason, _connection, _model, rotation) => {
+      rotated.push({ reason, resetAtMs: rotation?.resetAtMs })
+      return 'key-2'
+    },
+  })
+  await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.equal(rotated[0]?.reason, 'rate-limit')
+  assert.equal(rotated[0]?.resetAtMs, resetSeconds * 1000)
+})
+
+test('stream() rotates past a model the account’s plan does not include', async () => {
+  // Account-scoped like the credits case: another account may well have the
+  // model, and a hard failure on the first one is what made a mixed-plan pool
+  // unusable.
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': {
+      status: 403,
+      body: JSON.stringify({ error: { code: 'MODEL_NOT_IN_PLAN', message: 'Model not in plan: claude-opus-5' } }),
+    },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const reasons: string[] = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (_rejected, reason) => {
+      reasons.push(reason)
+      return 'key-2'
+    },
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-5', messages: [userMessage('hi')] }))
+
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.deepEqual(reasons, ['unavailable'])
+  assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+})
+
+test('stream() does not rotate on a request-shape 400', async () => {
+  // Negative control: a malformed request fails identically on every account,
+  // so rotating would multiply the load and hide the real error. Only
+  // account-scoped rejections rotate.
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': {
+      status: 400,
+      body: JSON.stringify({ error: { code: 'INVALID_REQUEST', message: "Invalid schema for function 'x'" } }),
+    },
+  })
+  let rotateCalls = 0
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async () => {
+      rotateCalls += 1
+      return 'key-2'
+    },
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => (error as { code?: string }).code === 'PROVIDER_HTTP_ERROR',
+  )
+  assert.equal(rotateCalls, 0)
+  assert.deepEqual(calls.map((call) => call.key), ['key-1'])
+})
+
 test('stream() propagates the rotation hook’s all-exhausted error', async () => {
   const { fetchImpl } = fetchByKey({ 'key-1': { status: 429, body: 'rate limited' } })
   const adapter = makeAdapter({
@@ -4127,22 +4568,99 @@ test('stream() propagates the rotation hook’s all-exhausted error', async () =
   )
 })
 
-test('probeFiveHourWindow() parses the five-hour window limit', async () => {
+test('probeWindowLimits() reports the five-hour window when it is the only one exceeded', async () => {
   const { fetchImpl } = fetchRouting({
     '/alpha/billing/credits': {
       status: 200,
-      body: { windowLimits: { fiveHour: { used: 5, cap: 5, exceeded: true, resetAt: 1_800_000_000_000 } } },
+      body: {
+        windowLimits: {
+          fiveHour: { used: 5, cap: 5, exceeded: true, resetAt: 1_800_000_000_000 },
+          weekly: { used: 1, cap: 6, exceeded: false, resetAt: 1_800_600_000_000 },
+        },
+      },
     },
   })
   const adapter = makeAdapter({ fetchImpl })
-  assert.deepEqual(await adapter.probeFiveHourWindow('key-1'), { exceeded: true, resetAt: 1_800_000_000_000 })
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: 1_800_000_000_000 })
 })
 
-test('probeFiveHourWindow() degrades to undefined on endpoint or shape failure', async () => {
+test('probeWindowLimits() treats an exhausted weekly quota as limiting while the five-hour window is open', async () => {
+  // Issue #51's follow-up: the two windows are metered separately, and reading
+  // only `fiveHour` revived an account whose WEEKLY quota was spent — the pool
+  // handed it out, the provider rejected the request, and the next all-marked
+  // pass revived it again. "切到一个不可用账号" is exactly that loop.
+  const weeklyReset = 1_800_600_000_000
+  const { fetchImpl } = fetchRouting({
+    '/alpha/billing/credits': {
+      status: 200,
+      body: {
+        windowLimits: {
+          fiveHour: { used: 0.2, cap: 3, exceeded: false, resetAt: 1_799_000_000_000 },
+          weekly: { used: 6, cap: 6, exceeded: true, resetAt: weeklyReset },
+        },
+      },
+    },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  // The binding reset is the weekly one: the open five-hour window buys
+  // nothing while the weekly quota is spent.
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: weeklyReset })
+})
+
+test('probeWindowLimits() reports the latest reset when every window is exceeded', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/alpha/billing/credits': {
+      status: 200,
+      body: {
+        windowLimits: {
+          fiveHour: { used: 9, cap: 5, exceeded: true, resetAt: 1_800_000_000_000 },
+          weekly: { used: 9, cap: 6, exceeded: true, resetAt: 1_800_600_000_000 },
+        },
+      },
+    },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: 1_800_600_000_000 })
+})
+
+test('probeWindowLimits() reports a clear account when no window is exceeded', async () => {
+  const { fetchImpl } = fetchRouting({
+    '/alpha/billing/credits': {
+      status: 200,
+      body: {
+        windowLimits: {
+          fiveHour: { used: 0.1, cap: 3, exceeded: false, resetAt: 1_800_000_000_000 },
+          weekly: { used: 1, cap: 6, exceeded: false, resetAt: 1_800_600_000_000 },
+        },
+      },
+    },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: false, resetAt: 0 })
+})
+
+test('probeWindowLimits() uses a weekly-only payload', async () => {
+  // The endpoint need not publish both windows; a report of one is still an
+  // answer, and the other simply does not constrain the account.
+  const { fetchImpl } = fetchRouting({
+    '/alpha/billing/credits': {
+      status: 200,
+      body: { windowLimits: { weekly: { used: 6, cap: 6, exceeded: true, resetAt: 1_800_600_000_000 } } },
+    },
+  })
+  const adapter = makeAdapter({ fetchImpl })
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: 1_800_600_000_000 })
+})
+
+test('probeWindowLimits() degrades to undefined on endpoint or shape failure', async () => {
   const failing = makeAdapter({ fetchImpl: fetchReturning(500, 'boom') })
-  assert.equal(await failing.probeFiveHourWindow('key-1'), undefined)
+  assert.equal(await failing.probeWindowLimits('key-1'), undefined)
   const shapeless = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify({ credits: {} })) })
-  assert.equal(await shapeless.probeFiveHourWindow('key-1'), undefined)
+  assert.equal(await shapeless.probeWindowLimits('key-1'), undefined)
+  // Window limits present but empty: nothing can be concluded, so the caller
+  // keeps its mark (a fail-safe, never a revival).
+  const emptyWindows = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify({ windowLimits: {} })) })
+  assert.equal(await emptyWindows.probeWindowLimits('key-1'), undefined)
 })
 
 test('providerRetryPolicy() pins the near-unbounded transient-only retry policy', () => {

@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.54.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.56.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -100,6 +100,22 @@ interface CommandCodeConnectionOptions {
  * text-only request never depends on the attachment seam.
  */
 type ResolveAttachments = () => AttachmentStore | undefined;
+/**
+ * Why a pre-stream rejection rotates to another account. `rate-limit` and
+ * `invalid-credential` are the two the pool records as marks; `unavailable` is
+ * an account-scoped rejection that must NOT become a mark — the account's key
+ * is valid and its windows may be open, the ACCOUNT just cannot serve THIS
+ * request (no credits, a model outside its plan) — so the pool moves on
+ * without remembering anything.
+ */
+type AccountRotationReason = 'rate-limit' | 'invalid-credential' | 'unavailable';
+/** What the rotation hook knows about the request it is rotating within. */
+interface AccountRotationContext {
+  /** Every API key this request has already used, just-rejected key included. */
+  tried: readonly string[];
+  /** The provider's own reset time for a `rate-limit` rejection, in millis. */
+  resetAtMs?: number;
+}
 /** Everything the adapter needs beyond the request itself. */
 interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
   /** Resolve the current connection facts (fresh per request, settings-aware). */
@@ -112,13 +128,33 @@ interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = Comman
   resolveApiKey: (connection: C, model?: string) => Promise<string>;
   /**
    * Multi-account rotation hook: the request sent with `rejectedKey` was
-   * refused with 429 (`rate-limit`) or 401 (`invalid-credential`) before
-   * any response body streamed. The host marks that key and returns the next
-   * account's key to retry with, or `undefined` to surface the failure.
-   * Only pre-stream rejections rotate — a mid-stream failure never replays a
-   * partially consumed generation against another account.
+   * refused before any response body streamed, for an account-scoped reason
+   * (see {@link AccountRotationReason}). The host marks that key when the
+   * reason warrants it and returns the next account's key to retry with, or
+   * `undefined` to surface the failure. Only pre-stream rejections rotate — a
+   * mid-stream failure never replays a partially consumed generation against
+   * another account.
+   *
+   * `rotation.tried` lists every key this request has already used (the
+   * just-rejected one included). The host must not offer one of them again:
+   * with several accounts a rejection that does not mark the key (a plan or
+   * balance rejection is model-specific, not account-fatal) would otherwise
+   * re-offer the same account on every attempt and the pool could never reach
+   * the accounts behind it.
+   *
+   * `rotation.resetAtMs` carries the provider's own reset time when the
+   * rejection body published one, so the host can hold the key out until then
+   * instead of waiting for a billing probe to learn the same fact.
    */
-  rotateApiKey?: (rejectedKey: string, rejection: 'rate-limit' | 'invalid-credential', connection: C, model?: string) => Promise<string | undefined>;
+  rotateApiKey?: (rejectedKey: string, rejection: AccountRotationReason, connection: C, model?: string, rotation?: AccountRotationContext) => Promise<string | undefined>;
+  /**
+   * Every API key the host can serve from, in rotation order and deduplicated
+   * — the multi-account pool's own list. The picker's plan filter asks all of
+   * them, because the pool (not any single account) is what serves a request;
+   * a host without a pool omits this seam and the filter falls back to the key
+   * that would serve the current request.
+   */
+  resolveAccountKeys?: () => Promise<readonly string[]>;
   /** HTTP transport override (tests); defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
@@ -302,11 +338,30 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    */
   private fetchEndpointJson;
   /**
-   * The billing facts behind the picker's plan filter, cached for
-   * {@link BILLING_ACCESS_TTL_MS} and shared across concurrent callers.
-   * `undefined` means "unknown — show everything" (fail-open).
+   * Every account's billing facts behind the picker's plan filter, in the
+   * pool's rotation order and cached per key for {@link BILLING_ACCESS_TTL_MS}
+   * (so the extra accounts cost their three requests once per TTL, not once
+   * per picker load). `undefined` means the filter cannot be evaluated at all
+   * — no key resolved — which {@link modelVisibleForAnyAccount} reads as
+   * "show everything".
+   *
+   * The serving account is only the first entry: with several accounts the
+   * model list must not depend on which of them rotation happens to be using.
    */
-  private loadBillingAccess;
+  private loadPoolBillingAccess;
+  /**
+   * The API keys the picker's plan filter must consult: every account the host
+   * can serve from, in rotation order, when the host exposes one. A host
+   * without a pool (or without the seam) reports just the key that would serve
+   * this request — exactly the pre-pool behaviour.
+   */
+  private poolAccountKeys;
+  /**
+   * One account's billing facts, cached for {@link BILLING_ACCESS_TTL_MS} and
+   * shared across concurrent callers. `undefined` means "unknown — show
+   * everything" (fail-open).
+   */
+  private loadBillingAccessForKey;
   /**
    * The billing facts behind the picker's plan filter, mirroring the CLI's
    * `createBilling` flow: whoami yields the org id, then the subscriptions
@@ -354,14 +409,29 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    */
   getUsage(apiKey?: string): Promise<CommandCodeUsageReport>;
   /**
-   * Probe one account's five-hour window from `/alpha/billing/credits`. The
+   * Probe one account's real usage windows from `/alpha/billing/credits`. The
    * multi-account pool calls this when every account is marked exhausted: an
-   * account whose window no longer reports `exceeded` is revived, and the
-   * `resetAt` values feed the "earliest reset" error message. Returns
-   * `undefined` when the probe itself failed (transport, non-200, or a
-   * payload without window limits) — a failed probe never changes pool state.
+   * account whose windows no longer report `exceeded` is revived, and the
+   * `resetAt` values feed the "earliest reset" error message.
+   *
+   * BOTH windows the endpoint publishes are read, not just `fiveHour`. An
+   * account can have an open five-hour window and an exhausted WEEKLY quota at
+   * the same time (the two are metered separately), and reading only the
+   * shorter one revived such an account as "usable" — the pool then handed it
+   * out, the provider rejected the request again, and the next all-marked pass
+   * revived it once more, so a used-up account kept coming back (issue #51's
+   * follow-up: "切到一个不可用账号"). `exceeded` is therefore true when ANY
+   * published window is exceeded, and `resetAt` is the LATEST reset among the
+   * exceeded ones — the binding constraint, because a clear five-hour window
+   * buys nothing while the weekly quota is spent.
+   *
+   * Returns `undefined` when the probe itself failed (transport, non-200, or a
+   * payload with no window limits at all) — a failed probe never changes pool
+   * state. The monthly/purchased/free credit balances are deliberately NOT part
+   * of this answer: they are balances rather than windows, they carry no reset
+   * time, and the server remains the final gate on them.
    */
-  probeFiveHourWindow(apiKey: string): Promise<{
+  probeWindowLimits(apiKey: string): Promise<{
     exceeded: boolean;
     resetAt: number;
   } | undefined>;
@@ -414,8 +484,13 @@ interface ResolvedAccount {
   /** The key's current rotation state; undefined means usable. */
   state: CommandCodeAccountState | undefined;
 }
-/** Five-hour window facts probed from `/alpha/billing/credits`. */
-interface FiveHourWindowProbe {
+/**
+ * One account's real rate-limit state, probed from `/alpha/billing/credits`:
+ * `exceeded` is true when ANY of the account's usage windows is spent, and
+ * `resetAt` is the latest reset among them (the binding constraint — an open
+ * five-hour window buys nothing while the weekly quota is exhausted).
+ */
+interface AccountWindowProbe {
   exceeded: boolean;
   resetAt: number;
 }
@@ -427,13 +502,19 @@ interface CommandCodeAccountPoolDeps {
   resolveRef(ref: CredentialRef): Promise<string | undefined>;
   /** The official CLI auth-file key (`~/.commandcode/auth.json`); default slot only. */
   authFileKey(): string | undefined;
-  /** Probe one key's five-hour window; undefined when the probe itself failed. */
-  probeWindow(apiKey: string): Promise<FiveHourWindowProbe | undefined>;
+  /**
+   * Probe one key's usage windows — BOTH windows the endpoint publishes (the
+   * five-hour and the weekly one), not just the five-hour one; see
+   * {@link AccountWindowProbe}. Undefined when the probe itself failed.
+   */
+  probeWindow(apiKey: string): Promise<AccountWindowProbe | undefined>;
   /**
    * The manually selected account (a slot id, e.g. `default` or an extra's
    * credential reference), re-read per resolution. The preferred account
    * serves whenever it is usable; an unknown id or an exhausted preferred
-   * account falls back to the first usable slot.
+   * account falls back to the first usable slot — and an exhausted one is
+   * re-probed on the way (see {@link CommandCodeAccountPool.resolveKey}), so
+   * the fallback lasts only as long as the window really is exceeded.
    */
   preferredId?(): string | undefined;
   /**
@@ -445,6 +526,13 @@ interface CommandCodeAccountPoolDeps {
    * back to the normal selection (the router is a hint, never a hard gate).
    */
   modelAccountRules?(): readonly CommandCodeModelAccountRule[];
+  /**
+   * Clock seam for the explicit-account probe throttle. Tests drive it so the
+   * "the interval elapsed, probe again" half of
+   * {@link CommandCodeAccountPool.canProbeExplicit} is reachable without
+   * waiting a real minute; production reads `Date.now()`.
+   */
+  now?(): number;
 }
 /**
  * One "route these models to that account" rule. `models` lists catalog ids
@@ -493,6 +581,8 @@ declare class CommandCodeAccountPool {
   private readonly deps;
   /** Rotation state by API key. */
   private readonly states;
+  /** Last explicit-revival probe attempt by API key (throttles a failing probe). */
+  private readonly explicitProbes;
   constructor(deps: CommandCodeAccountPoolDeps);
   /**
    * Resolve every slot's key, deduplicated by key (first slot wins). Slots
@@ -519,25 +609,37 @@ declare class CommandCodeAccountPool {
    * `options.model` is the request's model id; routing rules re-read per
    * resolution, so a settings change applies live.
    *
-   * `options.exclude` skips one key during the probe-revival pass: the
-   * rotation hook excludes the just-rejected key so a probe that clears its
-   * window cannot re-offer the same key within the same request (the adapter
-   * refuses already-tried keys; the next request picks the revived key up).
+   * `options.tried` lists the keys this request has already used — the
+   * just-rejected one included. They are removed from the resolution entirely,
+   * which is what lets one request walk a four-account pool: an account-scoped
+   * rejection that does not mark the key (no credits, a model outside the
+   * account's plan) would otherwise be offered again on every attempt, and the
+   * accounts behind it would never be reached.
+   *
+   * An explicit selection (the pin or a model rule) that a rate-limit mark
+   * would demote is probed before the fallback serves, so "falls back while
+   * exhausted" never becomes "stays demoted until the process restarts".
    */
   resolveKey(options?: {
-    exclude?: string;
+    tried?: readonly string[];
     model?: string;
   }): Promise<{
     key: string;
     slot: CommandCodeAccountSlot;
   } | undefined>;
   /**
-   * Record a rejection against one key. `rate-limit` (429) marks the key
-   * exhausted with an unknown reset (probed lazily at the next resolution
-   * once every account is marked); `invalid-credential` (401) disables the
-   * key until the stored credential changes.
+   * Record a rejection against one key. `rate-limit` marks the key exhausted
+   * (`429`/`RATE_LIMITED`) — as a `cooldown` until `resetAtMs` when the
+   * rejection body published the provider's own reset time, otherwise as an
+   * `unknown` mark whose reset is probed lazily — and `invalid-credential`
+   * (401) disables the key until the stored credential changes.
+   *
+   * `resetAtMs` is seconds-to-millis converted by the adapter from the
+   * provider's `error.rateLimit.reset`: knowing the real reset immediately is
+   * what keeps an exhausted account out of rotation for exactly as long as the
+   * provider said, instead of until a probe happens to run.
    */
-  markRejected(apiKey: string, rejection: AccountRejection): void;
+  markRejected(apiKey: string, rejection: AccountRejection, resetAtMs?: number): void;
   /**
    * One account's key: literal → credential seam → auth file (default slot).
    *
@@ -553,6 +655,35 @@ declare class CommandCodeAccountPool {
    * agree on one string.
    */
   private resolveSlotKey;
+  /**
+   * The account the user explicitly asked for: the slot a model rule routes
+   * the request to when that id exists among the resolved slots, else the
+   * manually pinned slot. Consulted only on the fallback path — a usable
+   * routed account already returned above — so unlike
+   * {@link selectAccountForModel} it does NOT require the account to be
+   * usable, which is exactly what {@link resolveKey} re-probes.
+   */
+  private explicitAccount;
+  /**
+   * Whether an explicitly selected account's mark is due for a window probe.
+   * Only an `unknown` mark (a 429 whose reset was never learned) is worth
+   * re-probing: a `cooldown` already carries its reset time and expires by
+   * itself, and a `disabled` (401) key stays out until the stored credential
+   * changes. The interval bounds a probe endpoint that keeps failing.
+   */
+  private canProbeExplicit;
+  /** The clock the probe throttle reads; injected so a test can travel in time. */
+  private now;
+  /**
+   * Probe one explicitly selected account's window and apply the answer. A
+   * window that is no longer exceeded drops the mark, so the user's own
+   * selection serves again on this very request. An exceeded one is stamped
+   * as a cooldown carrying the provider's reset time, after which
+   * {@link accountUsable} lets the account back in with no further probe. A
+   * probe that fails changes nothing: the mark stays `unknown` and the next
+   * attempt waits out the interval.
+   */
+  private probeExplicit;
   /** Hand out the chosen account's key. */
   private pick;
 }
@@ -643,7 +774,8 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
  * (GOAT) plus its Contributor sibling (Go); command-code@1.52.0 added the
  * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
- * added `deepseek/deepseek-v4.1-flash` (Go).
+ * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
+ * `Qwen/Qwen3.8-Omni-Flash` (Go).
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
