@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.56.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.57.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -746,8 +746,9 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * `['low', 'medium', 'high']` efforts in command-code@1.38.0 and moved to
  * `KNOWN_EFFORTS`. `moonshotai/Kimi-K3` followed the same path in
  * command-code@1.39.3 — it gained `['low', 'high', 'max']` efforts and moved
- * to `KNOWN_EFFORTS`. command-code@1.42.0 added `meituan/LongCat-2.0:free`
- * (reasoning:!0, no efforts). command-code@1.45.0 gave the Muse Spark family
+ * to `KNOWN_EFFORTS`. command-code@1.42.0 added LongCat 2.0 (then
+ * `meituan/LongCat-2.0:free`, now the paid `meituan/LongCat-2.0`; reasoning:!0,
+ * no efforts). command-code@1.45.0 gave the Muse Spark family
  * (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) selectable
  * `['low', 'medium', 'high', 'xhigh']` efforts — they moved to `KNOWN_EFFORTS`.
  * command-code@1.51.3 gave `MiniMaxAI/MiniMax-M3` selectable
@@ -770,12 +771,14 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * the official plan/pricing pages grants individual-provider/max/ultra and
  * teams-pro only, and the CLI's plan-access map blocks it on Go/GOAT/Pro.
  * command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` (Go) and 1.42.0 added
- * `meituan/LongCat-2.0:free` (Go, free promo); command-code@1.43.0 added
+ * LongCat 2.0 (Go — a free promo until 2026-09-19, when the backend renamed
+ * `meituan/LongCat-2.0:free` to the paid `meituan/LongCat-2.0`); 1.43.0 added
  * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
  * (GOAT) plus its Contributor sibling (Go); command-code@1.52.0 added the
  * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
  * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
- * `Qwen/Qwen3.8-Omni-Flash` (Go).
+ * `Qwen/Qwen3.8-Omni-Flash` (Go); command-code@1.57.0 added
+ * `z-ai/glm-5.3-flashx` (Go).
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to

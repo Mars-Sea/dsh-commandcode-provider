@@ -110,6 +110,10 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
   'z-ai/glm-5.3-flash': ['low', 'high', 'max'],
+  // command-code@1.57.0 added GLM-5.3 FlashX — the only model-registry change
+  // across 1.56.0 -> 1.57.0 — with the same three-level effort set as its
+  // `z-ai/glm-5.3-flash` sibling.
+  'z-ai/glm-5.3-flashx': ['low', 'high', 'max'],
   'zai-org/GLM-5.2': ['high', 'max'],
   'zai-org/GLM-5.3': ['low', 'high', 'max'],
   // Muse Spark family (command-code@1.45.0: "Reasoning levels for Muse
@@ -221,6 +225,10 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'xai/grok-4.6',
   'xiaomi/mimo-v2.5',
   'z-ai/glm-5.3-flash',
+  // command-code@1.57.0 added GLM-5.3 FlashX; Vision per the official
+  // registry and the CLI's inputModalities:["text","image"] (the pricing page
+  // also carries caps.vision: true).
+  'z-ai/glm-5.3-flashx',
 ])
 
 /**
@@ -242,8 +250,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * `['low', 'medium', 'high']` efforts in command-code@1.38.0 and moved to
  * `KNOWN_EFFORTS`. `moonshotai/Kimi-K3` followed the same path in
  * command-code@1.39.3 — it gained `['low', 'high', 'max']` efforts and moved
- * to `KNOWN_EFFORTS`. command-code@1.42.0 added `meituan/LongCat-2.0:free`
- * (reasoning:!0, no efforts). command-code@1.45.0 gave the Muse Spark family
+ * to `KNOWN_EFFORTS`. command-code@1.42.0 added LongCat 2.0 (then
+ * `meituan/LongCat-2.0:free`, now the paid `meituan/LongCat-2.0`; reasoning:!0,
+ * no efforts). command-code@1.45.0 gave the Muse Spark family
  * (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) selectable
  * `['low', 'medium', 'high', 'xhigh']` efforts — they moved to `KNOWN_EFFORTS`.
  * command-code@1.51.3 gave `MiniMaxAI/MiniMax-M3` selectable
@@ -270,8 +279,15 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'thinkingmachines/inkling-small',
   'poolside/laguna-s-2.1-free',
   // LongCat 2.0 (command-code@1.42.0, Meituan's trillion-parameter coding
-  // model, 1M context) is free and text-only, with automatic reasoning.
-  'meituan/LongCat-2.0:free',
+  // model, 1M context) is text-only with automatic reasoning. The free promo
+  // ended 2026-09-19 and the backend catalog renamed it from
+  // `meituan/LongCat-2.0:free` to the paid `meituan/LongCat-2.0`. The rename is
+  // billing-only, so the new id keeps this entry: the pricing page still
+  // carries `caps.reasoning: true` with no efforts, and the retired `:free`
+  // row in the command-code@1.57.0 CLI registry has `reasoning:!0` and no
+  // `reasoningEfforts`. (That registry lag is why the upstream audit's
+  // automatic-reasoning candidate set cannot yet confirm this id.)
+  'meituan/LongCat-2.0',
   // Ling 3.0 Flash Sante (command-code@1.52.0, 262K context, text-only) is
   // free and reasons automatically with no selectable efforts.
   'inclusionai/ling-3.0-flash-sante:free',
@@ -332,12 +348,14 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * the official plan/pricing pages grants individual-provider/max/ultra and
  * teams-pro only, and the CLI's plan-access map blocks it on Go/GOAT/Pro.
  * command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` (Go) and 1.42.0 added
- * `meituan/LongCat-2.0:free` (Go, free promo); command-code@1.43.0 added
+ * LongCat 2.0 (Go — a free promo until 2026-09-19, when the backend renamed
+ * `meituan/LongCat-2.0:free` to the paid `meituan/LongCat-2.0`); 1.43.0 added
  * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
  * (GOAT) plus its Contributor sibling (Go); command-code@1.52.0 added the
  * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
  * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
- * `Qwen/Qwen3.8-Omni-Flash` (Go).
+ * `Qwen/Qwen3.8-Omni-Flash` (Go); command-code@1.57.0 added
+ * `z-ai/glm-5.3-flashx` (Go).
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -348,7 +366,7 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (45) ---
+  // --- Go (46) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -379,8 +397,13 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'deepseek/deepseek-v4-pro': 'go',
   'gpt-5.6-luna': 'go',
   // command-code@1.42.0 added Meituan's LongCat 2.0 as a free Go-tier model
-  // ("LongCat 2.0 free model" — 100% off while it lasts, every plan).
-  'meituan/LongCat-2.0:free': 'go',
+  // ("LongCat 2.0 free model" — 100% off while it lasts, every plan). That
+  // promo ended 2026-09-19: the pricing page dropped the deal and the free
+  // slug, the public catalog renamed the id to `meituan/LongCat-2.0` (paid,
+  // $0.30/$1.20/$0.006), and the docs list the new id. The command-code@1.57.0
+  // CLI registry still carries the retired `:free` id — the next CLI release
+  // is expected to follow the backend.
+  'meituan/LongCat-2.0': 'go',
   // command-code@1.52.0 added Ling 3.0 Flash Sante as a free Go-tier model
   // ("free, up to 100 requests a day", every plan) — the successor to the
   // retired `inclusionai/ling-3.0-flash-free` promo.
@@ -407,6 +430,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'xiaomi/mimo-v2.5': 'go',
   'xiaomi/mimo-v2.5-pro': 'go',
   'z-ai/glm-5.3-flash': 'go',
+  // command-code@1.57.0 added GLM-5.3 FlashX; the pricing page's embedded
+  // availability grants every tier (individual-go through teams-pro) — the
+  // same "all":true shape as its `z-ai/glm-5.3-flash` sibling.
+  'z-ai/glm-5.3-flashx': 'go',
   'zai-org/GLM-5': 'go',
   'zai-org/GLM-5.1': 'go',
   'zai-org/GLM-5.2': 'go',
@@ -632,14 +659,14 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   // here rather than left to lapse on schedule. The paid MiniMax M3 / M2.7
   // rows keep their own rates.
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
-  // Meituan's LongCat 2.0 (command-code@1.42.0, "LongCat 2.0 free model") is
-  // 100% off while it lasts — a permanent-style deal (no fixed end date; the
-  // pricing page's DEAL block says "Term: while it lasts"). Free requests cost
-  // no credits on every plan, like Laguna S 2.1.
-  'meituan/LongCat-2.0:free': { label: 'FREE', free: true },
+  // Meituan's LongCat 2.0 promo ended 2026-09-19 (the pricing page's deal count
+  // dropped 6 -> 5, its free count 4 -> 3, and the DEAL block no longer exists):
+  // the entry that shipped from command-code@1.42.0 on is removed here rather
+  // than left to badge a model the catalog now serves paid as
+  // `meituan/LongCat-2.0` at $0.30/$1.20/$0.006.
   // Ling 3.0 Flash Sante (command-code@1.52.0) is free "up to 100 requests a
   // day" while the promo lasts — a permanent-style deal (no fixed end date,
-  // like LongCat 2.0). Free requests cost no credits on every plan.
+  // like LongCat 2.0 used to be). Free requests cost no credits on every plan.
   'inclusionai/ling-3.0-flash-sante:free': { label: 'FREE', free: true },
 }
 
