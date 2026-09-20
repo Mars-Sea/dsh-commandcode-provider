@@ -41,7 +41,7 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import type {} from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
-import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
+import type { AccountRotationReason, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
 import { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
 import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModelAccountRule } from './accounts.ts'
 import { applyCommands } from './commands.ts'
@@ -481,7 +481,7 @@ export function apply(ctx: Context, config: Config): void {
     // the raw provider rejection, is what the caller sees.
     rotateApiKey: async (
       rejectedKey: string,
-      rejection: 'rate-limit' | 'invalid-credential' | 'unavailable',
+      rejection: AccountRotationReason,
       _connection: ResolvedCommandCodeOptions,
       model?: string,
       rotation?: { tried: readonly string[]; resetAtMs?: number },
@@ -490,8 +490,12 @@ export function apply(ctx: Context, config: Config): void {
       // rejection (no credits, a model outside this account's plan) says
       // nothing durable about the key, so the pool rotates past it without
       // remembering — a `:free` model is still served by a credits-empty
-      // account. The provider's own `resetAtMs`, when the body carried one,
-      // turns the rate-limit mark into a cooldown that expires by itself.
+      // account. `rate-limit` (a window the provider named) and `throttled` (a
+      // 429 that named none) both mark, but with different causes, so the
+      // pool's own diagnosis never reports a plain throttle as an exhausted
+      // usage window (issue #54). The provider's own `resetAtMs`, when the body
+      // carried one, turns the rate-limit mark into a cooldown that expires by
+      // itself.
       if (rejection !== 'unavailable') pool.markRejected(rejectedKey, rejection, rotation?.resetAtMs)
       // The whole tried set, not just the rejected key, reaches the pool: a
       // rejection that does not mark the key would otherwise be re-offered on

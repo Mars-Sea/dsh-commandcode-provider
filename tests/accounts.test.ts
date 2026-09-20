@@ -204,6 +204,102 @@ test('a failed probe keeps the mark and reports no reset time', async () => {
   )
   assert.equal(error.code, 'RATE_LIMIT')
   assert.doesNotMatch(error.message, /resets at/)
+  // The window verdict stays a window verdict: the mark came from a provider
+  // that named one, so the message may still say the window is spent — it just
+  // has to admit the reset time is unknown.
+  assert.match(error.message, /exhausted their usage window/)
+  assert.match(error.message, /published no reset time/)
+  assert.match(error.message, /服务商未公布重置时间/)
+})
+
+test('a bare 429 is reported as a throttle, never as an exhausted usage window', async () => {
+  // Issue #54. The report's account panel showed the five-hour window at 2% and
+  // the weekly one at 10% while the turn failed with "all 1 Command Code
+  // account(s) have exhausted their usage window": a plain 429 marked the key,
+  // the billing probe never confirmed a spent window, and the pool's diagnosis
+  // claimed one anyway. The mark still rotates and stays probe-eligible — only
+  // the claim changes.
+  const { pool, probeCalls } = makePool({
+    slots: [defaultSlot()],
+    keys: { COMMANDCODE_API_KEY: 'key-1' },
+    probes: { 'key-1': { exceeded: false, resetAt: 0 } },
+  })
+  pool.markRejected('key-1', 'throttled')
+  // A probe that finds the window open revives the key on that very attempt.
+  assert.equal((await pool.resolveKey())?.key, 'key-1')
+  assert.deepEqual(probeCalls, ['key-1'])
+
+  // And when the probe cannot answer, the pool says "rate limited" instead of
+  // inventing a spent window.
+  const stubborn = makePool({
+    slots: [defaultSlot()],
+    keys: { COMMANDCODE_API_KEY: 'key-1' },
+    probes: { 'key-1': undefined },
+  })
+  stubborn.pool.markRejected('key-1', 'throttled')
+  const error = await stubborn.pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as Error & { code?: string },
+  )
+  assert.equal(error.code, 'RATE_LIMIT')
+  assert.match(error.message, /are rate limited \(429\)/)
+  assert.match(error.message, /did not report an exhausted usage window/)
+  assert.match(error.message, /全部 1 个 Command Code 账户被限流/)
+  assert.doesNotMatch(error.message, /exhausted their usage window/)
+  assert.doesNotMatch(error.message, /已用尽全部/)
+})
+
+test('a probe that confirms an exceeded window turns a throttle mark into a window verdict', async () => {
+  // The other half of issue #54's fix: a bare 429 keeps the key probe-eligible
+  // precisely so a REAL window limit behind it is still discovered — the probe
+  // is what upgrades the mark's cause, and the diagnosis then reports the
+  // window with the provider's own reset.
+  const reset = Date.now() + 3 * 3_600_000
+  const { pool } = makePool({
+    slots: [defaultSlot()],
+    keys: { COMMANDCODE_API_KEY: 'key-1' },
+    probes: { 'key-1': { exceeded: true, resetAt: 0 } },
+  })
+  pool.markRejected('key-1', 'throttled')
+  const error = await pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as Error & { code?: string },
+  )
+  assert.equal(error.code, 'RATE_LIMIT')
+  assert.match(error.message, /exhausted their usage window/)
+
+  const withReset = makePool({
+    slots: [defaultSlot()],
+    keys: { COMMANDCODE_API_KEY: 'key-1' },
+    probes: { 'key-1': { exceeded: true, resetAt: reset } },
+  })
+  withReset.pool.markRejected('key-1', 'throttled')
+  const stamped = await withReset.pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as Error & { code?: string },
+  )
+  assert.match(stamped.message, /earliest window resets at/)
+  assert.ok(stamped.message.includes(new Date(reset).toLocaleString()))
+})
+
+test('a probe that publishes no reset never throws away a known cooldown', async () => {
+  // The provider's own reset (from the rejection body) is strictly more useful
+  // than "unknown": the mark keeps its cooldown end, so the diagnosis still
+  // names it and the account returns by the clock.
+  const known = Date.now() + 3_600_000
+  const { pool } = makePool({
+    slots: [defaultSlot()],
+    keys: { COMMANDCODE_API_KEY: 'key-1' },
+    probes: { 'key-1': { exceeded: true, resetAt: 0 } },
+  })
+  pool.markRejected('key-1', 'rate-limit', known)
+  const error = await pool.resolveKey().then(
+    () => assert.fail('expected resolveKey to throw'),
+    (caught: unknown) => caught as Error & { code?: string },
+  )
+  assert.match(error.message, /earliest window resets at/)
+  assert.ok(error.message.includes(new Date(known).toLocaleString()))
+  assert.equal((await pool.resolvedAccounts())[0]?.state?.until, known)
 })
 
 test('a throwing probe counts as unknown and still throws RATE_LIMIT', async () => {
@@ -246,11 +342,11 @@ test('returns undefined when no account resolves any key', async () => {
 
 test('accountUsable maps every rotation state', () => {
   assert.equal(accountUsable(undefined), true)
-  assert.equal(accountUsable({ kind: 'unknown', reason: 'rate limited (429)', until: 0 }), false)
-  assert.equal(accountUsable({ kind: 'disabled', reason: 'invalid API key (401)', until: 0 }), false)
-  assert.equal(accountUsable({ kind: 'cooldown', reason: 'x', until: Date.now() + 60_000 }), false)
-  assert.equal(accountUsable({ kind: 'cooldown', reason: 'x', until: Date.now() - 60_000 }), true)
-  assert.equal(accountUsable({ kind: 'cooldown', reason: 'x', until: 0 }), false)
+  assert.equal(accountUsable({ kind: 'unknown', cause: 'throttle', reason: 'rate limited (429)', until: 0 }), false)
+  assert.equal(accountUsable({ kind: 'disabled', cause: 'auth', reason: 'invalid API key (401)', until: 0 }), false)
+  assert.equal(accountUsable({ kind: 'cooldown', cause: 'window', reason: 'x', until: Date.now() + 60_000 }), false)
+  assert.equal(accountUsable({ kind: 'cooldown', cause: 'window', reason: 'x', until: Date.now() - 60_000 }), true)
+  assert.equal(accountUsable({ kind: 'cooldown', cause: 'window', reason: 'x', until: 0 }), false)
 })
 
 // ---------------------------------------------------------------------------
@@ -416,7 +512,7 @@ test('selectAccountForModel picks the routed account when usable', () => {
 test('selectAccountForModel ignores a routed account that is not usable', () => {
   const accounts: ResolvedAccount[] = [
     { slot: defaultSlot(), key: 'key-1', state: undefined },
-    { slot: extraSlot(2), key: 'key-2', state: { kind: 'disabled', reason: '401', until: 0 } },
+    { slot: extraSlot(2), key: 'key-2', state: { kind: 'disabled', cause: 'auth', reason: '401', until: 0 } },
   ]
   const picked = selectAccountForModel(accounts, 'deepseek/deepseek-v4-pro', [
     { models: ['deepseek/deepseek-v4-pro'], account: 'account-2' },

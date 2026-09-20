@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.57.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.58.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -101,14 +101,19 @@ interface CommandCodeConnectionOptions {
  */
 type ResolveAttachments = () => AttachmentStore | undefined;
 /**
- * Why a pre-stream rejection rotates to another account. `rate-limit` and
- * `invalid-credential` are the two the pool records as marks; `unavailable` is
- * an account-scoped rejection that must NOT become a mark — the account's key
- * is valid and its windows may be open, the ACCOUNT just cannot serve THIS
+ * Why a pre-stream rejection rotates to another account. `rate-limit` (a usage
+ * window the provider NAMED), `throttled` (a 429 that named no window) and
+ * `invalid-credential` are the three the pool records as marks; `unavailable`
+ * is an account-scoped rejection that must NOT become a mark — the account's
+ * key is valid and its windows may be open, the ACCOUNT just cannot serve THIS
  * request (no credits, a model outside its plan) — so the pool moves on
  * without remembering anything.
+ *
+ * The window/throttle split decides what the pool may CLAIM, never whether it
+ * rotates: both leave rotation and mark the key, but only a named window lets
+ * the pool report an exhausted usage window (issue #54).
  */
-type AccountRotationReason = 'rate-limit' | 'invalid-credential' | 'unavailable';
+type AccountRotationReason = 'rate-limit' | 'throttled' | 'invalid-credential' | 'unavailable';
 /** What the rotation hook knows about the request it is rotating within. */
 interface AccountRotationContext {
   /** Every API key this request has already used, just-rejected key included. */
@@ -461,8 +466,21 @@ interface CommandCodeAccountSlot {
   /** Whether the official CLI auth file may back this slot (default slot only). */
   allowAuthFile: boolean;
 }
-/** Why a key stopped serving requests. */
-type AccountRejection = 'rate-limit' | 'invalid-credential';
+/**
+ * Why a key stopped serving requests.
+ *
+ * `rate-limit` is a USAGE-WINDOW rejection: the provider named one of its
+ * metered windows (`error.rateLimit.window`, or a message saying the plan's
+ * usage limit was reached — the only two shapes the official CLI's own
+ * `parseWindowLimitError`/`resolveWindowLabel` accept). `throttled` is the
+ * plain 429: the provider refused the request without saying anything about a
+ * window, so the key leaves rotation for now but the pool must not describe it
+ * as an exhausted window. Collapsing the two is issue #54: the reporter's
+ * account panel showed the five-hour window at 2% and the weekly one at 10%
+ * while the turn failed with "all 1 Command Code account(s) have exhausted
+ * their usage window".
+ */
+type AccountRejection = 'rate-limit' | 'throttled' | 'invalid-credential';
 /** One key's rotation state. */
 interface CommandCodeAccountState {
   kind:
@@ -472,6 +490,14 @@ interface CommandCodeAccountState {
   'cooldown' |
   /** Marked by a 401: skipped until the stored credential changes. */
   'disabled';
+  /**
+   * The evidence behind the mark — what the pool may CLAIM when it reports
+   * that no account can serve. `window`: the provider named a usage window, or
+   * a `/alpha/billing/credits` probe read one as exceeded. `throttle`: a 429
+   * that said nothing about a window (a burst limiter, or a model- or
+   * spend-level limit the billing endpoint cannot show). `auth`: a 401.
+   */
+  cause: 'window' | 'throttle' | 'auth';
   /** Human-readable reason for the mark (e.g. `rate limited (429)`). */
   reason: string;
   /** Cooldown end in millis; 0 for the other kinds. */
@@ -628,16 +654,21 @@ declare class CommandCodeAccountPool {
     slot: CommandCodeAccountSlot;
   } | undefined>;
   /**
-   * Record a rejection against one key. `rate-limit` marks the key exhausted
-   * (`429`/`RATE_LIMITED`) — as a `cooldown` until `resetAtMs` when the
-   * rejection body published the provider's own reset time, otherwise as an
-   * `unknown` mark whose reset is probed lazily — and `invalid-credential`
-   * (401) disables the key until the stored credential changes.
+   * Record a rejection against one key. `rate-limit` marks the key's usage
+   * WINDOW exhausted — as a `cooldown` until `resetAtMs` when the rejection
+   * body named the provider's own reset time, otherwise as an `unknown` mark
+   * whose window is probed lazily. `throttled` (the plain 429 that named no
+   * window) marks the key with the `throttle` cause instead: it leaves rotation
+   * exactly like a window mark does, but the pool's own diagnosis keeps saying
+   * "rate limited" rather than inventing an exhausted window. A 401
+   * (`invalid-credential`) disables the key until the stored credential
+   * changes.
    *
    * `resetAtMs` is seconds-to-millis converted by the adapter from the
    * provider's `error.rateLimit.reset`: knowing the real reset immediately is
    * what keeps an exhausted account out of rotation for exactly as long as the
-   * provider said, instead of until a probe happens to run.
+   * provider said. It only applies to a window mark; a plain throttle keeps the
+   * window unknown on purpose, so a probe can still find out.
    */
   markRejected(apiKey: string, rejection: AccountRejection, resetAtMs?: number): void;
   /**

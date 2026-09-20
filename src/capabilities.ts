@@ -283,10 +283,10 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   // ended 2026-09-19 and the backend catalog renamed it from
   // `meituan/LongCat-2.0:free` to the paid `meituan/LongCat-2.0`. The rename is
   // billing-only, so the new id keeps this entry: the pricing page still
-  // carries `caps.reasoning: true` with no efforts, and the retired `:free`
-  // row in the command-code@1.57.0 CLI registry has `reasoning:!0` and no
-  // `reasoningEfforts`. (That registry lag is why the upstream audit's
-  // automatic-reasoning candidate set cannot yet confirm this id.)
+  // carries `caps.reasoning: true` with no efforts, and command-code@1.58.0 —
+  // the CLI release that retired the free tier — carries the new id with
+  // `reasoning:!0` and no `reasoningEfforts`, one release after the backend
+  // rename the 1.57.0 sync recorded here.
   'meituan/LongCat-2.0',
   // Ling 3.0 Flash Sante (command-code@1.52.0, 262K context, text-only) is
   // free and reasons automatically with no selectable efforts.
@@ -400,9 +400,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // ("LongCat 2.0 free model" — 100% off while it lasts, every plan). That
   // promo ended 2026-09-19: the pricing page dropped the deal and the free
   // slug, the public catalog renamed the id to `meituan/LongCat-2.0` (paid,
-  // $0.30/$1.20/$0.006), and the docs list the new id. The command-code@1.57.0
-  // CLI registry still carries the retired `:free` id — the next CLI release
-  // is expected to follow the backend.
+  // $0.30/$1.20/$0.006), and the docs list the new id. command-code@1.58.0
+  // followed the backend: it adds the paid id and marks the retired `:free`
+  // sibling `hidden` ("LongCat 2.0 (Free)"), so the CLI registry now agrees
+  // with the catalog this map is keyed by.
   'meituan/LongCat-2.0': 'go',
   // command-code@1.52.0 added Ling 3.0 Flash Sante as a free Go-tier model
   // ("free, up to 100 requests a day", every plan) — the successor to the

@@ -12,10 +12,11 @@
  *     usable, the routed account — resolving each slot's key lazily (literal
  *     config key → credential seam → launch environment → the official CLI
  *     auth file for the default slot only).
- *   - {@link CommandCodeAccountPool.markRejected} records a 429 (rate limit,
- *     window unknown) or 401 (invalid key, disabled until the config changes)
- *     against the exact API key, so several slots sharing one key share one
- *     state.
+ *   - {@link CommandCodeAccountPool.markRejected} records a 429 or 401 against
+ *     the exact API key, so several slots sharing one key share one state. A
+ *     429 that NAMED a usage window marks the window exhausted; a 429 that
+ *     named none is recorded as a plain throttle, which rotates the same way
+ *     but is never reported as an exhausted window (issue #54).
  *   - When every account is marked, the pool probes each key's
  *     `/alpha/billing/credits` window limits (through the injected
  *     {@link CommandCodeAccountPoolDeps.probeWindow}): an account whose window
@@ -83,8 +84,21 @@ export interface CommandCodeAccountSlot {
   allowAuthFile: boolean
 }
 
-/** Why a key stopped serving requests. */
-export type AccountRejection = 'rate-limit' | 'invalid-credential'
+/**
+ * Why a key stopped serving requests.
+ *
+ * `rate-limit` is a USAGE-WINDOW rejection: the provider named one of its
+ * metered windows (`error.rateLimit.window`, or a message saying the plan's
+ * usage limit was reached — the only two shapes the official CLI's own
+ * `parseWindowLimitError`/`resolveWindowLabel` accept). `throttled` is the
+ * plain 429: the provider refused the request without saying anything about a
+ * window, so the key leaves rotation for now but the pool must not describe it
+ * as an exhausted window. Collapsing the two is issue #54: the reporter's
+ * account panel showed the five-hour window at 2% and the weekly one at 10%
+ * while the turn failed with "all 1 Command Code account(s) have exhausted
+ * their usage window".
+ */
+export type AccountRejection = 'rate-limit' | 'throttled' | 'invalid-credential'
 
 /** One key's rotation state. */
 export interface CommandCodeAccountState {
@@ -95,6 +109,14 @@ export interface CommandCodeAccountState {
     | 'cooldown'
     /** Marked by a 401: skipped until the stored credential changes. */
     | 'disabled'
+  /**
+   * The evidence behind the mark — what the pool may CLAIM when it reports
+   * that no account can serve. `window`: the provider named a usage window, or
+   * a `/alpha/billing/credits` probe read one as exceeded. `throttle`: a 429
+   * that said nothing about a window (a burst limiter, or a model- or
+   * spend-level limit the billing endpoint cannot show). `auth`: a 401.
+   */
+  cause: 'window' | 'throttle' | 'auth'
   /** Human-readable reason for the mark (e.g. `rate limited (429)`). */
   reason: string
   /** Cooldown end in millis; 0 for the other kinds. */
@@ -375,12 +397,24 @@ export class CommandCodeAccountPool {
       // must not: `until: 0` would read as "never usable again" to
       // {@link accountUsable} and take the account out of service for the rest
       // of the process — the very permanence this pool must not have. Keeping
-      // the `unknown` mark leaves it eligible for the next probe.
+      // the `unknown` mark leaves it eligible for the next probe. Either way the
+      // cause becomes `window`: a probe that read a window as exceeded is
+      // window evidence, whatever the key was originally marked for. A mark that
+      // ALREADY carries a cooldown keeps it when this probe publishes no reset
+      // — a known reset must never be thrown away for an unknown one.
       if (probe.resetAt > 0) {
         this.states.set(account.key, {
           kind: 'cooldown',
-          reason: account.state?.reason ?? 'rate limited (429)',
+          cause: 'window',
+          reason: account.state?.reason ?? 'usage window exhausted (429)',
           until: probe.resetAt,
+        })
+      } else if (account.state?.kind !== 'cooldown') {
+        this.states.set(account.key, {
+          kind: 'unknown',
+          cause: 'window',
+          reason: account.state?.reason ?? 'usage window exhausted (429)',
+          until: 0,
         })
       }
     }))
@@ -417,24 +451,35 @@ export class CommandCodeAccountPool {
   }
 
   /**
-   * Record a rejection against one key. `rate-limit` marks the key exhausted
-   * (`429`/`RATE_LIMITED`) — as a `cooldown` until `resetAtMs` when the
-   * rejection body published the provider's own reset time, otherwise as an
-   * `unknown` mark whose reset is probed lazily — and `invalid-credential`
-   * (401) disables the key until the stored credential changes.
+   * Record a rejection against one key. `rate-limit` marks the key's usage
+   * WINDOW exhausted — as a `cooldown` until `resetAtMs` when the rejection
+   * body named the provider's own reset time, otherwise as an `unknown` mark
+   * whose window is probed lazily. `throttled` (the plain 429 that named no
+   * window) marks the key with the `throttle` cause instead: it leaves rotation
+   * exactly like a window mark does, but the pool's own diagnosis keeps saying
+   * "rate limited" rather than inventing an exhausted window. A 401
+   * (`invalid-credential`) disables the key until the stored credential
+   * changes.
    *
    * `resetAtMs` is seconds-to-millis converted by the adapter from the
    * provider's `error.rateLimit.reset`: knowing the real reset immediately is
    * what keeps an exhausted account out of rotation for exactly as long as the
-   * provider said, instead of until a probe happens to run.
+   * provider said. It only applies to a window mark; a plain throttle keeps the
+   * window unknown on purpose, so a probe can still find out.
    */
   markRejected(apiKey: string, rejection: AccountRejection, resetAtMs?: number): void {
     if (rejection === 'invalid-credential') {
-      this.states.set(apiKey, { kind: 'disabled', reason: 'invalid API key (401)', until: 0 })
+      this.states.set(apiKey, { kind: 'disabled', cause: 'auth', reason: 'invalid API key (401)', until: 0 })
+    } else if (rejection === 'throttled') {
+      // Deliberately NOT a cooldown from `resetAtMs`: a throttle carries no
+      // window fact, and an `unknown` mark is what keeps the key eligible for
+      // the window probe that turns a real window limit into a cooldown with
+      // the provider's own reset (or revives the key when the window is open).
+      this.states.set(apiKey, { kind: 'unknown', cause: 'throttle', reason: 'rate limited (429)', until: 0 })
     } else if (resetAtMs !== undefined && resetAtMs > Date.now()) {
-      this.states.set(apiKey, { kind: 'cooldown', reason: 'rate limited (429)', until: resetAtMs })
+      this.states.set(apiKey, { kind: 'cooldown', cause: 'window', reason: 'usage window exhausted (429)', until: resetAtMs })
     } else {
-      this.states.set(apiKey, { kind: 'unknown', reason: 'rate limited (429)', until: 0 })
+      this.states.set(apiKey, { kind: 'unknown', cause: 'window', reason: 'usage window exhausted (429)', until: 0 })
     }
   }
 
@@ -545,12 +590,23 @@ export class CommandCodeAccountPool {
       return { slot: account.slot, key: account.key, state: undefined }
     }
     // A reset time is what makes the mark expire on its own; without one the
-    // mark stays `unknown`, so a later probe can still learn it.
+    // mark stays `unknown`, so a later probe can still learn it. The cause is
+    // `window` either way: the probe read the account's own usage windows. A
+    // mark that already carries a cooldown keeps it, exactly like the all-marked
+    // pass: a known reset is never traded for an unknown one.
     if (probe.resetAt > 0) {
       this.states.set(account.key, {
         kind: 'cooldown',
-        reason: account.state?.reason ?? 'rate limited (429)',
+        cause: 'window',
+        reason: account.state?.reason ?? 'usage window exhausted (429)',
         until: probe.resetAt,
+      })
+    } else if (account.state?.kind !== 'cooldown') {
+      this.states.set(account.key, {
+        kind: 'unknown',
+        cause: 'window',
+        reason: account.state?.reason ?? 'usage window exhausted (429)',
+        until: 0,
       })
     }
     return undefined
@@ -563,19 +619,30 @@ export class CommandCodeAccountPool {
 }
 
 /**
- * The error for "accounts exist but none of them can serve": all-401 becomes
- * `INVALID_CREDENTIAL`, anything else `RATE_LIMIT` naming the earliest known
- * window reset. Shared by the all-marked tail of {@link CommandCodeAccountPool.resolveKey}
+ * The error for "accounts exist but none of them can serve". Three shapes, each
+ * claiming only what the pool actually knows:
+ *
+ *   - every account rejected with 401 → `INVALID_CREDENTIAL`;
+ *   - at least one account marked by a NAMED usage window (or by a probe that
+ *     read a window as exceeded) → the window diagnosis, naming the earliest
+ *     known reset when the provider published one;
+ *   - every mark a plain throttle (a 429 that said nothing about a window, and
+ *     no probe could confirm one) → a throttle diagnosis that says so. Claiming
+ *     "all accounts have exhausted their usage window" here is issue #54: the
+ *     report's account panel showed the five-hour window at 2% and the weekly
+ *     one at 10% while the turn failed with exactly that sentence.
+ *
+ * Shared by the all-marked tail of {@link CommandCodeAccountPool.resolveKey}
  * and by its already-tried diagnosis, so the two can never drift apart.
  *
  * The attached `providerRetryAfterMs` is the exact wait until the earliest
- * known reset, so dsh-llm-retry sleeps through the window instead of polling
- * at its backoff cadence. It is capped at {@link RETRY_MAX_DELAY_MS}: the
- * executor honors a provider wait verbatim only at or below the policy's
+ * known window reset, so dsh-llm-retry sleeps through the window instead of
+ * polling at its backoff cadence. It is capped at {@link RETRY_MAX_DELAY_MS}:
+ * the executor honors a provider wait verbatim only at or below the policy's
  * `maxDelayMs` — a LONGER attached wait makes it abandon the retry entirely
  * (normal mode), which would turn "poll until the window opens" into "fail
  * now". Longer resets simply ride the capped local backoff and the probe
- * revival.
+ * revival. A throttle diagnosis attaches none: its marks carry no reset.
  */
 function allAccountsUnusable(accounts: readonly ResolvedAccount[]): LlmError {
   const disabled = accounts.filter((account) => account.state?.kind === 'disabled')
@@ -591,18 +658,37 @@ function allAccountsUnusable(accounts: readonly ResolvedAccount[]): LlmError {
       'INVALID_CREDENTIAL',
     )
   }
-  const resets = accounts
+  const marked = accounts
     .map((account) => account.state)
-    .filter((state): state is CommandCodeAccountState => state !== undefined && state.kind === 'cooldown' && state.until > 0)
+    .filter((state): state is CommandCodeAccountState => state !== undefined)
+  // Only a `window` mark may be described as an exhausted usage window. A
+  // throttle mark proves the provider refused the request, never that a
+  // metered window is spent — and because it deliberately carries no reset
+  // (`unknown`, so the next pass may probe the real windows), this answer has
+  // no time to name either. dsh-llm-retry's own backoff paces the retries.
+  const windowMarked = marked.filter((state) => state.cause === 'window')
+  if (windowMarked.length === 0) {
+    return new LlmError(
+      `llm-commandcode: all ${accounts.length} Command Code account(s) are rate limited (429)`
+        + ' — the provider did not report an exhausted usage window; retrying'
+        + `；全部 ${accounts.length} 个 Command Code 账户被限流（429）`
+        + '——服务商未报告用量窗口用尽，正在重试',
+      'RATE_LIMIT',
+    )
+  }
+  const resets = windowMarked
+    .filter((state) => state.kind === 'cooldown' && state.until > 0)
     .map((state) => state.until)
   const earliest = resets.length > 0 ? Math.min(...resets) : 0
   const wait = earliest > 0 ? Math.max(1000, earliest - Date.now()) : 0
   return new LlmError(
     `llm-commandcode: all ${accounts.length} Command Code account(s) have exhausted their usage window`
-      + (earliest > 0 ? `; the earliest window resets at ${clockLabel(earliest)}` : '')
+      + (earliest > 0
+        ? `; the earliest window resets at ${clockLabel(earliest)}`
+        : ' — the provider published no reset time for it')
       + ' — requests will succeed again after the reset (or add another account)'
       + `；已用尽全部 ${accounts.length} 个 Command Code 账户的用量窗口`
-      + (earliest > 0 ? `，最早的重置时间为 ${clockLabel(earliest)}` : '')
+      + (earliest > 0 ? `，最早的重置时间为 ${clockLabel(earliest)}` : '，服务商未公布重置时间')
       + '——窗口重置后请求会自动恢复（也可以添加更多账户）',
     'RATE_LIMIT',
     wait > 0 && wait <= RETRY_MAX_DELAY_MS ? { providerRetryAfterMs: wait } : undefined,

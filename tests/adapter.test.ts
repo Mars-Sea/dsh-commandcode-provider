@@ -4179,6 +4179,19 @@ test('isPeakPricingHour() answers the model-independent half of the same rule', 
 })
 
 test('CLI version and API base constants are stable', () => {
+  // command-code@1.58.0 (2026-09-20 check of the 2026-09-19 npm `latest`, whose
+  // changelog entry is "Retire the free LongCat 2.0 tier and sell LongCat 2.0 as
+  // a paid model"): the registry grows 77 -> 78 with exactly one addition,
+  // `meituan/LongCat-2.0`, and its retired `meituan/LongCat-2.0:free` sibling
+  // gains `hidden` plus the display name "LongCat 2.0 (Free)" — the CLI catching
+  // up with the backend rename the 1.57.0 sync already snapshotted, so nothing in
+  // src/capabilities.ts moves. The effort map, the subscription maps, the plan
+  // tiers, every deal, the peak/off-peak schedule, the public catalog (71 models,
+  // 55 x chat/completions + responses / 8 Claude ids x messages-only / 8 x
+  // chat/completions) and the vendored price rows (71) are all unchanged, and
+  // static inspection finds no transport drift: the /alpha/* endpoint set, the
+  // /alpha/generate converters and the stream event vocabulary are identical to
+  // 1.57.0. This is a version-pin sync only; no runtime behavior changes.
   // command-code@1.57.0 (2026-09-19, npm `latest`; no changelog entry yet — the
   // page stops at 1.56.1, and 1.56.2 shipped without one): the model registry
   // grows 76 -> 77 with exactly one addition, `z-ai/glm-5.3-flashx` ("GLM-5.3
@@ -4244,7 +4257,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.57.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.58.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -4305,10 +4318,65 @@ test('stream() rotates to the next account after a pre-stream 429', async () => 
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
 
   // Two connect attempts: key-1 refused, key-2 served; the rotation hook saw
-  // the rejection exactly once and the stream finished normally.
+  // the rejection exactly once and the stream finished normally. The reason is
+  // `throttled`, not `rate-limit`: this body names no usage window, and only a
+  // named window may be reported as an exhausted one (issue #54).
   assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
-  assert.deepEqual(rotated, [['key-1', 'rate-limit']])
+  assert.deepEqual(rotated, [['key-1', 'throttled']])
   assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+})
+
+test('stream() classifies a 429 that NAMES a window as the window limit it is', async () => {
+  // The other half of the same rule, mirroring the CLI's `resolveWindowLabel`:
+  // a `rateLimit.window` (or the plan-usage-limit wording) is what makes a 429
+  // a window rejection. Only then may the pool report an exhausted window and
+  // hold the account out until the provider's own reset.
+  const resetSeconds = Math.floor(Date.now() / 1000) + 1800
+  const cases: Array<readonly [string, number | undefined]> = [
+    [JSON.stringify({ error: { code: 'RATE_LIMITED', rateLimit: { window: 'weekly', reset: resetSeconds } } }), resetSeconds * 1000],
+    [JSON.stringify({ error: { message: 'You have reached the usage limit for your plan (weekly)' } }), undefined],
+    [JSON.stringify({ error: { rateLimit: { window: 'fiveHour' } } }), undefined],
+  ]
+  for (const [body, expectedReset] of cases) {
+    const { fetchImpl } = fetchByKey({ 'key-1': { status: 429, body } })
+    const seen: Array<{ reason: string; resetAtMs: number | undefined }> = []
+    const adapter = makeAdapter({
+      fetchImpl,
+      resolveApiKey: async () => 'key-1',
+      rotateApiKey: async (_rejected, reason, _connection, _model, rotation) => {
+        seen.push({ reason, resetAtMs: rotation?.resetAtMs })
+        return undefined
+      },
+    })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (err: unknown) => (err as { code?: string }).code === 'RATE_LIMIT',
+    )
+    assert.equal(seen[0]?.reason, 'rate-limit', body)
+    assert.equal(seen[0]?.resetAtMs, expectedReset, body)
+  }
+})
+
+test('stream() ends a bare RATE_LIMITED as a retryable RATE_LIMIT that claims no window', async () => {
+  // Issue #54's shape: a rejection whose body says nothing about a usage
+  // window. The CLI accepts the code on ANY status, so this is also the branch
+  // whose own wording the user reads — it must stay retryable and must not
+  // imply a spent window. (The pool's diagnosis is pinned in
+  // tests/accounts.test.ts; this pins the adapter's end-of-turn message.)
+  const { fetchImpl } = fetchByKey({
+    'key-1': { status: 503, body: JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Too many requests' } }) },
+  })
+  const adapter = makeAdapter({ fetchImpl, resolveApiKey: async () => 'key-1' })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const caught = err as { code?: string; message?: string }
+      assert.equal(caught.code, 'RATE_LIMIT')
+      assert.match(caught.message ?? '', /did not report an exhausted usage window/)
+      assert.match(caught.message ?? '', /未报告用量窗口用尽/)
+      return true
+    },
+  )
 })
 
 test('stream() rotates past an invalid-credential account (401)', async () => {

@@ -6,7 +6,7 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.57.0 — endpoints, request shape, and
+ * re-verified against command-code@1.58.0 — endpoints, request shape, and
  * stream events unchanged):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
@@ -82,7 +82,7 @@ import {
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.57.0'
+export const COMMAND_CODE_CLI_VERSION = '1.58.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -1454,14 +1454,19 @@ export interface CommandCodeConnectionOptions {
 export type ResolveAttachments = () => AttachmentStore | undefined
 
 /**
- * Why a pre-stream rejection rotates to another account. `rate-limit` and
- * `invalid-credential` are the two the pool records as marks; `unavailable` is
- * an account-scoped rejection that must NOT become a mark — the account's key
- * is valid and its windows may be open, the ACCOUNT just cannot serve THIS
+ * Why a pre-stream rejection rotates to another account. `rate-limit` (a usage
+ * window the provider NAMED), `throttled` (a 429 that named no window) and
+ * `invalid-credential` are the three the pool records as marks; `unavailable`
+ * is an account-scoped rejection that must NOT become a mark — the account's
+ * key is valid and its windows may be open, the ACCOUNT just cannot serve THIS
  * request (no credits, a model outside its plan) — so the pool moves on
  * without remembering anything.
+ *
+ * The window/throttle split decides what the pool may CLAIM, never whether it
+ * rotates: both leave rotation and mark the key, but only a named window lets
+ * the pool report an exhausted usage window (issue #54).
  */
-export type AccountRotationReason = 'rate-limit' | 'invalid-credential' | 'unavailable'
+export type AccountRotationReason = 'rate-limit' | 'throttled' | 'invalid-credential' | 'unavailable'
 
 /** What the rotation hook knows about the request it is rotating within. */
 export interface AccountRotationContext {
@@ -2743,28 +2748,43 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           continue
         }
       }
-      // The provider named a window limit and no other account could serve. The
-      // turn must fail as a RATE_LIMIT carrying that reset rather than as the
-      // generic `PROVIDER_HTTP_ERROR` this status maps to: the CLI accepts the
+      // The provider named a window limit — or refused the request as a plain
+      // throttle — and no other account could serve. The turn must fail as a
+      // RATE_LIMIT carrying that reset rather than as the generic
+      // `PROVIDER_HTTP_ERROR` this status maps to: the CLI accepts the
       // `RATE_LIMITED` code on ANY status (a 400 is pinned by a test above), and
       // `PROVIDER_HTTP_ERROR` sits outside dsh-llm-retry's whitelist — so
       // without this the turn dies on the spot even though the provider said
       // exactly when the same request would work again.
       //
-      // A plain 429 keeps the mapping it already had: `generateHttpError` owns
-      // the `Retry-After` header's cap and finiteness rules there, and its tests
-      // pin them. Only a body that names its own reset — or a status that does
-      // not already map to RATE_LIMIT — takes this branch.
-      if (rejection?.reason === 'rate-limit' && (rejection.resetAtMs !== undefined || attempt.status !== 429)) {
+      // The two reasons keep their own wording: only a NAMED window may be
+      // described as a spent window (issue #54), while a plain throttle says
+      // what it is and leaves the window verdict to the pool's own diagnosis.
+      //
+      // A status that already maps to RATE_LIMIT (a plain 429) keeps the
+      // mapping it had — `generateHttpError` owns the `Retry-After` header's cap
+      // and finiteness rules there, and its tests pin them — unless the body
+      // named its own reset, which is more precise.
+      if (
+        rejection !== undefined
+        && (rejection.reason === 'rate-limit' || rejection.reason === 'throttled')
+        && (rejection.resetAtMs !== undefined || attempt.status !== 429)
+      ) {
         const reset = rejection.resetAtMs
         const wait = reset === undefined
           ? 0
           : Math.min(Math.max(1000, reset - Date.now()), RETRY_MAX_DELAY_MS)
         const when = reset === undefined ? undefined : new Date(reset).toISOString()
+        const window = rejection.reason === 'rate-limit'
         throw new LlmError(
-          'llm-commandcode: the Command Code account is rate limited'
+          (window
+            ? 'llm-commandcode: the Command Code account is rate limited'
+            : 'llm-commandcode: the Command Code account is rate limited (429)'
+              + ' — the provider did not report an exhausted usage window')
             + (when === undefined ? '' : ` — the provider reports it resets at ${when}`)
-            + '；当前 Command Code 账户已被限流'
+            + (window
+              ? '；当前 Command Code 账户已被限流'
+              : '；当前 Command Code 账户被限流（429），服务商未报告用量窗口用尽')
             + (when === undefined ? '' : `，服务商给出的重置时间为 ${when}`),
           'RATE_LIMIT',
           wait > 0 ? { providerRetryAfterMs: wait } : undefined,
@@ -3281,10 +3301,19 @@ function mapFinishReason(reason: unknown): FinishReason {
  * the host should do with them, which is the caller's decision, not this
  * function's:
  *
- *   - `rate-limit`: a usage window is spent. The code `RATE_LIMITED` is the
+ *   - `rate-limit`: a usage WINDOW is spent. The code `RATE_LIMITED` is the
  *     authoritative signal — the CLI accepts the code OR a 429 status — and the
  *     body's `error.rateLimit` names the window and its `reset` (in seconds),
  *     so the host can hold the account out until the provider's own reset time.
+ *   - `throttled`: the provider refused the request (429 or a bare
+ *     `RATE_LIMITED` code) without naming a usage window. It is account-scoped
+ *     like the above, so it rotates and marks the key the same way, but it is
+ *     NOT evidence that a metered window is spent: the CLI's own
+ *     `parseWindowLimitError` returns a window limit only when
+ *     `resolveWindowLabel` can name one, and a burst/model/spend limiter the
+ *     billing endpoint cannot see is exactly this shape (issue #54's report: a
+ *     429 whose probe read five-hour 2% and weekly 10% while the error claimed
+ *     both were exhausted).
  *   - `invalid-credential`: 401; the key itself is bad.
  *   - `unavailable`: the key is fine but this account cannot serve: no credits
  *     (`400 Insufficient credits`, the codes `INSUFFICIENT_CREDITS`,
@@ -3296,8 +3325,15 @@ function mapFinishReason(reason: unknown): FinishReason {
  */
 function classifyAccountRejection(status: number, errText: string): { reason: AccountRotationReason; resetAtMs?: number } | undefined {
   if (status === 429 || readProviderErrorCode(errText)?.toUpperCase() === 'RATE_LIMITED') {
-    const resetAtMs = readWindowResetAtMs(errText)
-    return resetAtMs === undefined ? { reason: 'rate-limit' } : { reason: 'rate-limit', resetAtMs }
+    const evidence = readWindowLimitEvidence(errText)
+    // A plain throttle carries no reset: an `error.rateLimit.reset` without a
+    // window label is the provider saying "come back later", not "this window
+    // is spent", and a mark pinned to it would be a window claim the body never
+    // made.
+    if (evidence.window === undefined) return { reason: 'throttled' }
+    return evidence.resetAtMs === undefined
+      ? { reason: 'rate-limit' }
+      : { reason: 'rate-limit', resetAtMs: evidence.resetAtMs }
   }
   if (status === 401) return { reason: 'invalid-credential' }
   // The code check above deliberately runs BEFORE this status guard, mirroring
@@ -3348,34 +3384,54 @@ function readProviderErrorCode(errText: string): string | undefined {
 }
 
 /**
- * The exact reset time carried by a window-limit rejection body, in millis.
- * The CLI reads `error.rateLimit.reset` as SECONDS (`1e3 * reset`) and falls
- * back to a `resets at <ISO>` stamp in the message; both are honored here so a
- * 429 does not need a billing probe to learn a fact the provider already told
- * us. Undefined when the body carries neither.
+ * The usage-window evidence carried by a rejected request, mirroring the CLI's
+ * `parseWindowLimitError` → `resolveWindowLabel`/`extractResetAtMs` pair.
+ *
+ * `window` is present only when the body actually names one: a
+ * `error.rateLimit.window` of `fiveHour`/`weekly`/`daily`, or the
+ * "usage limit for your plan" wording (read as `weekly` when it says so, else
+ * `fiveHour`). That is the CLI's own bar for calling a rejection a WINDOW
+ * limit, and it is what keeps a bare 429 — a burst limiter, a model-level
+ * limit, a spend cap `windowLimits` cannot show — from being reported as an
+ * exhausted window (issue #54).
+ *
+ * `resetAtMs` is the reset the body publishes: `error.rateLimit.reset` is
+ * SECONDS (`1e3 * reset`, like the CLI), and a `resets at <ISO>` stamp in the
+ * message is honored as the fallback. Either can be present without the other;
+ * the window label is what decides the classification.
  */
-function readWindowResetAtMs(errText: string): number | undefined {
+function readWindowLimitEvidence(errText: string): { window?: 'fiveHour' | 'weekly' | 'daily'; resetAtMs?: number } {
+  let named: string | undefined
+  let message = ''
+  let seconds: number | undefined
   try {
     const parsed: unknown = JSON.parse(errText)
     if (isRecord(parsed)) {
       const error = isRecord(parsed.error) ? parsed.error : parsed
       const rateLimit = isRecord(error.rateLimit) ? error.rateLimit : undefined
-      const seconds = numberValue(rateLimit?.reset)
-      if (seconds !== undefined && seconds > 0) return Math.round(seconds * 1000)
-      const message = stringValue(error.message) ?? ''
-      const stamp = /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(message)?.[1]
-      if (stamp !== undefined) {
-        const at = Date.parse(stamp)
-        if (!Number.isNaN(at)) return at
-      }
+      named = stringValue(rateLimit?.window)
+      message = stringValue(error.message) ?? stringValue(parsed.message) ?? ''
+      seconds = numberValue(rateLimit?.reset)
     }
   } catch {
-    // Plain-text bodies carry no structured reset.
+    // A plain-text body carries no structured window; the message scan below
+    // still reads its `resets at <ISO>` stamp.
   }
-  const stamp = /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(errText)?.[1]
-  if (stamp === undefined) return undefined
-  const at = Date.parse(stamp)
-  return Number.isNaN(at) ? undefined : at
+  const window = named === 'fiveHour' || named === 'weekly' || named === 'daily'
+    ? named
+    : /usage limit for your plan/i.test(message) || /usage limit for your plan/i.test(errText)
+      ? (/weekly/i.test(message) ? 'weekly' : 'fiveHour')
+      : undefined
+  const stamp = /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(message)?.[1]
+    ?? /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(errText)?.[1]
+  const stamped = stamp === undefined ? undefined : Date.parse(stamp)
+  const resetAtMs = seconds !== undefined && seconds > 0
+    ? Math.round(seconds * 1000)
+    : stamped !== undefined && !Number.isNaN(stamped) ? stamped : undefined
+  return {
+    ...(window === undefined ? {} : { window }),
+    ...(resetAtMs === undefined ? {} : { resetAtMs }),
+  }
 }
 
 function isUpgradeRequiredError(status: number, errText: string): boolean {
