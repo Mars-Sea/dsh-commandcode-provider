@@ -3735,6 +3735,17 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // moonshotai/Kimi-K3 gained selectable ['low','high','max'] efforts in
   // command-code@1.39.3 (it previously reasoned automatically with none).
   assert.deepEqual(KNOWN_EFFORTS['moonshotai/Kimi-K3'], ['low', 'high', 'max'])
+  // command-code@1.60.0 added Step 5 Preview with the Step family's three-level
+  // set; command-code@1.59.0 added Grok 4.7 with Grok 4.6's four-level set.
+  // These two are the ONLY effort-map changes across 1.58.0 -> 1.62.0.
+  assert.deepEqual(KNOWN_EFFORTS['stepfun/Step-5-Preview'], ['low', 'medium', 'high'])
+  assert.deepEqual(KNOWN_EFFORTS['xai/grok-4.7'], ['low', 'medium', 'high', 'xhigh'])
+  // The MiMo V2.6 family (command-code@1.62.0) carries no reasoning flag and no
+  // reasoningEfforts in the bundled table (and caps.reasoning:false on the
+  // pricing page), so it belongs to neither effort set.
+  assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-flash'])
+  assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro'])
+  assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro-ultraspeed'])
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
@@ -3870,6 +3881,17 @@ test('known image models snapshot has stable anchor entries', () => {
   // command-code@1.49.0 added GPT-6 Astra; Vision per the official registry
   // and the CLI's inputModalities:["text","image"].
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6-astra'))
+  // command-code@1.59.0/1.60.0/1.62.0 added Grok 4.7, Step 5 Preview and the
+  // MiMo V2.6 family; all five are Vision per the official registry, the CLI's
+  // inputModalities:["text","image"] and the pricing page's caps.vision: true.
+  assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.7'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('stepfun/Step-5-Preview'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-flash'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro-ultraspeed'))
+  // The MiMo V2.6 family does not reason (docs: "Text input, Vision"); only its
+  // Vision capability is snapshotted.
+  assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.6-pro'))
 })
 
 test('known plan snapshot tiers models by the official plan pages', () => {
@@ -3916,12 +3938,25 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // all tiers, and the Go/GOAT/Pro/Max plan pages all list it.
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash'], 'go')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3-contributor'], 'go')
+  // Step 5 Preview (command-code@1.60.0) and MiMo V2.6 Flash/Pro
+  // (command-code@1.62.0) are available on every plan including Go: the pricing
+  // page grants them individual-go, and the Go plan page's rendered table lists
+  // all three.
+  assert.equal(KNOWN_PLANS['stepfun/Step-5-Preview'], 'go')
+  assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
+  assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro'], 'go')
   // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
   // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
   assert.equal(KNOWN_PLANS['xai/grok-4.6'], 'goat')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.2'], 'goat')
   assert.equal(KNOWN_PLANS['gpt-5.6-sol'], 'goat')
+  // Grok 4.7 (command-code@1.59.0) and MiMo V2.6 Pro UltraSpeed
+  // (command-code@1.62.0) are "Available on GOAT and above": the pricing page
+  // sets individual-go false for both, and the Go plan page does not list them
+  // while the GOAT one does — which is what keeps the superset chain intact.
+  assert.equal(KNOWN_PLANS['xai/grok-4.7'], 'goat')
+  assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro-ultraspeed'], 'goat')
   // Gemini 3.8 Flash (1.43.0) and Muse Spark 1.3 (1.44.0) are "available on
   // GOAT and above" per the pricing page.
   assert.equal(KNOWN_PLANS['google/gemini-3.8-flash'], 'goat')
@@ -3978,6 +4013,16 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // Ling 3.0 Flash Sante (command-code@1.52.0) is free "up to 100 requests a
   // day" while the promo lasts — also a permanent-style deal.
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.0-flash-sante:free']?.free, true)
+  // Grok 4.7's 40% off launch deal (command-code@1.61.0) carries the page's own
+  // expiry stamp, so the badge lapses without another sync; its vendored rate
+  // row already holds the discounted figures.
+  assert.equal(KNOWN_DEALS['xai/grok-4.7']?.label, '40% off')
+  assert.equal(KNOWN_DEALS['xai/grok-4.7']?.expiresAt, '2026-09-27T23:59:59.999Z')
+  // The pricing page still embeds an already-expired (2026-06-22)
+  // `qwen-3.7-max-2x-usage` record its own Deals section does not list, so it
+  // stays out of the snapshot — the rate row already carries the discounted
+  // figures.
+  assert.equal(KNOWN_DEALS['Qwen/Qwen3.7-Max'], undefined)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
@@ -3993,6 +4038,13 @@ test('dealLabel() hides a deal after its expiry date', () => {
   assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  // Grok 4.7's 40% off launch deal (command-code@1.61.0) is stamped with the
+  // page's own expiry (2026-09-27T23:59:59.999Z), so it shows until that
+  // instant and hides itself afterwards — before the price row's reverted
+  // figures would ever be needed.
+  assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-21T00:00:00Z')), '40% off')
+  assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-27T12:00:00Z')), '40% off')
+  assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-28T00:00:00Z')), undefined)
   // No deal -> undefined.
   assert.equal(dealLabel('claude-sonnet-5'), undefined)
   // Gemini 3.7 Flash's deal was retired in the 1.38.2 sync: no label at any time.
@@ -4179,6 +4231,35 @@ test('isPeakPricingHour() answers the model-independent half of the same rule', 
 })
 
 test('CLI version and API base constants are stable', () => {
+  // command-code@1.62.0 (2026-09-22 check of the 2026-09-21 npm `latest`) is an
+  // ADDITIVE release train: 1.58.1 -> 1.62.0 ships five CLI versions whose only
+  // model-registry changes are five additions — `xai/grok-4.7` (1.59.0,
+  // chatComplete, text+image, 500K, ['low','medium','high','xhigh'], GOAT and
+  // above, 40% off from 2026-09-21 to 2026-09-27), `stepfun/Step-5-Preview`
+  // (1.60.0, text+image, 1M, ['low','medium','high'], Go),
+  // `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (1.62.0, text+image,
+  // 1,048,576 context, no reasoning flag, Go) and
+  // `xiaomi/mimo-v2.6-pro-ultraspeed` (1.62.0, same family, GOAT and above).
+  // Nothing was removed and no existing model changed efforts, modalities,
+  // context or tier: the registry diff across the two pinned bundles is
+  // 78 -> 83 entries with exactly those five additions, the effort map gains
+  // exactly two keys (46 -> 48), KNOWN_IMAGE_MODELS gains the five (52 -> 57),
+  // the plan map gains three Go and two GOAT entries without moving a tier
+  // (46/52/65/72 -> 49/57/70/77), the deal count goes 5 -> 6, and the vendored
+  // price table gains exactly the five matching rows (71 -> 76) with no rate
+  // change to any existing row. The public catalog serves 76 models now (71 +
+  // the five; `gpt-6-astra` is still a CLI/pricing/docs-only model, absent from
+  // the public Provider catalog as before) with its endpoint mix moving to
+  // 60 x chat/completions + responses, the same 8 Claude ids x messages-only,
+  // 8 x chat/completions. Static inspection finds no transport drift for this
+  // adapter: the /alpha/* endpoint set, the /alpha/generate converters and the
+  // stream event vocabulary differ from 1.58.0 only by minifier variable
+  // renames, the subscription plan maps and the peak/off-peak membership and
+  // schedule are byte-identical, and the documented Provider API endpoint set
+  // is unchanged. The two CLI-side items outside this adapter's surface are
+  // 1.58.1's "Auto-compact past images and keep their result" (a CLI client
+  // behavior, not a wire change) and 1.59.0's YOLO/accept-edits keybinding
+  // rework.
   // command-code@1.58.0 (2026-09-20 check of the 2026-09-19 npm `latest`, whose
   // changelog entry is "Retire the free LongCat 2.0 tier and sell LongCat 2.0 as
   // a paid model"): the registry grows 77 -> 78 with exactly one addition,
@@ -4257,7 +4338,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.58.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.62.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

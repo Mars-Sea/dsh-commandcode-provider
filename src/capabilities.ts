@@ -27,7 +27,7 @@
 // ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.53.0 bundled model
+  // Re-verified against the authoritative command-code@1.62.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -59,6 +59,10 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // (text+image, reasoning without selectable efforts, hidden behind a
   // 2026-09-10 expiry gate); command-code@1.51.2 removed it from the bundle
   // entirely, so no snapshot entry is needed.
+  // The 1.58.0 -> 1.62.0 train added `xai/grok-4.7` (command-code@1.59.0) and
+  // `stepfun/Step-5-Preview` (1.60.0) — the only two effort-map changes across
+  // those releases, re-verified against the 1.62.0 table; every existing entry,
+  // and every effort-less automatic-reasoning model, is unchanged.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Max-0902': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
@@ -106,9 +110,18 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // effort set as the rest of the Gemini Flash family.
   'google/gemini-3.8-flash': ['low', 'medium', 'high'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
+  // command-code@1.60.0 added Step 5 Preview (StepFun's 600B sparse-MoE agentic
+  // coding model, 1M context, text+image) with ['low', 'medium', 'high']
+  // efforts — the same three-level set as its Step 3.x Flash siblings, which
+  // still reason automatically with no levels and so stay out of this map.
+  'stepfun/Step-5-Preview': ['low', 'medium', 'high'],
   'tencent/hy4-preview': ['low', 'medium', 'high'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
+  // command-code@1.59.0 added Grok 4.7 ("Add Grok 4.7") with the same
+  // four-level set as Grok 4.6; 1.61.0 then put it on a 40% off launch deal
+  // (see KNOWN_DEALS).
+  'xai/grok-4.7': ['low', 'medium', 'high', 'xhigh'],
   'z-ai/glm-5.3-flash': ['low', 'high', 'max'],
   // command-code@1.57.0 added GLM-5.3 FlashX — the only model-registry change
   // across 1.56.0 -> 1.57.0 — with the same three-level effort set as its
@@ -216,6 +229,11 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'moonshotai/Kimi-K3',
   'sakana/fugu-ultra',
   'stepfun/Step-3.7-Flash',
+  // command-code@1.60.0 added Step 5 Preview; Vision per the official registry
+  // ("Text input, Vision, Reasoning") and the CLI's
+  // inputModalities:["text","image"] (the pricing page also carries
+  // caps.vision: true).
+  'stepfun/Step-5-Preview',
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
   'xai/grok-4.5',
@@ -223,7 +241,20 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // 1.46.0); re-verified present in the 1.53.0 bundle's
   // inputModalities:["text","image"] entries.
   'xai/grok-4.6',
+  // command-code@1.59.0 added Grok 4.7; Vision per the official registry
+  // ("Text input, Vision, Reasoning"), the CLI's
+  // inputModalities:["text","image"] and the pricing page's caps.vision: true.
+  'xai/grok-4.7',
   'xiaomi/mimo-v2.5',
+  // command-code@1.62.0 added the MiMo V2.6 family (Flash, Pro, Pro
+  // UltraSpeed); all three are Vision per the official registry ("Text input,
+  // Vision"), the CLI's inputModalities:["text","image"] and the pricing
+  // page's caps.vision: true. None of them carries a reasoning flag in any
+  // source, so they are plain non-thinking models — no effort or
+  // automatic-reasoning entry belongs beside these.
+  'xiaomi/mimo-v2.6-flash',
+  'xiaomi/mimo-v2.6-pro',
+  'xiaomi/mimo-v2.6-pro-ultraspeed',
   'z-ai/glm-5.3-flash',
   // command-code@1.57.0 added GLM-5.3 FlashX; Vision per the official
   // registry and the CLI's inputModalities:["text","image"] (the pricing page
@@ -355,7 +386,11 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
  * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
  * `Qwen/Qwen3.8-Omni-Flash` (Go); command-code@1.57.0 added
- * `z-ai/glm-5.3-flashx` (Go).
+ * `z-ai/glm-5.3-flashx` (Go); command-code@1.59.0 added `xai/grok-4.7` (GOAT)
+ * and 1.60.0 added `stepfun/Step-5-Preview` (Go); command-code@1.62.0 added the
+ * MiMo V2.6 family — `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (Go) and
+ * `xiaomi/mimo-v2.6-pro-ultraspeed` (GOAT) — so the 1.58.0 -> 1.62.0 window's
+ * only tier changes are additions and the superset chain still holds.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -366,7 +401,7 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (46) ---
+  // --- Go (49) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -423,6 +458,11 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'poolside/laguna-s-2.1-free': 'go',
   'stepfun/Step-3.5-Flash': 'go',
   'stepfun/Step-3.7-Flash': 'go',
+  // command-code@1.60.0 added Step 5 Preview; the pricing page's embedded
+  // availability grants every tier (individual-go through teams-pro), and the
+  // Go plan page's rendered table lists it — while GOAT/Pro/Max list it too,
+  // which is the superset chain this map encodes.
+  'stepfun/Step-5-Preview': 'go',
   'tencent/hy3-paid': 'go',
   'tencent/hy4-preview': 'go',
   'thinkingmachines/inkling': 'go',
@@ -430,6 +470,12 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'xai/grok-4.5': 'go',
   'xiaomi/mimo-v2.5': 'go',
   'xiaomi/mimo-v2.5-pro': 'go',
+  // command-code@1.62.0 added MiMo V2.6 Flash and MiMo V2.6 Pro on every tier;
+  // the Go plan page lists both, and the GOAT-tier Pro UltraSpeed sibling does
+  // NOT appear there — the pricing page's availability is what separates them
+  // (individual-go: true for these two, false for UltraSpeed).
+  'xiaomi/mimo-v2.6-flash': 'go',
+  'xiaomi/mimo-v2.6-pro': 'go',
   'z-ai/glm-5.3-flash': 'go',
   // command-code@1.57.0 added GLM-5.3 FlashX; the pricing page's embedded
   // availability grants every tier (individual-go through teams-pro) — the
@@ -440,7 +486,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'zai-org/GLM-5.2': 'go',
   'zai-org/GLM-5.2-Fast': 'go',
   'zai-org/GLM-5.3': 'go',
-  // --- GOAT (6 more) ---
+  // --- GOAT (8 more) ---
   'google/gemini-3.7-flash': 'goat',
   // command-code@1.43.0 added Gemini 3.8 Flash; the pricing page marks it
   // "Available on GOAT and above", like the rest of the Gemini Flash family.
@@ -451,6 +497,16 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // "Available on GOAT and above", like the 1.2/1.1 models.
   'meta/muse-spark-1.3': 'goat',
   'xai/grok-4.6': 'goat',
+  // command-code@1.59.0 added Grok 4.7 on GOAT and above: the pricing page's
+  // availability sets individual-go false with goat/pro/provider/max/ultra
+  // true ("Available on GOAT and above"), and the Go plan page's table does not
+  // list it while GOAT's does.
+  'xai/grok-4.7': 'goat',
+  // command-code@1.62.0 added MiMo V2.6 Pro UltraSpeed on GOAT and above, the
+  // same split as its Grok 4.7 sibling (individual-go false; the Go plan page
+  // does not list it, GOAT/Pro/Max do) — its two cheaper V2.6 siblings are Go
+  // models and sit in the section above.
+  'xiaomi/mimo-v2.6-pro-ultraspeed': 'goat',
   // --- Pro (13 more) ---
   'claude-haiku-4-5-20251001': 'pro',
   'claude-sonnet-4-6': 'pro',
@@ -653,6 +709,13 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
   'xiaomi/mimo-v2.5': { label: '98% off' },
+  // command-code@1.61.0 put Grok 4.7 on a 40% off launch deal ("Grok 4.7 40%
+  // off"), running 2026-09-21 -> 2026-09-27T23:59:59.999Z and reverting to
+  // $2.00 in / $6.00 out. The expiry is stamped from the page's own `deal`
+  // record so the badge lapses by itself: the vendored rate row already holds
+  // the discounted figures ($1.20 in / $3.60 out / $0.30 cache read, doubling
+  // past 200K), exactly like the other percentage deals here.
+  'xai/grok-4.7': { label: '40% off', expiresAt: '2026-09-27T23:59:59.999Z' },
   // The MiniMax M3 / M2.7 FREE promo variants were retired in
   // command-code@1.39.2 ("Retire MiniMax free models"): the official CLI hides
   // them and the pricing page no longer lists them as free, so the free

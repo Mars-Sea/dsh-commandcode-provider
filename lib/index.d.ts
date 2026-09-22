@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.58.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.62.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -809,7 +809,11 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
  * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
  * `Qwen/Qwen3.8-Omni-Flash` (Go); command-code@1.57.0 added
- * `z-ai/glm-5.3-flashx` (Go).
+ * `z-ai/glm-5.3-flashx` (Go); command-code@1.59.0 added `xai/grok-4.7` (GOAT)
+ * and 1.60.0 added `stepfun/Step-5-Preview` (Go); command-code@1.62.0 added the
+ * MiMo V2.6 family — `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (Go) and
+ * `xiaomi/mimo-v2.6-pro-ultraspeed` (GOAT) — so the 1.58.0 -> 1.62.0 window's
+ * only tier changes are additions and the superset chain still holds.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
