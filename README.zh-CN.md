@@ -52,7 +52,7 @@
 **pnpm 11 会拦下刚发布的新版本。** 它的 `minimumReleaseAge` 默认为 1440 分钟，发布不足一天的版本会被跳过，`@latest` 解析到**上一个**版本 —— 而且是静默的，命令照样以成功退出。想装 24 小时内发布的版本，必须写精确版本号：
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.1
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.9
 ```
 
 这一点对每个 profile 都成立，包括下面的终端界面。
@@ -71,7 +71,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 每个 profile 各自更新 —— 终端界面有独立的插件列表（见下文）：
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.1
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.9
 ```
 
 要更新到发布不足 24 小时的版本，和上面的安装一样写精确版本号；pnpm 11 的年龄门禁会把 `@latest` 解析成上一个版本。
@@ -100,7 +100,7 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 插件同样支持终端前端。**每个 dsh profile 有独立的插件列表**，所以上面那条 Web 安装命令不会装到终端里 —— 还要把插件装进 `dsh-tui` profile：
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.1
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.9
 ```
 
 这里请写精确版本号。新版本发布后的 24 小时内，只写包名（或 `@latest`）会被静默解析到上一个版本 —— 安装命令照样成功，但 profile 里拿到的是旧版本，结果就是全新的终端安装里既没有 **`/settings` → Command Code** 页面，也看不到任何 `commandcode` 模型。
