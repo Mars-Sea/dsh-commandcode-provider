@@ -61,6 +61,7 @@ test('per-release DSH compatibility is declared for every supported release', ()
     '0.1.5-rc.2',
     '0.1.6-alpha.1',
     '0.1.6-alpha.2',
+    '0.1.7-alpha.1',
   ]) {
     assert.equal(releases[version], 'compatible', `dshReleases[${version}]`)
   }

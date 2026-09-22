@@ -140,6 +140,7 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-usageBlocked{border:1px solid var(--dsw-alias-label-error);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px}
 .cc-usageBlockedTitle{color:var(--dsw-alias-label-error);margin:0;font-size:13px;font-weight:600;line-height:1.5}
 .cc-usageBlockedHint{color:var(--dsw-alias-label-secondary);margin:0;font-size:12px;line-height:1.5}
+.cc-usageBlockedDetail{color:var(--dsw-alias-label-secondary);margin:0;font-size:11px;line-height:1.5;word-break:break-word;opacity:.85}
 .cc-version{margin:4px 0 0;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 /* The Models-page provider panel root: unstyled by design — the row card the
  * Models page owns supplies the surface, the panel only stacks its controls. */

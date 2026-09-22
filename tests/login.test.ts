@@ -366,6 +366,46 @@ test('a terminal state makes the next begin start fresh', async () => {
   }
 })
 
+test('two concurrent begin() calls share one attempt and one server', async () => {
+  // Two GUI tabs (or a double click) can issue two `loginBegin` RPCs at once,
+  // and the rejoin check cannot see them: the status only becomes `waiting`
+  // AFTER the port is bound. Without the single-flight fence each call bound
+  // its own loopback server and only the last was reachable by teardown — the
+  // orphan kept listening (and answering /callback) for the process's
+  // lifetime, and ten of them exhausted the login port window.
+  const harness = makeFlow()
+  try {
+    const [first, second] = await Promise.all([harness.flow.begin(), harness.flow.begin()])
+    assert.equal(first.state, 'waiting')
+    assert.equal(second.state, 'waiting')
+    assert.equal(first.authUrl, second.authUrl, 'both callers rejoin the SAME attempt')
+    const { callbackUrl } = parseAuthUrl(first.authUrl ?? '')
+    // One server, and it is the tracked one: tearing the flow down closes it.
+    harness.dispose()
+    await assert.rejects(fetch(callbackUrl, { method: 'POST', body: '{}' }))
+  } finally {
+    harness.dispose()
+  }
+})
+
+test('cancel() during a start retires the attempt instead of publishing it', async () => {
+  // The status cannot say `waiting` while the port is still being bound, so a
+  // cancel in that window used to be dropped on the floor: the attempt went on
+  // to publish a live authUrl and start a watchdog the user had already
+  // dismissed. The flag retires it as soon as the bind settles.
+  const harness = makeFlow()
+  try {
+    const started = harness.flow.begin()
+    harness.flow.cancel()
+    const status = await started
+    assert.equal(status.state, 'failed')
+    assert.equal(status.reason, 'cancelled')
+    assert.equal(harness.flow.status().state, 'failed')
+  } finally {
+    harness.dispose()
+  }
+})
+
 test('begin rejects when no candidate port is free', async () => {
   // Occupy a real port, then aim the flow at exactly that one.
   const occupant = createNetServer()

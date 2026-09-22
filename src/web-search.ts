@@ -89,15 +89,25 @@ export function selectCommandCodeSearchProvider(web: WebRuntime, enable: boolean
  * configured, leave auto-select" and must round-trip untouched: writing the
  * factory default instead would still override a sibling plugin's own
  * constructor-time pin.
+ *
+ * `preexisting` is the one fact `displaced` cannot carry: an `undefined`
+ * `displaced` means EITHER "the field was unset when we took over" (give
+ * `undefined` back on disable) OR "the field already read `commandcode`"
+ * (touch nothing on disable — see {@link applyCommandCodeSearchSelection}).
+ * Collapsing the two is what turned a user's own `searchProvider: commandcode`
+ * pin into an auto-select — and then into `WEB_PROVIDER_AMBIGUOUS` on every
+ * search — the moment this plugin was disabled or unloaded.
  */
 export interface CommandCodeSearchSelection {
   owner: boolean
   displaced: string | undefined
+  /** Whether the field already read `commandcode` when this plugin first took it over. */
+  preexisting: boolean
 }
 
 /** Fresh selection state: the plugin starts out not owning the selection. */
 export function commandCodeSearchSelection(): CommandCodeSearchSelection {
-  return { owner: false, displaced: undefined }
+  return { owner: false, displaced: undefined, preexisting: false }
 }
 
 /**
@@ -115,8 +125,14 @@ export function commandCodeSearchSelection(): CommandCodeSearchSelection {
  *   auto-select — already says what the user wants.
  * - When the field already reads `commandcode` at first touch (e.g. a
  *   surviving runtime the plugin did not set, or a manual
- *   `searchProvider: commandcode` pin), `displaced` stays undefined so the
- *   later disable is a no-op rather than a guess at the factory default.
+ *   `searchProvider: commandcode` pin), `displaced` stays undefined and
+ *   `preexisting` is set, so the later disable is a no-op rather than a guess
+ *   at the factory default. A "no-op" means the field is left ALONE: writing
+ *   that `undefined` back would destroy the user's own pin, and dsh-web reads
+ *   a cleared `searchProviderId` as auto-select — where a second usable
+ *   provider (the shipped `deepseek-official` is usable whenever a DeepSeek
+ *   key resolves) makes EVERY later search throw
+ *   `WEB_PROVIDER_AMBIGUOUS`.
  *
  * Never throws: like the low-level rewrite, a hardened runtime shape degrades
  * to registered-but-unselected.
@@ -135,14 +151,28 @@ export function applyCommandCodeSearchSelection(
         return
       }
       const prior = field.searchProviderId
-      state.displaced = prior === COMMANDCODE_SEARCH_PROVIDER_ID ? undefined : prior
+      // Three cases, and `displaced` alone cannot tell the last two apart:
+      // a sibling's id (restore it), the field was unset (restore `undefined`),
+      // or the field already read OUR id (touch nothing — see the disable
+      // branch). `preexisting` carries that third case.
+      state.preexisting = prior === COMMANDCODE_SEARCH_PROVIDER_ID
+      state.displaced = state.preexisting ? undefined : prior
       field.searchProviderId = COMMANDCODE_SEARCH_PROVIDER_ID
       state.owner = true
       return
     }
     if (state.owner) {
       state.owner = false
-      field.searchProviderId = state.displaced
+      // Restore ONLY a selection this plugin actually took over. `preexisting`
+      // means the field already read `commandcode` before we ever touched it
+      // (a manual `searchProvider: commandcode` patch,
+      // `$DSH_WEB_SEARCH_PROVIDER`, or a surviving runtime): assigning the
+      // empty memory back would clear the user's own pin and hand the
+      // selection to auto-select, which throws `WEB_PROVIDER_AMBIGUOUS` as
+      // soon as a second provider is usable — while our own provider stays
+      // registered either way.
+      if (!state.preexisting) field.searchProviderId = state.displaced
+      state.preexisting = false
       return
     }
     // Off without ever having taken over: nothing of ours to give back.

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Command Code">
+  <rect width="64" height="64" rx="14" fill="#0F172A"/>
+  <path d="M18 20 L30 32 L18 44" fill="none" stroke="#4ADE80" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M34 44 L48 44" fill="none" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+</svg>

@@ -7,5 +7,9 @@ lib/
 .DS_Store
 .agents/
 
+# The official Command Code CLI's per-project state (e.g. `taste/`), created by
+# running the CLI inside this checkout. Local-only: never commit, never publish.
+.commandcode/
+
 # Maintainer-local release guide: never commit, never publish.
 RELEASES.local.md

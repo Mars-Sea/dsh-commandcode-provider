@@ -29,6 +29,7 @@ import { randomUUID } from 'node:crypto'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 import {
+  assertUsableApiKey,
   attributionHeaders,
   CONTEXT_WINDOW_EXCEEDED_CODE,
   isContextWindowExceededError,
@@ -66,6 +67,7 @@ import * as dshLlm from '@deepseek-ai/dsh-llm'
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 import { requestImageTarget } from './image-request.ts'
 import { commandCodeImageTokens } from './image-tokens.ts'
+import { boundTraceText, openStreamTrace, STREAM_TRACE_ENV } from './stream-trace.ts'
 
 import {
   KNOWN_EFFORTS,
@@ -194,16 +196,22 @@ function periodEndValue(value: unknown): number {
  * Terminal stream-error markers from the official CLI (`Xw` in command-code's
  * cli.mjs): these always mean "retrying cannot succeed", so the adapter must
  * not classify them as transient server errors.
+ *
+ * Written with spaces rather than the CLI's underscores, because
+ * {@link hasTerminalStreamMarker} normalizes the separator before matching:
+ * a JSON body usually carries `premium credits exhausted` while the CLI's own
+ * list is written `premium_credits_exhausted`, and both are the same refusal
+ * (the pre-stream classifier normalizes identically).
  */
 const TERMINAL_STREAM_ERROR_MARKERS = [
-  'premium_credits_exhausted',
-  'model_not_in_plan',
+  'premium credits exhausted',
+  'model not in plan',
   'insufficient credits',
 ]
 
 function hasTerminalStreamMarker(message: string): boolean {
-  const lower = message.toLowerCase()
-  return TERMINAL_STREAM_ERROR_MARKERS.some((marker) => lower.includes(marker))
+  const normalized = message.toLowerCase().replaceAll('_', ' ')
+  return TERMINAL_STREAM_ERROR_MARKERS.some((marker) => normalized.includes(marker))
 }
 
 /**
@@ -245,7 +253,10 @@ function isContextOverflowDetail(detail: string): boolean {
  *   (issue #39).
  * - Credits/plan wording is terminal, so an exhausted balance or a model
  *   outside the plan is not retried as if it were a transient rate limit.
- * - Only then does the status/`isRetryable` pair decide, as before.
+ * - Only then does the status/`isRetryable` pair decide — and an explicit
+ *   refusal (`isRetryable: false`) or a terminal marker OUTRANKS a status, so a
+ *   5xx carrying "insufficient credits" stays terminal instead of entering the
+ *   retry cadence as `SERVER`.
  */
 function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmError {
   const record = isRecord(value) ? value : undefined
@@ -276,8 +287,16 @@ function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmErr
   }
   const terminal = hasTerminalStreamMarker(detail)
   const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
+  // An explicit refusal and a terminal marker both outrank the STATUS, so a 5xx
+  // that carries "insufficient credits" (or `isRetryable: false`) cannot be
+  // answered with `SERVER` — that put a permanent refusal back on
+  // dsh-llm-retry's 1000-attempt cadence. Only a status with no such evidence
+  // keeps the transient mapping, and an explicit `isRetryable: true` still
+  // wins over everything.
   const retryable = isRetryable === true
-    || (statusCode !== undefined ? retryableStatus : (isRetryable !== false && !terminal))
+    || (isRetryable === false || terminal
+      ? false
+      : (statusCode !== undefined ? retryableStatus : true))
   if (!retryable) {
     return new LlmError(
       `Command Code stream error: ${message}`,
@@ -580,43 +599,41 @@ async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): 
 // replayed on both transports.
 // ---------------------------------------------------------------------------
 
+/** A common view of the two tool-result envelopes shipped by the Harness. */
+interface ToolResultView {
+  readonly toolCallId: string
+  readonly isError?: boolean
+  readonly content: readonly ContentBlock[]
+}
+
 /**
- * Whether an inbound message is a tool RESULT — a `user`-role message the
- * producer tagged with `source: { kind: 'tool' }`.
+ * >=0.1.7 puts toolCallId/isError on a role:'tool' message and carries raw
+ * content blocks. Older engines wrap those fields in the first tool-result
+ * block of a role:'user' message. Read structurally so the bundle still builds
+ * and loads against older peers. Pairing and emission MUST use this same view:
+ * otherwise a dropped result either drops its call too (making the model
+ * forget completed work), or leaves an unanswered call on the wire.
  *
- * The tag is read defensively because it is PRODUCER-supplied and nothing
- * validates it: dsh-llm's `Message` type declares `source` required, but the
- * runtime never checks it and every adapter shipped before this one ignored the
- * field outright (`dsh-llm-deepseek` never reads it). A third-party plugin that
- * assembles its own history can therefore omit it and run correctly everywhere
- * else — dsh-mneme's memory pipeline did — which made this adapter, the first
- * to actually read the field, the first to crash on such a message with
- * `TypeError: Cannot read properties of undefined (reading 'kind')` in the
- * serialization phase, 0–8 ms in, before any request left the machine and with
- * nothing in the error naming the message or the producer (issue #47).
- *
- * Two rules keep an untagged message from costing the turn:
- *
- *  - A PRESENT tag is authoritative. `kind: 'user'`, `'model'`, `'plugin'` or
- *    any producer-added kind means "not a tool result", whatever the content
- *    looks like — the tag answers *who produced this*.
- *  - An ABSENT tag falls back to the content shape. A `user` message whose
- *    first block is a `tool-result` is a tool result by the harness's own
- *    definition (`ToolResultMessage` is exactly that shape with a
- *    `ToolMessageSource`), and the fallback is not cosmetic: `pairedToolCalls()`
- *    counts a `tool-result` block from ANY message, so classifying such a
- *    message as a plain user message would drop it at emission while its call
- *    still counted as paired — leaving the assistant's tool call unanswered on
- *    the wire, which the gateway rejects outright. FIRST block, not "any block":
- *    the tool-result branch reads `content[0]` and skips anything else, so
- *    claiming a mixed message as a tool result would discard its other blocks
- *    instead of sending them.
+ * For the legacy envelope a present source tag remains authoritative; an
+ * absent tag falls back to the first block (issue #47). The modern role is
+ * itself the discriminator, as it is for the Harness's own serializers.
  */
-function isToolResultMessage(message: Message): boolean {
-  if (message.role !== 'user') return false
+function toolResultOf(message: Message): ToolResultView | undefined {
+  const current = message as unknown as {
+    role: string
+    toolCallId?: string
+    isError?: boolean
+    content: readonly ContentBlock[]
+  }
+  if (current.role === 'tool') {
+    if (typeof current.toolCallId !== 'string' || current.toolCallId === '') return undefined
+    return { toolCallId: current.toolCallId, isError: current.isError ?? false, content: current.content }
+  }
+  if (message.role !== 'user') return undefined
   const kind: string | undefined = message.source?.kind
-  if (kind !== undefined) return kind === 'tool'
-  return message.content?.[0]?.type === 'tool-result'
+  if (kind !== undefined && kind !== 'tool') return undefined
+  const block = message.content[0]
+  return block?.type === 'tool-result' ? block : undefined
 }
 
 /**
@@ -634,12 +651,13 @@ function pairedToolCalls(messages: readonly Message[]): {
   const names = new Map<string, string>()
   const resultIds = new Set<string>()
   for (const message of messages) {
+    const result = toolResultOf(message)
+    if (result) resultIds.add(result.toolCallId)
     for (const block of message.content) {
       if (message.role === 'assistant' && block.type === 'tool-call') {
         callIds.add(block.id)
         names.set(block.id, block.name)
       }
-      if (block.type === 'tool-result') resultIds.add(block.toolCallId)
     }
   }
   return { ids: new Set([...callIds].filter((id) => resultIds.has(id))), names }
@@ -708,7 +726,7 @@ interface ToolResultMedia {
  * invisible to a Vision model (issue #30). Deduplication keeps a result that
  * repeats one attachment from paying for the same pixels twice.
  */
-function toolResultMedia(block: Extract<ContentBlock, { type: 'tool-result' }>): ToolResultMedia {
+function toolResultMedia(block: ToolResultView): ToolResultMedia {
   const chunks: string[] = []
   const images: ImageAttachmentRef[] = []
   const seen = new Set<string>()
@@ -1134,7 +1152,8 @@ async function messagesToCC(
   for (const message of messages) {
     if (message.role === 'system') continue // folded into params.system by the caller
 
-    if (message.role === 'user' && !isToolResultMessage(message)) {
+    const result = toolResultOf(message)
+    if (message.role === 'user' && !result) {
       flushPendingImages()
       const parts: unknown[] = []
       for (const block of message.content) {
@@ -1192,14 +1211,13 @@ async function messagesToCC(
       continue
     }
 
-    // tool-result message (user role, single tool-result block)
-    if (isToolResultMessage(message)) {
-      const block = message.content[0]
-      if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
-      const media = toolResultMedia(block)
+    // Both modern tool messages and legacy wrapped results use the same view.
+    if (result) {
+      if (!paired.has(result.toolCallId)) continue
+      const media = toolResultMedia(result)
       // Resolved once: the tool message and the carrier note below must name
       // the same call, or the model cannot tie an image back to its result.
-      const wireToolCallId = wireIds.get(block.toolCallId) ?? block.toolCallId
+      const wireToolCallId = wireIds.get(result.toolCallId) ?? result.toolCallId
       out.push({
         role: 'tool',
         content: [
@@ -1209,8 +1227,8 @@ async function messagesToCC(
             // `paired` guarantees a call with this id exists, so the map
             // always hits; `|| 'unknown'` also guards an empty call name
             // (matches the official CLI's `?? "unknown"` fallback).
-            toolName: toolNames.get(block.toolCallId) || 'unknown',
-            output: block.isError
+            toolName: toolNames.get(result.toolCallId) || 'unknown',
+            output: result.isError
               ? { type: 'error-text', value: toolResultTextForWire(media) }
               : { type: 'text', value: toolResultTextForWire(media) },
           },
@@ -1293,7 +1311,8 @@ async function messagesToOpenAI(
     // the caller, matching the existing adapter's conversation folding.
     if (message.role === 'system') continue
 
-    if (message.role === 'user' && !isToolResultMessage(message)) {
+    const result = toolResultOf(message)
+    if (message.role === 'user' && !result) {
       flushPendingImages()
       const parts: unknown[] = []
       for (const block of message.content) {
@@ -1357,14 +1376,13 @@ async function messagesToOpenAI(
       continue
     }
 
-    // tool-result message (user role, single tool-result block)
-    if (isToolResultMessage(message)) {
-      const block = message.content[0]
-      if (!block || block.type !== 'tool-result' || !paired.has(block.toolCallId)) continue
-      const media = toolResultMedia(block)
+    // Both modern tool messages and legacy wrapped results use the same view.
+    if (result) {
+      if (!paired.has(result.toolCallId)) continue
+      const media = toolResultMedia(result)
       // Resolved once: the tool message and the carrier note below must name
       // the same call, or the model cannot tie an image back to its result.
-      const wireToolCallId = wireIds.get(block.toolCallId) ?? block.toolCallId
+      const wireToolCallId = wireIds.get(result.toolCallId) ?? result.toolCallId
       out.push({
         role: 'tool',
         tool_call_id: wireToolCallId,
@@ -1970,6 +1988,8 @@ interface BlockAssembler {
   reasoningIndex: number
   reasoningContent: string
   sawContent: boolean
+  /** Provider spelling, retained for terminal diagnostics rather than inferred from usage. */
+  finishReason: string | undefined
   /** Buffered OpenAI tool-call fragments, flushed at finish. */
   openAiToolCalls: Array<{ index: number; id?: string; name: string; arguments: string }>
 }
@@ -1983,6 +2003,7 @@ function createBlockAssembler(): BlockAssembler {
     reasoningIndex: -1,
     reasoningContent: '',
     sawContent: false,
+    finishReason: undefined,
     openAiToolCalls: [],
   }
 }
@@ -2255,7 +2276,17 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   /** The headers every authenticated account endpoint shares. */
   private async accountHeaders(apiKey?: string): Promise<Record<string, string>> {
     const connection = this.deps.options()
-    const key = apiKey ?? (await this.deps.resolveApiKey(connection))
+    const raw = apiKey ?? (await this.deps.resolveApiKey(connection))
+    // The chat path validates the key through the harness's own helper (see
+    // `resolveApiKey` in the plugin entry); every account endpoint must run the
+    // same check, or a key carrying a character no HTTP header can hold throws
+    // inside `fetch` BEFORE any I/O — once per endpoint — and the report reads
+    // as "the network is down". The credential reference is read structurally:
+    // it belongs to the host's resolved options, not to this adapter's
+    // connection type, and it only names the key in the rejection message.
+    const named = (connection as { apiKeyEnv?: unknown }).apiKeyEnv
+    const ref = typeof named === 'string' && named !== '' ? named : 'the stored credential'
+    const key = assertUsableApiKey(raw, 'llm-commandcode', ref)
     return {
       Authorization: `Bearer ${key}`,
       'x-command-code-version': COMMAND_CODE_CLI_VERSION,
@@ -2270,15 +2301,21 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * failure accounting: the billing probe fails open silently, the usage
    * report books failures per endpoint. Non-2xx and non-record bodies come
    * back without a record; only a transport throw propagates to the caller.
+   *
+   * `timeoutMs` is the caller's budget for this one request. The default is the
+   * CATALOG probe's short cap, which fits the picker's fail-open reads; the
+   * usage report deliberately passes the connection's own request budget so an
+   * account query is not held to a stricter (and invisible) limit than chat.
    */
   private async fetchEndpointJson(
     url: string,
     headers: Record<string, string>,
+    timeoutMs: number = MODELS_TIMEOUT_MS,
   ): Promise<{ status: number; record?: Record<string, unknown> }> {
     const response = await this.fetchImpl(url, {
       headers,
       // A hung account endpoint must not stall the picker / usage card forever.
-      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) return { status: response.status }
     const parsed: unknown = await response.json()
@@ -2451,11 +2488,37 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * view. Requires a usable API key (throws `MISSING_CREDENTIAL` otherwise).
    * Pass `apiKey` to report on a specific account of a multi-account pool;
    * the default resolves the currently active account.
+   *
+   * Two failure modes are NOT "the network is down", and the report must say
+   * so rather than let {@link classifyTotalFailure} blame the connection:
+   *
+   *  - A key that no HTTP header can carry (a stray newline from a paste, a
+   *    full-width character) makes `fetch` throw a `TypeError` **before any
+   *    I/O**, for every endpoint at once. The chat path refuses such a key
+   *    through `assertUsableApiKey`; this path must too, and it answers
+   *    `blocked: 'invalid-key'` instead of four phantom transport failures.
+   *  - The four endpoints get the SAME per-request budget as a chat call
+   *    (`connection.requestTimeoutMs`, default 60 s), not the catalog's 10 s
+   *    probe budget: on a slow link a 10 s cap made every account query time
+   *    out while chat kept working, which is exactly a "check your network"
+   *    banner that never clears.
    */
   async getUsage(apiKey?: string): Promise<CommandCodeUsageReport> {
     const connection = this.deps.options()
     const base = connection.apiBase
-    const headers = await this.accountHeaders(apiKey)
+    let headers: Record<string, string>
+    try {
+      headers = await this.accountHeaders(apiKey)
+    } catch (error: unknown) {
+      // An unusable key is a CREDENTIAL verdict, not a transport one. A
+      // missing key still propagates (the caller renders the unconfigured
+      // state); only the harness's own "characters no header can carry"
+      // rejection — and a blank resolved key — becomes `invalid-key`.
+      if (error instanceof LlmError && error.code === 'INVALID_CREDENTIAL') {
+        return { failures: [error.message], blocked: 'invalid-key' }
+      }
+      throw error
+    }
     const failures: string[] = []
     // HTTP status per failed endpoint (undefined for transport failures), in
     // failure order — the all-failed classification below reads it.
@@ -2463,7 +2526,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
       try {
-        const { status, record } = await this.fetchEndpointJson(`${base}${path}`, headers)
+        const { status, record } = await this.fetchEndpointJson(
+          `${base}${path}`,
+          headers,
+          connection.requestTimeoutMs,
+        )
         if (record === undefined) {
           failures.push(`${path}: HTTP ${status}`)
           failedStatuses.push(status)
@@ -2568,7 +2635,14 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         reported = true
         if (!window.exceeded) continue
         exceeded = true
-        resetAt = Math.max(resetAt, window.resetAt)
+        // Same untrusted-magnitude rule as the rejection body's reset: a value
+        // beyond the horizon is not a reset this route can act on, and pinning
+        // a cooldown to it would keep the account out of rotation for the life
+        // of the process (nothing probes a `cooldown`). Dropping it leaves the
+        // mark `unknown`, which the next probe pass re-checks.
+        if (window.resetAt > 0 && window.resetAt - Date.now() <= MAX_TRUSTED_RESET_MS) {
+          resetAt = Math.max(resetAt, window.resetAt)
+        }
       }
       // No window in the payload at all: nothing can be concluded, so the
       // caller keeps the mark (fail-safe, exactly like a failed probe).
@@ -2808,6 +2882,27 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const decoder = new TextDecoder()
     let buffer = ''
 
+    // Raw-stream trace (opt-in via `DSH_COMMANDCODE_TRACE`): the only artifact
+    // that can tell "the provider closed this stream" apart from "our parser
+    // missed the terminal event" — see ./stream-trace.ts for why that
+    // distinction is the whole diagnosis. Off, this is one environment read and
+    // every call below is inert.
+    const trace = openStreamTrace(`${options.provider}/${options.model}`)
+    const streamStartedAt = Date.now()
+    let chunkCount = 0
+    let totalBytes = 0
+    let lastChunkAt = streamStartedAt
+    trace.record('response', {
+      protocol,
+      endpoint: protocol === 'cli'
+        ? `${connection.apiBase}/alpha/generate`
+        : `${connection.apiBase}/provider/v1/chat/completions`,
+      status: response.status,
+      attempts: tried.size,
+      maxTokens,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    })
+
     // Stream idle watchdog: a generation that stalls this long has a dead
     // connection (the API keeps the socket open between reasoning/text
     // bursts). The default (300s) is deliberately generous: frontier
@@ -2833,9 +2928,21 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
 
     const asm = createBlockAssembler()
-    const handle = (event: unknown): StreamChunk[] => handleEvent(asm, protocol, event)
+    let finish: Extract<StreamChunk, { type: 'finish' }> | undefined
+    let usage: TokenUsage | undefined
+    let usageEmitted = false
+    let endRecorded = false
+    // Do not publish success until the assembled answer has been checked.
+    // DSH converts an adapter throw into an error finish; throwing AFTER a
+    // success finish would violate its single-terminal-event contract.
+    function* handle(event: unknown): Generator<StreamChunk> {
+      for (const chunk of handleEvent(asm, protocol, event)) {
+        if (chunk.type === 'finish') finish = chunk
+        else if (chunk.type === 'usage') usage = chunk.usage
+        else yield chunk
+      }
+    }
     try {
-      let finished = false
       for (;;) {
         let read: ReadableStreamReadResult<Uint8Array>
         armIdle()
@@ -2845,6 +2952,12 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           // A mid-stream transport failure (connection reset, TLS teardown)
           // surfaces here. Caller cancellation propagates as-is.
           if (options.signal?.aborted) throw error
+          trace.record('read-error', {
+            chunks: chunkCount,
+            bytes: totalBytes,
+            silentMs: Date.now() - lastChunkAt,
+            message: errorChain(error),
+          })
           throw new LlmError(
             `Command Code API stream from ${connection.apiBase} failed while reading: ${errorChain(error)}`
             + '；Command Code API 流式响应中途断开——网络波动所致，重试通常可恢复',
@@ -2859,6 +2972,15 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           // The idle watchdog cancels the reader to unblock a stalled read;
           // cancel() resolves a pending read() as done, so a done here after
           // the watchdog fired is a timeout, not a normal stream end.
+          trace.record('eof', {
+            chunks: chunkCount,
+            bytes: totalBytes,
+            silentMs: Date.now() - lastChunkAt,
+            totalMs: Date.now() - streamStartedAt,
+            finishSeen: finish !== undefined,
+            idleFired,
+            buffered: buffer.length,
+          })
           if (idleFired) {
             throw new LlmError(
               `Command Code API stream from ${connection.apiBase} was idle for ${connection.streamIdleTimeoutMs}ms`
@@ -2868,42 +2990,108 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
             )
           }
           if (buffer.trim()) {
-            // The final line may lack its trailing newline: account its
-            // chunks exactly like the line loop (a trailing `finish` must
-            // set `finished`, or the tail below would emit a second one).
-            for (const chunk of handle(parseStreamEventLine(buffer))) {
-              yield chunk
-              if (chunk.type === 'finish') finished = true
-            }
+            // The final line may lack its trailing newline; it uses the same
+            // terminal validation as events parsed in the line loop.
+            yield* handle(parseStreamEventLine(buffer))
           }
           break
         }
-        buffer += decoder.decode(value, { stream: true })
+        const text = decoder.decode(value, { stream: true })
+        buffer += text
+        chunkCount += 1
+        totalBytes += value.byteLength
+        lastChunkAt = Date.now()
+        trace.record('chunk', {
+          n: chunkCount,
+          bytes: value.byteLength,
+          text: boundTraceText(text),
+        })
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
         for (const line of lines) {
-          const chunks = handle(parseStreamEventLine(line))
-          for (const chunk of chunks) {
-            yield chunk
-            if (chunk.type === 'finish') finished = true
-          }
+          yield* handle(parseStreamEventLine(line))
         }
-        if (finished) break
+        if (finish !== undefined) break
       }
-      if (!finished) {
-        // Stream ended without a finish event: close open blocks and
-        // terminate according to the adapter contract (usage, then finish).
-        yield* closeText(asm)
-        yield* closeReasoning(asm)
-        if (protocol === 'openai') yield* emitOpenAiToolCalls(asm)
+      // Preserve the provider's usage even when this attempt fails. Usage is
+      // cumulative, so only the latest sample is emitted, before the terminal.
+      if (usage !== undefined) {
+        usageEmitted = true
+        yield { type: 'usage', usage }
+      }
+      if (finish !== undefined) {
+        const failure = asm.sawContent ? undefined : emptyCompletionError(asm.finishReason, maxTokens, usage)
+        trace.record('end', {
+          outcome: failure === undefined ? 'finished' : failure.code === 'OUTPUT_TOKEN_LIMIT' ? 'output-token-limit' : 'empty',
+          finishReason: asm.finishReason,
+          ...(failure === undefined ? {} : { code: failure.code }),
+          maxTokens,
+          ...(usage === undefined ? {} : { usage }),
+          chunks: chunkCount,
+          bytes: totalBytes,
+          totalMs: Date.now() - streamStartedAt,
+          sawContent: asm.sawContent,
+        })
+        endRecorded = true
+        if (failure !== undefined) throw failure
+        yield finish
+      } else {
+        // The stream ended without its terminal event, and that is NOT a normal
+        // ending — it must not be reported as one. Both transports terminate
+        // explicitly (the CLI transport with a `finish` event, the Provider API
+        // with a final `finish_reason` chunk), so an EOF here means the
+        // response was closed mid-generation: the gateway, an intermediary
+        // proxy, or the network. Synthesizing a clean `stop` is what turned a
+        // truncated answer into a turn that just ended, with nothing in the UI
+        // or the session log saying why. `dsh-llm-deepseek`'s `translate()`
+        // raises this same code for this same condition ("… stream ended before
+        // message_stop").
+        const elapsed = Date.now() - streamStartedAt
+        const detail = `${chunkCount} chunk(s), ${totalBytes} bytes, ${elapsed}ms`
+        trace.record('end', {
+          outcome: asm.sawContent ? 'stream-closed' : 'empty',
+          chunks: chunkCount,
+          bytes: totalBytes,
+          totalMs: elapsed,
+          sawContent: asm.sawContent,
+        })
+        endRecorded = true
         if (!asm.sawContent) {
+          // Nothing usable came out of it (no visible text, no tool call): the
+          // request has no tool action to replay, and this code is in the retry
+          // policy's whitelist — the cut is absorbed instead of surfaced. A cut
+          // during a long thinking phase lands here.
           throw new LlmError('Command Code returned an empty response；Command Code 返回了空响应，重试通常可恢复', 'EMPTY_RESPONSE')
         }
-        yield { type: 'finish', reason: { kind: 'stop' } }
+        throw new LlmError(
+          `Command Code API stream from ${connection.apiBase} ended before its finish event (${detail})`
+          + ' — the response was closed mid-generation, so this is not the model stopping by itself'
+          + '；Command Code API 流式响应在结束事件之前被关闭（生成中途断流），并非模型主动结束——请重试'
+          + `；若频繁出现，可用 ${STREAM_TRACE_ENV}=<文件路径> 抓取原始流以定位断流原因`,
+          'STREAM_CLOSED',
+        )
       }
+    } catch (error: unknown) {
+      // A later read/provider error must not discard usage already received.
+      if (!usageEmitted && usage !== undefined) yield { type: 'usage', usage }
+      if (!endRecorded) {
+        trace.record('end', {
+          outcome: options.signal?.aborted ? 'aborted' : 'error',
+          code: error instanceof LlmError ? error.code : 'unknown',
+          finishReason: asm.finishReason,
+          maxTokens,
+          ...(usage === undefined ? {} : { usage }),
+          sawContent: asm.sawContent,
+          chunks: chunkCount,
+          bytes: totalBytes,
+          totalMs: Date.now() - streamStartedAt,
+        })
+      }
+      throw error
     } finally {
       clearIdle()
       cleanup()
+      trace.close()
       await reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
@@ -3050,7 +3238,7 @@ function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
       }
       const delta = stringValue(event.text) ?? ''
       asm.textContent += delta
-      asm.sawContent = true
+      if (delta.trim() !== '') asm.sawContent = true
       chunks.push({ type: 'text-delta', index: asm.textIndex, text: delta })
       break
     }
@@ -3090,6 +3278,7 @@ function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
       break
     }
     case 'finish': {
+      asm.finishReason = stringValue(event.finishReason)
       chunks.push(...closeText(asm), ...closeReasoning(asm))
       const usage = isRecord(event.totalUsage) ? event.totalUsage : undefined
       if (usage) {
@@ -3105,6 +3294,9 @@ function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
           cacheReadTokens: cacheRead,
           cacheWriteTokens: cacheWrite,
         }
+        const outputDetails = isRecord(usage.outputTokenDetails) ? usage.outputTokenDetails : undefined
+        const reasoningTokens = numberValue(outputDetails?.reasoningTokens) ?? numberValue(usage.reasoningTokens)
+        if (reasoningTokens !== undefined) tokenUsage.reasoningTokens = reasoningTokens
         chunks.push({ type: 'usage', usage: tokenUsage })
       }
       chunks.push({ type: 'finish', reason: mapFinishReason(event.finishReason) })
@@ -3188,14 +3380,14 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
       chunks.push({ type: 'block-start', index: asm.textIndex, blockType: 'text' })
     }
     asm.textContent += contentDelta
-    asm.sawContent = true
+    if (contentDelta.trim() !== '') asm.sawContent = true
     chunks.push({ type: 'text-delta', index: asm.textIndex, text: contentDelta })
   }
 
   if (Array.isArray(delta.tool_calls)) {
-    asm.sawContent = true
     for (const rawCall of delta.tool_calls) {
       if (!isRecord(rawCall)) continue
+      asm.sawContent = true
       const callIndex = numberValue(rawCall.index) ?? 0
       let existing = asm.openAiToolCalls.find((call) => call.index === callIndex)
       const fn = isRecord(rawCall.function) ? rawCall.function : undefined
@@ -3221,6 +3413,7 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   }
 
   if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
+    asm.finishReason = stringValue(choice.finish_reason)
     chunks.push(...closeText(asm), ...closeReasoning(asm), ...emitOpenAiToolCalls(asm))
     if (event.usage !== undefined) {
       chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
@@ -3277,6 +3470,29 @@ function mapFinishReason(reason: unknown): FinishReason {
   return { kind: 'stop' }
 }
 
+/** A terminal marker without text or tools is a failed attempt, not a completed turn. */
+function emptyCompletionError(reason: string | undefined, maxTokens: number, usage: TokenUsage | undefined): LlmError {
+  const detail = `finish_reason=${reason ?? 'unknown'}, max_tokens=${maxTokens}, outputTokens=${usage?.outputTokens ?? 'unknown'}, reasoningTokens=${usage?.reasoningTokens ?? 'unknown'}`
+  if (mapFinishReason(reason).kind === 'max-tokens') {
+    // A length finish proves a generation limit, not how all tokens were spent.
+    // Keep this outside the retry whitelist: replaying the identical budget
+    // can repeatedly charge for reasoning without ever producing an answer.
+    return new LlmError(
+      `Command Code reached the output token limit without producing answer text or a tool call (${detail})`
+      + '；Command Code 已达到输出 token 上限，但没有生成正文或工具调用；请调整思考强度，或在模型和接口上限内增加输出预算',
+      'OUTPUT_TOKEN_LIMIT',
+    )
+  }
+  if (reason === 'content_filter' || reason === 'content-filter') {
+    return new LlmError(`Command Code filtered the response (${detail})；Command Code 拦截了响应，未生成正文或工具调用`, 'CONTENT_FILTER')
+  }
+  return new LlmError(
+    `Command Code finished without producing answer text or a tool call (${detail})`
+    + '；Command Code 返回了空响应（可能只有思考内容），重试通常可恢复',
+    'EMPTY_RESPONSE',
+  )
+}
+
 /**
  * True when a Provider API pre-stream rejection is Command Code's Go-plan
  * gate (`upgrade_required`). Only this exact class of rejection should fall
@@ -3321,8 +3537,27 @@ function mapFinishReason(reason: unknown): FinishReason {
  *     or a model outside its plan (`MODEL_NOT_IN_PLAN`). Rotating must NOT mark
  *     the account: the fact is about the model or the balance, it can change
  *     without the key changing, and a `:free` model can still be served by an
- *     account with an empty balance.
+ *     account with an empty balance. These codes are recognized on EVERY
+ *     status — a 5xx that proxies the provider's own credits/plan body is
+ *     still an account fact, and only the prose scan is confined to 4xx.
  */
+
+/**
+ * The provider's structured "this account cannot serve this request" codes.
+ *
+ * Status-independent on purpose, mirroring the CLI's classifier, which reads
+ * the code before any status guard. A 5xx that carries one of these must not
+ * be retried as a transient provider failure: the same request against the
+ * same account cannot succeed, so the caller rotates past it (without marking
+ * the key) instead of replaying it on the harness's retry cadence.
+ */
+const ACCOUNT_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+  'USAGE_EXCEEDED',
+  'INSUFFICIENT_CREDITS',
+  'PREMIUM_CREDITS_EXHAUSTED',
+  'MODEL_NOT_IN_PLAN',
+])
+
 function classifyAccountRejection(status: number, errText: string): { reason: AccountRotationReason; resetAtMs?: number } | undefined {
   if (status === 429 || readProviderErrorCode(errText)?.toUpperCase() === 'RATE_LIMITED') {
     const evidence = readWindowLimitEvidence(errText)
@@ -3336,29 +3571,29 @@ function classifyAccountRejection(status: number, errText: string): { reason: Ac
       : { reason: 'rate-limit', resetAtMs: evidence.resetAtMs }
   }
   if (status === 401) return { reason: 'invalid-credential' }
-  // The code check above deliberately runs BEFORE this status guard, mirroring
-  // the CLI's `parseWindowLimitError`, which accepts `RATE_LIMITED` on ANY
-  // status: a gateway that proxies the provider's own window-limit body under a
-  // 5xx is still a window limit, and that body's `reset` says for how long. So
-  // this guard covers only the rejections that carry NO such code — a 5xx (or a
-  // status below 400) without it is the provider being unavailable, and must
-  // keep its retry cadence for every account instead of being remembered
-  // against one. `tests/adapter.test.ts` pins both halves.
+  // The structured account codes are checked BEFORE the status guard, exactly
+  // like `RATE_LIMITED` above: a gateway that proxies the provider's own
+  // credits/plan rejection under a 5xx is still reporting a fact about this
+  // account, and treating it as "the provider is unavailable" is what turned a
+  // permanent refusal into a retried one — `SERVER` reaches dsh-llm-retry's
+  // 1000-attempt cadence while the sibling accounts that could serve are never
+  // consulted. The guard below therefore covers only the rejections with NO
+  // such code, whose evidence is prose: a bare 5xx (or a status under 400) is
+  // the provider being unavailable and must keep its retry cadence for every
+  // account instead of being remembered against one. `tests/adapter.test.ts`
+  // pins both halves.
+  const code = readProviderErrorCode(errText)?.toUpperCase()
+  if (code !== undefined && ACCOUNT_UNAVAILABLE_CODES.has(code)) return { reason: 'unavailable' }
   if (status < 400 || status >= 500) return undefined
   // Underscored and spaced spellings are the same words: a JSON body carries
   // `insufficient_credits` / `model_not_in_plan`, while the CLI's own marker
   // list is written with spaces. Normalizing the separator keeps both wire
-  // spellings classified, and the explicit code list below covers a body that
+  // spellings classified, and the explicit code list above covers a body that
   // carries a code and no message at all — which is exactly how the code-only
   // `INSUFFICIENT_CREDITS` body slipped through before.
   const lower = errText.toLowerCase().replaceAll('_', ' ')
-  const code = readProviderErrorCode(errText)?.toUpperCase()
   if (
-    code === 'USAGE_EXCEEDED'
-    || code === 'INSUFFICIENT_CREDITS'
-    || code === 'PREMIUM_CREDITS_EXHAUSTED'
-    || code === 'MODEL_NOT_IN_PLAN'
-    || lower.includes('insufficient credits')
+    lower.includes('insufficient credits')
     || lower.includes('premium credits exhausted')
     || lower.includes('model not in plan')
     || /insufficient (credit|balance)/.test(lower)
@@ -3382,6 +3617,17 @@ function readProviderErrorCode(errText: string): string | undefined {
     return undefined
   }
 }
+
+/**
+ * How far ahead a provider-published reset may be and still be trusted.
+ *
+ * Generous on purpose: the weekly window is the longest this provider meters,
+ * and the value is a plausibility bound rather than a policy. Beyond it the
+ * reset is dropped rather than clamped, which leaves the account's mark
+ * `unknown` — the state the pool's probe pass re-checks — instead of a
+ * cooldown that never expires.
+ */
+const MAX_TRUSTED_RESET_MS = 30 * 24 * 60 * 60 * 1000
 
 /**
  * The usage-window evidence carried by a rejected request, mirroring the CLI's
@@ -3425,9 +3671,22 @@ function readWindowLimitEvidence(errText: string): { window?: 'fiveHour' | 'week
   const stamp = /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(message)?.[1]
     ?? /resets at (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i.exec(errText)?.[1]
   const stamped = stamp === undefined ? undefined : Date.parse(stamp)
-  const resetAtMs = seconds !== undefined && seconds > 0
+  const published = seconds !== undefined && seconds > 0
     ? Math.round(seconds * 1000)
     : stamped !== undefined && !Number.isNaN(stamped) ? stamped : undefined
+  // A published reset is UNTRUSTED input, and two things break on a bogus
+  // magnitude: `new Date(...).toISOString()` throws `RangeError: Invalid time
+  // value` (replacing the intended RATE_LIMIT with an internal error), and a
+  // mark pinned beyond the horizon becomes a `cooldown` no probe will ever
+  // revisit — the account leaves rotation for the life of the process. A usage
+  // window resets within days, so anything further out is not a reset this
+  // route can act on: dropping it degrades the mark to `unknown`, which the
+  // pool's probe pass re-checks.
+  const resetAtMs = published !== undefined
+    && Number.isFinite(published)
+    && published - Date.now() <= MAX_TRUSTED_RESET_MS
+    ? published
+    : undefined
   return {
     ...(window === undefined ? {} : { window }),
     ...(resetAtMs === undefined ? {} : { resetAtMs }),

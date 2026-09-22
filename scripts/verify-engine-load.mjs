@@ -28,6 +28,17 @@
  *      and, on the durable (>=0.1.6) one, that `LlmError` carries
  *      `failure.offloadImages` — the payload the adapter's offload request is
  *      read from.
+ *   6. Asserts the Config schema SPLIT holds on this engine: `Config` marks
+ *      every settings-form field volatile (except the composition-only
+ *      `apiKey`) and parses to live references, while `LegacySettingsSchema`
+ *      carries no mark and parses to a plain, `structuredClone`-able object —
+ *      the shape ≤0.1.6's settings registration requires even though
+ *      schemastery ≥3.18.3 creates references during parse on every
+ *      generation. Skipped with a warning on engines whose schemastery
+ *      predates `.volatile()`.
+ *   7. Builds tool history with this engine's message constructors and captures
+ *      both transports' next request. Calls AND results must survive; merely
+ *      loading the bundle cannot detect message-envelope drift.
  *
  * Usage:
  *   node scripts/verify-engine-load.mjs                     # install + check
@@ -41,6 +52,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import assert from 'node:assert/strict'
 import {
   cpSync,
   existsSync,
@@ -396,6 +408,89 @@ async function checkImagePricing(staged) {
   }
 }
 
+/**
+ * Check 6: the Config schema split is right for BOTH settings generations.
+ *
+ * Two facts must hold on the engine the bundle will run on:
+ *
+ *   1. `Config` (the 0.1.7 generation) marks every field volatile except the
+ *      composition-only `apiKey`, AND parsing a config through it really does
+ *      produce a live reference (`{ get() }`) — the mark is worthless if the
+ *      engine's schemastery ignores it.
+ *   2. `LegacySettingsSchema` (the ≤0.1.6 registration) carries NO mark and
+ *      parses to a plain, `structuredClone`-able object. This is not
+ *      bookkeeping: schemastery ≥3.18.3 creates references during PARSE on
+ *      EVERY generation (`dsh-settings` through 0.1.6 declares
+ *      `schemastery: ^3.18.2`, so a freshly installed old engine resolves
+ *      3.18.3), and that generation re-validates the base it is handed and
+ *      `structuredClone`s it for the directory — so a marked schema there is a
+ *      boot-time `ValidationError`. Check 1 cannot see that: the plugin still
+ *      links and evaluates; only a MARKED-schema-on-old-engine parse does.
+ *
+ * The mark can only exist where the engine's schemastery ships `.volatile()`,
+ * so an older engine reports SKIPPED instead of failing a generation that
+ * never needed the split.
+ */
+async function checkVolatileConfig(staged) {
+  if (staged === undefined) return
+  const plugin = await import(pathToFileURL(join(staged, 'lib', 'index.js')).href)
+  const fields = plugin.Config?.dict
+  const legacyFields = plugin.LegacySettingsSchema?.dict
+  if (fields === undefined || fields.apiBase === undefined) {
+    fail('the staged Config schema carries no dict, so its settings-form surface cannot be checked')
+    return
+  }
+  if (legacyFields === undefined || legacyFields.apiBase === undefined) {
+    fail('the staged bundle exports no LegacySettingsSchema — ≤0.1.6 registration cannot be checked')
+    return
+  }
+  if (typeof fields.apiBase.volatile !== 'function') {
+    warn('engine schemastery predates .volatile(); skipped the settings-form field audit')
+    return
+  }
+  for (const [name, field] of Object.entries(fields)) {
+    const marked = field?.meta?.volatile === true
+    if (name === 'apiKey') {
+      if (marked) fail('Config.apiKey must stay unmarked: it is the composition-only secret literal')
+      continue
+    }
+    if (!marked) fail(`Config.${name} is not volatile — 0.1.7 settings forms cannot see or write it`)
+  }
+  for (const [name, field] of Object.entries(legacyFields)) {
+    if (field?.meta?.volatile === true) {
+      fail(`LegacySettingsSchema.${name} carries a volatile mark — ≤0.1.6 settings would throw at boot`)
+    }
+  }
+  // Parse through both schemas. `Config` must yield references; the legacy one
+  // must stay plain AND survive the clone the old service performs on it.
+  let marked
+  try {
+    marked = plugin.Config({ apiKeyEnv: 'engine-load-probe' })
+  } catch (error) {
+    fail(`Config rejected the engine-load probe config: ${error.message}`)
+    return
+  }
+  const ref = marked?.apiKeyEnv
+  if (ref === null || typeof ref !== 'object' || typeof ref.get !== 'function') {
+    fail('Config parses to plain values on this engine, so volatile writes cannot commit in place')
+  }
+  let legacy
+  try {
+    legacy = plugin.LegacySettingsSchema({ apiKeyEnv: 'engine-load-probe' })
+  } catch (error) {
+    fail(`LegacySettingsSchema rejected the engine-load probe config: ${error.message}`)
+    return
+  }
+  if (legacy?.apiKeyEnv !== 'engine-load-probe') {
+    fail(`LegacySettingsSchema parsed apiKeyEnv as ${String(legacy?.apiKeyEnv)}, expected the plain string`)
+  }
+  try {
+    structuredClone(legacy)
+  } catch (error) {
+    fail(`LegacySettingsSchema parses to a non-cloneable object (${error.name}) — ≤0.1.6 describe would throw`)
+  }
+}
+
 /** Check 4: the engine has one complete request-image policy, payload included. */
 async function checkImagePolicy(engineModules) {
   const specifier = `${SCOPE}/dsh-llm`
@@ -422,6 +517,65 @@ async function checkImagePolicy(engineModules) {
   return durable ? 'durable' : 'transient'
 }
 
+/** Check 7: real engine messages survive both request serializers (no network). */
+async function checkToolHistory(staged, engineModules) {
+  if (staged === undefined) return
+  const plugin = await import(pathToFileURL(join(staged, 'lib', 'index.js')).href)
+  const require = createRequire(join(dirname(engineModules), 'probe.cjs'))
+  const llm = await import(pathToFileURL(require.resolve(`${SCOPE}/dsh-llm`)).href)
+  const callId = llm.ToolCallId('engine-tool-history-probe')
+  const messages = [
+    llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'inspect the repository' }] }),
+    llm.createAssistantMessage({
+      source: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' },
+      content: [
+        { type: 'text', text: 'Let me inspect the changes.' },
+        { type: 'tool-call', id: callId, name: 'bash', arguments: '{"command":"git status"}' },
+      ],
+    }),
+    llm.createToolResultMessage({ callId, content: [{ type: 'text', text: 'working tree clean' }], isError: false }),
+  ]
+  for (const protocol of ['cli', 'openai']) {
+    try {
+      let body
+      const adapter = new plugin.CommandCodeAdapter({
+        options: () => ({
+          apiBase: 'https://engine-probe.invalid', workingDir: '/tmp/engine-probe',
+          modelsCachePath: '/tmp/engine-probe-unused.json',
+          protocol, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+        }),
+        resolveApiKey: async () => 'engine-load-probe',
+        fetchImpl: async (_url, init) => {
+          body = JSON.parse(init.body)
+          return new Response(protocol === 'cli'
+            ? 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+            : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+          { headers: { 'content-type': 'text/event-stream' } })
+        },
+      })
+      for await (const chunk of adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages })) {
+        if (chunk.type === 'finish') assert.equal(chunk.reason.kind, 'stop')
+      }
+      const wire = protocol === 'cli' ? body.params.messages : body.messages
+      assert.deepEqual(wire.map((m) => m.role), ['user', 'assistant', 'tool'])
+      if (protocol === 'cli') {
+        const call = wire[1].content.find((b) => b.type === 'tool-call')
+        assert.equal(call.toolCallId, callId)
+        assert.equal(wire[2].content[0].toolCallId, callId)
+        assert.equal(wire[2].content[0].toolName, 'bash')
+        assert.deepEqual(wire[2].content[0].output, { type: 'text', value: 'working tree clean' })
+      } else {
+        assert.equal(wire[1].tool_calls[0].id, callId)
+        assert.equal(wire[2].tool_call_id, callId)
+        assert.equal(wire[2].content, 'working tree clean')
+      }
+    } catch (error) {
+      fail(`${protocol} lost or rejected this engine's tool history: ${error.message}`)
+    }
+  }
+  process.stdout.write(`tool history checked with engine result role: ${messages[2].role}\n`)
+}
+
 /** Run every check against one resolved engine. */
 async function verify(argv) {
   const options = parseArgs(argv)
@@ -441,6 +595,8 @@ async function verify(argv) {
     await checkNamedImports(engine.modules)
     checkClientRequires(engine.modules)
     await checkImagePricing(staged)
+    await checkVolatileConfig(staged)
+    await checkToolHistory(staged, engine.modules)
     const policy = await checkImagePolicy(engine.modules)
     process.stdout.write(`request-image policy on this engine: ${policy}\n`)
     if (version !== undefined && engine.version !== version) {

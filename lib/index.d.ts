@@ -340,6 +340,11 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * failure accounting: the billing probe fails open silently, the usage
    * report books failures per endpoint. Non-2xx and non-record bodies come
    * back without a record; only a transport throw propagates to the caller.
+   *
+   * `timeoutMs` is the caller's budget for this one request. The default is the
+   * CATALOG probe's short cap, which fits the picker's fail-open reads; the
+   * usage report deliberately passes the connection's own request budget so an
+   * account query is not held to a stricter (and invisible) limit than chat.
    */
   private fetchEndpointJson;
   /**
@@ -411,6 +416,20 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * view. Requires a usable API key (throws `MISSING_CREDENTIAL` otherwise).
    * Pass `apiKey` to report on a specific account of a multi-account pool;
    * the default resolves the currently active account.
+   *
+   * Two failure modes are NOT "the network is down", and the report must say
+   * so rather than let {@link classifyTotalFailure} blame the connection:
+   *
+   *  - A key that no HTTP header can carry (a stray newline from a paste, a
+   *    full-width character) makes `fetch` throw a `TypeError` **before any
+   *    I/O**, for every endpoint at once. The chat path refuses such a key
+   *    through `assertUsableApiKey`; this path must too, and it answers
+   *    `blocked: 'invalid-key'` instead of four phantom transport failures.
+   *  - The four endpoints get the SAME per-request budget as a chat call
+   *    (`connection.requestTimeoutMs`, default 60 s), not the catalog's 10 s
+   *    probe budget: on a slow link a 10 s cap made every account query time
+   *    out while chat kept working, which is exactly a "check your network"
+   *    banner that never clears.
    */
   getUsage(apiKey?: string): Promise<CommandCodeUsageReport>;
   /**
@@ -1372,7 +1391,10 @@ declare function validateCommandApiKey(fetchImpl: typeof fetch, apiBase: string,
 /**
  * One browser-login attempt machine. Single-flight by design: `begin()` while
  * waiting returns the live attempt's status instead of starting a second one;
- * a terminal state makes the next `begin()` start fresh.
+ * a start that is still binding its port is REJOINED through
+ * {@link CommandCodeLoginFlow.begin}'s in-flight promise, because the status
+ * face cannot say `waiting` until that bind settles; a terminal state makes the
+ * next `begin()` start fresh.
  */
 declare class CommandCodeLoginFlow {
   private readonly deps;
@@ -1390,6 +1412,17 @@ declare class CommandCodeLoginFlow {
    * the user cancelled and flipping the page back to success.
    */
   private attemptSeq;
+  /**
+   * The start currently binding a port, if any. Every `begin()` that arrives
+   * before it settles joins it: two independent starts would each bind their
+   * own loopback server, and only the LAST one is reachable by
+   * {@link CommandCodeLoginFlow.teardown} — the orphan keeps listening and
+   * answering `/callback` for the process's lifetime, and ten of them exhaust
+   * the port window so browser login dies until the Host restarts.
+   */
+  private starting;
+  /** A `cancel()` that arrived while a start was still binding (see {@link CommandCodeLoginFlow.cancel}). */
+  private cancelPending;
   private disposed;
   constructor(deps: CommandCodeLoginFlowDeps);
   /** Subscribe to state transitions. @returns the disposer. */
@@ -1402,7 +1435,18 @@ declare class CommandCodeLoginFlow {
    * Rejects only when the flow cannot start at all (no free port, disposed).
    */
   begin(): Promise<CommandCodeLoginStatus>;
-  /** Cancel a waiting attempt; terminal states are untouched. */
+  /**
+   * The binding half of {@link CommandCodeLoginFlow.begin}: one attempt, one
+   * server, one published `waiting` status. Callers reach it only through
+   * `begin()`'s single-flight fence.
+   */
+  private startAttempt;
+  /**
+   * Cancel a waiting attempt; terminal states are untouched. A start that is
+   * still binding a port is flagged instead of ignored — it cannot be torn
+   * down from here (its server does not exist yet), so `startAttempt` observes
+   * the flag once the bind settles and retires it.
+   */
   cancel(): void;
   /** Stop everything; a waiting attempt ends cancelled. Idempotent. */
   dispose(): void;
@@ -1478,10 +1522,20 @@ declare function selectCommandCodeSearchProvider(web: WebRuntime, enable: boolea
  * configured, leave auto-select" and must round-trip untouched: writing the
  * factory default instead would still override a sibling plugin's own
  * constructor-time pin.
+ *
+ * `preexisting` is the one fact `displaced` cannot carry: an `undefined`
+ * `displaced` means EITHER "the field was unset when we took over" (give
+ * `undefined` back on disable) OR "the field already read `commandcode`"
+ * (touch nothing on disable — see {@link applyCommandCodeSearchSelection}).
+ * Collapsing the two is what turned a user's own `searchProvider: commandcode`
+ * pin into an auto-select — and then into `WEB_PROVIDER_AMBIGUOUS` on every
+ * search — the moment this plugin was disabled or unloaded.
  */
 interface CommandCodeSearchSelection {
   owner: boolean;
   displaced: string | undefined;
+  /** Whether the field already read `commandcode` when this plugin first took it over. */
+  preexisting: boolean;
 }
 /** Fresh selection state: the plugin starts out not owning the selection. */
 declare function commandCodeSearchSelection(): CommandCodeSearchSelection;
@@ -1500,8 +1554,14 @@ declare function commandCodeSearchSelection(): CommandCodeSearchSelection;
  *   auto-select — already says what the user wants.
  * - When the field already reads `commandcode` at first touch (e.g. a
  *   surviving runtime the plugin did not set, or a manual
- *   `searchProvider: commandcode` pin), `displaced` stays undefined so the
- *   later disable is a no-op rather than a guess at the factory default.
+ *   `searchProvider: commandcode` pin), `displaced` stays undefined and
+ *   `preexisting` is set, so the later disable is a no-op rather than a guess
+ *   at the factory default. A "no-op" means the field is left ALONE: writing
+ *   that `undefined` back would destroy the user's own pin, and dsh-web reads
+ *   a cleared `searchProviderId` as auto-select — where a second usable
+ *   provider (the shipped `deepseek-official` is usable whenever a DeepSeek
+ *   key resolves) makes EVERY later search throw
+ *   `WEB_PROVIDER_AMBIGUOUS`.
  *
  * Never throws: like the low-level rewrite, a hardened runtime shape degrades
  * to registered-but-unselected.
@@ -1825,7 +1885,35 @@ interface Config {
    */
   lang?: string;
 }
+/**
+ * The 0.1.7-generation schema: every field volatile except the
+ * composition-only `apiKey` secret.
+ *
+ * dsh 0.1.7's settings forms are projected from the schema's `meta.volatile`
+ * nodes, so an unmarked field would be invisible to AND unwritable from the
+ * settings page and refused by form-edit path validation — and on that
+ * generation the loader hands `apply()` a live reference per marked field,
+ * committing later writes without remounting this fiber (the
+ * `loader/volatile-update` listener at the bottom of `apply` covers the facts
+ * that are not re-derived per read). The mark is inert on engines whose
+ * schemastery predates `.volatile()`.
+ */
 declare const Config: z<Config>;
+/**
+ * The ≤0.1.6-generation registration schema: the same fields, NO volatile
+ * marks.
+ *
+ * The legacy `installSection(owner, ns, schema, entry, hooks)` re-validates the
+ * `entry` it is handed (`register()` → `resolve()` → `schema(mergeLayers(base,
+ * section))`) and its `describe()` structuredClones that same `entry`. Since
+ * schemastery ≥3.18.3 creates references at parse time on EVERY generation —
+ * `dsh-settings` through 0.1.6 declares `schemastery: ^3.18.2`, so old engines
+ * freshly installed today resolve 3.18.3 — a marked schema plus the raw
+ * reference-carrying `config` is a boot-time `ValidationError` there. This
+ * schema is therefore unmarked, and `apply` pairs it with
+ * `unwrapVolatileConfig(config)`.
+ */
+declare const LegacySettingsSchema: z<Config>;
 /** One resolution's complete request facts: connection plus credential reference. */
 interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
   apiKeyEnv: CredentialRef;
@@ -1839,5 +1927,5 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, selectCommandCodeSearchProvider, studioBaseForApiBase, subscriptionPlanInfo, usageReportSchema, validateCommandApiKey };
+export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, LegacySettingsSchema, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, selectCommandCodeSearchProvider, studioBaseForApiBase, subscriptionPlanInfo, usageReportSchema, validateCommandApiKey };
 //# sourceMappingURL=index.d.ts.map

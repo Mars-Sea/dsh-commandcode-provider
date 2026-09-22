@@ -21,11 +21,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createSnapshotStore } from './snapshot-store.ts'
 // Type-only imports that pull in the client-service augmentations
 // (`slots`/`remote`/`locale` on Context) and the `settings.section` SlotMap
-// entry (`settingsScope` arrives through dsh-client-ui-settings).
+// entry (declared through dsh-client-ui-settings).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { createSettingsScope, type SettingsRemoteNamespace, type SettingsScopeContext } from './settings-scope.ts'
 import { CommandCodeSettingsController, COMMANDCODE_NS, type SettingsPageState } from './settings.ts'
 import type { HostDescriptionSource, SettingsPageApi } from './settings.ts'
 import { adaptLegacyCredentials, type LegacyCredentialsApi } from './legacy-credentials.ts'
@@ -134,9 +135,11 @@ interface LegacyConnectionLike {
 
 /**
  * Client plugin body. Gates on the services shared by both client generations
- * (`slots`, `locale`, `connection`, `remote`, `settingsScope`). Current clients
- * mount the page after `remote.credentials` appears; legacy clients mount it
- * from the connection ApiProxy credential face.
+ * (`slots`, `locale`, `connection`, `remote`) — never on `settingsScope`,
+ * which 0.1.7 removed and which the settings scope here replaces for every
+ * generation. Current clients mount the page after `remote.credentials`
+ * appears; legacy clients mount it from the connection ApiProxy credential
+ * face.
  */
 export function apply(ctx: Context): void {
   injectPageCss()
@@ -181,7 +184,42 @@ function applyClientSurfaces(
   api: SettingsPageApi,
   hostDescription?: HostDescriptionSource,
 ): void {
-  const scope = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: COMMANDCODE_NS })
+  // The settings scope: this plugin's own binding of the `llm-commandcode`
+  // namespace over `remote.settings` (see `./settings-scope.ts`). The harness
+  // used to provide a `settingsScope` service to bind here, but that wrapper
+  // existed only through 0.1.6 and was removed with the 0.1.7 settings
+  // rewrite — while the describe/mutate wire underneath spans every
+  // supported release, so one implementation now serves all of them.
+  //
+  // The namespace object is captured from an INJECT-SCOPED context, never read
+  // off `ctx.remote`: `remote.settings` is a Cordis service nested under
+  // `remote`, and cordis answers a read through a context that does not declare
+  // it with `Error: cannot get property "remote.settings" without inject`. That
+  // throw lands inside the scope's own `try`/`catch` (so nothing is logged),
+  // leaving the mirror unanswered, the scope on its initial `writable: false`
+  // snapshot, and the page read-only with every control disabled — the 0.1.7
+  // settings-page report. The resolver below hands the scope the very object
+  // the inject resolved; `refresh()` re-reads once it lands, and a profile whose
+  // Host serves no settings namespace simply never resolves it, where the page
+  // keeps rendering its degraded state instead of crashing.
+  let settingsNamespace: SettingsRemoteNamespace | undefined
+  const scope = createSettingsScope<Record<string, unknown>>(
+    ctx as unknown as SettingsScopeContext,
+    COMMANDCODE_NS,
+    () => settingsNamespace,
+  )
+  ctx.effect(() => () => { void scope.dispose() }, 'dsh-commandcode-provider: settings scope')
+  ctx.inject(['remote.settings'], (settingsCtx) => {
+    settingsNamespace = (settingsCtx.remote as unknown as {
+      settings: SettingsRemoteNamespace
+    }).settings
+    // The first read raced this inject and answered "not mounted"; re-read now
+    // that the namespace is here (and again whenever it re-mounts).
+    scope.refresh()
+    settingsCtx.effect(() => () => {
+      settingsNamespace = undefined
+    }, 'dsh-commandcode-provider: settings namespace')
+  })
   // The model catalog for the settings page's model editors (the
   // routing-rule editor and the visible-models filter) is served by the
   // `commandcode/models` Remote below; the controller reads it through this
@@ -221,6 +259,11 @@ function applyClientSurfaces(
   // runs synchronously while the mount promise settles — before the
   // controller's own `const` below would have been initialized.
   let pricesController: CommandCodePricesController | undefined
+  // The same hazard for the usage controller, whose `const` is just as far
+  // below: the inject callback needs a way to ask for a report without
+  // touching that binding before it is initialized (a `const` read in its
+  // temporal dead zone THROWS, so `?.` would not save it).
+  let refreshUsage: (() => void) | undefined
   const contribution: TypertRemoteContribution = {
     package: USAGE_REMOTE_CONTRIBUTION.package,
     descriptors: [
@@ -248,6 +291,13 @@ function applyClientSurfaces(
         // screen simply starts pricing when the table lands, and asking earlier
         // could only fail (the namespace did not exist yet).
         pricesController?.reload()
+        // ...and the usage report. A surface can (and on a boot with the quota
+        // card on, always does) ask for it BEFORE this mount lands: the answer
+        // then is the synthetic "remote is not mounted" failure, which the
+        // controller stores as `status: 'error'` — and its `shouldRefresh` only
+        // fires from `idle`, so nothing would ever retry it (`usage.ts`). The
+        // namespace is live here, so re-read now and replace that stale answer.
+        refreshUsage?.()
         namespaceCtx.effect(() => () => {
           usageNamespace = undefined
         }, 'dsh-commandcode-provider: usage namespace')
@@ -297,6 +347,7 @@ function applyClientSurfaces(
   // model editors can fetch the catalog once the mount lands.
   modelsRemote = () => usageRemote.models()
   const usageController = new CommandCodeUsageController(usageRemote)
+  refreshUsage = () => void usageController.refresh()
   ctx.effect(() => () => usageController.dispose(), 'dsh-commandcode-provider: usage controller')
   const usageStore = createSnapshotStore<UsagePageState>(usageController.state())
   usageController.subscribe(() => usageStore.set(usageController.state()))
@@ -585,5 +636,4 @@ export const inject: readonly string[] = [
   'locale',
   'connection',
   'remote',
-  'settingsScope',
 ]

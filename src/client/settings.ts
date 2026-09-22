@@ -17,10 +17,14 @@
  *   - Working dir, request/stream timeouts -> the same namespace.
  *
  * The controller mirrors the plugin-card pattern from the harness's own
- * settings UI: it binds the `llm-commandcode` namespace through the
- * `settingsScope` service, keeps a staged draft of edits, and writes them on
- * save through `scope.set` / the credentials domain. The Host stays the
- * single fact source; the snapshot is republished after each accepted write.
+ * settings UI: it binds the `llm-commandcode` namespace through a
+ * `SettingsScope` — this plugin's own binding of `remote.settings` (see
+ * `./settings-scope.ts`; the harness's `settingsScope` wrapper existed only
+ * through 0.1.6 and was removed with the 0.1.7 settings rewrite, while the
+ * wire underneath spans every supported release) — keeps a staged draft of
+ * edits, and writes them on save through `scope.set` / the credentials
+ * domain. The Host stays the single fact source; the snapshot is republished
+ * after each accepted write.
  *
  * This module is deliberately free of JSX — it only produces the state face
  * the React component renders.

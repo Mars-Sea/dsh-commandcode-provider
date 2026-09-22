@@ -351,8 +351,8 @@ export function buildCommandCodeTuiSection(
         label: 'API key',
         descriptions: { zh: 'API 密钥' },
         secret: { ref },
-        hint: `Stored in the credential store as ${ref}, never in settings.yaml.`,
-        hintDescriptions: { zh: `保存在凭据库（${ref}），不会写入 settings.yaml。` },
+        hint: `Stored in the credential store as ${ref}, never in configuration files.`,
+        hintDescriptions: { zh: `保存在凭据库（${ref}），不会写入配置文件。` },
       },
       {
         path: ['apiBase'],
@@ -521,8 +521,8 @@ export function applyCommandCodeTuiSettings(
     } catch (error: unknown) {
       // A host that rejects the declaration (a shadow-mode capability policy,
       // a future contract change) must not take the plugin down with it: the
-      // terminal simply keeps no Command Code page, and the web page plus
-      // settings.yaml stay the fallback.
+      // terminal simply keeps no Command Code page, and the web settings
+      // page stays the fallback.
       ctx.logger?.warn(
         `llm-commandcode: could not register the dsh-TUI settings section: ${
           error instanceof Error ? error.message : String(error)

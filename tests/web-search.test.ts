@@ -320,11 +320,30 @@ test('applyCommandCodeSearchSelection keeps the displaced backend across re-enab
 test('applyCommandCodeSearchSelection treats a pre-set commandcode pin as nothing to restore', () => {
   // The field already read `commandcode` before we ever touched it (manual
   // `searchProvider: commandcode` pin or a surviving runtime): disabling is a
-  // no-op rather than a guess at the factory default.
+  // no-op rather than a guess at the factory default. A no-op means the field
+  // keeps the user's OWN id — writing `undefined` back would hand the
+  // selection to dsh-web's auto-select, where a second usable provider turns
+  // every later search into `WEB_PROVIDER_AMBIGUOUS`.
   const web = { searchProviderId: COMMANDCODE_SEARCH_PROVIDER_ID } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
   const state = commandCodeSearchSelection()
 
   applyCommandCodeSearchSelection(web, state, true)
+  applyCommandCodeSearchSelection(web, state, false)
+  assert.equal(
+    (web as unknown as { searchProviderId?: string }).searchProviderId,
+    COMMANDCODE_SEARCH_PROVIDER_ID,
+  )
+})
+
+test('applyCommandCodeSearchSelection still clears a field that never read our id', () => {
+  // The mirror image: the field was UNSET (auto-select) when we took over, so
+  // disabling must give that back — leaving `commandcode` in place there would
+  // keep Command Code serving with the toggle off.
+  const web = {} as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(web, state, true)
+  assert.equal((web as unknown as { searchProviderId?: string }).searchProviderId, COMMANDCODE_SEARCH_PROVIDER_ID)
   applyCommandCodeSearchSelection(web, state, false)
   assert.equal((web as unknown as { searchProviderId?: string }).searchProviderId, undefined)
 })
@@ -412,5 +431,50 @@ test('host apply() hands the selection back to the prior backend when webSearch 
   await (settings as unknown as {
     update: (ns: string, patch: Record<string, unknown>) => Promise<unknown>
   }).update('llm-commandcode', { webSearch: true })
+  assert.equal(web.searchProviderId, 'commandcode')
+})
+
+test('host apply() leaves a pre-existing commandcode pin alone when webSearch turns off', async () => {
+  // The durable selection this repo documents: the profile pins
+  // `searchProvider: commandcode` itself (or exports
+  // `$DSH_WEB_SEARCH_PROVIDER=commandcode`). Turning the plugin's toggle off
+  // must NOT clear that pin: dsh-web reads a cleared `searchProviderId` as
+  // auto-select, and with a second usable provider registered (the shipped
+  // `deepseek-official` is usable whenever a DeepSeek key resolves) EVERY
+  // later search throws `WEB_PROVIDER_AMBIGUOUS`. The plugin's own provider
+  // stays registered either way, so leaving the field alone is the only
+  // outcome that keeps the user's own configuration intact.
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { apply } = await import('../src/index.ts')
+  const { WebRuntime } = await import('@deepseek-ai/dsh-web')
+  const SettingsService = await import('@deepseek-ai/dsh-settings')
+
+  class MemorySettings extends SettingsService.SettingsProvider {
+    override readonly writable = true
+    override async load(): Promise<Record<string, unknown>> {
+      return {}
+    }
+    protected override async persist(
+      _ns: unknown,
+      _section: Record<string, unknown>,
+    ): Promise<void> {
+    }
+  }
+
+  const ctx = new Context()
+  ctx.provide('llm', {
+    registerConfigurableProviders: () => {},
+    registerAdapter: () => {},
+  })
+  await ctx.plugin(WebRuntime, { searchProvider: 'commandcode' })
+  await ctx.plugin(MemorySettings)
+  await ctx.plugin(apply, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
+
+  const web = ctx.get('web') as unknown as { searchProviderId?: string }
+  assert.equal(web.searchProviderId, 'commandcode')
+
+  await (ctx.get('settings') as unknown as {
+    update: (ns: string, patch: Record<string, unknown>) => Promise<unknown>
+  }).update('llm-commandcode', { webSearch: false })
   assert.equal(web.searchProviderId, 'commandcode')
 })

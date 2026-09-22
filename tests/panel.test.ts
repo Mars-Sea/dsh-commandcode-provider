@@ -418,6 +418,30 @@ test('a 401 across every endpoint surfaces the invalid-key box, not a generic er
   assert.equal(view.failure?.hint, 'errorInvalidKeyHint')
 })
 
+test('a blocked verdict carries the endpoint messages as its detail', () => {
+  // ONE verdict ('network') covers a real outage, a per-request timeout, a key
+  // no HTTP header can carry and an unparseable API base. The hint alone told
+  // users to check a connection that was fine, so the per-endpoint messages —
+  // the only place the cause is named — ride along as the detail line.
+  const view = buildPanelView({
+    usage: usage({
+      status: 'ready',
+      report: {
+        accounts: [entry({
+          report: {
+            blocked: 'network',
+            failures: ['/alpha/whoami: fetch failed', '/alpha/billing/credits: The operation was aborted due to timeout'],
+          },
+        })],
+      },
+    }),
+    apiKeyConfigured: true,
+  })
+  assert.equal(view.failure?.title, 'errorNetwork')
+  assert.match(view.failure?.detail ?? '', /^\/alpha\/whoami: fetch failed · /)
+  assert.match(view.failure?.detail ?? '', /aborted due to timeout/)
+})
+
 test('a transport failure with no report renders the generic box with its reason', () => {
   const view = buildPanelView({
     usage: usage({ status: 'error', report: undefined, error: 'commandcode/report remote is not mounted' }),

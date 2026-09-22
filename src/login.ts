@@ -157,7 +157,10 @@ function isCallbackCredentials(value: unknown): value is CommandCodeLoginCredent
 /**
  * One browser-login attempt machine. Single-flight by design: `begin()` while
  * waiting returns the live attempt's status instead of starting a second one;
- * a terminal state makes the next `begin()` start fresh.
+ * a start that is still binding its port is REJOINED through
+ * {@link CommandCodeLoginFlow.begin}'s in-flight promise, because the status
+ * face cannot say `waiting` until that bind settles; a terminal state makes the
+ * next `begin()` start fresh.
  */
 export class CommandCodeLoginFlow {
   private readonly deps: CommandCodeLoginFlowDeps
@@ -179,6 +182,17 @@ export class CommandCodeLoginFlow {
    * the user cancelled and flipping the page back to success.
    */
   private attemptSeq = 0
+  /**
+   * The start currently binding a port, if any. Every `begin()` that arrives
+   * before it settles joins it: two independent starts would each bind their
+   * own loopback server, and only the LAST one is reachable by
+   * {@link CommandCodeLoginFlow.teardown} — the orphan keeps listening and
+   * answering `/callback` for the process's lifetime, and ten of them exhaust
+   * the port window so browser login dies until the Host restarts.
+   */
+  private starting: Promise<CommandCodeLoginStatus> | undefined
+  /** A `cancel()` that arrived while a start was still binding (see {@link CommandCodeLoginFlow.cancel}). */
+  private cancelPending = false
   private disposed = false
 
   constructor(deps: CommandCodeLoginFlowDeps) {
@@ -209,6 +223,26 @@ export class CommandCodeLoginFlow {
     // dead authUrl back would give the user a link to a closed port. Starting
     // fresh retires it (the generation check below drops its late completion).
     if (this.statusValue.state === 'waiting' && this.server !== undefined) return this.statusValue
+    // ...and rejoin a start that has not published `waiting` yet. Two GUI tabs
+    // (or a Sign-in that follows a cancel which arrived too early to retire
+    // anything) would otherwise each bind a loopback server; see `starting`.
+    if (this.starting !== undefined) return this.starting
+    this.cancelPending = false
+    const starting = this.startAttempt()
+    this.starting = starting
+    try {
+      return await starting
+    } finally {
+      if (this.starting === starting) this.starting = undefined
+    }
+  }
+
+  /**
+   * The binding half of {@link CommandCodeLoginFlow.begin}: one attempt, one
+   * server, one published `waiting` status. Callers reach it only through
+   * `begin()`'s single-flight fence.
+   */
+  private async startAttempt(): Promise<CommandCodeLoginStatus> {
     this.teardown()
     const attempt = ++this.attemptSeq
 
@@ -222,6 +256,20 @@ export class CommandCodeLoginFlow {
     })
     // A bind failure must surface before the attempt reports `waiting`.
     await this.bindServer(port, expectedState)
+
+    // The attempt may have been retired while the port was being bound: a
+    // `cancel()` (the panel's ×, or a quick Sign-in → Cancel → Sign-in) cannot
+    // see a `waiting` status yet, and a `dispose()` may have unloaded the
+    // plugin. Publishing `waiting` now would hand the user a live authUrl they
+    // already asked to drop and start a watchdog nobody can reach, so the
+    // freshly bound server is closed here instead.
+    if (this.disposed || this.cancelPending) {
+      const cancelled = !this.disposed
+      this.cancelPending = false
+      this.teardown()
+      if (cancelled) this.setStatus({ state: 'failed', reason: 'cancelled' })
+      return this.statusValue
+    }
 
     const apiBase = this.readApiBase()
     this.setStatus({
@@ -247,17 +295,27 @@ export class CommandCodeLoginFlow {
     return this.statusValue
   }
 
-  /** Cancel a waiting attempt; terminal states are untouched. */
+  /**
+   * Cancel a waiting attempt; terminal states are untouched. A start that is
+   * still binding a port is flagged instead of ignored — it cannot be torn
+   * down from here (its server does not exist yet), so `startAttempt` observes
+   * the flag once the bind settles and retires it.
+   */
   cancel(): void {
-    if (this.disposed || this.statusValue.state !== 'waiting') return
-    this.teardown()
-    this.setStatus({ state: 'failed', reason: 'cancelled' })
+    if (this.disposed) return
+    if (this.statusValue.state === 'waiting') {
+      this.teardown()
+      this.setStatus({ state: 'failed', reason: 'cancelled' })
+      return
+    }
+    if (this.starting !== undefined) this.cancelPending = true
   }
 
   /** Stop everything; a waiting attempt ends cancelled. Idempotent. */
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.cancelPending = false
     const wasWaiting = this.statusValue.state === 'waiting'
     this.teardown()
     if (wasWaiting) this.setStatus({ state: 'failed', reason: 'cancelled' })
@@ -299,8 +357,18 @@ export class CommandCodeLoginFlow {
       const server = createHttpServer((request, response) => this.handleCallback(request, response, expectedState))
       this.server = server
       server.once('error', (error: NodeJS.ErrnoException) => {
-        if (this.server !== server) return
+        if (this.server !== server) {
+          // Another attempt owns the tracked server. This one is unreachable by
+          // every teardown path, so it is closed here — an orphaned listener
+          // would answer /callback for the rest of the process's life and hold
+          // a port out of the login window.
+          closeServer(server)
+          return
+        }
         this.server = undefined
+        // A post-listen error leaves a server that may still be listening;
+        // close() is a no-op (safe) when it never bound or is already gone.
+        closeServer(server)
         const tagged = new LoginSettleError(
           'error',
           `Could not bind the login callback server on port ${port}: ${error.code ?? error.message}`,
@@ -489,9 +557,18 @@ export class CommandCodeLoginFlow {
   /** Close the server and watchdog without touching the published status. */
   private teardown(): void {
     this.clearTimer()
-    this.server?.close()
+    closeServer(this.server)
     this.server = undefined
     this.settle = undefined
+  }
+}
+
+/** Close one loopback server without letting "not running"/"already closed" escape. */
+function closeServer(server: Server | undefined): void {
+  try {
+    server?.close()
+  } catch {
+    // The server never bound, or was already closed: nothing to release.
   }
 }
 

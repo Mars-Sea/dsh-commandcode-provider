@@ -396,15 +396,21 @@ function accountView(entry: CommandCodeAccountUsage, t: PanelTranslator): PanelA
 
 /** The report-level failure box, or undefined when the report is usable. */
 function failureView(state: UsagePageState): PanelFailureView | undefined {
-  const blocked = state.report?.accounts.find((entry) => entry.report.blocked !== undefined)?.report.blocked
+  const blockedEntry = state.report?.accounts.find((entry) => entry.report.blocked !== undefined)
+  const blocked = blockedEntry?.report.blocked
+  // The endpoint messages are the only place the CAUSE is named: one verdict
+  // ('network') covers a real outage, a per-request timeout, a key no header
+  // can carry and an unparseable API base, so the generic hint alone sent
+  // users to check a connection that was fine.
+  const detail = (blockedEntry?.report.failures ?? []).join(' · ')
   if (blocked === 'invalid-key') {
-    return { title: 'errorInvalidKey', hint: 'errorInvalidKeyHint', detail: '' }
+    return { title: 'errorInvalidKey', hint: 'errorInvalidKeyHint', detail }
   }
   if (blocked === 'service-unavailable') {
-    return { title: 'errorServiceUnavailable', hint: 'errorServiceUnavailableHint', detail: '' }
+    return { title: 'errorServiceUnavailable', hint: 'errorServiceUnavailableHint', detail }
   }
   if (blocked === 'network') {
-    return { title: 'errorNetwork', hint: 'errorNetworkHint', detail: '' }
+    return { title: 'errorNetwork', hint: 'errorNetworkHint', detail }
   }
   // A transport-level failure (unmounted Remote, offline browser) arrives as
   // the controller's own error rather than as a blocked report.

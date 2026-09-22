@@ -505,6 +505,17 @@ function AccountReport({ entry, fetchedAt, t, onRemove }: {
         <div className="cc-usageBlocked" role="alert">
           <p className="cc-usageBlockedTitle">{blockedTitle(report.blocked, t)}</p>
           <p className="cc-usageBlockedHint">{blockedHint(report.blocked, t)}</p>
+          {/* The verdict above is a CLASSIFICATION, and several unrelated
+              causes share it — a real outage, a per-request timeout, a key no
+              HTTP header can carry, an unparseable API base. The endpoint
+              messages are the only place the actual cause is named, so they
+              are shown instead of hidden behind the generic hint (the hint
+              alone told users to check a network that was fine). */}
+          {report.failures.length > 0 ? (
+            <p className="cc-usageBlockedDetail" title={report.failures.join('; ')}>
+              {report.failures.join(' · ')}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

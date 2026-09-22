@@ -255,11 +255,11 @@ async function captureWire(
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
     return protocol === 'openai'
-      ? new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+      ? new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
           status: 200,
           headers: { 'content-type': 'text/event-stream' },
         })
-      : new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+      : new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
   const adapter = makeAdapter({
     fetchImpl,
@@ -315,11 +315,64 @@ function parallelTurn(
 // Message conversion (via stream() request capture)
 // ---------------------------------------------------------------------------
 
+// The development peers still type the pre-0.1.7 envelope. Use the modern
+// runtime shape explicitly; test:engine also exercises the engine's constructor.
+function modernToolResults(messages: Message[]): Message[] {
+  return messages.map((message) => {
+    const block = message.content[0]
+    if (message.role !== 'user' || block?.type !== 'tool-result') return message
+    return {
+      ...message,
+      role: 'tool',
+      toolCallId: block.toolCallId,
+      isError: block.isError,
+      content: block.content,
+    } as unknown as Message
+  })
+}
+
+for (const protocol of ['cli', 'openai'] as const) {
+  test(`${protocol} replays DSH 0.1.7 tool calls and results into the next request`, async () => {
+    const history = [userMessage('inspect the repository'), ...modernToolResults(parallelTurn(
+      ['call-status', 'call-diff'],
+      [{ text: 'working tree clean' }, { text: 'diff unavailable', isError: true }],
+      { assistantText: 'Let me inspect the changes.' },
+    ))]
+    const messages = await captureWire(protocol, history, {})
+    assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool'])
+    assert.deepEqual(wireCallIds(messages[1]!), ['call-status', 'call-diff'])
+    assert.equal(wireAnswers(messages[2]!), 'call-status')
+    assert.equal(wireAnswers(messages[3]!), 'call-diff')
+    assert.match(JSON.stringify(messages[2]), /working tree clean/)
+    assert.match(JSON.stringify(messages[3]), /diff unavailable/)
+    if (protocol === 'cli') assert.match(JSON.stringify(messages[3]), /error-text/)
+    assertToolGroupsAnswered(messages, protocol)
+  })
+
+  test(`${protocol} preserves mixed-generation results, aliased ids and modern tool images`, async () => {
+    const ref = imageRef()
+    const longId = 'long-call-'.repeat(12)
+    const old = parallelTurn([longId, 'call-legacy'], [{ images: [ref, ref] }, { text: 'legacy output' }])
+    const modern = modernToolResults(old)
+    const history = [userMessage('inspect images'), modern[0]!, modern[1]!, old[2]!, userMessage('continue')]
+    const messages = await captureWire(protocol, history, { [ref.attachmentId]: pngBytes })
+    assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'user', 'user'])
+    const [alias] = wireCallIds(messages[1]!)
+    assert.ok(alias && alias.length <= 64)
+    assert.equal(wireAnswers(messages[2]!), alias)
+    assert.equal(wireAnswers(messages[3]!), 'call-legacy')
+    assert.match(JSON.stringify(messages[2]), /image returned/)
+    assert.match(JSON.stringify(messages[4]), new RegExp(`Attached image\\(s\\) from tool result \\(${alias}\\)`))
+    assert.equal(JSON.stringify(messages[4]).split(Buffer.from(pngBytes).toString('base64')).length - 1, 1)
+    assertToolGroupsAnswered(messages, protocol)
+  })
+}
+
 test('stream() sends the harness conversation in Command Code wire format', async () => {
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', {
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     })
@@ -363,7 +416,7 @@ test('stream() replays reasoning blocks on the CLI transport', async () => {
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', {
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     })
@@ -412,7 +465,7 @@ test('stream() normalizes tool schemas to an object root on the CLI transport', 
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const adapter = makeAdapter({ fetchImpl })
@@ -489,7 +542,7 @@ test('stream() normalizes tool schemas to an object root on the Provider API tra
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', { status: 200 })
+    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const adapter = makeAdapter({
@@ -525,7 +578,7 @@ test('stream() replays only paired tool calls', async () => {
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const callId = ToolCallId('call-123')
@@ -572,7 +625,7 @@ test('stream() remaps overlong cross-provider tool-call ids to the gateway limit
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   // Issue #23: switching to Command Code mid-session can replay a tool id
@@ -636,7 +689,7 @@ test('stream() falls back to "unknown" for an empty tool-call name', async () =>
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const callId = ToolCallId('call-empty-name')
@@ -708,7 +761,7 @@ test('stream() carries tool-result images after the tool message (issue #30)', a
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const ref = imageRef()
@@ -746,7 +799,7 @@ test('stream() carries a tool-result image exactly once and never without bytes'
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const ref = imageRef()
@@ -779,7 +832,7 @@ test('stream() gives an image-only tool result a non-empty tool message', async 
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const ref = imageRef()
@@ -826,7 +879,7 @@ test('openai protocol carries tool-result images as a following user message (is
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     })
@@ -870,7 +923,7 @@ test('stream() keeps parallel tool results consecutive before their image carrie
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const refA = { ...imageRef(), attachmentId: AttachmentId('sha256:test-image-a') }
@@ -943,7 +996,7 @@ test('openai protocol groups carried images after the whole parallel tool turn',
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     })
@@ -1020,7 +1073,7 @@ test('stream() names a remapped call id in the carrier note, not the harness id'
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   // The note must name the id the MODEL saw. An overlong cross-provider id is
@@ -1079,11 +1132,11 @@ test('both transports drop a user message that converted to nothing', async () =
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body))
       return protocol === 'openai'
-        ? new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+        ? new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
             status: 200,
             headers: { 'content-type': 'text/event-stream' },
           })
-        : new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+        : new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
     }) as unknown as typeof fetch
 
     const adapter = makeAdapter({
@@ -1167,13 +1220,8 @@ test('both transports convert an untagged message instead of crashing on it (iss
 })
 
 test('an untagged tool result stays a tool result, so its call is not left unanswered (issue #47)', async () => {
-  // The untagged fallback is not just "assume user". `pairedToolCalls()` counts
-  // a `tool-result` block from ANY message, so classifying an untagged tool
-  // result as a plain user message would drop it at emission while its call
-  // still counted as paired — the wire would carry an assistant `tool_calls`
-  // entry with no answer, which the gateway rejects outright. Content shape
-  // settles it: a `user` message whose first block is a tool result IS one by
-  // the harness's own definition.
+  // An untagged legacy result must be recognized by both pairing and emission:
+  // treating it as a plain user message would silently lose completed work.
   for (const protocol of ['cli', 'openai'] as const) {
     const callId = ToolCallId('call-untagged')
     const messages = await captureWire(
@@ -1219,7 +1267,7 @@ test('a present source tag stays authoritative over the content shape (issue #47
           source: { kind: 'model', provider: 'commandcode', model: 'm' },
         },
         // Tagged `user` while shaped like a tool result: dropped at emission on
-        // both transports today, and that must not change.
+        // both transports. Its call must also be excluded from pairing.
         {
           id: messageId(),
           role: 'user',
@@ -1232,9 +1280,10 @@ test('a present source tag stays authoritative over the content shape (issue #47
     )
     assert.deepEqual(
       messages.map((message) => message.role),
-      ['user', 'assistant', 'user'],
+      ['user', 'user'],
       `${protocol}: a tagged non-tool message must not be replayed as a tool answer`,
     )
+    assertToolGroupsAnswered(messages, `${protocol}: non-tool source must not pair a call`)
   }
 })
 
@@ -1342,7 +1391,7 @@ test('stream() leaves text-only tool results untouched', async () => {
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const callId = ToolCallId('call-bash')
@@ -1373,7 +1422,7 @@ test('stream() drops images of an unpaired tool result with the result itself', 
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const ref = imageRef()
@@ -1443,7 +1492,7 @@ test('stream() sends images in the official Command Code wire format', async () 
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
   const ref = imageRef()
@@ -1706,11 +1755,11 @@ function imageHistory(sizes: number[]): { messages: Message[]; images: Record<st
 /** The success stream each transport understands. */
 function okStream(protocol: 'cli' | 'openai'): Response {
   return protocol === 'openai'
-    ? new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+    ? new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
         status: 200,
         headers: { 'content-type': 'text/event-stream' },
       })
-    : new Response('data: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+    : new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
 }
 
 /**
@@ -2751,7 +2800,7 @@ test('stream() emits a tool-call block atomically', async () => {
 })
 
 test('stream() maps max-tokens finish reason', async () => {
-  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"finish","finishReason":"length"}\n\n') })
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"length"}\n\n') })
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
   const finish = chunks.find((c) => c.type === 'finish') as { reason: { kind: string } }
   assert.equal(finish.reason.kind, 'max-tokens')
@@ -2767,7 +2816,7 @@ test('openai protocol sends flat body and replays reasoning_content in history',
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     capturedUrl = String(input)
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     })
@@ -2825,7 +2874,7 @@ test('openai protocol remaps overlong cross-provider tool-call ids', async () =>
   let capturedBody: Record<string, unknown> | undefined
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body))
-    return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     })
@@ -3313,6 +3362,85 @@ test('stream() classifies a retryable HTTP status error event as SERVER', async 
   )
 })
 
+test('stream() lets a terminal marker or an explicit refusal outrank a 5xx status', async () => {
+  // A permanent refusal that arrives with a retryable status must stay
+  // terminal: answering it with `SERVER` puts the identical request on
+  // dsh-llm-retry's 1000-attempt cadence (waits doubling to 15 minutes) even
+  // though no resend can succeed.
+  const bodies = [
+    { message: 'insufficient credits', statusCode: 500 },
+    { message: 'model_not_in_plan', statusCode: 503 },
+    { message: 'premium credits exhausted', statusCode: 502 },
+    { message: 'boom', statusCode: 500, isRetryable: false },
+  ]
+  for (const error of bodies) {
+    const adapter = makeAdapter({
+      fetchImpl: fetchReturning(200, `data: ${JSON.stringify({ type: 'error', error })}\n\n`),
+    })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (err: unknown) => (err as { code?: string }).code === 'PROVIDER_STREAM_ERROR',
+      `${JSON.stringify(error)} must not be retried as a transient failure`,
+    )
+  }
+  // ...while an explicit `isRetryable: true` still wins over the classification.
+  const retryable = makeAdapter({
+    fetchImpl: fetchReturning(200, 'data: {"type":"error","error":{"message":"flash blip","statusCode":400,"isRetryable":true}}\n\n'),
+  })
+  await assert.rejects(
+    collect(retryable.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'SERVER',
+  )
+})
+
+test('stream() does not let an absurd provider reset break the RATE_LIMIT classification', async () => {
+  // A published reset is untrusted input. `1e300` seconds is finite, so it used
+  // to reach `new Date(1e303).toISOString()` — a RangeError thrown out of
+  // stream() in place of the intended retryable RATE_LIMIT — and a mark pinned
+  // to it would have been a cooldown no probe ever revisits.
+  const adapter = makeAdapter({
+    fetchImpl: fetchReturning(429, JSON.stringify({
+      error: { code: 'RATE_LIMITED', message: 'Rate limited', rateLimit: { window: 'fiveHour', reset: 1e300 } },
+    })),
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string }
+      assert.equal(e.code, 'RATE_LIMIT')
+      assert.doesNotMatch(e.message ?? '', /resets at/, 'no reset may be claimed from an implausible value')
+      return true
+    },
+  )
+})
+
+test('stream() drops an implausible reset from a window-limit body but still rotates', async () => {
+  // The same bound at the rejection-classification seam: the account is marked
+  // `window`-caused with NO reset (an `unknown` mark the pool's probe pass
+  // re-checks), never a cooldown that outlives the process.
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': {
+      status: 403,
+      body: JSON.stringify({ error: { code: 'RATE_LIMITED', rateLimit: { window: 'weekly', reset: 1e300 } } }),
+    },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const rotations: Array<{ reason: string; resetAtMs: number | undefined }> = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (_rejected, reason, _connection, _model, rotation) => {
+      rotations.push({ reason, resetAtMs: rotation?.resetAtMs })
+      return 'key-2'
+    },
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.equal(rotations[0]?.reason, 'rate-limit')
+  assert.equal(rotations[0]?.resetAtMs, undefined, 'the implausible reset is dropped, not clamped')
+  assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+})
+
 test('stream() reports a long-context rejection as CONTEXT_WINDOW_EXCEEDED, never as a repeatable SERVER (issue #39)', async () => {
   // At ~500k tokens a session that outgrew the model's window was rejected
   // with wording this adapter did not recognize, so the failure fell into the
@@ -3513,7 +3641,7 @@ test('stream() does not abort a healthy body when elapsed time exceeds requestTi
     async start(controller) {
       controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"hi"}\n\n'))
       await new Promise((r) => setTimeout(r, 60))
-      controller.enqueue(new TextEncoder().encode('data: {"type":"finish","finishReason":"stop"}\n\n'))
+      controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'))
       controller.close()
     },
   })
@@ -3563,12 +3691,69 @@ test('stream() fails with TIMEOUT when the stream stalls past streamIdleTimeoutM
   )
 })
 
-test('stream() throws EMPTY_RESPONSE when the stream ends without content', async () => {
-  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"finish","finishReason":"stop"}\n\n') })
-  // The finish event IS content (sawContent=false only when nothing emitted) —
-  // actually finish marks a completed stream, so this ends normally.
+test('stream() completes normally when the finish event arrives', async () => {
+  const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n') })
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
   assert.ok(chunks.some((c) => c.type === 'finish'))
+})
+
+test('stream() raises STREAM_CLOSED when the response is cut before its finish event', async () => {
+  // The reported failure: the gateway (or an intermediary) closes the socket
+  // mid-generation, so the read loop meets EOF without ever seeing the
+  // transport's terminal event. Answering that with a synthesized `stop` is
+  // what made a truncated reply look like a turn that had simply finished —
+  // no error in the UI, nothing in the session log. `dsh-llm-deepseek` raises
+  // this same code for this same condition ("… stream ended before
+  // message_stop"), which is the behavior mirrored here.
+  const cases = [
+    [undefined, 'data: {"type":"text-delta","text":"half an ans"}\n\n'],
+    [OPENAI_OPTIONS, 'data: {"choices":[{"delta":{"content":"half an ans"}}]}\n\n'],
+  ] as const
+  for (const [options, body] of cases) {
+    const adapter = makeAdapter({
+      ...(options === undefined ? {} : { options }),
+      fetchImpl: fetchReturning(200, body),
+    })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string }
+        return e.code === 'STREAM_CLOSED'
+          && /ended before its finish event/.test(e.message ?? '')
+          && /生成中途断流/.test(e.message ?? '')
+          && /DSH_COMMANDCODE_TRACE/.test(e.message ?? '')
+      },
+    )
+  }
+})
+
+test('stream() refuses a tool call the cut stream never finished', async () => {
+  // A tool call still in flight when the socket closed carries truncated JSON
+  // arguments — running it would be worse than failing the turn.
+  const adapter = makeAdapter({
+    options: OPENAI_OPTIONS,
+    fetchImpl: fetchReturning(
+      200,
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"bash","arguments":"{\\"comm"}}]}}]}\n\n',
+    ),
+  })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (err: unknown) => (err as { code?: string }).code === 'STREAM_CLOSED',
+  )
+})
+
+test('stream() keeps EMPTY_RESPONSE retryable when the cut produced no visible content', async () => {
+  // Nothing usable came out, so repeating the request is safe and cheap and the
+  // policy's whitelist absorbs it. A cut during a long thinking phase lands
+  // here too — that path is unchanged and stays retryable.
+  for (const body of ['', 'data: {"type":"reasoning-delta","text":"thinking"}\n\n']) {
+    const adapter = makeAdapter({ fetchImpl: fetchReturning(200, body) })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (err: unknown) => (err as { code?: string }).code === 'EMPTY_RESPONSE',
+    )
+  }
 })
 
 test('stream() emits a single finish when the trailing event lacks its newline', async () => {
@@ -4380,7 +4565,7 @@ function fetchByKey(byKey: Record<string, { status: number; body: string }>): {
   return { fetchImpl, calls }
 }
 
-const FINISH_STREAM = 'data: {"type":"finish","finishReason":"stop"}\n\n'
+const FINISH_STREAM = 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
 
 test('stream() rotates to the next account after a pre-stream 429', async () => {
   const { fetchImpl, calls } = fetchByKey({
@@ -4571,6 +4756,34 @@ test('stream() rotates on a code-only account-scoped body, with no wording to re
   assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
 })
 
+test('stream() rotates past a 5xx that carries a structured account code', async () => {
+  // The structured codes are account facts on ANY status (the CLI reads the
+  // code before its status guard). Without this, a gateway proxying the
+  // provider's own credits/plan rejection under a 5xx was classified as "the
+  // provider is unavailable": no rotation, and `SERVER` put the identical
+  // request back on dsh-llm-retry's 1000-attempt cadence while the accounts
+  // behind it were never tried. Only the PROSE scan stays confined to 4xx.
+  for (const code of ['INSUFFICIENT_CREDITS', 'USAGE_EXCEEDED', 'PREMIUM_CREDITS_EXHAUSTED', 'MODEL_NOT_IN_PLAN'] as const) {
+    const { fetchImpl, calls } = fetchByKey({
+      'key-1': { status: 503, body: JSON.stringify({ error: { code } }) },
+      'key-2': { status: 200, body: FINISH_STREAM },
+    })
+    const reasons: string[] = []
+    const adapter = makeAdapter({
+      fetchImpl,
+      resolveApiKey: async () => 'key-1',
+      rotateApiKey: async (_rejected, reason) => {
+        reasons.push(reason)
+        return 'key-2'
+      },
+    })
+    const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
+    assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'], `${code} must rotate`)
+    assert.deepEqual(reasons, ['unavailable'], `${code} is an account fact, not a provider outage`)
+    assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+  }
+})
+
 test('stream() does not blame an account for a 5xx that carries no window-limit code', async () => {
   // The status guard's job: a provider outage keeps its retry cadence for EVERY
   // account instead of being remembered against one. (A 5xx that does carry the
@@ -4749,20 +4962,31 @@ test('stream() propagates the rotation hook’s all-exhausted error', async () =
   )
 })
 
+/**
+ * Plausible window resets for the probe fixtures, relative to now.
+ *
+ * The endpoint publishes `resetAt` as an epoch in millis, and the pool trusts
+ * one only while it lies inside a real metering horizon (see
+ * `MAX_TRUSTED_RESET_MS`): a fixture pinned to a fixed far-future instant would
+ * be dropped as implausible, which is not what these tests are about.
+ */
+const FIVE_HOUR_RESET = Date.now() + 3 * 60 * 60 * 1000
+const WEEKLY_RESET = Date.now() + 4 * 24 * 60 * 60 * 1000
+
 test('probeWindowLimits() reports the five-hour window when it is the only one exceeded', async () => {
   const { fetchImpl } = fetchRouting({
     '/alpha/billing/credits': {
       status: 200,
       body: {
         windowLimits: {
-          fiveHour: { used: 5, cap: 5, exceeded: true, resetAt: 1_800_000_000_000 },
-          weekly: { used: 1, cap: 6, exceeded: false, resetAt: 1_800_600_000_000 },
+          fiveHour: { used: 5, cap: 5, exceeded: true, resetAt: FIVE_HOUR_RESET },
+          weekly: { used: 1, cap: 6, exceeded: false, resetAt: WEEKLY_RESET },
         },
       },
     },
   })
   const adapter = makeAdapter({ fetchImpl })
-  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: 1_800_000_000_000 })
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: FIVE_HOUR_RESET })
 })
 
 test('probeWindowLimits() treats an exhausted weekly quota as limiting while the five-hour window is open', async () => {
@@ -4770,13 +4994,13 @@ test('probeWindowLimits() treats an exhausted weekly quota as limiting while the
   // only `fiveHour` revived an account whose WEEKLY quota was spent — the pool
   // handed it out, the provider rejected the request, and the next all-marked
   // pass revived it again. "切到一个不可用账号" is exactly that loop.
-  const weeklyReset = 1_800_600_000_000
+  const weeklyReset = WEEKLY_RESET
   const { fetchImpl } = fetchRouting({
     '/alpha/billing/credits': {
       status: 200,
       body: {
         windowLimits: {
-          fiveHour: { used: 0.2, cap: 3, exceeded: false, resetAt: 1_799_000_000_000 },
+          fiveHour: { used: 0.2, cap: 3, exceeded: false, resetAt: FIVE_HOUR_RESET - 60_000 },
           weekly: { used: 6, cap: 6, exceeded: true, resetAt: weeklyReset },
         },
       },
@@ -4794,14 +5018,14 @@ test('probeWindowLimits() reports the latest reset when every window is exceeded
       status: 200,
       body: {
         windowLimits: {
-          fiveHour: { used: 9, cap: 5, exceeded: true, resetAt: 1_800_000_000_000 },
-          weekly: { used: 9, cap: 6, exceeded: true, resetAt: 1_800_600_000_000 },
+          fiveHour: { used: 9, cap: 5, exceeded: true, resetAt: FIVE_HOUR_RESET },
+          weekly: { used: 9, cap: 6, exceeded: true, resetAt: WEEKLY_RESET },
         },
       },
     },
   })
   const adapter = makeAdapter({ fetchImpl })
-  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: 1_800_600_000_000 })
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: WEEKLY_RESET })
 })
 
 test('probeWindowLimits() reports a clear account when no window is exceeded', async () => {
@@ -4810,8 +5034,8 @@ test('probeWindowLimits() reports a clear account when no window is exceeded', a
       status: 200,
       body: {
         windowLimits: {
-          fiveHour: { used: 0.1, cap: 3, exceeded: false, resetAt: 1_800_000_000_000 },
-          weekly: { used: 1, cap: 6, exceeded: false, resetAt: 1_800_600_000_000 },
+          fiveHour: { used: 0.1, cap: 3, exceeded: false, resetAt: FIVE_HOUR_RESET },
+          weekly: { used: 1, cap: 6, exceeded: false, resetAt: WEEKLY_RESET },
         },
       },
     },
@@ -4826,11 +5050,11 @@ test('probeWindowLimits() uses a weekly-only payload', async () => {
   const { fetchImpl } = fetchRouting({
     '/alpha/billing/credits': {
       status: 200,
-      body: { windowLimits: { weekly: { used: 6, cap: 6, exceeded: true, resetAt: 1_800_600_000_000 } } },
+      body: { windowLimits: { weekly: { used: 6, cap: 6, exceeded: true, resetAt: WEEKLY_RESET } } },
     },
   })
   const adapter = makeAdapter({ fetchImpl })
-  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: 1_800_600_000_000 })
+  assert.deepEqual(await adapter.probeWindowLimits('key-1'), { exceeded: true, resetAt: WEEKLY_RESET })
 })
 
 test('probeWindowLimits() degrades to undefined on endpoint or shape failure', async () => {
@@ -4942,6 +5166,60 @@ test('getUsage() classifies an all-transport-failure run as network', async () =
   })
   const report = await adapter.getUsage('user_test_key')
   assert.equal(report.blocked, 'network')
+  // The endpoint messages ARE the diagnosis: one 'network' verdict also covers
+  // an unparseable API base and a per-request timeout, so the card renders
+  // these rather than only the generic "check your connection" hint.
+  assert.equal(report.failures.length, 4)
+  assert.match(report.failures[0] ?? '', /^\/alpha\/whoami: fetch failed/)
+})
+
+test('getUsage() reports a key no HTTP header can carry as an invalid key, not as a network outage', async () => {
+  // A paste artifact (an embedded newline, a full-width character) makes
+  // `fetch` throw a TypeError BEFORE any I/O — for every endpoint at once — so
+  // the all-transport-failure classifier used to answer "无法连接 Command Code
+  // 服务 / 请检查网络连接或 API 地址设置" while the connection was fine and the
+  // real problem was the credential. The chat path already refuses such a key
+  // through `assertUsableApiKey`; the account path now does too, and the report
+  // carries the credential verdict.
+  let fetches = 0
+  const adapter = makeAdapter({
+    fetchImpl: (async () => {
+      fetches += 1
+      throw new TypeError('should never be reached')
+    }) as unknown as typeof fetch,
+  })
+  const report = await adapter.getUsage('cc_sk_bad\nkey')
+  assert.equal(report.blocked, 'invalid-key')
+  assert.equal(fetches, 0, 'the key is rejected before any request is attempted')
+  assert.match(report.failures[0] ?? '', /characters no HTTP header can carry/)
+})
+
+test('getUsage() holds the account endpoints to the connection request budget, not the catalog probe cap', async () => {
+  // The four account endpoints used the catalog's 10 s cap while a chat call
+  // got 60 s, so on a slow link every account query timed out while chat kept
+  // working — a "check your network" banner that could never clear. The budget
+  // is the connection's own `requestTimeoutMs`, which this pins by lowering it
+  // to a value the catalog cap would never reach: with the old 10 s signal this
+  // call would take ten seconds and blow the assertion below.
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), requestTimeoutMs: 40 }),
+    // A stub that waits for the request's OWN abort signal. The keep-alive
+    // timer is ref'd because `AbortSignal.timeout`'s timer is not: without it
+    // the loop drains before the abort fires and this test never settles.
+    fetchImpl: (async (_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      const keepAlive = setTimeout(() => {}, 15_000)
+      init?.signal?.addEventListener('abort', () => {
+        clearTimeout(keepAlive)
+        reject(init.signal?.reason)
+      }, { once: true })
+    })) as unknown as typeof fetch,
+  })
+  const started = Date.now()
+  const report = await adapter.getUsage('user_test_key')
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 2_000, `the account fetch honored requestTimeoutMs (took ${elapsed}ms)`)
+  assert.equal(report.blocked, 'network')
+  assert.equal(report.failures.length, 4)
 })
 
 test('getUsage() leaves partial failures unclassified', async () => {
@@ -4958,4 +5236,97 @@ test('getUsage() leaves partial failures unclassified', async () => {
   assert.equal(report.blocked, undefined)
   assert.notEqual(report.account, undefined)
   assert.equal(report.failures.length, 3)
+})
+
+// Terminal events are not proof that the model produced a usable answer.
+for (const protocol of ['cli', 'openai'] as const) {
+  for (const finishReason of ['stop', 'length', 'max_tokens', 'max-tokens', 'max_output_tokens']) {
+    test(`${protocol}: reasoning-only ${finishReason} fails before publishing a finish`, async () => {
+      const limited = finishReason !== 'stop'
+      const events = protocol === 'cli' ? [
+        { type: 'reasoning-delta', text: 'still thinking' },
+        { type: 'finish', finishReason, totalUsage: { inputTokens: 10, outputTokens: 32, outputTokenDetails: { reasoningTokens: 31 } } },
+      ] : [
+        { choices: [{ delta: { reasoning_content: 'still thinking', tool_calls: [] } }] },
+        { choices: [{ delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: 10, completion_tokens: 32, completion_tokens_details: { reasoning_tokens: 31 } } },
+      ]
+      // No final newline: exercise the EOF buffer as well as the line loop.
+      const body = events.map(event => `data: ${JSON.stringify(event)}`).join('\n')
+      const adapter = makeAdapter({
+        ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+        fetchImpl: fetchReturning(200, body),
+      })
+      const seen: StreamChunk[] = []
+      const code = limited ? 'OUTPUT_TOKEN_LIMIT' : 'EMPTY_RESPONSE'
+      await assert.rejects(async () => {
+        for await (const chunk of adapter.stream({ provider: 'commandcode', model: 'm', maxTokens: 32, messages: [userMessage('hi')] })) seen.push(chunk)
+      }, (error: unknown) => {
+        const e = error as { code: string; message: string }
+        assert.equal(e.code, code)
+        assert.match(e.message, /max_tokens=32/)
+        assert.match(e.message, /reasoningTokens=31/)
+        return true
+      })
+      assert.equal(seen.some(chunk => chunk.type === 'finish'), false, 'DSH must receive only its error finish, never a preceding success')
+      assert.equal(seen.filter(chunk => chunk.type === 'usage').length, 1, 'keep billed usage on failed attempts')
+      assert.ok(seen.some(chunk => chunk.type === 'block-end' && chunk.block.type === 'reasoning'))
+      const policy = adapter.providerRetryPolicy('commandcode')
+      assert.equal(policy.mode, 'normal')
+      assert.equal(policy.retryableCodes.includes(code), !limited)
+    })
+  }
+
+  test(`${protocol}: empty or whitespace-only terminal responses are retryable`, async () => {
+    for (const text of ['', ' \n\t']) {
+      const events = protocol === 'cli' ? [
+        { type: 'text-delta', text }, { type: 'finish', finishReason: 'stop' },
+      ] : [
+        { choices: [{ delta: { content: text, tool_calls: [] }, finish_reason: 'stop' }] },
+      ]
+      const adapter = makeAdapter({
+        ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+        fetchImpl: fetchReturning(200, events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')),
+      })
+      await assert.rejects(collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+        (error: unknown) => (error as { code: string }).code === 'EMPTY_RESPONSE')
+    }
+  })
+}
+
+test('a token-limited empty response does not invent reasoning usage', async () => {
+  const adapter = makeAdapter({ options: OPENAI_OPTIONS, fetchImpl: fetchReturning(200,
+    'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n') })
+  await assert.rejects(collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })), (error: unknown) => {
+    const e = error as { code: string; message: string }
+    assert.equal(e.code, 'OUTPUT_TOKEN_LIMIT')
+    assert.match(e.message, /reasoningTokens=unknown/)
+    assert.doesNotMatch(e.message, /全部|\ball\b.*reasoning/)
+    return true
+  })
+})
+
+test('an explicit content filter is not retried as an empty response', async () => {
+  const adapter = makeAdapter({ options: OPENAI_OPTIONS, fetchImpl: fetchReturning(200,
+    'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n') })
+  await assert.rejects(collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => (error as { code: string }).code === 'CONTENT_FILTER')
+  const policy = adapter.providerRetryPolicy('commandcode')
+  assert.equal(policy.mode, 'normal')
+  assert.equal(policy.retryableCodes.includes('CONTENT_FILTER'), false)
+})
+
+test('usage received before a transport error is retained without a success finish', async () => {
+  let reads = 0
+  const adapter = makeAdapter({ options: OPENAI_OPTIONS, fetchImpl: fetchReturning(200, () => new ReadableStream({
+    pull(controller) {
+      if (reads++ === 0) controller.enqueue(new TextEncoder().encode('data: {"choices":[],"usage":{"completion_tokens":7}}\n\n'))
+      else controller.error(new Error('connection reset'))
+    },
+  })) })
+  const seen: StreamChunk[] = []
+  await assert.rejects(async () => {
+    for await (const chunk of adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })) seen.push(chunk)
+  }, (error: unknown) => (error as { code: string }).code === 'TRANSPORT')
+  assert.equal(seen.filter(chunk => chunk.type === 'usage').length, 1)
+  assert.equal(seen.some(chunk => chunk.type === 'finish'), false)
 })
