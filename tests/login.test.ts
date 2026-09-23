@@ -15,6 +15,7 @@ import { createServer as createNetServer } from 'node:net'
 import {
   CommandCodeLoginFlow,
   buildCommandAuthUrl,
+  loginCredentialRef,
   studioBaseForApiBase,
   validateCommandApiKey,
   type CommandCodeLoginCredentials,
@@ -46,7 +47,8 @@ interface FlowHarness {
 
 function makeFlow(overrides?: {
   timeoutMs?: number
-  storeKey?: (credentials: CommandCodeLoginCredentials) => Promise<void>
+  storeKey?: (credentials: CommandCodeLoginCredentials, targetRef?: string) => Promise<void>
+  validateTargetRef?: (targetRef: string | undefined) => void
   whoami?: (apiKey: string) => ResponseInit & { body?: unknown } | 'throw'
   startPort?: number
   maxPortAttempts?: number
@@ -61,6 +63,7 @@ function makeFlow(overrides?: {
     ...(overrides?.maxPortAttempts === undefined ? {} : { maxPortAttempts: overrides.maxPortAttempts }),
     fetchImpl: whoami.fetchImpl,
     storeKey: overrides?.storeKey ?? (async (credentials) => void stored.push(credentials)),
+    ...(overrides?.validateTargetRef === undefined ? {} : { validateTargetRef: overrides.validateTargetRef }),
   })
   return {
     flow,
@@ -126,7 +129,10 @@ test('buildCommandAuthUrl carries the loopback callback and state', () => {
 })
 
 test('validateCommandApiKey mirrors the CLI verdicts', async () => {
-  const ok = (async () => ({ status: 200, ok: true, json: async () => ({}) })) as unknown as typeof fetch
+  const ok = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(new Headers(init?.headers).get('accept-encoding'), 'identity')
+    return { status: 200, ok: true, json: async () => ({}) }
+  }) as unknown as typeof fetch
   const unauthorized = (async () => ({ status: 401, ok: false })) as unknown as typeof fetch
   const boom = (async () => {
     throw new Error('down')
@@ -136,6 +142,14 @@ test('validateCommandApiKey mirrors the CLI verdicts', async () => {
   assert.deepEqual(await validateCommandApiKey(unauthorized, 'https://api.commandcode.ai', 'k'), { valid: false, error: 'invalid_key' })
   assert.deepEqual(await validateCommandApiKey(serverError, 'https://api.commandcode.ai', 'k'), { valid: false, error: 'server_error' })
   assert.deepEqual(await validateCommandApiKey(boom, 'https://api.commandcode.ai', 'k'), { valid: false, error: 'network_error' })
+})
+
+test('browser login accepts only the default or a saved extra-account credential ref', () => {
+  const accounts = [{ apiKeyEnv: 'COMMANDCODE_API_KEY_2' }]
+  assert.equal(loginCredentialRef(undefined, 'COMMANDCODE_API_KEY', accounts), 'COMMANDCODE_API_KEY')
+  assert.equal(loginCredentialRef('COMMANDCODE_API_KEY_2', 'COMMANDCODE_API_KEY', accounts), 'COMMANDCODE_API_KEY_2')
+  assert.throws(() => loginCredentialRef('OTHER_SECRET', 'COMMANDCODE_API_KEY', accounts), /must be saved/)
+  assert.throws(() => loginCredentialRef('COMMANDCODE_API_KEY', 'COMMANDCODE_API_KEY', [{ apiKeyEnv: 'COMMANDCODE_API_KEY' }]), /must be saved/)
 })
 
 test('happy path: callback credentials validate, store, and report success', async () => {
@@ -162,6 +176,44 @@ test('happy path: callback credentials validate, store, and report success', asy
     assert.deepEqual(harness.whoamiKeys, ['cc_sk_test_key'])
     // The server stopped listening after the attempt settled.
     await assert.rejects(fetch(callbackUrl, { method: 'POST', body: '{}' }))
+  } finally {
+    harness.dispose()
+  }
+})
+
+test('a saved extra account login stores its key under that account, not default', async () => {
+  const targets: Array<string | undefined> = []
+  const harness = makeFlow({
+    storeKey: async (_credentials, targetRef) => { targets.push(targetRef) },
+  })
+  try {
+    const waiting = await harness.flow.begin('COMMANDCODE_API_KEY_2')
+    const { callbackUrl, state } = parseAuthUrl(waiting.authUrl ?? '')
+    const response = await fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials(state, 'cc_sk_second_account')),
+    })
+    assert.equal(response.status, 200)
+    assert.equal((await waitFor(harness.flow, (s) => s.state !== 'waiting')).state, 'success')
+    assert.deepEqual(targets, ['COMMANDCODE_API_KEY_2'])
+    assert.deepEqual(harness.whoamiKeys, ['cc_sk_second_account'])
+  } finally {
+    harness.dispose()
+  }
+})
+
+test('another account cannot rejoin a live login or supply an unsaved target', async () => {
+  const harness = makeFlow({
+    validateTargetRef: (targetRef) => {
+      if (targetRef !== undefined && targetRef !== 'SAVED_ACCOUNT') throw new Error('account must be saved')
+    },
+  })
+  try {
+    await assert.rejects(harness.flow.begin('UNSAVED_ACCOUNT'), /account must be saved/)
+    const first = await harness.flow.begin('SAVED_ACCOUNT')
+    await assert.rejects(harness.flow.begin(), /another account login/)
+    assert.equal((await harness.flow.begin('SAVED_ACCOUNT')).authUrl, first.authUrl)
   } finally {
     harness.dispose()
   }

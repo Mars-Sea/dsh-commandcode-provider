@@ -91,6 +91,13 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-advancedBody>.cc-field:first-of-type{border-top:1px solid var(--dsw-alias-border-l2)}
 .cc-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
 .cc-footer{justify-content:flex-end;align-items:center;gap:8px;display:flex}
+/* Keep the original footer in flow and inside the settings scrollport. */
+.cc-footerMarker{height:1px;margin:-6px 0 -7px;pointer-events:none}
+.cc-footerSticky{position:sticky;bottom:0;z-index:2;flex-shrink:0;min-height:48px;pointer-events:none}
+.cc-footerActions{align-items:center;gap:8px;display:flex;pointer-events:auto}
+.cc-footerFloating .cc-footerActions{padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2));box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.cc-accountEditor{border-top:1px solid var(--dsw-alias-border-l2)}
+.cc-accountLoginHint{padding:0 0 12px}
 .cc-toggleRow{align-items:center;gap:8px;cursor:pointer;display:flex}
 .cc-toggleRow:has(.cc-toggle:disabled){cursor:default}
 .cc-toggle{appearance:none;flex-shrink:0;background:var(--dsw-alias-border-l2);border-radius:999px;width:30px;height:18px;margin:0;cursor:pointer;position:relative;transition:background .15s ease}

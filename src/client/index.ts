@@ -364,11 +364,11 @@ function applyClientSurfaces(
   // to the browser — the Host validates and stores it through the credentials
   // seam, and a landed login re-reads the credential badges + usage card.
   const loginRemote: LoginRemote = {
-    loginBegin: async () => {
+    loginBegin: async (targetRef?: string) => {
       if (usageNamespace === undefined) {
         return { ok: false, error: { message: usageMountError ?? 'commandcode remote is not mounted' } }
       }
-      return usageNamespace.loginBegin()
+      return usageNamespace.loginBegin(targetRef)
     },
     loginStatus: async () => {
       if (usageNamespace === undefined) {
@@ -411,7 +411,7 @@ function applyClientSurfaces(
     }),
     discard: () => controller.discard(),
     refreshUsage: () => void usageController.refresh(),
-    beginLogin: () => void loginController.begin(),
+    beginLogin: (targetRef?: string) => void loginController.begin(targetRef),
     cancelLogin: () => void loginController.cancel(),
     addAccount: () => controller.addAccount(),
     removeAccount: (id: string) => controller.removeAccount(id),

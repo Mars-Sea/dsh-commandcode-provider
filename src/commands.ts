@@ -125,6 +125,8 @@ function renderReport(report: CommandCodeUsageReport, locale: LocaleId, title?: 
     lines.push(commandCopy(locale, 'blockedInvalidKey'), '')
   } else if (report.blocked === 'service-unavailable') {
     lines.push(commandCopy(locale, 'blockedServiceUnavailable'), '')
+  } else if (report.blocked === 'invalid-response') {
+    lines.push(commandCopy(locale, 'blockedInvalidResponse'), '')
   } else if (report.blocked === 'network') {
     lines.push(commandCopy(locale, 'blockedNetwork'), '')
   }

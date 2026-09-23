@@ -16,7 +16,7 @@
  * (see src/client/index.ts) and class-prefixed `cc-` to stay local.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
@@ -43,7 +43,7 @@ export interface CommandCodeSettingsProps {
   save(): void
   discard(): void
   refreshUsage(): void
-  beginLogin(): void
+  beginLogin(targetRef?: string): void
   cancelLogin(): void
   addAccount(): void
   removeAccount(id: string): void
@@ -562,12 +562,8 @@ function AccountReport({ entry, fetchedAt, t, onRemove }: {
         <div className="cc-usageBlocked" role="alert">
           <p className="cc-usageBlockedTitle">{blockedTitle(report.blocked, t)}</p>
           <p className="cc-usageBlockedHint">{blockedHint(report.blocked, t)}</p>
-          {/* The verdict above is a CLASSIFICATION, and several unrelated
-              causes share it — a real outage, a per-request timeout, a key no
-              HTTP header can carry, an unparseable API base. The endpoint
-              messages are the only place the actual cause is named, so they
-              are shown instead of hidden behind the generic hint (the hint
-              alone told users to check a network that was fine). */}
+          {/* Keep the per-endpoint failures visible alongside the summary:
+              they carry the actual status or transport error for diagnosis. */}
           {report.failures.length > 0 ? (
             <p className="cc-usageBlockedDetail" title={report.failures.join('; ')}>
               {report.failures.join(' · ')}
@@ -638,6 +634,7 @@ function AccountReport({ entry, fetchedAt, t, onRemove }: {
 function blockedTitle(reason: CommandCodeUsageReport['blocked'], t: Translate<SettingsCommandCodeKey>): string {
   if (reason === 'invalid-key') return t('usageKeyInvalid')
   if (reason === 'service-unavailable') return t('usageServiceUnavailable')
+  if (reason === 'invalid-response') return t('usageInvalidResponse')
   return t('usageNetworkError')
 }
 
@@ -645,6 +642,7 @@ function blockedTitle(reason: CommandCodeUsageReport['blocked'], t: Translate<Se
 function blockedHint(reason: CommandCodeUsageReport['blocked'], t: Translate<SettingsCommandCodeKey>): string {
   if (reason === 'invalid-key') return t('usageKeyInvalidHint')
   if (reason === 'service-unavailable') return t('usageServiceUnavailableHint')
+  if (reason === 'invalid-response') return t('usageInvalidResponseHint')
   return t('usageNetworkHint')
 }
 
@@ -851,9 +849,10 @@ function AccountRow({ account, disabled, t, onLabel, onKey, onToggleClear, onRem
 }
 
 /** The multi-account card: the active-account selector + extra accounts in rotation order + add button. */
-function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onToggleClear, onActive, onActiveReset }: {
+function AccountsCard({ t, state, login, disabled, onAdd, onRemove, onLabel, onKey, onToggleClear, onActive, onActiveReset, onBeginLogin, onCancelLogin }: {
   t: Translate<SettingsCommandCodeKey>
   state: SettingsPageState
+  login: LoginPageState
   disabled: boolean
   onAdd(): void
   onRemove(id: string): void
@@ -862,6 +861,8 @@ function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onT
   onToggleClear(id: string): void
   onActive(text: string): void
   onActiveReset(): void
+  onBeginLogin(ref: string): void
+  onCancelLogin(): void
 }) {
   const active = state.activeAccount
   return (
@@ -899,16 +900,32 @@ function AccountsCard({ t, state, disabled, onAdd, onRemove, onLabel, onKey, onT
         <p className="cc-hint">{t('activeAccountHint')}</p>
       </div>
       {state.accounts.map((account) => (
-        <AccountRow
-          key={account.id}
-          account={account}
-          disabled={disabled}
-          t={t}
-          onLabel={(text) => onLabel(account.id, text)}
-          onKey={(text) => onKey(account.id, text)}
-          onToggleClear={() => onToggleClear(account.id)}
-          onRemove={() => onRemove(account.id)}
-        />
+        <div key={account.id} className="cc-accountEditor">
+          <AccountRow
+            account={account}
+            disabled={disabled || (login.targetRef === account.ref && (login.phase === 'starting' || login.phase === 'waiting'))}
+            t={t}
+            onLabel={(text) => onLabel(account.id, text)}
+            onKey={(text) => onKey(account.id, text)}
+            onToggleClear={() => onToggleClear(account.id)}
+            onRemove={() => onRemove(account.id)}
+          />
+          {account.added ? (
+            <div className="cc-accountLoginHint">
+              <p className="cc-hint">{t('accountLoginAfterSave')}</p>
+            </div>
+          ) : (
+            <LoginRow
+              state={login}
+              targetRef={account.ref}
+              disabled={disabled || !account.writable || state.dirty}
+              disabledHint={state.dirty ? t('loginSaveBefore') : undefined}
+              t={t}
+              onBegin={() => onBeginLogin(account.ref)}
+              onCancel={onCancelLogin}
+            />
+          )}
+        </div>
       ))}
     </div>
   )
@@ -1227,6 +1244,8 @@ function usePluginUpdate(): string | undefined {
 /** The settings page body: connection facts for the Command Code provider. */
 export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const { t } = props
+  const footerMarker = useRef<HTMLSpanElement>(null)
+  const [footerFloating, setFooterFloating] = useState(false)
   const state = props.useCommandCodeSettings((snapshot) => snapshot)
   const usage = props.useCommandCodeUsage((snapshot) => snapshot)
   const login = props.useCommandCodeLogin((snapshot) => snapshot)
@@ -1234,6 +1253,15 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const keyLocked = !state.apiKeyWritable
   const savedVisible = useSavedFlash(state.savedCount)
   const updateVersion = usePluginUpdate()
+  useEffect(() => {
+    const marker = footerMarker.current
+    if (!marker || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry) setFooterFloating(!entry.isIntersecting)
+    })
+    observer.observe(marker)
+    return () => observer.disconnect()
+  }, [])
   return (
     <section className="cc-section" aria-label={t('title')}>
       <h2 className="cc-title">{t('title')}</h2>
@@ -1251,6 +1279,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
       <AccountsCard
         t={t}
         state={state}
+        login={login}
         disabled={disabled}
         onAdd={props.addAccount}
         onRemove={props.removeAccount}
@@ -1259,6 +1288,8 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onToggleClear={(id) => props.toggleKeyClear(id)}
         onActive={(text) => props.edit('activeAccount', text)}
         onActiveReset={() => props.resetField('activeAccount')}
+        onBeginLogin={props.beginLogin}
+        onCancelLogin={props.cancelLogin}
       />
       <RulesCard
         t={t}
@@ -1281,7 +1312,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
           label={t('apiKey')}
           hint={keyLocked ? t('apiKeyLocked') : t('apiKeyHint')}
           state={state.apiKey}
-          disabled={disabled || keyLocked}
+          disabled={disabled || keyLocked || (login.targetRef === undefined && (login.phase === 'starting' || login.phase === 'waiting'))}
           configured={state.apiKeyConfigured}
           configuredLabel={t('apiKeySet')}
           unconfiguredLabel={t('apiKeyUnset')}
@@ -1296,7 +1327,8 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         />
         <LoginRow
           state={login}
-          disabled={disabled || keyLocked}
+          disabled={disabled || keyLocked || state.dirty}
+          disabledHint={state.dirty ? t('loginSaveBefore') : undefined}
           t={t}
           onBegin={props.beginLogin}
           onCancel={props.cancelLogin}
@@ -1309,20 +1341,23 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onEdit={props.edit}
         onReset={props.resetField}
       />
-      <div className="cc-footer">
-        {state.failed ? <p className="cc-failed" role="status">{t('saveFailed')}</p> : null}
-        {savedVisible ? <p className="cc-saved" role="status">{t('saved')}</p> : null}
-        <Button variant="ghost" size="sm" disabled={!state.dirty || state.saving} onClick={props.discard}>
-          {t('discard')}
-        </Button>
-        <Button
-          variant="primary"
-          size="sm"
-          disabled={!state.dirty || state.invalid || state.saving}
-          onClick={props.save}
-        >
-          {t(state.saving ? 'saving' : 'save')}
-        </Button>
+      <span ref={footerMarker} className="cc-footerMarker" aria-hidden="true" />
+      <div className={`cc-footer cc-footerSticky${footerFloating ? ' cc-footerFloating' : ''}`}>
+        <div className="cc-footerActions">
+          {state.failed ? <p className="cc-failed" role="status">{t('saveFailed')}</p> : null}
+          {savedVisible ? <p className="cc-saved" role="status">{t('saved')}</p> : null}
+          <Button variant="ghost" size="sm" disabled={!state.dirty || state.saving} onClick={props.discard}>
+            {t('discard')}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!state.dirty || state.invalid || state.saving}
+            onClick={props.save}
+          >
+            {t(state.saving ? 'saving' : 'save')}
+          </Button>
+        </div>
       </div>
       <p className="cc-version">
         Command Code Provider v{PLUGIN_VERSION}

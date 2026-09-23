@@ -25,6 +25,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
 
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
@@ -1650,7 +1651,7 @@ export interface CommandCodePlan {
  * at all, so the degraded per-endpoint view would hide the root cause behind
  * a generic "partial data" note). Undefined for partial failures.
  */
-export type UsageBlockReason = 'invalid-key' | 'service-unavailable' | 'network'
+export type UsageBlockReason = 'invalid-key' | 'service-unavailable' | 'invalid-response' | 'network'
 
 /** Account endpoints fetched by one `getUsage()` run (see the classification there). */
 const USAGE_ENDPOINT_COUNT = 4
@@ -1666,8 +1667,9 @@ export interface CommandCodeUsageReport {
   /**
    * The single reason every endpoint failed, when they all did: `invalid-key`
    * (every call rejected with 401 — the stored key is wrong or expired),
-   * `service-unavailable` (every call answered 5xx), or `network` (no HTTP
-   * response at all). Undefined when any endpoint succeeded.
+   * `service-unavailable` (every call answered 5xx), `invalid-response`
+   * (every call answered but its body was not usable JSON), or `network`
+   * (no HTTP response at all). Undefined when any endpoint succeeded.
    */
   blocked?: UsageBlockReason
 }
@@ -1771,22 +1773,27 @@ function parseAccountIdentity(whoami: Record<string, unknown> | undefined): {
  * error, the degraded per-endpoint view would hide the root cause behind
  * a generic "partial data" note — name it instead.
  */
+type UsageEndpointFailure =
+  | { kind: 'http'; status: number }
+  | { kind: 'invalid-response'; status: number }
+  | { kind: 'transport' }
+
 function classifyTotalFailure(
   failures: readonly string[],
-  failedStatuses: ReadonlyArray<number | undefined>,
+  failed: readonly UsageEndpointFailure[],
 ): UsageBlockReason | undefined {
   // Four endpoints are fetched (whoami, usage/summary, billing/credits,
   // billing/subscriptions; the last may carry an orgId query, so the
   // classification counts endpoints, not paths).
   if (failures.length !== USAGE_ENDPOINT_COUNT) return undefined
-  const codes = failedStatuses.filter((status): status is number => status !== undefined)
-  if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code === 401)) {
+  if (failed.every((item) => item.kind === 'http' && item.status === 401)) {
     return 'invalid-key'
   }
-  if (codes.length === USAGE_ENDPOINT_COUNT && codes.every((code) => code >= 500)) {
+  if (failed.every((item) => item.kind === 'http' && item.status >= 500)) {
     return 'service-unavailable'
   }
-  if (codes.length === 0) return 'network'
+  if (failed.every((item) => item.kind === 'invalid-response')) return 'invalid-response'
+  if (failed.every((item) => item.kind === 'transport')) return 'network'
   return undefined
 }
 
@@ -1944,6 +1951,7 @@ async function connectGenerate(
   const headers = protocol === 'cli'
     ? {
         'Content-Type': 'application/json',
+        ...IDENTITY_ENCODING_HEADER,
         Authorization: `Bearer ${key}`,
         'x-command-code-version': COMMAND_CODE_CLI_VERSION,
         'x-cli-environment': 'production',
@@ -1955,6 +1963,7 @@ async function connectGenerate(
       }
     : {
         'Content-Type': 'application/json',
+        ...IDENTITY_ENCODING_HEADER,
         Authorization: `Bearer ${key}`,
         Accept: 'text/event-stream',
         // Deliberately no x-command-code-version / x-cli-environment:
@@ -2188,7 +2197,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const { apiBase, modelsCachePath } = this.deps.options()
     try {
       const response = await this.fetchImpl(`${apiBase}/provider/v1/models`, {
-        headers: { accept: 'application/json', ...attributionHeaders() },
+        headers: { accept: 'application/json', ...IDENTITY_ENCODING_HEADER, ...attributionHeaders() },
         signal: signal ?? AbortSignal.timeout(MODELS_TIMEOUT_MS),
       })
       if (!response.ok) {
@@ -2325,6 +2334,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const key = assertUsableApiKey(raw, 'llm-commandcode', ref)
     return {
       Authorization: `Bearer ${key}`,
+      ...IDENTITY_ENCODING_HEADER,
       'x-command-code-version': COMMAND_CODE_CLI_VERSION,
       'x-cli-environment': 'production',
       ...attributionHeaders(),
@@ -2335,8 +2345,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * Fetch one account endpoint and parse its JSON body. Returns the HTTP
    * status alongside the parsed record so each caller applies its own
    * failure accounting: the billing probe fails open silently, the usage
-   * report books failures per endpoint. Non-2xx and non-record bodies come
-   * back without a record; only a transport throw propagates to the caller.
+   * report books failures per endpoint. Non-2xx and invalid JSON bodies come
+   * back without a record; only a fetch failure propagates to the caller.
    *
    * `timeoutMs` is the caller's budget for this one request. The default is the
    * CATALOG probe's short cap, which fits the picker's fail-open reads; the
@@ -2347,15 +2357,22 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     url: string,
     headers: Record<string, string>,
     timeoutMs: number = MODELS_TIMEOUT_MS,
-  ): Promise<{ status: number; record?: Record<string, unknown> }> {
+  ): Promise<{ status: number; record?: Record<string, unknown>; invalidResponse?: boolean }> {
     const response = await this.fetchImpl(url, {
       headers,
       // A hung account endpoint must not stall the picker / usage card forever.
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) return { status: response.status }
-    const parsed: unknown = await response.json()
-    return { status: response.status, ...(isRecord(parsed) ? { record: parsed } : {}) }
+    let parsed: unknown
+    try {
+      parsed = await response.json()
+    } catch {
+      return { status: response.status, invalidResponse: true }
+    }
+    return isRecord(parsed)
+      ? { status: response.status, record: parsed }
+      : { status: response.status, invalidResponse: true }
   }
 
   /**
@@ -2556,26 +2573,26 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       throw error
     }
     const failures: string[] = []
-    // HTTP status per failed endpoint (undefined for transport failures), in
-    // failure order — the all-failed classification below reads it.
-    const failedStatuses: Array<number | undefined> = []
+    // Keep received-but-unreadable bodies separate from requests that never
+    // received a response. The former used to be counted as "network".
+    const failed: UsageEndpointFailure[] = []
 
     const getJson = async (path: string): Promise<Record<string, unknown> | undefined> => {
       try {
-        const { status, record } = await this.fetchEndpointJson(
+        const { status, record, invalidResponse } = await this.fetchEndpointJson(
           `${base}${path}`,
           headers,
           connection.requestTimeoutMs,
         )
         if (record === undefined) {
-          failures.push(`${path}: HTTP ${status}`)
-          failedStatuses.push(status)
+          failures.push(`${path}: HTTP ${status}${invalidResponse ? ' returned an unreadable or invalid JSON body' : ''}`)
+          failed.push(invalidResponse ? { kind: 'invalid-response', status } : { kind: 'http', status })
           return undefined
         }
         return record
       } catch (error: unknown) {
         failures.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
-        failedStatuses.push(undefined)
+        failed.push({ kind: 'transport' })
         return undefined
       }
     }
@@ -2621,7 +2638,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       }
     }
 
-    const blocked = classifyTotalFailure(failures, failedStatuses)
+    const blocked = classifyTotalFailure(failures, failed)
     if (blocked !== undefined) report.blocked = blocked
 
     return report

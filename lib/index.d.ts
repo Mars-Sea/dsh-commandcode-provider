@@ -259,7 +259,7 @@ interface CommandCodePlan {
  * at all, so the degraded per-endpoint view would hide the root cause behind
  * a generic "partial data" note). Undefined for partial failures.
  */
-type UsageBlockReason = 'invalid-key' | 'service-unavailable' | 'network';
+type UsageBlockReason = 'invalid-key' | 'service-unavailable' | 'invalid-response' | 'network';
 /** Everything the usage endpoints report, fetched together. */
 interface CommandCodeUsageReport {
   account?: CommandCodeAccount;
@@ -271,8 +271,9 @@ interface CommandCodeUsageReport {
   /**
    * The single reason every endpoint failed, when they all did: `invalid-key`
    * (every call rejected with 401 — the stored key is wrong or expired),
-   * `service-unavailable` (every call answered 5xx), or `network` (no HTTP
-   * response at all). Undefined when any endpoint succeeded.
+   * `service-unavailable` (every call answered 5xx), `invalid-response`
+   * (every call answered but its body was not usable JSON), or `network`
+   * (no HTTP response at all). Undefined when any endpoint succeeded.
    */
   blocked?: UsageBlockReason;
 }
@@ -348,8 +349,8 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * Fetch one account endpoint and parse its JSON body. Returns the HTTP
    * status alongside the parsed record so each caller applies its own
    * failure accounting: the billing probe fails open silently, the usage
-   * report books failures per endpoint. Non-2xx and non-record bodies come
-   * back without a record; only a transport throw propagates to the caller.
+   * report books failures per endpoint. Non-2xx and invalid JSON bodies come
+   * back without a record; only a fetch failure propagates to the caller.
    *
    * `timeoutMs` is the caller's budget for this one request. The default is the
    * CATALOG probe's short cap, which fits the picker's fail-open reads; the
@@ -1284,7 +1285,7 @@ declare const loginStatusSchema: TypertSchema<CommandCodeLoginStatus>;
  */
 interface LoginFlowFacade {
   /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
-  begin(): Promise<CommandCodeLoginStatus>;
+  begin(targetRef?: string): Promise<CommandCodeLoginStatus>;
   /** The current attempt's status. */
   status(): CommandCodeLoginStatus;
   /** Cancel a waiting attempt. */
@@ -1361,7 +1362,7 @@ declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = C
    * (no free loopback port, disposed plugin); the Gateway folds the throw
    * into the failure branch the page renders.
    */
-  loginBegin(): Promise<CommandCodeLoginStatus>;
+  loginBegin(targetRef?: string): Promise<CommandCodeLoginStatus>;
   /** Poll a login attempt's status. */
   loginStatus(): Promise<CommandCodeLoginStatus>;
   /** Cancel a waiting attempt; returns the post-cancel status. */
@@ -1422,7 +1423,9 @@ interface CommandCodeLoginFlowDeps {
    * Receives the validated credentials after a successful login. Rejecting
    * fails the attempt with `unavailable`.
    */
-  storeKey(credentials: CommandCodeLoginCredentials): Promise<void>;
+  storeKey(credentials: CommandCodeLoginCredentials, targetRef?: string): Promise<void>;
+  /** Reject an account target that is not a saved slot before opening Studio. */
+  validateTargetRef?(targetRef: string | undefined): void;
 }
 /** Compose the Studio authorization URL (pure, exported for tests). */
 declare function buildCommandAuthUrl(options: {
@@ -1471,6 +1474,8 @@ declare class CommandCodeLoginFlow {
    * the port window so browser login dies until the Host restarts.
    */
   private starting;
+  /** A live attempt's destination; different rows may not rejoin it. */
+  private targetRef;
   /** A `cancel()` that arrived while a start was still binding (see {@link CommandCodeLoginFlow.cancel}). */
   private cancelPending;
   private disposed;
@@ -1484,7 +1489,7 @@ declare class CommandCodeLoginFlow {
    * `waiting` carrying the Studio URL once the loopback server is up.
    * Rejects only when the flow cannot start at all (no free port, disposed).
    */
-  begin(): Promise<CommandCodeLoginStatus>;
+  begin(targetRef?: string): Promise<CommandCodeLoginStatus>;
   /**
    * The binding half of {@link CommandCodeLoginFlow.begin}: one attempt, one
    * server, one published `waiting` status. Callers reach it only through

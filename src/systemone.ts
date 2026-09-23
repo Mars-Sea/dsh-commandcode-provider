@@ -42,6 +42,7 @@
 
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
 import { COMMAND_CODE_CLI_VERSION } from './adapter.ts'
+import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
 
 /** Path of the decision endpoint, relative to `apiBase`. */
 export const SYSTEMONE_ROUTE = '/provider/v1/systemone'
@@ -443,6 +444,7 @@ export async function runSystemOne(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...IDENTITY_ENCODING_HEADER,
           Authorization: `Bearer ${key}`,
           'x-command-code-version': COMMAND_CODE_CLI_VERSION,
           ...attributionHeaders(),

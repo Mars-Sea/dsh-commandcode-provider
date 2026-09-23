@@ -35,6 +35,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { createServer as createNetServer } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { DEFAULT_API_BASE } from './adapter.ts'
+import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
 import type { CommandCodeLoginFailureReason, CommandCodeLoginStatus } from './login-wire.ts'
 
 /** Give up on the browser after this long without a callback (mirrors the CLI). */
@@ -94,7 +95,22 @@ export interface CommandCodeLoginFlowDeps {
    * Receives the validated credentials after a successful login. Rejecting
    * fails the attempt with `unavailable`.
    */
-  storeKey(credentials: CommandCodeLoginCredentials): Promise<void>
+  storeKey(credentials: CommandCodeLoginCredentials, targetRef?: string): Promise<void>
+  /** Reject an account target that is not a saved slot before opening Studio. */
+  validateTargetRef?(targetRef: string | undefined): void
+}
+
+/** Resolve a browser-login destination without allowing arbitrary credential writes. */
+export function loginCredentialRef(
+  targetRef: string | undefined,
+  defaultRef: string,
+  accounts: readonly { apiKeyEnv?: string }[],
+): string {
+  if (targetRef === undefined) return defaultRef
+  if (targetRef === defaultRef || !accounts.some((account) => account.apiKeyEnv === targetRef)) {
+    throw new Error('the target account must be saved before browser sign-in')
+  }
+  return targetRef
 }
 
 /** Compose the Studio authorization URL (pure, exported for tests). */
@@ -123,7 +139,7 @@ export async function validateCommandApiKey(
   try {
     const response = await fetchImpl(`${apiBase}/alpha/whoami`, {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      headers: { 'Content-Type': 'application/json', ...IDENTITY_ENCODING_HEADER, Authorization: `Bearer ${apiKey}` },
     })
     if (response.status === 401) return { valid: false, error: 'invalid_key' }
     if (response.ok) return { valid: true }
@@ -191,6 +207,8 @@ export class CommandCodeLoginFlow {
    * the port window so browser login dies until the Host restarts.
    */
   private starting: Promise<CommandCodeLoginStatus> | undefined
+  /** A live attempt's destination; different rows may not rejoin it. */
+  private targetRef: string | undefined
   /** A `cancel()` that arrived while a start was still binding (see {@link CommandCodeLoginFlow.cancel}). */
   private cancelPending = false
   private disposed = false
@@ -215,20 +233,28 @@ export class CommandCodeLoginFlow {
    * `waiting` carrying the Studio URL once the loopback server is up.
    * Rejects only when the flow cannot start at all (no free port, disposed).
    */
-  async begin(): Promise<CommandCodeLoginStatus> {
+  async begin(targetRef?: string): Promise<CommandCodeLoginStatus> {
     if (this.disposed) throw new Error('login flow has been disposed')
+    this.deps.validateTargetRef?.(targetRef)
     // Rejoin only a live attempt. A `waiting` status whose server is already
     // torn down means the callback was consumed and the key is being
     // validated: that attempt can no longer receive anything, so handing its
     // dead authUrl back would give the user a link to a closed port. Starting
     // fresh retires it (the generation check below drops its late completion).
-    if (this.statusValue.state === 'waiting' && this.server !== undefined) return this.statusValue
+    if (this.statusValue.state === 'waiting' && this.server !== undefined) {
+      if (this.targetRef !== targetRef) throw new Error('another account login is already in progress')
+      return this.statusValue
+    }
     // ...and rejoin a start that has not published `waiting` yet. Two GUI tabs
     // (or a Sign-in that follows a cancel which arrived too early to retire
     // anything) would otherwise each bind a loopback server; see `starting`.
-    if (this.starting !== undefined) return this.starting
+    if (this.starting !== undefined) {
+      if (this.targetRef !== targetRef) throw new Error('another account login is already in progress')
+      return this.starting
+    }
     this.cancelPending = false
-    const starting = this.startAttempt()
+    this.targetRef = targetRef
+    const starting = this.startAttempt(targetRef)
     this.starting = starting
     try {
       return await starting
@@ -242,7 +268,7 @@ export class CommandCodeLoginFlow {
    * server, one published `waiting` status. Callers reach it only through
    * `begin()`'s single-flight fence.
    */
-  private async startAttempt(): Promise<CommandCodeLoginStatus> {
+  private async startAttempt(targetRef: string | undefined): Promise<CommandCodeLoginStatus> {
     this.teardown()
     const attempt = ++this.attemptSeq
 
@@ -289,7 +315,7 @@ export class CommandCodeLoginFlow {
     this.timer.unref?.()
 
     void settled.then(
-      (credentials) => this.complete(attempt, credentials),
+      (credentials) => this.complete(attempt, credentials, targetRef),
       (failure) => this.failFrom(attempt, failure),
     )
     return this.statusValue
@@ -497,7 +523,7 @@ export class CommandCodeLoginFlow {
    * would report "cancelled" while the credential landed anyway, and the page
    * would silently flip to success.
    */
-  private async complete(attempt: number, credentials: CommandCodeLoginCredentials): Promise<void> {
+  private async complete(attempt: number, credentials: CommandCodeLoginCredentials, targetRef: string | undefined): Promise<void> {
     if (!this.ownsAttempt(attempt)) return
     const validation = await validateCommandApiKey(
       this.deps.fetchImpl ?? fetch,
@@ -520,7 +546,8 @@ export class CommandCodeLoginFlow {
     // whoami check must win over storing the key.
     if (!this.ownsAttempt(attempt)) return
     try {
-      await this.deps.storeKey(credentials)
+      this.deps.validateTargetRef?.(targetRef)
+      await this.deps.storeKey(credentials, targetRef)
     } catch (error: unknown) {
       if (!this.ownsAttempt(attempt)) return
       this.setStatus({

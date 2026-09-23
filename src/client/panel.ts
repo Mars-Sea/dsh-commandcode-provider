@@ -398,10 +398,7 @@ function accountView(entry: CommandCodeAccountUsage, t: PanelTranslator): PanelA
 function failureView(state: UsagePageState): PanelFailureView | undefined {
   const blockedEntry = state.report?.accounts.find((entry) => entry.report.blocked !== undefined)
   const blocked = blockedEntry?.report.blocked
-  // The endpoint messages are the only place the CAUSE is named: one verdict
-  // ('network') covers a real outage, a per-request timeout, a key no header
-  // can carry and an unparseable API base, so the generic hint alone sent
-  // users to check a connection that was fine.
+  // Preserve each endpoint's status or transport error beside the summary.
   const detail = (blockedEntry?.report.failures ?? []).join(' · ')
   if (blocked === 'invalid-key') {
     return { title: 'errorInvalidKey', hint: 'errorInvalidKeyHint', detail }
@@ -411,6 +408,9 @@ function failureView(state: UsagePageState): PanelFailureView | undefined {
   }
   if (blocked === 'network') {
     return { title: 'errorNetwork', hint: 'errorNetworkHint', detail }
+  }
+  if (blocked === 'invalid-response') {
+    return { title: 'errorInvalidResponse', hint: 'errorInvalidResponseHint', detail }
   }
   // A transport-level failure (unmounted Remote, offline browser) arrives as
   // the controller's own error rather than as a blocked report.

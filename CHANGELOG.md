@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.11] - 2026-09-23
+
+### Fixed
+
+- **Saving account-rotation edits is visible on a long settings page** ([#60](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/60)). The page's single global Save/Discard bar stays inside the settings panel, attached to the bottom of its scrolling area. A new account can be saved with only a label, then signed in through the same browser authorization flow as the default account; the Host writes the resulting key to that saved account's credential reference. Login attempts for different accounts cannot silently rejoin one another.
+
+- **Command Code responses remain readable when a DSH HTTP dispatcher passes through compressed bytes** ([#59](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/59)). Host-side chat, account usage, catalog, web search, decision, and login requests now ask for `Accept-Encoding: identity`. This also lets a Go account's `403 upgrade_required` body reach the existing CLI-transport fallback. If every usage endpoint answers but its body still cannot be parsed, the account view reports an unreadable response instead of claiming that no request reached the server.
+
 ## [0.11.10] - 2026-09-23
 
 ### Added

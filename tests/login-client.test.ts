@@ -13,6 +13,7 @@ import {
   CommandCodeLoginController,
   loginFailureCopy,
   loginHint,
+  loginStateForTarget,
   type LoginCallResult,
   type LoginPageState,
   type LoginRemote,
@@ -52,6 +53,39 @@ function makeRemote(script: {
     },
   }
 }
+
+test('account login keeps its target while polling and leaves the default row separate', async () => {
+  const requested: Array<string | undefined> = []
+  let status: LoginCallResult = { ok: true, value: { state: 'waiting', authUrl: 'https://commandcode.ai/auth' } }
+  const remote: LoginRemote = {
+    loginBegin: async (targetRef) => {
+      requested.push(targetRef)
+      return status
+    },
+    loginStatus: async () => status,
+    loginCancel: async () => ({ ok: true, value: { state: 'failed', reason: 'cancelled' } }),
+  }
+  const controller = new CommandCodeLoginController(() => remote, POLL_MS)
+  try {
+    void controller.begin('COMMANDCODE_API_KEY_2')
+    await waitForPhase(controller, 'waiting')
+    assert.deepEqual(requested, ['COMMANDCODE_API_KEY_2'])
+    assert.equal(controller.state().targetRef, 'COMMANDCODE_API_KEY_2')
+    assert.equal(loginStateForTarget(controller.state(), undefined).visible.phase, 'idle')
+    assert.equal(loginStateForTarget(controller.state(), undefined).busyElsewhere, true)
+    assert.equal(loginStateForTarget(controller.state(), 'COMMANDCODE_API_KEY_2').visible.phase, 'waiting')
+    status = { ok: true, value: { state: 'success', userName: 'second', keyName: 'cli' } }
+    await waitForPhase(controller, 'success')
+    assert.equal(controller.state().targetRef, 'COMMANDCODE_API_KEY_2')
+    assert.equal(loginStateForTarget(controller.state(), undefined).visible.phase, 'idle')
+    assert.equal(loginStateForTarget(controller.state(), 'COMMANDCODE_API_KEY_2').visible.phase, 'success')
+    await controller.begin()
+    assert.deepEqual(requested, ['COMMANDCODE_API_KEY_2', undefined])
+    assert.equal(controller.state().targetRef, undefined)
+  } finally {
+    controller.dispose()
+  }
+})
 
 /** Resolve once the controller's projected phase matches. */
 function waitForPhase(

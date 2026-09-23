@@ -54,7 +54,7 @@ Pick the release line that matches your DeepSeek Harness version:
 **pnpm 11 holds back new releases.** Its `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly:
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.9
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11
 ```
 
 The same applies to every profile you install into, including the terminal UI below.
@@ -73,7 +73,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 Each profile updates separately — the terminal UI owns its own plugin list (see below):
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.9
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.11
 ```
 
 To move to a version published less than 24 hours ago, name it exactly as in Install above; pnpm 11's age gate resolves `@latest` to the previous release instead.
@@ -102,7 +102,7 @@ After restart, enter your API key in **Settings → Command Code** and save; **S
 The plugin also works under a terminal front door. **Each dsh profile owns its own plugin list**, so the web install above does not reach the terminal — add the plugin to the `dsh-tui` profile as well:
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.9
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.11
 ```
 
 Pin the exact version here. For the first 24 hours after a release, a bare package name (or `@latest`) is silently resolved to the previous one: the install succeeds, but the profile gets the older build — which is how a fresh terminal install ends up with no **`/settings` → Command Code** page and no `commandcode` models at all.
@@ -156,7 +156,7 @@ The command's user-facing copy follows the shell's locale: explicit `lang: 'en' 
 
 With several Command Code subscriptions, the plugin **switches to the next account automatically** when one hits its usage limit:
 
-- **Setup** — use the **Account rotation** card at Settings → **Command Code** to add accounts with a label and API key; the top-level key always serves first as the `default` account.
+- **Setup** — use the **Account rotation** card at Settings → **Command Code** to add an account and label it. Paste its API key, or use the page's global **Save** button, then **Sign in to Command Code** and open the authorization link shown on that account's row in a new browser tab. The global Save/Discard bar stays inside the settings panel, attached to the bottom of its scrolling area. The top-level key always serves first as the `default` account.
 - **Manual switching** — the **Active account** dropdown pins a preferred account; if it is exhausted, requests fall back to other accounts and return once its window resets.
 - **Route models to accounts** — the **Route models to accounts** card picks catalog models (multi-select, fetched from the live catalog) and routes them to an account. A request whose model is in a rule serves from that account while it is usable; an exhausted or invalid routed account falls back to the normal rotation. Rules match in list order — the first hit wins.
 - **Show only favorite models** — the **Model allowlist** card keeps only the checked models in the model picker; unchecked shows all (the default).

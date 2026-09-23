@@ -59,6 +59,7 @@ export type SettingsCommandCodeKey =
   | 'accountLabel'
   | 'accountKey'
   | 'accountKeyHint'
+  | 'accountLoginAfterSave'
   | 'accountDefault'
   | 'activeAccount'
   | 'activeAccountAuto'
@@ -129,6 +130,8 @@ export type SettingsCommandCodeKey =
   | 'usageServiceUnavailableHint'
   | 'usageNetworkError'
   | 'usageNetworkHint'
+  | 'usageInvalidResponse'
+  | 'usageInvalidResponseHint'
   | 'usageUpdated'
   | 'usagePeriodEnd'
   | 'usageActive'
@@ -139,6 +142,7 @@ export type SettingsCommandCodeKey =
   | 'updateHint'
   | 'loginTitle'
   | 'loginHintIdle'
+  | 'loginSaveBefore'
   | 'loginButton'
   | 'loginStarting'
   | 'loginWaiting'
@@ -209,6 +213,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   accountLabel: '账户备注名',
   accountKey: 'API 密钥',
   accountKeyHint: '该账户的 API 密钥。留空保存不会覆盖已存储的密钥。',
+  accountLoginAfterSave: '先点击页面底部的「保存」，再点击该账户的「登录 Command Code」通过网页获取密钥。',
   accountDefault: '默认账户',
   activeAccount: '当前使用账户',
   activeAccountAuto: '自动（第一个可用账户）',
@@ -281,6 +286,8 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   usageServiceUnavailableHint: '服务端返回了错误（5xx），稍后点击刷新重试。',
   usageNetworkError: '无法连接 Command Code 服务',
   usageNetworkHint: '所有请求都没有到达服务端。请检查网络连接或 API 地址设置。',
+  usageInvalidResponse: 'Command Code 响应无法读取',
+  usageInvalidResponseHint: '请求已收到响应，但内容无法解析。请检查宿主的 HTTP 代理或响应解压配置。',
   usageUpdated: '更新于',
   usagePeriodEnd: '账期截止',
   usageActive: '当前使用',
@@ -291,6 +298,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   updateHint: '已发布新版本，点击查看发布说明；更新插件后刷新本页，提示会自动消失。',
   loginTitle: '通过官方登录获取密钥',
   loginHintIdle: '不想手动创建密钥？点击登录后浏览器会打开 commandcode.ai 授权页，完成后密钥自动写入本机凭据服务，下次请求即生效。',
+  loginSaveBefore: '请先保存本页更改，再通过网页登录此账户。',
   loginButton: '登录 Command Code',
   loginStarting: '正在启动本地回调服务…',
   loginWaiting: '等待在浏览器中完成授权…',
@@ -384,6 +392,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   accountLabel: 'Account label',
   accountKey: 'API key',
   accountKeyHint: 'This account’s API key. Saving with the field blank keeps the stored key.',
+  accountLoginAfterSave: 'Use Save at the bottom of the page, then sign in to this account in your browser to obtain a key.',
   accountDefault: 'Default account',
   activeAccount: 'Active account',
   activeAccountAuto: 'Auto (first usable account)',
@@ -462,6 +471,8 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   usageServiceUnavailableHint: 'The server returned errors (5xx); try Refresh again later.',
   usageNetworkError: 'Could not reach the Command Code service',
   usageNetworkHint: 'No request reached the server. Check your network connection or the API base setting.',
+  usageInvalidResponse: 'Could not read the Command Code response',
+  usageInvalidResponseHint: 'The requests received responses, but their bodies could not be parsed. Check the host HTTP proxy or response decoding.',
   usageUpdated: 'Updated',
   usagePeriodEnd: 'Period ends',
   usageActive: 'Active',
@@ -472,6 +483,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   updateHint: 'A newer version has been published; click for release notes. The notice disappears once the plugin is updated.',
   loginTitle: 'Sign in to fetch a key',
   loginHintIdle: 'Rather not create a key by hand? Sign in and your browser opens the commandcode.ai authorization page; the approved key is stored in the local credential service and applies to the next request.',
+  loginSaveBefore: 'Save page changes before signing in to this account.',
   loginButton: 'Sign in to Command Code',
   loginStarting: 'Starting the local callback server…',
   loginWaiting: 'Waiting for authorization in your browser…',

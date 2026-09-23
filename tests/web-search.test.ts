@@ -91,6 +91,7 @@ test('sends the CLI web-search POST with the Command Code key and version header
   assert.equal(headers?.['x-command-code-version'], COMMAND_CODE_CLI_VERSION)
   assert.equal(headers?.['x-cli-environment'], 'production')
   assert.equal(headers?.['Content-Type'], 'application/json')
+  assert.equal(headers?.['accept-encoding'], 'identity')
   assert.deepEqual(stub.lastBody, { query: 'latest model 2026', numResults: 5 })
 })
 

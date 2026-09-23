@@ -90,6 +90,12 @@ test('every shipped descriptor satisfies both engine generations', () => {
     assert.equal(descriptor.result.mode, 'strict')
     assertReleasedEngineAccepts(descriptor.result, `${subject} (descriptor ${index})`)
     assertMasterEngineAccepts(descriptor.result, `${subject} (descriptor ${index})`)
+    for (const parameter of descriptor.parameters) {
+      const field = `${descriptor.id} parameter ${parameter.name}`
+      assert.equal(parameter.codec.mode, 'strict', `${field}: the client Remote refuses src-json parameters`)
+      assertReleasedEngineAccepts(parameter.codec, field)
+      assertMasterEngineAccepts(parameter.codec, field)
+    }
   }
 })
 

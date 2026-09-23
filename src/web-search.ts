@@ -21,6 +21,7 @@ import { WebError, type WebSearchProvider, type WebSearchRequest, type WebSearch
 import type { WebRuntime } from '@deepseek-ai/dsh-web'
 import { attributionHeaders, type HarnessError } from '@deepseek-ai/dsh-llm'
 import { COMMAND_CODE_CLI_VERSION } from './adapter.ts'
+import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
 
 /** Stable id this provider registers under in `ctx.web`. */
 export const COMMANDCODE_SEARCH_PROVIDER_ID = 'commandcode'
@@ -280,6 +281,7 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...IDENTITY_ENCODING_HEADER,
           Authorization: `Bearer ${key}`,
           'x-command-code-version': COMMAND_CODE_CLI_VERSION,
           'x-cli-environment': 'production',

@@ -100,13 +100,18 @@ export function makeBoundaryValidator(prefix: string): BoundaryValidator {
  * older generation's `InvocationDescriptor` requires `schema` and ignores the
  * extra `create`; the newer one requires `create`, so neither needs a cast).
  */
-interface StrictResultCodec<Output> {
+interface StrictCodec<Output> {
   readonly mode: 'strict'
   readonly typeSymbol: string
   /** Read by released engines (≤ `0.1.6-alpha.1`). */
   readonly schema: TypertSchema<Output>
   /** Read by engines after `e459e3263` — the lazy replacement for `schema`. */
   readonly create: () => TypertSchema<Output>
+}
+
+/** Use the same strict-codec shape for invocation parameters and results. */
+export function makeStrictCodec<Output>(typeSymbol: string, schema: TypertSchema<Output>): StrictCodec<Output> {
+  return { mode: 'strict', typeSymbol, schema, create: () => schema }
 }
 
 /**
@@ -127,12 +132,7 @@ export function makeRemoteDescriptor<Output>(
   // two generations can never validate against different rules. Defined as a
   // value (not inline) so the older typings' excess-property check does not
   // reject the member they do not declare.
-  const result: StrictResultCodec<Output> = {
-    mode: 'strict',
-    typeSymbol,
-    schema,
-    create: () => schema,
-  }
+  const result = makeStrictCodec(typeSymbol, schema)
   return {
     id: `${REMOTE_PACKAGE}#${endpoint}`,
     service: REMOTE_SERVICE,

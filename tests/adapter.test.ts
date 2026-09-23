@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { rmSync } from 'node:fs'
+import { brotliCompressSync } from 'node:zlib'
 
 import {
   CommandCodeAdapter,
@@ -2300,6 +2301,22 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   )
 })
 
+test('catalog and window probes ask for uncompressed Command Code responses', async () => {
+  const paths: string[] = []
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname
+    paths.push(path)
+    assert.equal(new Headers(init?.headers).get('accept-encoding'), 'identity')
+    return Response.json(path === '/provider/v1/models'
+      ? { object: 'list', data: [] }
+      : { windowLimits: { weekly: { used: 0, cap: 1, exceeded: false, resetAt: 0 } } })
+  }) as unknown as typeof fetch
+  const adapter = makeAdapter({ fetchImpl })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  assert.deepEqual(await adapter.probeWindowLimits('user_test_key'), { exceeded: false, resetAt: 0 })
+  assert.deepEqual(paths, ['/provider/v1/models', '/alpha/billing/credits'])
+})
+
 // ---------------------------------------------------------------------------
 // Zero data retention (the `zdr` connection option)
 // ---------------------------------------------------------------------------
@@ -3250,18 +3267,23 @@ test('openai protocol accepts reasoning_content as the reasoning field', async (
 
 test('auto protocol falls back to CLI on 403 upgrade_required and caches per account', async () => {
   const calls: string[] = []
-  const fetchImpl = (async (input: RequestInfo | URL) => {
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     calls.push(url)
+    const identity = new Headers(init?.headers).get('accept-encoding') === 'identity'
     if (url.includes('/provider/v1/chat/completions')) {
-      return new Response(JSON.stringify({ error: { code: 'upgrade_required', message: 'Go plan has no API access' } }), {
+      const body = JSON.stringify({ error: { code: 'upgrade_required', message: 'Go plan has no API access' } })
+      return new Response(identity ? body : new Uint8Array(brotliCompressSync(body)), {
         status: 403,
-        headers: { 'content-type': 'application/json' },
+        // The affected host loses Content-Encoding and would pass raw Brotli
+        // bytes to response.text() unless the request asks for identity.
+        headers: identity ? { 'content-type': 'application/json' } : {},
       })
     }
-    return new Response('data: {"type":"text-delta","text":"hi"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
+    const stream = 'data: {"type":"text-delta","text":"hi"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+    return new Response(identity ? stream : new Uint8Array(brotliCompressSync(stream)), {
       status: 200,
-      headers: { 'content-type': 'text/event-stream' },
+      headers: identity ? { 'content-type': 'text/event-stream' } : {},
     })
   }) as unknown as typeof fetch
 
@@ -5265,6 +5287,42 @@ test('getUsage() classifies an all-transport-failure run as network', async () =
   // these rather than only the generic "check your connection" hint.
   assert.equal(report.failures.length, 4)
   assert.match(report.failures[0] ?? '', /^\/alpha\/whoami: fetch failed/)
+})
+
+test('getUsage() asks for identity encoding when a host would otherwise pass raw Brotli', async () => {
+  const calls: string[] = []
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname
+    calls.push(path)
+    const body = path === '/alpha/whoami'
+      ? { user: { id: 'u1', name: 'A', userName: 'a' } }
+      : path === '/alpha/usage/summary'
+        ? { totalCount: 1, totalCost: 0, successRate: 100, completedCount: 1, failedCount: 0, totalTokensIn: 1, totalTokensOut: 1, totalCredits: 0, periodBasis: 'billing-period' }
+        : path === '/alpha/billing/credits'
+          ? { credits: { monthlyCredits: 5, purchasedCredits: 0, freeCredits: 0 } }
+          : { data: { planId: 'individual-go', status: 'active' } }
+    const json = JSON.stringify(body)
+    return new Headers(init?.headers).get('accept-encoding') === 'identity'
+      ? new Response(json, { status: 200 })
+      : new Response(new Uint8Array(brotliCompressSync(json)), { status: 200 })
+  }) as unknown as typeof fetch
+  const report = await makeAdapter({ fetchImpl }).getUsage('user_test_key')
+  assert.equal(report.blocked, undefined)
+  assert.equal(report.account?.name, 'A')
+  assert.equal(report.plan?.name, 'Go')
+  assert.equal(report.failures.length, 0)
+  assert.deepEqual(calls.sort(), ['/alpha/billing/credits', '/alpha/billing/subscriptions', '/alpha/usage/summary', '/alpha/whoami'])
+})
+
+test('getUsage() classifies HTTP 200 with unreadable bodies as invalid-response', async () => {
+  const compressed = new Uint8Array(brotliCompressSync('{"ok":true}'))
+  const adapter = makeAdapter({
+    fetchImpl: (async () => new Response(compressed, { status: 200 })) as unknown as typeof fetch,
+  })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(report.blocked, 'invalid-response')
+  assert.equal(report.failures.length, 4)
+  assert.ok(report.failures.every((failure) => failure.includes('HTTP 200 returned an unreadable or invalid JSON body')))
 })
 
 test('getUsage() reports a key no HTTP header can carry as an invalid key, not as a network outage', async () => {

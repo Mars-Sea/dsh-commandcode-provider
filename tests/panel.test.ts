@@ -418,6 +418,18 @@ test('a 401 across every endpoint surfaces the invalid-key box, not a generic er
   assert.equal(view.failure?.hint, 'errorInvalidKeyHint')
 })
 
+test('a received but unreadable response does not claim the network is down', () => {
+  const view = buildPanelView({
+    usage: usage({
+      status: 'ready',
+      report: { accounts: [entry({ report: { failures: ['/alpha/whoami: HTTP 200 returned an unreadable body'], blocked: 'invalid-response' } })] },
+    }),
+    apiKeyConfigured: true,
+  })
+  assert.equal(view.failure?.title, 'errorInvalidResponse')
+  assert.equal(view.failure?.hint, 'errorInvalidResponseHint')
+})
+
 test('a blocked verdict carries the endpoint messages as its detail', () => {
   // ONE verdict ('network') covers a real outage, a per-request timeout, a key
   // no HTTP header can carry and an unparseable API base. The hint alone told

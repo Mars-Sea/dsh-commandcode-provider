@@ -35,7 +35,7 @@ import type { CommandCodeLoginStatus } from './login-wire.ts'
  */
 export interface LoginFlowFacade {
   /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
-  begin(): Promise<CommandCodeLoginStatus>
+  begin(targetRef?: string): Promise<CommandCodeLoginStatus>
   /** The current attempt's status. */
   status(): CommandCodeLoginStatus
   /** Cancel a waiting attempt. */
@@ -159,9 +159,9 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
    * (no free loopback port, disposed plugin); the Gateway folds the throw
    * into the failure branch the page renders.
    */
-  async loginBegin(): Promise<CommandCodeLoginStatus> {
+  async loginBegin(targetRef?: string): Promise<CommandCodeLoginStatus> {
     const login = this.requireLogin()
-    return login.begin()
+    return login.begin(targetRef)
   }
 
   /** Poll a login attempt's status. */

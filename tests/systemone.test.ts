@@ -108,6 +108,7 @@ test('a decision posts the typed-question body to /provider/v1/systemone with th
   assert.equal(headers.Authorization, 'Bearer test-key')
   assert.equal(headers['x-command-code-version'], COMMAND_CODE_CLI_VERSION)
   assert.equal(headers['Content-Type'], 'application/json')
+  assert.equal(headers['accept-encoding'], 'identity')
   // The ZDR header is never sent: this model has no ZDR upstream, so asking
   // with it would turn every decision into a 422.
   assert.equal(headers['x-cmd-zdr'], undefined)

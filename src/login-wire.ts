@@ -22,6 +22,7 @@ import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } fro
 import {
   makeBoundaryValidator,
   makeRemoteDescriptor,
+  makeStrictCodec,
   REMOTE_PACKAGE,
 } from './wire-shared.ts'
 
@@ -118,14 +119,32 @@ export const loginStatusSchema: TypertSchema<CommandCodeLoginStatus> = {
   parse: parseLoginStatus,
 }
 
-/** Build one login invocation descriptor (uniform result, no parameters). */
+/** Optional account target; the Host still checks it against saved slots. */
+const loginTargetSchema: TypertSchema<string | undefined> = {
+  parse(value: unknown): string | undefined {
+    if (value === undefined || typeof value === 'string') return value
+    return reject('targetRef')
+  },
+}
+
+/** Build one login invocation descriptor. Only begin accepts an account ref. */
 function loginDescriptor(endpoint: string, method: string): InvocationDescriptor {
-  return makeRemoteDescriptor<CommandCodeLoginStatus>(
+  const descriptor = makeRemoteDescriptor<CommandCodeLoginStatus>(
     endpoint,
     method,
     `${REMOTE_PACKAGE}#CommandCodeLoginStatus`,
     loginStatusSchema,
   )
+  return method === 'loginBegin'
+    ? {
+        ...descriptor,
+        parameters: [{
+          name: 'targetRef', wire: 'targetRef', source: 'json',
+          codec: makeStrictCodec(`${REMOTE_PACKAGE}#CommandCodeLoginTargetRef`, loginTargetSchema),
+          acceptsUndefined: true,
+        }],
+      }
+    : descriptor
 }
 
 /** The three login descriptors, shared verbatim by Host registration and Client mount. */

@@ -91,6 +91,8 @@ export type PanelKey =
   | 'errorServiceUnavailableHint'
   | 'errorNetwork'
   | 'errorNetworkHint'
+  | 'errorInvalidResponse'
+  | 'errorInvalidResponseHint'
   /** A fetch that failed for any other reason. */
   | 'errorGeneric'
 
@@ -150,6 +152,8 @@ export const PANEL_COPY_ZH: Record<PanelKey, string> = {
   errorServiceUnavailableHint: '服务端返回错误（5xx），请稍后点击刷新重试。',
   errorNetwork: '无法连接 Command Code 服务',
   errorNetworkHint: '所有请求都没有到达服务端。请检查网络连接或 API 地址设置。',
+  errorInvalidResponse: 'Command Code 响应无法读取',
+  errorInvalidResponseHint: '请求已收到响应，但内容无法解析。请检查宿主的 HTTP 代理或响应解压配置。',
   errorGeneric: '用量获取失败',
 }
 
@@ -203,6 +207,8 @@ export const PANEL_COPY_EN: Record<PanelKey, string> = {
   errorServiceUnavailableHint: 'The server returned errors (5xx). Try Refresh again in a moment.',
   errorNetwork: 'Could not reach the Command Code service',
   errorNetworkHint: 'No request reached the server. Check your network connection or the API base setting.',
+  errorInvalidResponse: 'Could not read the Command Code response',
+  errorInvalidResponseHint: 'The requests received responses, but their bodies could not be parsed. Check the host HTTP proxy or response decoding.',
   errorGeneric: 'Could not fetch account usage',
 }
 

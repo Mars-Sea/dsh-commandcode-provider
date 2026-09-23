@@ -52,7 +52,7 @@
 **pnpm 11 会拦下刚发布的新版本。** 它的 `minimumReleaseAge` 默认为 1440 分钟，发布不足一天的版本会被跳过，`@latest` 解析到**上一个**版本 —— 而且是静默的，命令照样以成功退出。想装 24 小时内发布的版本，必须写精确版本号：
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.9
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11
 ```
 
 这一点对每个 profile 都成立，包括下面的终端界面。
@@ -71,7 +71,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 每个 profile 各自更新 —— 终端界面有独立的插件列表（见下文）：
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.9
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.11
 ```
 
 要更新到发布不足 24 小时的版本，和上面的安装一样写精确版本号；pnpm 11 的年龄门禁会把 `@latest` 解析成上一个版本。
@@ -100,7 +100,7 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 插件同样支持终端前端。**每个 dsh profile 有独立的插件列表**，所以上面那条 Web 安装命令不会装到终端里 —— 还要把插件装进 `dsh-tui` profile：
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.9
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.11
 ```
 
 这里请写精确版本号。新版本发布后的 24 小时内，只写包名（或 `@latest`）会被静默解析到上一个版本 —— 安装命令照样成功，但 profile 里拿到的是旧版本，结果就是全新的终端安装里既没有 **`/settings` → Command Code** 页面，也看不到任何 `commandcode` 模型。
@@ -154,7 +154,7 @@ cmd login                               # 写入 ~/.commandcode/auth.json
 
 有多个 Command Code 订阅时，插件可以在一个账户达到用量限额后**自动切换到下一个账户**：
 
-- **配置**：在 **设置 → Command Code** 的「多账户轮换」卡片添加账户并填写备注名与 API key；顶层 key 始终是第一顺位的 `default` 账户。
+- **配置**：在 **设置 → Command Code** 的「多账户轮换」卡片添加账户并填写备注名。可直接填写 API key，或先点击页面底部的全局「保存」，再在该账户行点击「登录 Command Code」并打开出现的授权链接，在新网页授权获取 key；全局「放弃 / 保存」操作栏在设置面板内部随滚动吸附于底部。顶层 key 始终是第一顺位的 `default` 账户。
 - **手动切换**：卡片上的「当前使用账户」下拉框可指定优先账户；所选账户耗尽时自动回落到其他账户，窗口重置后自动恢复。
 - **按模型切换账户**：在「按模型切换账户」卡片从实时模型目录**多选**模型并固定到某个账户。请求的模型在规则列表中且该账户可用时使用该账户；账户耗尽或密钥失效时自动回落到常规轮换。规则按列表顺序匹配，第一条命中生效。
 - **只显示常用模型**：在「模型白名单」卡片勾选要保留的模型，模型选择器只列出这些；不勾选则显示全部（默认行为不变）。

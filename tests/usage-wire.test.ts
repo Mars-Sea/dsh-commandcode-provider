@@ -100,6 +100,8 @@ test('schema accepts and preserves a blocked classification', () => {
   const value = wrap(makeAccount({ failures: ['/alpha/whoami: HTTP 401'], blocked: 'invalid-key' }))
   assert.deepEqual(usageReportSchema.parse(value), value)
   assert.equal(usageReportSchema.parse(value).accounts[0]?.report.blocked, 'invalid-key')
+  const unreadable = wrap(makeAccount({ failures: ['/alpha/whoami: HTTP 200 returned an unreadable body'], blocked: 'invalid-response' }))
+  assert.equal(usageReportSchema.parse(unreadable).accounts[0]?.report.blocked, 'invalid-response')
 })
 
 test('schema rejects an unknown blocked reason', () => {

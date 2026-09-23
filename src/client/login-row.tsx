@@ -14,22 +14,26 @@
 
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsCommandCodeKey } from './locales.ts'
-import { loginHint } from './login.ts'
+import { loginHint, loginStateForTarget } from './login.ts'
 import type { LoginPageState } from './login.ts'
 
 /** One login row's props (same face both surfaces supply). */
 export interface LoginRowProps {
   state: LoginPageState
+  /** Only the matching attempt appears in this row; omitted means default. */
+  targetRef?: string
   disabled: boolean
+  disabledHint?: string | undefined
   t: Translate<SettingsCommandCodeKey>
   onBegin(): void
   onCancel(): void
 }
 
 /** The sign-in alternative to pasting a key (settings page + Models card). */
-export function LoginRow({ state, disabled, t, onBegin, onCancel }: LoginRowProps) {
-  const busy = state.phase === 'starting' || state.phase === 'waiting'
-  const hint = loginHint(state, t)
+export function LoginRow({ state, targetRef, disabled, disabledHint, t, onBegin, onCancel }: LoginRowProps) {
+  const { visible: visibleState, busyElsewhere } = loginStateForTarget(state, targetRef)
+  const busy = visibleState.phase === 'starting' || visibleState.phase === 'waiting'
+  const hint = loginHint(visibleState, t)
   return (
     <div className="cc-field">
       <div className="cc-fieldHead">
@@ -38,16 +42,16 @@ export function LoginRow({ state, disabled, t, onBegin, onCancel }: LoginRowProp
           {busy ? (
             <button type="button" className="cc-reset" onClick={onCancel}>{t('loginCancel')}</button>
           ) : (
-            <button type="button" className="cc-reset" disabled={disabled} onClick={onBegin}>{t('loginButton')}</button>
+            <button type="button" className="cc-reset" disabled={disabled || busyElsewhere} onClick={onBegin}>{t('loginButton')}</button>
           )}
         </span>
       </div>
-      {state.authUrl !== undefined ? (
+      {visibleState.authUrl !== undefined ? (
         <p className="cc-hint">
-          <a className="cc-loginLink" href={state.authUrl} target="_blank" rel="noreferrer">{t('loginOpenLink')}</a>
+          <a className="cc-loginLink" href={visibleState.authUrl} target="_blank" rel="noreferrer">{t('loginOpenLink')}</a>
         </p>
       ) : null}
-      <p className={hint.className} title={hint.title}>{hint.text}</p>
+      <p className={hint.className} title={hint.title}>{disabled && !busy && disabledHint !== undefined ? disabledHint : hint.text}</p>
     </div>
   )
 }

@@ -24,7 +24,7 @@ import type { SettingsCommandCodeKey } from './locales.ts'
 /** The endpoint-level Remote surface this controller calls. */
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteMap {
-    'commandcode/loginBegin': () => Promise<RemoteResult<CommandCodeLoginStatus>>
+    'commandcode/loginBegin': (targetRef?: string) => Promise<RemoteResult<CommandCodeLoginStatus>>
     'commandcode/loginStatus': () => Promise<RemoteResult<CommandCodeLoginStatus>>
     'commandcode/loginCancel': () => Promise<RemoteResult<CommandCodeLoginStatus>>
   }
@@ -32,7 +32,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 
 /** The narrow slice of the mounted Remote this controller calls. */
 export interface LoginRemote {
-  loginBegin(): Promise<LoginCallResult>
+  loginBegin(targetRef?: string): Promise<LoginCallResult>
   loginStatus(): Promise<LoginCallResult>
   loginCancel(): Promise<LoginCallResult>
 }
@@ -51,6 +51,8 @@ export interface LoginPageState {
    * failure), manual paste is the way.
    */
   phase: 'idle' | 'starting' | 'waiting' | 'success' | 'failed' | 'unavailable'
+  /** The saved extra account receiving this attempt, or undefined for default. */
+  targetRef?: string
   /** The Studio authorization URL while `waiting`. */
   authUrl: string | undefined
   /** The account display name on `success`. */
@@ -61,6 +63,18 @@ export interface LoginPageState {
   reason: CommandCodeLoginFailureReason | undefined
   /** Secondary failure detail when `failed`/`unavailable`. */
   message: string | undefined
+}
+
+/** Keep one account's login status out of every other account's row. */
+export function loginStateForTarget(
+  state: LoginPageState,
+  targetRef: string | undefined,
+): { visible: LoginPageState; busyElsewhere: boolean } {
+  if (state.targetRef === targetRef) return { visible: state, busyElsewhere: false }
+  return {
+    visible: { ...state, phase: 'idle', authUrl: undefined },
+    busyElsewhere: state.phase === 'starting' || state.phase === 'waiting',
+  }
 }
 
 /** How often a live attempt is polled. */
@@ -79,6 +93,7 @@ export class CommandCodeLoginController {
   private disposed = false
 
   private phase: LoginPageState['phase'] = 'idle'
+  private targetRef: string | undefined
   private authUrl: string | undefined
   private userName: string | undefined
   private keyName: string | undefined
@@ -100,6 +115,7 @@ export class CommandCodeLoginController {
   state(): LoginPageState {
     return {
       phase: this.phase,
+      ...(this.targetRef === undefined ? {} : { targetRef: this.targetRef }),
       authUrl: this.authUrl,
       userName: this.userName,
       keyName: this.keyName,
@@ -109,9 +125,10 @@ export class CommandCodeLoginController {
   }
 
   /** Start (or rejoin) a login attempt and begin polling its status. */
-  async begin(): Promise<void> {
+  async begin(targetRef?: string): Promise<void> {
     if (this.disposed || this.phase === 'starting' || this.phase === 'waiting') return
     const generation = ++this.generation
+    this.targetRef = targetRef
     this.set({ phase: 'starting', authUrl: undefined, userName: undefined, keyName: undefined, reason: undefined, message: undefined })
     const remote = this.remote()
     if (remote === undefined) {
@@ -120,7 +137,7 @@ export class CommandCodeLoginController {
     }
     let result: LoginCallResult
     try {
-      result = await remote.loginBegin()
+      result = await remote.loginBegin(targetRef)
     } catch (error: unknown) {
       // A transport throw (gateway hiccup) reads the same as a rejected call.
       result = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } }

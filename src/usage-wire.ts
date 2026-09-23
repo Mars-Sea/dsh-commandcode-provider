@@ -106,7 +106,7 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
     // Positive check: TS's never-return control-flow analysis only recognizes
     // function declarations, not the factory's destructured-arrow `reject`, so
     // narrow `blocked` in the positive branch instead.
-    if (blocked === 'invalid-key' || blocked === 'service-unavailable' || blocked === 'network') {
+    if (blocked === 'invalid-key' || blocked === 'service-unavailable' || blocked === 'invalid-response' || blocked === 'network') {
       report.blocked = blocked
     } else {
       reject('blocked')

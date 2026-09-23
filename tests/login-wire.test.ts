@@ -34,7 +34,24 @@ test('the three login descriptors target the usage service under one namespace',
     assert.equal(descriptor.namespace, 'commandcode')
     assert.equal(descriptor.invocation.kind, 'direct')
     assert.equal(descriptor.result.mode, 'strict')
-    assert.deepEqual(descriptor.parameters, [])
+    if (descriptor.method === 'loginBegin') {
+      const parameter = descriptor.parameters[0]
+      assert.equal(descriptor.parameters.length, 1)
+      assert.equal(parameter?.name, 'targetRef')
+      assert.equal(parameter?.wire, 'targetRef')
+      assert.equal(parameter?.source, 'json')
+      assert.equal(parameter?.acceptsUndefined, true)
+      const codec = parameter?.codec
+      assert.equal(codec?.mode, 'strict')
+      if (codec?.mode === 'strict') {
+        assert.equal(codec.schema.parse('COMMANDCODE_API_KEY_2'), 'COMMANDCODE_API_KEY_2')
+        assert.equal(codec.schema.parse(undefined), undefined)
+        assert.throws(() => codec.schema.parse(42))
+        assert.equal((codec as typeof codec & { create(): unknown }).create(), codec.schema)
+      }
+    } else {
+      assert.deepEqual(descriptor.parameters, [])
+    }
   }
 })
 

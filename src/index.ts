@@ -48,7 +48,7 @@ import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModel
 import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
 import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire.ts'
-import { CommandCodeLoginFlow } from './login.ts'
+import { CommandCodeLoginFlow, loginCredentialRef } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
@@ -819,8 +819,11 @@ export function apply(ctx: Context, config: Config): void {
   // reference the default slot resolves — no restart, no settings document.
   const loginFlow = new CommandCodeLoginFlow({
     apiBase: () => options().apiBase,
-    storeKey: async ({ apiKey }: CommandCodeLoginCredentials): Promise<void> => {
-      const ref = credentialRef(current().apiKeyEnv ?? DEFAULT_API_KEY_ENV)
+    validateTargetRef: (targetRef): void => {
+      loginCredentialRef(targetRef, current().apiKeyEnv ?? DEFAULT_API_KEY_ENV, current().accounts ?? [])
+    },
+    storeKey: async ({ apiKey }: CommandCodeLoginCredentials, targetRef): Promise<void> => {
+      const ref = credentialRef(loginCredentialRef(targetRef, current().apiKeyEnv ?? DEFAULT_API_KEY_ENV, current().accounts ?? []))
       const credentials = ctx.get('credentials')
       if (credentials === undefined) {
         throw new Error('the credentials service is unavailable in this profile; paste the key manually')

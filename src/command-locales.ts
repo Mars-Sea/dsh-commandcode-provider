@@ -27,6 +27,7 @@ export type CommandCodeCommandKey =
   | 'unconfigured'            // one-account row when the slot has no key
   | 'blockedInvalidKey'       // top-of-report block when the whole account is 401
   | 'blockedServiceUnavailable' // 5xx
+  | 'blockedInvalidResponse'  // received an unreadable response body
   | 'blockedNetwork'          // network unreachable
   | 'planLine'                // "  📦 套餐    {name}{status}{period}"
   | 'planPeriodSuffix'        // " · 账期截止 {date}" / " · period ends {date}"
@@ -61,6 +62,8 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
       '⛔ API 密钥无效或已过期 — 服务端拒绝了全部请求（401），请检查该账户的密钥配置',
     blockedServiceUnavailable:
       '⚠️ Command Code 服务暂时不可用（5xx），稍后重试',
+    blockedInvalidResponse:
+      '⚠️ Command Code 返回了无法读取的响应 — 请检查宿主的 HTTP 代理或响应解压配置',
     blockedNetwork:
       '⚠️ 无法连接 Command Code 服务 — 请检查网络或 API 地址',
     planLine: '  📦 套餐    {name}{status}{period}',
@@ -95,6 +98,8 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
       '⛔ API key invalid or expired — the server rejected every request (401); check the key configured for this account',
     blockedServiceUnavailable:
       '⚠️ Command Code service temporarily unavailable (5xx); try again later',
+    blockedInvalidResponse:
+      '⚠️ Command Code returned an unreadable response — check the host HTTP proxy or response decoding',
     blockedNetwork:
       '⚠️ could not reach the Command Code service — check your network or the API base setting',
     planLine: '  📦 Plan     {name}{status}{period}',
