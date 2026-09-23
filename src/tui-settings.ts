@@ -369,6 +369,68 @@ export function buildCommandCodeTuiSection(
         },
       },
       {
+        path: ['commandGuard'],
+        group: 'advanced',
+        kind: 'boolean',
+        label: 'AI command guard',
+        descriptions: { zh: 'AI 命令安全预判' },
+        hint: 'typesafe/jev judges whether a shell command is safe and auto-approves it;'
+          + ' everything else asks as usual. Off by default.',
+        hintDescriptions: { zh: '由 typesafe/jev 判断 shell 命令是否安全，安全则自动放行，其余照常弹窗。默认关闭。' },
+        // Off is the shipped default and the safe reading of an unset document.
+        format: (value) => (value === true ? 'true' : 'false'),
+        parse: (text) => ({ kind: 'set', value: text.trim() === 'true' }),
+      },
+      {
+        path: ['commandGuardThreshold'],
+        group: 'advanced',
+        kind: 'number',
+        label: 'Auto-approve threshold (0.5-1)',
+        descriptions: { zh: '自动放行阈值（0.5-1）' },
+        hint: 'Approve when typesafe/jev rates the command "safe" at least this likely; default 0.9.',
+        hintDescriptions: { zh: 'typesafe/jev 判定"安全"的概率达到该值即放行，默认 0.9。' },
+        parse: (text) => {
+          const trimmed = text.trim()
+          if (trimmed === '') return { kind: 'clear' }
+          const parsed = Number(trimmed)
+          return Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 1 ? { kind: 'set', value: parsed } : undefined
+        },
+      },
+      {
+        path: ['commandGuardTimeoutMs'],
+        group: 'advanced',
+        kind: 'number',
+        label: 'Judgement timeout (ms, 200-10000)',
+        descriptions: { zh: '判定超时（毫秒，200-10000）' },
+        hint: 'If typesafe/jev does not answer in time, the normal prompt appears; default 1500.',
+        hintDescriptions: { zh: 'typesafe/jev 超过该时间未返回就照常弹窗，默认 1500。' },
+        parse: (text) => {
+          const trimmed = text.trim()
+          if (trimmed === '') return { kind: 'clear' }
+          const parsed = Number(trimmed)
+          return Number.isFinite(parsed) && parsed >= 200 && parsed <= 10000 ? { kind: 'set', value: parsed } : undefined
+        },
+      },
+      {
+        path: ['zdr'],
+        group: 'advanced',
+        kind: 'boolean',
+        label: 'Zero data retention (ZDR)',
+        descriptions: { zh: '零数据保留（ZDR）' },
+        hint: 'Route requests only through upstreams that retain nothing and never'
+          + ' train on prompts (the CLI\'s CMD_ZDR=1). Models without an available'
+          + ' ZDR upstream fail instead of losing protection; ZDR is usually'
+          + ' billed at higher pass-through rates. Off by default.',
+        hintDescriptions: {
+          zh: '请求只经由不留存数据、也不用于训练的上游（等价于 CLI 的 CMD_ZDR=1）。'
+            + '没有可用 ZDR 上游的模型会报错，不会降级为非 ZDR 请求；'
+            + 'ZDR 通常按更高的透传价计费。默认关闭。',
+        },
+        // Off is the shipped default and the safe reading of an unset document.
+        format: (value) => (value === true ? 'true' : 'false'),
+        parse: (text) => ({ kind: 'set', value: text.trim() === 'true' }),
+      },
+      {
         path: ['filterModelsByPlan'],
         group: 'models',
         kind: 'boolean',

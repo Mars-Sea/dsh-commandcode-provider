@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.62.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.64.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -93,6 +93,16 @@ interface CommandCodeConnectionOptions {
    * the plugin's user settings schema.
    */
   protocol?: 'auto' | CommandCodeProtocol;
+  /**
+   * Whether requests enforce zero data retention by sending the
+   * `x-cmd-zdr: 1` header (the same opt-in the official CLI exposes as
+   * `CMD_ZDR=1`). Default false. Every chat request carries the header when
+   * enabled. The provider refuses a model without a ZDR-capable upstream with
+   * 422 `cmd_zdr_no_providers`; never retry that request without the header.
+   * The decision endpoint (`/provider/v1/systemone`) is deliberately never
+   * reached through this connection option — see `./systemone.ts`.
+   */
+  zdr?: boolean;
 }
 /**
  * Resolve the durable attachment service, or undefined when the host does not
@@ -777,6 +787,46 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
  * dsh-commandcode-upstream skill).
  */
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
+/**
+ * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
+ * registry (`command-code@1.64.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
+ * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
+ * carries the same membership in the sibling route table — the union is this
+ * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
+ * — "99% of our models have ZDR-capable upstreams … only a small handful of
+ * models are affected" — so the CLI's exclusion list is the only per-model
+ * evidence there is; a ZDR request naming one of these fails with HTTP 422
+ * `cmd_zdr_no_providers` instead of routing through a provider that retains.
+ *
+ * Why a NEGATIVE set, and why "not listed" answers TRUE: 99% of the catalog is
+ * covered, so the maintained difference is the exception list. This helper is
+ * informational; the adapter sends the ZDR header for EVERY request when the
+ * switch is on. The provider remains the routing authority and refuses an
+ * unsupported model rather than silently dropping the privacy guarantee.
+ *
+ * `minimax/minimax-m3-free` is the one entry the public catalog
+ * (`/provider/v1/models`) does not serve (it is CLI/pricing-visible and hidden
+ * from the picker); it stays listed because the CLI carries it and a Go-plan
+ * request can still name it.
+ *
+ * Keep in sync via the dsh-commandcode-upstream skill: the CLI's registry data
+ * (its `zdr:{only:[…]}` provider routes and the per-provider `zdr`/`noTraining`
+ * flags) is upstream-internal routing, not a per-model contract, so this table
+ * is the snapshot of the exclusion set and nothing more. The 1.62.0 → 1.64.0
+ * diff of that union is EMPTY: both anchors were extracted from both bundles
+ * during the 2026-09-23 check and each carries the same 20 members — which is
+ * how rare a change here is expected to be. `meituan/LongCat-2.0` is the one
+ * member the two anchors disagree about (it is in `modelSupportsZdr`'s set in
+ * both releases and in neither `knownModelSupportsZdr` set), so the union is
+ * what this table follows; reading only the sibling route table would drop it.
+ */
+declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
+/**
+ * Whether the CLI snapshot lists a ZDR-capable upstream for `modelId`. This is
+ * informational, never a reason to omit the header when ZDR is enabled: the
+ * provider may add coverage or lack capacity after this snapshot was taken.
+ */
+declare function supportsZeroDataRetention(modelId: string): boolean;
 /**
  * Models the official CLI's model table (command-code@1.53.0) marks
  * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
@@ -1873,6 +1923,44 @@ interface Config {
    */
   showSidebarQuota?: boolean;
   /**
+   * Whether the Command Code decision model (`typesafe/jev`) may auto-approve
+   * shell commands that dsh was about to ask about. Defaults to FALSE: the
+   * guard turns a model's opinion into a one-shot approval grant, so it is
+   * opt-in, and the command text (plus the agent's own description of it) is
+   * sent to Command Code to judge. Only commands a policy already wanted a
+   * human to look at are ever judged, and only a confident "safe" verdict
+   * (`commandGuardThreshold`) skips the prompt — every other outcome, including
+   * any failure of the decision call itself, delegates to the normal approval
+   * flow. See `./command-guard.ts`.
+   */
+  commandGuard?: boolean;
+  /**
+   * Minimum probability of "safe" that lets the guard skip the approval prompt;
+   * defaults to 0.9. Lowering it approves more, on less evidence.
+   */
+  commandGuardThreshold?: number;
+  /**
+   * Milliseconds the guard waits for a decision before falling back to the
+   * human prompt; defaults to 1500. This is a latency budget for an interactive
+   * approval, not a request timeout — a decision that arrives late is useless,
+   * because the user is staring at a prompt.
+   */
+  commandGuardTimeoutMs?: number;
+  /**
+   * Whether requests enforce zero data retention: the provider then routes
+   * them only through upstreams that keep no prompts/completions and never
+   * train on them (its own opt-in, `CMD_ZDR=1` in the CLI / `x-cmd-zdr: 1` on
+   * the Provider API). Defaults to FALSE: `zdr` changes WHERE a request is
+   * served. Every chat request carries the header when enabled; a model with
+   * no ZDR-capable upstream fails with 422 `cmd_zdr_no_providers` instead of
+   * being routed through an upstream that retains data. ZDR capacity is
+   * priced pass-through and usually costs more, and the price readout keeps
+   * quoting the ordinary catalog rates (the real per-request price shows in
+   * Command Code's Studio). The decision endpoint behind the command guard is
+   * never ZDR-enforced — see `./systemone.ts`.
+   */
+  zdr?: boolean;
+  /**
    * Language override for the `/commandcode` Host-side command's user-facing
    * copy. Host commands cannot read the client's `ctx.locale`, so this is
    * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
@@ -1927,5 +2015,5 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, LegacySettingsSchema, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, selectCommandCodeSearchProvider, studioBaseForApiBase, subscriptionPlanInfo, usageReportSchema, validateCommandApiKey };
+export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, LegacySettingsSchema, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, selectCommandCodeSearchProvider, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey };
 //# sourceMappingURL=index.d.ts.map

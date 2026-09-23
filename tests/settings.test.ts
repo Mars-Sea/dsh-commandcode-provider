@@ -18,6 +18,13 @@ import {
   DEFAULT_API_KEY_REF,
   type SettingsPageApi,
 } from '../src/client/settings.ts'
+import {
+  COMMAND_GUARD_DEFAULT_THRESHOLD,
+  COMMAND_GUARD_MAX_THRESHOLD,
+  COMMAND_GUARD_MAX_TIMEOUT_MS,
+  COMMAND_GUARD_MIN_THRESHOLD,
+  COMMAND_GUARD_MIN_TIMEOUT_MS,
+} from '../src/command-guard.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -401,6 +408,34 @@ test('resetField() on webSearch clears it back to the inherited default', async 
   await controller.save()
   assert.equal(scope.state.user?.webSearch, undefined)
   assert.equal(controller.state().webSearch.text, '')
+})
+
+test('save() writes the zdr toggle as a real boolean, off when unset', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  // Unset is the fresh-install shape, and unset means off: ZDR changes which
+  // upstream serves a request and usually what it costs, so nobody gets it by
+  // accident (the Host schema defaults it to false).
+  assert.equal(controller.state().zdr.text, '')
+  controller.edit('zdr', 'true')
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.equal(scope.state.value.zdr, true)
+  assert.equal(controller.state().zdr.text, 'true')
+})
+
+test('resetField() on zdr clears it back to the inherited default', async () => {
+  const scope = makeScope({
+    value: { zdr: true },
+    user: { zdr: true },
+  })
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().zdr.text, 'true')
+  assert.equal(controller.state().zdr.overridden, true)
+  controller.resetField('zdr')
+  await controller.save()
+  assert.equal(scope.state.user?.zdr, undefined)
+  assert.equal(controller.state().zdr.text, '')
 })
 
 test('save() writes the sidebar quota toggle as a real boolean, off when unset', async () => {
@@ -1215,4 +1250,40 @@ test('a rule draft is dropped when the rules write landed and ids shifted', asyn
     ['b-model', 'b-extra'],
     ['n-model'],
   ])
+})
+
+test('the command-guard fields stage like their neighbours and mirror the Host bounds', () => {
+  const { controller } = makeController()
+  const state = controller.state()
+
+  // A toggle with no stored value reads as unset, not as "off": the page shows
+  // the default (off) and only a save writes the field.
+  assert.equal(state.commandGuard.text, '')
+  assert.equal(state.commandGuard.overridden, false)
+  controller.edit('commandGuard', 'true')
+  assert.equal(controller.state().commandGuard.text, 'true')
+
+  // The numeric bounds are mirrored into the client bundle from
+  // `src/command-guard.ts` (which this bundle cannot import at runtime), so a
+  // draft can never be saved in a shape the Host schema rejects.
+  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MIN_THRESHOLD))
+  assert.equal(controller.state().commandGuardThreshold.invalid, false)
+  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MAX_THRESHOLD))
+  assert.equal(controller.state().commandGuardThreshold.invalid, false)
+  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MIN_THRESHOLD - 0.01))
+  assert.equal(controller.state().commandGuardThreshold.invalidReason, 'tooSmall')
+  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MAX_THRESHOLD + 0.01))
+  assert.equal(controller.state().commandGuardThreshold.invalidReason, 'tooLarge')
+  // The default is inside the bounds the client enforces.
+  assert.ok(COMMAND_GUARD_DEFAULT_THRESHOLD >= COMMAND_GUARD_MIN_THRESHOLD)
+  assert.ok(COMMAND_GUARD_DEFAULT_THRESHOLD <= COMMAND_GUARD_MAX_THRESHOLD)
+
+  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MIN_TIMEOUT_MS))
+  assert.equal(controller.state().commandGuardTimeoutMs.invalid, false)
+  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MAX_TIMEOUT_MS))
+  assert.equal(controller.state().commandGuardTimeoutMs.invalid, false)
+  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MIN_TIMEOUT_MS - 1))
+  assert.equal(controller.state().commandGuardTimeoutMs.invalidReason, 'tooSmall')
+  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MAX_TIMEOUT_MS + 1))
+  assert.equal(controller.state().commandGuardTimeoutMs.invalidReason, 'tooLarge')
 })

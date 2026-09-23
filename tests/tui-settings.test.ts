@@ -381,6 +381,19 @@ test('the account selector reflects the slot list it was built from', () => {
   ), [ACTIVE_ACCOUNT_AUTO])
 })
 
+test('the zdr field is a boolean toggle that renders its effective off default', () => {
+  const zdr = field(build().section, 'zdr')
+  assert.equal(zdr.kind, 'boolean')
+  // Unset is the fresh-install shape, and unset means off — the same reading
+  // the guard field above takes, because both switches change what the plugin
+  // sends rather than how it renders.
+  assert.equal(zdr.format?.(undefined), 'false')
+  assert.equal(zdr.format?.(true), 'true')
+  assert.equal(zdr.format?.(false), 'false')
+  assert.deepEqual(parse(zdr, ' true '), { kind: 'set', value: true })
+  assert.deepEqual(parse(zdr, 'false'), { kind: 'set', value: false })
+})
+
 test('the language field maps unset to auto and stages a concrete locale', () => {
   const lang = field(build().section, 'lang')
   assert.equal(lang.kind, 'text')

@@ -84,7 +84,7 @@ import {
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.62.0'
+export const COMMAND_CODE_CLI_VERSION = '1.64.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -228,6 +228,23 @@ const CLI_CONTEXT_OVERFLOW_PATTERN = /prompt is too long|context.*(length|window
 
 function isContextOverflowDetail(detail: string): boolean {
   return isContextWindowExceededError(detail) || CLI_CONTEXT_OVERFLOW_PATTERN.test(detail)
+}
+
+/**
+ * Whether one rejection says "ZDR requested, no ZDR-capable upstream": the
+ * provider spells the code `cmd_zdr_no_providers` in JSON error bodies and
+ * `CMD_ZDR_NO_PROVIDERS` in plain-text ones (the official CLI's own
+ * classifier checks both spellings, and its error text tells the user to
+ * unset `CMD_ZDR`). Underscore-separated matching normalizes the separator, so
+ * one comparison covers the variants — the same normalization the pre-stream
+ * rejection classifier and `hasTerminalStreamMarker` already use.
+ */
+const ZDR_NO_PROVIDERS_PATTERN = /cmd[_\s-]?zdr[_\s-]?no[_\s-]?providers/i
+
+function isZdrNoProviders(providerCode: string | undefined, providerDetail: string, errText: string): boolean {
+  return ZDR_NO_PROVIDERS_PATTERN.test(providerCode ?? '')
+    || ZDR_NO_PROVIDERS_PATTERN.test(providerDetail)
+    || ZDR_NO_PROVIDERS_PATTERN.test(errText)
 }
 
 /**
@@ -1462,6 +1479,16 @@ export interface CommandCodeConnectionOptions {
    * the plugin's user settings schema.
    */
   protocol?: 'auto' | CommandCodeProtocol
+  /**
+   * Whether requests enforce zero data retention by sending the
+   * `x-cmd-zdr: 1` header (the same opt-in the official CLI exposes as
+   * `CMD_ZDR=1`). Default false. Every chat request carries the header when
+   * enabled. The provider refuses a model without a ZDR-capable upstream with
+   * 422 `cmd_zdr_no_providers`; never retry that request without the header.
+   * The decision endpoint (`/provider/v1/systemone`) is deliberately never
+   * reached through this connection option — see `./systemone.ts`.
+   */
+  zdr?: boolean
 }
 
 /**
@@ -1909,6 +1936,11 @@ async function connectGenerate(
   }
 
   let response: Response
+  // Enforce ZDR on every chat request when selected. The provider is the
+  // routing authority: an unsupported model (or unavailable ZDR capacity)
+  // fails with 422 rather than sending the prompt through a retaining upstream.
+  // Never omit the header based on a client-side capability snapshot.
+  const zdr = connection.zdr === true
   const headers = protocol === 'cli'
     ? {
         'Content-Type': 'application/json',
@@ -1918,6 +1950,7 @@ async function connectGenerate(
         'x-project-slug': projectSlugFromPath(connection.workingDir),
         'x-taste-learning': 'true',
         'x-co-flag': 'false',
+        ...(zdr ? { 'x-cmd-zdr': '1' } : {}),
         ...attributionHeaders(),
       }
     : {
@@ -1926,7 +1959,10 @@ async function connectGenerate(
         Accept: 'text/event-stream',
         // Deliberately no x-command-code-version / x-cli-environment:
         // this is the documented OpenAI-format surface, not the CLI
-        // transport — do not "fix" these in.
+        // transport — do not "fix" these in. ZDR is the one header both
+        // transports share: the Provider API documents `x-cmd-zdr: 1`
+        // itself (commandcode.ai/docs/provider#zero-data-retention-zdr).
+        ...(zdr ? { 'x-cmd-zdr': '1' } : {}),
         ...attributionHeaders(),
       }
   try {
@@ -3151,6 +3187,23 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
       + `；Command Code API 返回 ${status}：请求内容超出模型上下文窗口——正在压缩上下文后重试；如仍失败，请新建会话或减少上下文`,
       CONTEXT_WINDOW_EXCEEDED_CODE,
       { status },
+    )
+  }
+  if (status === 422 && isZdrNoProviders(providerCode, providerDetail, errText)) {
+    // Zero data retention refused (the `zdr` connection option is on): either
+    // this model has no ZDR-capable upstream, or none had capacity at that
+    // moment. Bilingual — the harness UI renders this message verbatim. The
+    // code is matched shape-insensitively because the provider spells it both
+    // ways (`cmd_zdr_no_providers` in the JSON error body, `CMD_ZDR_NO_PROVIDERS`
+    // in plain-text ones, exactly as the official CLI's classifier reads it),
+    // and the CLI's own user guidance is to unset CMD_ZDR.
+    return new LlmError(
+      `Command Code API error 422 (${detail}): zero data retention is enforced but no ZDR-capable`
+      + ' upstream is available for this model — turn the ZDR setting off (or use another model)'
+      + '；Command Code API 返回 422：已开启零数据保留（ZDR），但该模型当前没有可用的 ZDR 上游——'
+      + '请关闭 ZDR 开关，或改用其他模型',
+      'PROVIDER_HTTP_ERROR',
+      { status: 422 },
     )
   }
   if (status === 401) {

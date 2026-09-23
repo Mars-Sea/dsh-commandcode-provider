@@ -188,7 +188,7 @@ llm-commandcode:
 
 ## Configure
 
-**Settings → Command Code** covers the API key, API base URL, working directory, and request/stream timeouts; once a key is saved, a live **Account usage** card appears at the top of the page. The **Advanced** card holds the toggles — hide out-of-plan models, serve web search with Command Code, and show the quota card in the sidebar (off by default).
+**Settings → Command Code** covers the API key, API base URL, working directory, and request/stream timeouts; once a key is saved, a live **Account usage** card appears at the top of the page. The **Advanced** card holds the toggles — hide out-of-plan models, serve web search with Command Code, show the quota card in the sidebar (off by default), the AI command guard (off by default, see below), and zero data retention (off by default, see below).
 
 The same options live in `$DSH_HOME/settings.yaml` (changes apply immediately, no restart):
 
@@ -201,6 +201,10 @@ llm-commandcode:
   requestTimeoutMs: 60000          # default 60s
   streamIdleTimeoutMs: 300000      # default 300s
   showSidebarQuota: true           # optional: show the plans & quota card in the sidebar (default off)
+  commandGuard: true               # optional: let the decision model auto-approve safe shell commands (default off)
+  commandGuardThreshold: 0.9       # optional: probability of "safe" needed to skip the prompt (0.5-1, default 0.9)
+  commandGuardTimeoutMs: 1500      # optional: decision budget in ms (200-10000, default 1500)
+  zdr: true                        # optional: route requests only through zero-data-retention upstreams (default off)
 ```
 
 ## Web search
@@ -215,6 +219,32 @@ When your deployment's dsh shell mounts the web capability (`@deepseek-ai/dsh-we
 
 > This reuses the Command Code Provider API directly (like the official CLI's built-in `web_search`), so it is distinct from a DeepSeek-native search backend.
 
+## AI command guard
+
+When dsh is about to ask you to approve a shell command (`bash`/`pwsh`) — a permission preset, a `PreToolUse` hook, or a sandbox escalation — this plugin can ask the Command Code decision model `typesafe/jev` whether the command is safe to run without asking. A confident *yes* turns into a one-shot `allowed-once` grant; everything else asks you exactly as before.
+
+**Off by default.** Turn it on with the *"Let AI judge shell commands"* toggle (`commandGuard`) in the Advanced card, or in your profile config. What the guard does and does not do:
+
+- It only ever sees commands dsh had **already decided to ask about** — it never widens a permission policy, and it never answers a session whose policy is "never ask".
+- Only a `yes` with probability at least `commandGuardThreshold` (default 0.9) skips the prompt. A `no`, a low-confidence answer, a timeout (default 1500 ms), a rate limit, a missing key, an unreadable answer, a command longer than 6000 characters, or a match against the built-in denylist (`sudo`, `rm -rf /`, `git push`, publish/upload commands, piping a download into a shell, …) all fall back to the normal prompt.
+- The **command text** (plus the agent's own one-line description, the working directory and the asker's reason) is sent to Command Code to be judged — with the same API key and base URL as chat.
+- The decision model has **no zero-data-retention upstream**, so this feature is incompatible with a ZDR-only policy. Leave it off if that matters to you.
+- The endpoint is free through 2026-09-24; after that it bills $0.042 per 1M input tokens (output free) — a single decision is a few hundred tokens, and an identical command with the same approval context in the same agent reuses the previous verdict for 10 minutes.
+
+Every AI decision is logged on the Host — `llm-commandcode: command guard auto-approved a bash call (safe probability 0.97, model): <the command>` for a grant, `… delegated a bash call: <reason> — <the command>` for everything that fell through — and the outcome lands in the session's own approval audit (`approval/asked` / `approval/decided`), so a grant can always be traced back to the verdict that produced it. The log goes to the Host's console (the terminal running `dsh web`, or the desktop app's log), not to the browser.
+
+## Zero data retention (ZDR)
+
+Command Code can serve a request only through upstreams that retain no prompts or completions and never train on them — the same opt-in the official CLI exposes as `CMD_ZDR=1`, and the `x-cmd-zdr: 1` header on the Provider API ([official docs](https://commandcode.ai/docs/resources/zdr)).
+
+**Off by default.** Turn it on with the *"Zero data retention (ZDR)"* toggle (`zdr`) in the Advanced card, or in your profile config. How this plugin implements it:
+
+- The header is sent on **every chat request** while ZDR is on. The plugin maintains an informational exception list (`KNOWN_NON_ZDR_MODELS`, synced from the official CLI — about 20 models, e.g. `xai/grok-4.5`, `stepfun/Step-3.7-Flash`, `meta/muse-spark-1.3`). A model without an available ZDR upstream fails with `422 cmd_zdr_no_providers`; the request is never retried without the header.
+- If a refusal still happens (coverage churn, or no ZDR upstream with spare capacity at that moment), the error names the cause and how to turn ZDR off, instead of surfacing as a bare HTTP 422.
+- **ZDR usually costs more**: capacity is limited and billed at each upstream's pass-through rates, and which upstream serves a request can change per request. The session-cost readout keeps quoting the ordinary catalog rates; the real per-request price shows in Command Code's Studio usage page.
+- The decision model behind the **AI command guard** has no ZDR upstream, so its requests never carry the header even with `zdr` on — the two features stay independent.
+- Works on every plan; plan credits meter ZDR requests at the plan's default allowance.
+
 ## Notes & limitations
 
 - **Image input is model-gated** — only Vision models accept images; text-only models refuse them.
@@ -227,7 +257,7 @@ When your deployment's dsh shell mounts the web capability (`@deepseek-ai/dsh-we
 
 ## Permissions & privacy
 
-The plugin only communicates between your local dsh profile and your Command Code account: locally it touches only the credential store and the models cache (plus `~/.commandcode/auth.json` as a last-resort fallback); on the network it calls only the Command Code API. No telemetry.
+The plugin only communicates between your local dsh profile and your Command Code account: locally it touches only the credential store and the models cache (plus `~/.commandcode/auth.json` as a last-resort fallback); on the network it calls only the Command Code API. No telemetry. The one optional exception is the **AI command guard** (off by default), which sends the shell command it is asked to judge — see above. With **zero data retention** on (also off by default), chat requests require a ZDR upstream; models without one fail instead of running without the protection.
 
 ## Disabling / uninstalling
 

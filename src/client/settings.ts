@@ -211,6 +211,27 @@ export interface SettingsPageState {
    */
   showSidebarQuota: StagedField
   /**
+   * commandGuard draft, staged as `'true'`/`'false'`/`''` (unset). The component
+   * renders it as a toggle; `''` means "inherit the default" (off — the guard
+   * turns a decision model's opinion into an approval grant, so it is opt-in).
+   */
+  commandGuard: StagedField
+  /**
+   * commandGuardThreshold draft: the minimum probability of "safe" that skips
+   * the approval prompt. Unset means the Host default (0.9), so it stages like
+   * the numeric fields above.
+   */
+  commandGuardThreshold: StagedField
+  /** commandGuardTimeoutMs draft: the decision budget in milliseconds. */
+  commandGuardTimeoutMs: StagedField
+  /**
+   * zdr draft, staged as `'true'`/`'false'`/`''` (unset). The component
+   * renders it as a toggle; `''` means "inherit the default" (off — ZDR
+   * changes which upstream serves a request and usually what it costs, so it
+   * is opt-in like the guard above).
+   */
+  zdr: StagedField
+  /**
    * Whether the STORED document turns the sidebar quota card on
    * (`showSidebarQuota === true`). This is the fact the sidebar card itself
    * follows — deliberately NOT the staged draft above: the page has an explicit
@@ -355,6 +376,15 @@ const SECTION_FIELDS: FieldSpec[] = [
   booleanField('filterModelsByPlan'),
   booleanField('webSearch'),
   booleanField('showSidebarQuota'),
+  booleanField('commandGuard'),
+  // The bounds mirror COMMAND_GUARD_MIN/MAX_THRESHOLD and
+  // COMMAND_GUARD_MIN/MAX_TIMEOUT_MS in the Host's `src/command-guard.ts`;
+  // this bundle cannot import that node-side module, so the literals are
+  // mirrored here like `transportMaxRetries`' own bounds, and the Host schema
+  // stays the final gate.
+  numberField('commandGuardThreshold', { min: 0.5, max: 1 }),
+  numberField('commandGuardTimeoutMs', { min: 200, max: 10000 }),
+  booleanField('zdr'),
   textField('activeAccount'),
 ]
 
@@ -525,6 +555,10 @@ export class CommandCodeSettingsController {
       filterModelsByPlan: this.field('filterModelsByPlan'),
       webSearch: this.field('webSearch'),
       showSidebarQuota: this.field('showSidebarQuota'),
+      commandGuard: this.field('commandGuard'),
+      commandGuardThreshold: this.field('commandGuardThreshold'),
+      commandGuardTimeoutMs: this.field('commandGuardTimeoutMs'),
+      zdr: this.field('zdr'),
       sidebarQuota: this.sectionValue('showSidebarQuota') === true,
       activeAccount: this.field('activeAccount'),
       accounts,

@@ -63,6 +63,17 @@ import {
   transportResetAction,
 } from './transport-retry.ts'
 import { KNOWN_PLANS } from './capabilities.ts'
+import {
+  COMMAND_GUARD_DEFAULT_THRESHOLD,
+  COMMAND_GUARD_DEFAULT_TIMEOUT_MS,
+  COMMAND_GUARD_MAX_THRESHOLD,
+  COMMAND_GUARD_MAX_TIMEOUT_MS,
+  COMMAND_GUARD_MIN_THRESHOLD,
+  COMMAND_GUARD_MIN_TIMEOUT_MS,
+  applyCommandGuard,
+  type CommandGuardSettings,
+} from './command-guard.ts'
+import { runSystemOne } from './systemone.ts'
 import { markVolatileFields, unwrapVolatileConfig } from './config-volatile.ts'
 
 export {
@@ -81,6 +92,7 @@ export {
   KNOWN_EFFORTS,
   KNOWN_IMAGE_MODELS,
   KNOWN_THINKING_MODELS,
+  KNOWN_NON_ZDR_MODELS,
   KNOWN_PLANS,
   KNOWN_SUBSCRIPTION_PLANS,
   KNOWN_DEALS,
@@ -96,6 +108,7 @@ export {
   peakPricingState,
   planLabel,
   subscriptionPlanInfo,
+  supportsZeroDataRetention,
 } from './capabilities.ts'
 export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
 export type { CommandCodeBillingAccess } from './capabilities.ts'
@@ -267,6 +280,44 @@ export interface Config {
    */
   showSidebarQuota?: boolean
   /**
+   * Whether the Command Code decision model (`typesafe/jev`) may auto-approve
+   * shell commands that dsh was about to ask about. Defaults to FALSE: the
+   * guard turns a model's opinion into a one-shot approval grant, so it is
+   * opt-in, and the command text (plus the agent's own description of it) is
+   * sent to Command Code to judge. Only commands a policy already wanted a
+   * human to look at are ever judged, and only a confident "safe" verdict
+   * (`commandGuardThreshold`) skips the prompt — every other outcome, including
+   * any failure of the decision call itself, delegates to the normal approval
+   * flow. See `./command-guard.ts`.
+   */
+  commandGuard?: boolean
+  /**
+   * Minimum probability of "safe" that lets the guard skip the approval prompt;
+   * defaults to 0.9. Lowering it approves more, on less evidence.
+   */
+  commandGuardThreshold?: number
+  /**
+   * Milliseconds the guard waits for a decision before falling back to the
+   * human prompt; defaults to 1500. This is a latency budget for an interactive
+   * approval, not a request timeout — a decision that arrives late is useless,
+   * because the user is staring at a prompt.
+   */
+  commandGuardTimeoutMs?: number
+  /**
+   * Whether requests enforce zero data retention: the provider then routes
+   * them only through upstreams that keep no prompts/completions and never
+   * train on them (its own opt-in, `CMD_ZDR=1` in the CLI / `x-cmd-zdr: 1` on
+   * the Provider API). Defaults to FALSE: `zdr` changes WHERE a request is
+   * served. Every chat request carries the header when enabled; a model with
+   * no ZDR-capable upstream fails with 422 `cmd_zdr_no_providers` instead of
+   * being routed through an upstream that retains data. ZDR capacity is
+   * priced pass-through and usually costs more, and the price readout keeps
+   * quoting the ordinary catalog rates (the real per-request price shows in
+   * Command Code's Studio). The decision endpoint behind the command guard is
+   * never ZDR-enforced — see `./systemone.ts`.
+   */
+  zdr?: boolean
+  /**
    * Language override for the `/commandcode` Host-side command's user-facing
    * copy. Host commands cannot read the client's `ctx.locale`, so this is
    * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
@@ -337,6 +388,17 @@ function configFields() {
       models: z.array(z.string()),
       account: z.string(),
     })),
+    // The command guard. The probability bounds mirror
+    // COMMAND_GUARD_MIN/MAX_THRESHOLD and the budget bounds mirror
+    // COMMAND_GUARD_MIN/MAX_TIMEOUT_MS in `./command-guard.ts`; the client's
+    // field specs mirror them again (the browser bundle cannot import that
+    // node-side module), and `tests/command-guard.test.ts` pins the pair.
+    commandGuard: z.boolean().default(false),
+    commandGuardThreshold: z.number().min(COMMAND_GUARD_MIN_THRESHOLD).max(COMMAND_GUARD_MAX_THRESHOLD),
+    commandGuardTimeoutMs: z.number().min(COMMAND_GUARD_MIN_TIMEOUT_MS).max(COMMAND_GUARD_MAX_TIMEOUT_MS),
+    // Off by default: turning it on changes which upstream serves the request
+    // (and usually what it costs), so nobody gets ZDR routing by accident.
+    zdr: z.boolean().default(false),
     lang: z.string().pattern(/^(zh|en)$/).default('zh' as const),
   }
 }
@@ -399,6 +461,9 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     // and a malformed flag must fall back to the array rather than hide a
     // model. An all-empty map is the same as no map.
     modelVisibility: readModelVisibility(config.modelVisibility),
+    // The connection carries the switch; the adapter enforces it on every
+    // chat request rather than depending on a client-side coverage snapshot.
+    zdr: config.zdr === true,
   }
 }
 
@@ -840,6 +905,47 @@ export function apply(ctx: Context, config: Config): void {
       webRuntime = undefined
       applyCommandCodeSearchSelection(webCtx.web, searchSelection, false)
     }, 'dsh-commandcode-provider: web search selection')
+  })
+
+  // The command guard's live settings. Declared BEFORE the inject below
+  // because an inject callback can run synchronously (when the seam is already
+  // mounted) and a `const` declared after it would be a temporal-dead-zone
+  // throw. Every fact is re-read per ask, so a settings write lands on the very
+  // next approval.
+  const commandGuardSettings = (): CommandGuardSettings => {
+    const raw = current()
+    return {
+      enabled: raw.commandGuard === true,
+      threshold: raw.commandGuardThreshold ?? COMMAND_GUARD_DEFAULT_THRESHOLD,
+      timeoutMs: raw.commandGuardTimeoutMs ?? COMMAND_GUARD_DEFAULT_TIMEOUT_MS,
+    }
+  }
+
+  // The command guard: an AI second opinion in front of the human approval
+  // prompt. dsh's approval seam is an optional service, and the guard is only
+  // meaningful where it exists (no approval service means no asks to answer at
+  // all), so the listeners ride `ctx.inject(['approval'], …)` exactly like
+  // `web` and `tuiSettingsSections`: a profile without the seam never activates
+  // this fiber, and an engine that predates the service stays inert.
+  //
+  // The decision endpoint uses the plugin's ordinary credential chain and base
+  // URL — no separate key — and every failure inside it delegates to the human
+  // (`./command-guard.ts` documents the ladder).
+  ctx.inject(['approval'], (approvalCtx) => {
+    applyCommandGuard(approvalCtx, {
+      settings: commandGuardSettings,
+      decide: (request, decideOptions) => runSystemOne(
+        {
+          apiBase: () => options().apiBase,
+          resolveApiKey: () => resolveApiKey(options()),
+        },
+        request,
+        decideOptions,
+      ),
+      log: (message) => {
+        ctx.logger.info(`llm-commandcode: ${message}`)
+      },
+    })
   })
 
   // The terminal front door (dsh-TUI) settings page. dsh-TUI owns its own

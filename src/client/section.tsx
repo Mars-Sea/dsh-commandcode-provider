@@ -59,7 +59,7 @@ export interface CommandCodeSettingsProps {
 }
 
 /** The section fields folded into the collapsible Advanced card. */
-type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'transportMaxRetries' | 'filterModelsByPlan' | 'webSearch' | 'showSidebarQuota'
+type AdvancedField = 'apiBase' | 'workingDir' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'transportMaxRetries' | 'filterModelsByPlan' | 'webSearch' | 'showSidebarQuota' | 'commandGuard' | 'commandGuardThreshold' | 'commandGuardTimeoutMs' | 'zdr'
 const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'apiBase',
   'workingDir',
@@ -69,6 +69,10 @@ const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'filterModelsByPlan',
   'webSearch',
   'showSidebarQuota',
+  'commandGuard',
+  'commandGuardThreshold',
+  'commandGuardTimeoutMs',
+  'zdr',
 ]
 
 /** One labelled field row in the page body. */
@@ -265,6 +269,59 @@ function AdvancedSection({
             defaultChecked={false}
             onEdit={(text) => onEdit('showSidebarQuota', text)}
             onReset={() => onReset('showSidebarQuota')}
+            t={t}
+          />
+          {/* The command guard: also opt-in and off by default. It is the one
+              field here whose decision can skip an approval the user would
+              otherwise have seen, and it sends the command text to a model
+              with no ZDR upstream — so it starts off, and the two knobs that
+              bound it sit right under it. */}
+          <ToggleField
+            id="cc-command-guard"
+            label={t('commandGuard')}
+            hint={t('commandGuardHint')}
+            state={state.commandGuard}
+            disabled={disabled}
+            defaultChecked={false}
+            onEdit={(text) => onEdit('commandGuard', text)}
+            onReset={() => onReset('commandGuard')}
+            t={t}
+          />
+          <Field
+            id="cc-command-guard-threshold"
+            label={t('commandGuardThreshold')}
+            hint={t('commandGuardThresholdHint')}
+            state={state.commandGuardThreshold}
+            disabled={disabled}
+            onEdit={(text: string) => onEdit('commandGuardThreshold', text)}
+            onReset={() => onReset('commandGuardThreshold')}
+            t={t}
+          />
+          <Field
+            id="cc-command-guard-timeout"
+            label={t('commandGuardTimeoutMs')}
+            hint={t('commandGuardTimeoutMsHint')}
+            state={state.commandGuardTimeoutMs}
+            disabled={disabled}
+            numeric
+            onEdit={(text: string) => onEdit('commandGuardTimeoutMs', text)}
+            onReset={() => onReset('commandGuardTimeoutMs')}
+            t={t}
+          />
+          {/* Zero data retention: opt-in and off by default, for the opposite
+              reason from the guard — this one protects the request, and the
+              lever (which upstream serves it, and what it costs) is invisible
+              to the user until the bill arrives. The per-model exclusion list
+              lives on the Host, so the toggle needs no model picker. */}
+          <ToggleField
+            id="cc-zdr"
+            label={t('zdr')}
+            hint={t('zdrHint')}
+            state={state.zdr}
+            disabled={disabled}
+            defaultChecked={false}
+            onEdit={(text) => onEdit('zdr', text)}
+            onReset={() => onReset('zdr')}
             t={t}
           />
         </div>

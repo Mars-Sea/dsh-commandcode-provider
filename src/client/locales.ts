@@ -44,6 +44,14 @@ export type SettingsCommandCodeKey =
   | 'webSearchHint'
   | 'showSidebarQuota'
   | 'showSidebarQuotaHint'
+  | 'commandGuard'
+  | 'commandGuardHint'
+  | 'commandGuardThreshold'
+  | 'commandGuardThresholdHint'
+  | 'commandGuardTimeoutMs'
+  | 'commandGuardTimeoutMsHint'
+  | 'zdr'
+  | 'zdrHint'
   | 'accountsTitle'
   | 'accountsHint'
   | 'accountAdd'
@@ -183,6 +191,17 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   webSearchHint: '开启后，dsh 的 web_search 工具由 Command Code 承担（复用同一个 API key 与地址），并优先于其他搜索后端；关闭则把选择权交还给之前的后端（如 modsearch），而不是强制回退到 DeepSeek 搜索。',
   showSidebarQuota: '在侧边栏显示额度卡片',
   showSidebarQuotaHint: '开启后，侧边栏底部（Settings 上方）显示 Command Code 套餐与配额卡片，点击可在中间栏打开完整仪表盘。默认关闭：左侧不显示任何额度信息，也不会为其后台刷新用量。保存后立即生效。',
+  commandGuard: 'AI 命令安全预判',
+  commandGuardHint: '命令确认弹窗前，先由 typesafe/jev 判断它是否安全：安全就自动放行，其余照常弹窗。默认关闭。',
+  commandGuardThreshold: '自动放行阈值（0.5–1）',
+  commandGuardThresholdHint: 'typesafe/jev 判定"安全"的概率达到该值即放行，默认 0.9。',
+  commandGuardTimeoutMs: '判定超时（毫秒，200–10000）',
+  commandGuardTimeoutMsHint: 'typesafe/jev 超过该时间未返回就照常弹窗，默认 1500。',
+  zdr: '零数据保留（ZDR）',
+  zdrHint:
+    '开启后，请求只经由不留存提示词与回复、也不用于训练的上游（等价于 CLI 的 CMD_ZDR=1）。'
+    + '没有可用 ZDR 上游的模型会返回错误，请换用其他模型或关闭此开关。'
+    + 'ZDR 容量按上游实价透传，通常更贵；费用读数仍按常规目录价估算。默认关闭。',
   accountsTitle: '多账户轮换',
   accountsHint: '当前账户达到用量限额（429）或密钥失效（401）时，请求自动切换到下一个账户；全部耗尽时会提示最早的重置时间。',
   accountAdd: '添加账户',
@@ -338,6 +357,24 @@ export const en: Record<SettingsCommandCodeKey, string> = {
     + ' sidebar (above Settings) and opens the full dashboard in the centre column.'
     + ' Off by default: nothing is shown on the left, and no background usage poll'
     + ' runs for it. Applies on save.',
+  commandGuard: 'AI command guard',
+  commandGuardHint: 'Before a shell command asks for approval, typesafe/jev judges whether'
+    + ' it is safe: safe commands run without a prompt, everything else asks as usual.'
+    + ' Off by default.',
+  commandGuardThreshold: 'Auto-approve threshold (0.5–1)',
+  commandGuardThresholdHint: 'Approve when typesafe/jev rates the command "safe" at least'
+    + ' this likely; default 0.9.',
+  commandGuardTimeoutMs: 'Judgement timeout (ms, 200–10000)',
+  commandGuardTimeoutMsHint: 'If typesafe/jev does not answer in time, the normal prompt'
+    + ' appears; default 1500.',
+  zdr: 'Zero data retention (ZDR)',
+  zdrHint:
+    'Serve requests only through upstreams that keep no prompts or completions'
+    + ' and never train on them (the same opt-in as the CLI\'s CMD_ZDR=1). A few'
+    + ' models have no ZDR upstream; requests for those models fail rather than'
+    + ' losing ZDR protection. ZDR capacity is billed'
+    + ' at the upstream\'s pass-through rates and usually costs more; the cost'
+    + ' readout keeps quoting the ordinary catalog rates. Off by default.',
   accountsTitle: 'Account rotation',
   accountsHint: 'When the active account hits its usage limit (429) or its key'
     + ' fails (401), requests switch to the next account; when every account is'

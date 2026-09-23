@@ -39,6 +39,7 @@ import {
   peakPricingState,
   compareByPlan,
   requiresMessagesEndpoint,
+  supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CoreImagePolicy } from '../src/adapter.ts'
 import type { ContentBlock, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -2300,6 +2301,99 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
 })
 
 // ---------------------------------------------------------------------------
+// Zero data retention (the `zdr` connection option)
+// ---------------------------------------------------------------------------
+
+/** A model the maintained snapshot says HAS a ZDR-capable upstream. */
+const ZDR_COVERED_MODEL = 'deepseek/deepseek-v4.1-flash'
+/** A model on the provider's ZDR exception list (no ZDR-capable upstream). */
+const ZDR_EXCLUDED_MODEL = 'stepfun/Step-3.7-Flash'
+
+/**
+ * Drive one request and return the headers its POST carried (the catalog GET's
+ * headers are filtered out — only the generate call's decision matters).
+ */
+async function postedHeaders(
+  protocol: 'cli' | 'openai',
+  overrides: { zdr?: boolean; model?: string },
+): Promise<Record<string, string>> {
+  let seen: Record<string, string> = {}
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      seen = { ...(init.headers as Record<string, string>) }
+    }
+    return okStream(protocol)
+  }) as unknown as typeof fetch
+  const adapter = makeAdapter({
+    fetchImpl,
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol,
+      ...(overrides.zdr === undefined ? {} : { zdr: overrides.zdr }),
+    }),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: overrides.model ?? ZDR_COVERED_MODEL,
+    messages: [userMessage('hello')],
+  }))
+  return seen
+}
+
+test('stream() sends x-cmd-zdr on both transports when zdr is on and the model is covered', async () => {
+  for (const protocol of ['cli', 'openai'] as const) {
+    const headers = await postedHeaders(protocol, { zdr: true })
+    assert.equal(headers['x-cmd-zdr'], '1', `${protocol} transport carries the ZDR header`)
+    // The provider's own opt-in is additive: the ordinary headers stay.
+    assert.equal(headers.Authorization, 'Bearer user_test_key')
+    assert.equal(headers['Content-Type'], 'application/json')
+  }
+})
+
+test('stream() leaves the ZDR header off by default, whatever the model', async () => {
+  for (const protocol of ['cli', 'openai'] as const) {
+    assert.equal((await postedHeaders(protocol, {}))['x-cmd-zdr'], undefined)
+    assert.equal((await postedHeaders(protocol, { zdr: false }))['x-cmd-zdr'], undefined)
+  }
+})
+
+test('stream() enforces ZDR even for a model without a ZDR upstream', async () => {
+  // The provider must refuse this request with 422 instead of routing it to
+  // an upstream that retains data. The client must never silently omit ZDR.
+  assert.equal(supportsZeroDataRetention(ZDR_EXCLUDED_MODEL), false)
+  for (const protocol of ['cli', 'openai'] as const) {
+    const headers = await postedHeaders(protocol, { zdr: true, model: ZDR_EXCLUDED_MODEL })
+    assert.equal(headers['x-cmd-zdr'], '1')
+  }
+})
+
+test('stream() diagnoses a ZDR refusal as a ZDR problem, bilingual', async () => {
+  const fetchImpl = (async () => new Response(
+    JSON.stringify({ error: { code: 'cmd_zdr_no_providers', message: 'no ZDR-capable upstream available' } }),
+    { status: 422 },
+  )) as unknown as typeof fetch
+  const adapter = makeAdapter({ fetchImpl, options: () => ({ ...OPENAI_OPTIONS(), zdr: true }) })
+  let error: (Error & { failure?: { status?: number } }) | undefined
+  try {
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model: ZDR_COVERED_MODEL,
+      messages: [userMessage('hello')],
+    }))
+  } catch (thrown) {
+    error = thrown as Error & { failure?: { status?: number } }
+  }
+  assert.ok(error !== undefined)
+  assert.equal(error.failure?.status, 422)
+  assert.match(error.message ?? '', /zero data retention/i)
+  assert.match(error.message ?? '', /零数据保留/)
+})
+
+// ---------------------------------------------------------------------------
 // Plan filter (listModels hides models above the account's subscription tier)
 // ---------------------------------------------------------------------------
 
@@ -4523,7 +4617,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.62.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.64.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

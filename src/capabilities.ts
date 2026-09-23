@@ -141,6 +141,16 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'meta/muse-spark-1.3-contributor': ['low', 'medium', 'high', 'xhigh'],
   // command-code@1.49.0 added GPT-6 Astra with the full five-level effort set.
   'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
+  // The 1.62.0 -> 1.64.0 train (1.63.0 and 1.64.0; neither has a changelog
+  // entry yet — the official changelog page still tops out at 1.62.0, so this
+  // was read from the 1.64.0 bundle and the public sources) is additive again:
+  // the registry grows 83 -> 86 with exactly three additions — Claude Opus 5.5
+  // and the GPT-6 Sol / GPT-6 Luna pair — all three text+image, reasoning with
+  // the same five-level set as `gpt-6-astra`, and no edit to any existing row.
+  // They are also the only three models the public catalog gained (77 -> 80).
+  'claude-opus-5-5': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   // command-code@1.51.3 gave MiniMax M3 selectable ['low', 'medium', 'high']
   // efforts (it previously reasoned automatically with no levels and lived in
   // KNOWN_THINKING_MODELS; the hidden `minimax/minimax-m3-free` sibling gained
@@ -188,6 +198,10 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'claude-haiku-4-5-20251001',
   'claude-opus-4-7',
   'claude-opus-4-8',
+  // command-code@1.64.0 added Claude Opus 5.5; Vision per the official registry
+  // and the CLI's inputModalities:["text","image"] (the pricing page also
+  // carries caps.vision: true).
+  'claude-opus-5-5',
   'claude-opus-5',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
@@ -214,6 +228,11 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // command-code@1.49.0 added GPT-6 Astra; Vision per the official registry
   // and the CLI's inputModalities:["text","image"].
   'gpt-6-astra',
+  // command-code@1.64.0 added the GPT-6 Sol / GPT-6 Luna pair; Vision per the
+  // official registry and the CLI's inputModalities:["text","image"] (the
+  // pricing page also carries caps.vision: true).
+  'gpt-6-luna',
+  'gpt-6-sol',
   // command-code@1.44.0 added Muse Spark 1.3 and its Contributor sibling;
   // both are Vision per the official registry and the CLI's
   // inputModalities:["text","image"].
@@ -261,6 +280,71 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // also carries caps.vision: true).
   'z-ai/glm-5.3-flashx',
 ])
+
+/**
+ * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
+ * registry (`command-code@1.64.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
+ * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
+ * carries the same membership in the sibling route table — the union is this
+ * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
+ * — "99% of our models have ZDR-capable upstreams … only a small handful of
+ * models are affected" — so the CLI's exclusion list is the only per-model
+ * evidence there is; a ZDR request naming one of these fails with HTTP 422
+ * `cmd_zdr_no_providers` instead of routing through a provider that retains.
+ *
+ * Why a NEGATIVE set, and why "not listed" answers TRUE: 99% of the catalog is
+ * covered, so the maintained difference is the exception list. This helper is
+ * informational; the adapter sends the ZDR header for EVERY request when the
+ * switch is on. The provider remains the routing authority and refuses an
+ * unsupported model rather than silently dropping the privacy guarantee.
+ *
+ * `minimax/minimax-m3-free` is the one entry the public catalog
+ * (`/provider/v1/models`) does not serve (it is CLI/pricing-visible and hidden
+ * from the picker); it stays listed because the CLI carries it and a Go-plan
+ * request can still name it.
+ *
+ * Keep in sync via the dsh-commandcode-upstream skill: the CLI's registry data
+ * (its `zdr:{only:[…]}` provider routes and the per-provider `zdr`/`noTraining`
+ * flags) is upstream-internal routing, not a per-model contract, so this table
+ * is the snapshot of the exclusion set and nothing more. The 1.62.0 → 1.64.0
+ * diff of that union is EMPTY: both anchors were extracted from both bundles
+ * during the 2026-09-23 check and each carries the same 20 members — which is
+ * how rare a change here is expected to be. `meituan/LongCat-2.0` is the one
+ * member the two anchors disagree about (it is in `modelSupportsZdr`'s set in
+ * both releases and in neither `knownModelSupportsZdr` set), so the union is
+ * what this table follows; reading only the sibling route table would drop it.
+ */
+export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
+  'MiniMaxAI/MiniMax-M3',
+  'Qwen/Qwen3.8-Max-0902',
+  'meituan/LongCat-2.0',
+  'meta/muse-spark-1.1',
+  'meta/muse-spark-1.2',
+  'meta/muse-spark-1.2-contributor',
+  'meta/muse-spark-1.3',
+  'meta/muse-spark-1.3-contributor',
+  'minimax/minimax-m3-free',
+  'poolside/laguna-s-2.1-free',
+  'sakana/fugu-ultra',
+  'stepfun/Step-3.7-Flash',
+  'stepfun/Step-5-Preview',
+  'xai/grok-4.5',
+  'xai/grok-4.6',
+  'xiaomi/mimo-v2.6-flash',
+  'xiaomi/mimo-v2.6-pro',
+  'xiaomi/mimo-v2.6-pro-ultraspeed',
+  'z-ai/glm-5.3-flashx',
+  'zai-org/GLM-5.2-Fast',
+])
+
+/**
+ * Whether the CLI snapshot lists a ZDR-capable upstream for `modelId`. This is
+ * informational, never a reason to omit the header when ZDR is enabled: the
+ * provider may add coverage or lack capacity after this snapshot was taken.
+ */
+export function supportsZeroDataRetention(modelId: string): boolean {
+  return !KNOWN_NON_ZDR_MODELS.has(modelId)
+}
 
 /**
  * Models the official CLI's model table (command-code@1.53.0) marks
@@ -401,7 +485,7 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (49) ---
+  // --- Go (50) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -431,6 +515,11 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'deepseek/deepseek-v4-flash-vision-exp': 'go',
   'deepseek/deepseek-v4-pro': 'go',
   'gpt-5.6-luna': 'go',
+  // command-code@1.64.0 added GPT-6 Luna on every plan including Go (the
+  // opensource-category GPT-6 sibling): the pricing page's availability sets
+  // individual-go true and the Go plan page lists it, while its premium-category
+  // siblings Sol (Pro) and Astra (Provider/Max) do not.
+  'gpt-6-luna': 'go',
   // command-code@1.42.0 added Meituan's LongCat 2.0 as a free Go-tier model
   // ("LongCat 2.0 free model" — 100% off while it lasts, every plan). That
   // promo ended 2026-09-19: the pricing page dropped the deal and the free
@@ -507,7 +596,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // does not list it, GOAT/Pro/Max do) — its two cheaper V2.6 siblings are Go
   // models and sit in the section above.
   'xiaomi/mimo-v2.6-pro-ultraspeed': 'goat',
-  // --- Pro (13 more) ---
+  // --- Pro (14 more) ---
   'claude-haiku-4-5-20251001': 'pro',
   'claude-sonnet-4-6': 'pro',
   'claude-sonnet-5': 'pro',
@@ -520,12 +609,22 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'gpt-5.4-mini': 'pro',
   'gpt-5.5': 'pro',
   'gpt-5.6-terra': 'pro',
+  // command-code@1.64.0 added GPT-6 Sol on Pro and above: the pricing page's
+  // availability sets individual-go/goat false with pro and above true, and the
+  // Go and GOAT plan pages do not list it while Pro/Max do.
+  'gpt-6-sol': 'pro',
   'meta/muse-spark-1.1': 'pro',
-  // --- Provider / Max (7) ---
+  // --- Provider / Max (8) ---
   'claude-fable-5-1': 'provider',
   'claude-fable-5': 'provider',
   'claude-opus-4-7': 'provider',
   'claude-opus-4-8': 'provider',
+  // command-code@1.64.0 added Claude Opus 5.5 on the Provider API only: the
+  // pricing page's availability sets go/goat/pro/pro-v1 all false with
+  // provider/max/ultra true, and the public catalog serves it with
+  // supported_endpoints ['/messages'] — the Claude family's route, which the
+  // adapter's `claude-*` prefix rule already sends down the CLI transport.
+  'claude-opus-5-5': 'provider',
   'claude-opus-5': 'provider',
   // command-code@1.49.0 added GPT-6 Astra; per the pricing page it sits on
   // Max (Provider/Max tier).
