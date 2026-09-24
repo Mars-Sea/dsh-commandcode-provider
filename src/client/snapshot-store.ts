@@ -3,10 +3,11 @@
  * triple React's `useSyncExternalStore` consumes through the harness slot kit
  * (the host builds each slot's `useFoo(selector)` hook from one of these).
  *
- * Vendored on purpose. DSH 0.1.2 seeds `@deepseek-ai/dsh-client-store` as a
- * platform module, but older Web shells do not and the package is not yet
- * published independently on npm. Inlining the small subset used here avoids
- * a version-specific module request while preserving the slot-hook contract.
+ * Vendored on purpose, and small enough to stay that way: the harness's
+ * `@deepseek-ai/dsh-client-store` is a seeded platform module, but pulling it in
+ * would add a fourth `require()` target (and a client-only peer) to the bundle
+ * for the ~30 lines used here, and its `set()` carries engine semantics
+ * (dev-mode deep freeze, forced replacement) these callers do not want.
  */
 
 /** Mutable observable snapshot consumed by slot hooks. */

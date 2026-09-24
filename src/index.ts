@@ -6,10 +6,9 @@
  * the configurable-provider directory, so the web Models page shows a
  * "Command Code" card with an API-key field and the model picker lists the
  * live Command Code model catalog. Connection facts resolve per request over
- * the plugin's live config — the `llm-commandcode` settings section through
- * dsh 0.1.6, profile Config (volatile fields, unwrapped per read) from 0.1.7
- * — and the credential seam, so a changed key, endpoint, or cache path
- * reaches the next request without a restart.
+ * the plugin's live profile Config (volatile fields, unwrapped per read) and
+ * the credential seam, so a changed key, endpoint, or cache path reaches the
+ * next request without a restart.
  *
  * ```yaml
  * - id: llm-commandcode
@@ -147,7 +146,7 @@ export type {
 } from './login.ts'
 export { CommandCodeAccountPool, accountUsable, selectActiveAccount, matchModelRule, selectAccountForModel } from './accounts.ts'
 export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState, CommandCodeModelAccountRule } from './accounts.ts'
-export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, applyCommandCodeSearchSelection, commandCodeSearchSelection, selectCommandCodeSearchProvider } from './web-search.ts'
+export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, applyCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
 export type { CommandCodeSearchSelection } from './web-search.ts'
 export type { CommandCodeSearchProviderDeps } from './web-search.ts'
 export { ACTIVE_ACCOUNT_AUTO, LANG_AUTO, applyCommandCodeTuiSettings, buildCommandCodeTuiSection } from './tui-settings.ts'
@@ -332,107 +331,73 @@ export interface Config {
 }
 
 /**
- * The Config schema's fields, freshly built on every call.
- *
- * A FACTORY, not a shared dict, and that is load-bearing: the exported
- * {@link Config} marks every field volatile while {@link LegacySettingsSchema}
- * must carry no mark at all, and schemastery's schema instances are
- * single-purpose objects — sharing one dict would leak the marks into the
- * legacy registration (see `config-volatile.ts` for why that is a boot-time
- * `ValidationError` on ≤0.1.6 engines whose schemastery resolved to ≥3.18.3).
- *
- * @returns One fresh schema instance per Config field.
- */
-function configFields() {
-  return {
-    apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
-    // `role('secret')` is load-bearing, not decoration: a literal key is the one
-    // credential path this plugin cannot keep out of a settings document (the
-    // page writes through the credentials seam instead), so the harness must
-    // strip it from every descriptor read (`settings.describe()` runs with
-    // `redactSecrets: true`). Without the role the literal rides back to the
-    // browser verbatim — including on a remote-Host setup, where that is another
-    // machine. Same declaration as the official providers' `apiKey` field.
-    // DELIBERATELY not volatile: no settings surface writes it (both the web
-    // page and the dsh-TUI section write keys through the credentials seam), so
-    // it stays composition-only, and a config-file edit to it reloading this
-    // fiber is the correct behavior for a secret literal.
-    apiKey: z.string().role('secret'),
-    apiBase: z.string(),
-    workingDir: z.string(),
-    modelsCachePath: z.string(),
-    requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
-    streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
-    transportMaxRetries: z.number().min(0).max(MAX_TRANSPORT_MAX_RETRIES),
-    filterModelsByPlan: z.boolean(),
-    visibleModels: z.array(z.string()),
-    /**
-     * Per-model visibility overrides for the terminal settings page's checkbox
-     * list, keyed by catalog id. dsh-TUI addresses a staged edit by its field
-     * PATH, so two checkboxes sharing one path would overwrite each other's
-     * draft and the section's last model would decide every write; a map gives
-     * each checkbox a path of its own. An id listed here wins over
-     * {@link Config.visibleModels}; ids absent here keep following it.
-     */
-    modelVisibility: z.dict(z.boolean()),
-    webSearch: z.boolean().default(true),
-    showSidebarQuota: z.boolean().default(false),
-    accounts: z.array(z.object({
-      label: z.string(),
-      apiKeyEnv: z.string().role('credential-ref'),
-      /** Literal key for one extra slot; see the top-level `apiKey` secret note. */
-      apiKey: z.string().role('secret'),
-    })),
-    activeAccount: z.string(),
-    modelAccountRules: z.array(z.object({
-      models: z.array(z.string()),
-      account: z.string(),
-    })),
-    // The command guard. The probability bounds mirror
-    // COMMAND_GUARD_MIN/MAX_THRESHOLD and the budget bounds mirror
-    // COMMAND_GUARD_MIN/MAX_TIMEOUT_MS in `./command-guard.ts`; the client's
-    // field specs mirror them again (the browser bundle cannot import that
-    // node-side module), and `tests/command-guard.test.ts` pins the pair.
-    commandGuard: z.boolean().default(false),
-    commandGuardThreshold: z.number().min(COMMAND_GUARD_MIN_THRESHOLD).max(COMMAND_GUARD_MAX_THRESHOLD),
-    commandGuardTimeoutMs: z.number().min(COMMAND_GUARD_MIN_TIMEOUT_MS).max(COMMAND_GUARD_MAX_TIMEOUT_MS),
-    // Off by default: turning it on changes which upstream serves the request
-    // (and usually what it costs), so nobody gets ZDR routing by accident.
-    zdr: z.boolean().default(false),
-    lang: z.string().pattern(/^(zh|en)$/).default('zh' as const),
-  }
-}
-
-/**
- * The 0.1.7-generation schema: every field volatile except the
- * composition-only `apiKey` secret.
+ * The Config schema: every field volatile except the composition-only `apiKey`
+ * secret.
  *
  * dsh 0.1.7's settings forms are projected from the schema's `meta.volatile`
  * nodes, so an unmarked field would be invisible to AND unwritable from the
- * settings page and refused by form-edit path validation — and on that
- * generation the loader hands `apply()` a live reference per marked field,
- * committing later writes without remounting this fiber (the
- * `loader/volatile-update` listener at the bottom of `apply` covers the facts
- * that are not re-derived per read). The mark is inert on engines whose
- * schemastery predates `.volatile()`.
+ * settings page and refused by form-edit path validation — and the loader
+ * hands `apply()` a live reference per marked field, committing later writes
+ * without remounting this fiber (the `loader/volatile-update` listener at the
+ * bottom of `apply` covers the facts that are not re-derived per read).
  */
-export const Config: z<Config> = z.object(markVolatileFields(configFields(), ['apiKey']))
-
-/**
- * The ≤0.1.6-generation registration schema: the same fields, NO volatile
- * marks.
- *
- * The legacy `installSection(owner, ns, schema, entry, hooks)` re-validates the
- * `entry` it is handed (`register()` → `resolve()` → `schema(mergeLayers(base,
- * section))`) and its `describe()` structuredClones that same `entry`. Since
- * schemastery ≥3.18.3 creates references at parse time on EVERY generation —
- * `dsh-settings` through 0.1.6 declares `schemastery: ^3.18.2`, so old engines
- * freshly installed today resolve 3.18.3 — a marked schema plus the raw
- * reference-carrying `config` is a boot-time `ValidationError` there. This
- * schema is therefore unmarked, and `apply` pairs it with
- * `unwrapVolatileConfig(config)`.
- */
-export const LegacySettingsSchema: z<Config> = z.object(configFields()) as z<Config>
+export const Config: z<Config> = z.object(markVolatileFields({
+  apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
+  // `role('secret')` is load-bearing, not decoration: a literal key is the one
+  // credential path this plugin cannot keep out of a profile Config document
+  // (the page writes through the credentials seam instead), so the harness must
+  // strip it from every descriptor read (`settings.describe()` runs with
+  // `redactSecrets: true`). Without the role the literal rides back to the
+  // browser verbatim — including on a remote-Host setup, where that is another
+  // machine. Same declaration as the official providers' `apiKey` field.
+  // DELIBERATELY not volatile: no settings surface writes it (both the web
+  // page and the dsh-TUI section write keys through the credentials seam), so
+  // it stays composition-only, and a config-file edit to it reloading this
+  // fiber is the correct behavior for a secret literal.
+  apiKey: z.string().role('secret'),
+  apiBase: z.string(),
+  workingDir: z.string(),
+  modelsCachePath: z.string(),
+  requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
+  streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
+  transportMaxRetries: z.number().min(0).max(MAX_TRANSPORT_MAX_RETRIES),
+  filterModelsByPlan: z.boolean(),
+  visibleModels: z.array(z.string()),
+  /**
+   * Per-model visibility overrides for the terminal settings page's checkbox
+   * list, keyed by catalog id. dsh-TUI addresses a staged edit by its field
+   * PATH, so two checkboxes sharing one path would overwrite each other's
+   * draft and the section's last model would decide every write; a map gives
+   * each checkbox a path of its own. An id listed here wins over
+   * {@link Config.visibleModels}; ids absent here keep following it.
+   */
+  modelVisibility: z.dict(z.boolean()),
+  webSearch: z.boolean().default(true),
+  showSidebarQuota: z.boolean().default(false),
+  accounts: z.array(z.object({
+    label: z.string(),
+    apiKeyEnv: z.string().role('credential-ref'),
+    /** Literal key for one extra slot; see the top-level `apiKey` secret note. */
+    apiKey: z.string().role('secret'),
+  })),
+  activeAccount: z.string(),
+  modelAccountRules: z.array(z.object({
+    models: z.array(z.string()),
+    account: z.string(),
+  })),
+  // The command guard. The probability bounds mirror
+  // COMMAND_GUARD_MIN/MAX_THRESHOLD and the budget bounds mirror
+  // COMMAND_GUARD_MIN/MAX_TIMEOUT_MS in `./command-guard.ts`; the client's
+  // field specs mirror them again (the browser bundle cannot import that
+  // node-side module), and `tests/command-guard.test.ts` pins the pair.
+  commandGuard: z.boolean().default(false),
+  commandGuardThreshold: z.number().min(COMMAND_GUARD_MIN_THRESHOLD).max(COMMAND_GUARD_MAX_THRESHOLD),
+  commandGuardTimeoutMs: z.number().min(COMMAND_GUARD_MIN_TIMEOUT_MS).max(COMMAND_GUARD_MAX_TIMEOUT_MS),
+  // Off by default: turning it on changes which upstream serves the request
+  // (and usually what it costs), so nobody gets ZDR routing by accident.
+  zdr: z.boolean().default(false),
+  lang: z.string().pattern(/^(zh|en)$/).default('zh' as const),
+}, ['apiKey']))
 
 /** One resolution's complete request facts: connection plus credential reference. */
 export interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
@@ -482,46 +447,14 @@ function readModelVisibility(raw: unknown): Readonly<Record<string, boolean>> | 
   return entries.length === 0 ? undefined : Object.fromEntries(entries)
 }
 
-/**
- * The settings service faces this plugin adapts across generations, typed
- * structurally because the installed `@deepseek-ai/dsh-settings` .d.ts
- * describes only the generation it was built against — `installSection` through
- * 0.1.6, `configure` from 0.1.7 — so naming either method statically would not
- * compile against the other.
- */
-interface SettingsServiceSeam {
-  /** ≤0.1.6: register the section over the settings document. */
-  installSection?(
-    owner: Context,
-    ns: string,
-    schema: typeof Config,
-    entry: Config,
-    hooks: { setSource: (source: () => Config) => void; onChange: () => void },
-  ): void
-  /** ≥0.1.7: declare this instance's auto-form policy (a disposer). */
-  configure?(presentation: { auto?: boolean }, owner?: unknown): () => void
-}
-
 export function apply(ctx: Context, config: Config): void {
   installCostProjection(ctx)
   // The raw composition config as handed to `apply`. Everything downstream
-  // reads through `current()`, which unwraps volatile references on every
-  // call — so this closure is the ONLY place a stale plain snapshot can
-  // hide, and on plain-config engines it hands back the same object
-  // identity the options memo keys on.
-  let source: () => Config = () => config
-  const current = (): Config => unwrapVolatileConfig(source())
-  let lastRaw: Config | undefined
-  let lastGood: ResolvedCommandCodeOptions | undefined
-  const options = (): ResolvedCommandCodeOptions => {
-    const raw = current()
-    if (raw === lastRaw && lastGood !== undefined) return lastGood
-    const next = resolveAdapterOptions(raw)
-    lastRaw = raw
-    lastGood = next
-    return next
-  }
-  options()
+  // reads through `current()`, which unwraps volatile references on every call
+  // — the loader commits a settings write IN PLACE on the reference, so a
+  // cached plain snapshot would go stale on the very next write.
+  const current = (): Config => unwrapVolatileConfig(config)
+  const options = (): ResolvedCommandCodeOptions => resolveAdapterOptions(current())
 
   // The account slots, rebuilt from the live config on every resolution so
   // a settings-page accounts change reaches the very next request. The
@@ -985,77 +918,33 @@ export function apply(ctx: Context, config: Config): void {
     }, 'dsh-commandcode-provider: tui settings handle')
   })
 
-  // Settings became an optional service in dsh 0.1.2 and was REWRITTEN in
-  // 0.1.7 (the settings.yaml document became schema-derived profile Config
-  // forms; `installSection` no longer exists there), so the registration is
-  // chosen by capability rather than by version:
-  //   ≤0.1.6  `installSection` registers the `llm-commandcode` section over
-  //           the settings document, hands `current` the merged reader via
-  //           `setSource`, and calls `onChange` after every write — the
-  //           `webSearch` toggle reaches the web seam's next search without
-  //           a restart (the tracked selection remembers the displaced
-  //           backend, issue #26, so flipping the toggle is a handoff), and
-  //           the dsh-TUI section refreshes its key field and account
-  //           selector, which are frozen into the declaration the host
-  //           renders (a no-op unless one of those facts actually moved, so
-  //           ordinary writes never churn the screen);
-  //   ≥0.1.7  `configure({ auto: false })` declares that this plugin ships
-  //           its own page (so SettingsForms publishes no auto-generated form
-  //           for this entry), config IS the live source, and the
-  //           `loader/volatile-update` listener below replaces `onChange`.
-  // Profiles without a settings service continue to use the composition
-  // entry captured by `source` above. The legacy branch also keeps our
-  // namespace in ≤0.1.6's describe directory — that generation's wire only
-  // lists installSection REGISTRATIONS, so dropping it would blank the
-  // settings page on every old engine.
+  // Settings is an optional service. `configure({ auto: false })` declares that
+  // this plugin ships its own page, so SettingsForms publishes no auto-generated
+  // form for this entry; config IS the live source (volatile fields), and the
+  // `loader/volatile-update` listener below is what re-applies the two facts
+  // that are not re-derived per read. A profile without a settings service
+  // simply keeps using the composition config `apply()` was handed.
   //
-  // The 0.1.7 one-time settings.yaml import needs no cooperation from here:
-  // the section id and the profile entry id are the SAME string
+  // The one-time settings.yaml import needs no cooperation from here: the
+  // section id and the profile entry id are the SAME string
   // (`llm-commandcode`), which is exactly the identity the engine's
   // `importLegacyDocument` looks the entry up by.
   ctx.inject(['settings'], (settingsCtx) => {
-    const service = settingsCtx.settings as unknown as SettingsServiceSeam
-    if (typeof service.installSection === 'function') {
-      // The legacy registration gets the UNMARKED schema and an UNWRAPPED base.
-      // schemastery ≥3.18.3 turns marked fields into frozen `{ get() }`
-      // references at parse time on every generation (dsh-settings ≤0.1.6
-      // declares `schemastery: ^3.18.2`, so a freshly installed old engine
-      // resolves 3.18.3), and this generation re-validates the base it is
-      // handed (`register()` → `resolve()` → `schema(base)`) before cloning it
-      // for the directory. Marked schema + raw config therefore throws
-      // `ValidationError: expected boolean but got [object Object]` AT BOOT —
-      // see `config-volatile.ts` for the full chain.
-      service.installSection(ctx, NS, LegacySettingsSchema, unwrapVolatileConfig(config), {
-        setSource: (next) => {
-          source = next
-        },
-        onChange: () => {
-          applySearchSelection(current().webSearch ?? true)
-          refreshTuiSettings?.()
-        },
-      })
-      return
-    }
-    if (typeof service.configure === 'function') {
-      settingsCtx.effect(() => {
-        const dispose = service.configure?.({ auto: false }, ctx.fiber)
-        return () => {
-          dispose?.()
-        }
-      }, 'dsh-commandcode-provider: settings auto-form policy')
-    }
+    settingsCtx.effect(() => {
+      const dispose = settingsCtx.settings.configure({ auto: false }, ctx.fiber)
+      return () => {
+        dispose()
+      }
+    }, 'dsh-commandcode-provider: settings auto-form policy')
   })
 
-  // dsh 0.1.7's loader commits volatile config IN PLACE — no remount — and
-  // notifies the OWNING fiber (`loader/volatile-update`, every value already
-  // committed before dispatch). The facts that are not re-derived from
-  // `current()` per use re-apply here: the web seam's selection (its private
-  // field is written, not read back from config) and the TUI section (its
-  // option lists are frozen into the declaration). On ≤0.1.6 the same body
-  // runs from installSection's `onChange` above; older loaders simply never
-  // emit this event, so registering it unconditionally is harmless. Typed
-  // structurally because the event is declared by `cordis-plugin-loader`,
-  // which is not a peer of this bundle.
+  // The loader commits volatile config IN PLACE — no remount — and notifies the
+  // OWNING fiber (`loader/volatile-update`, every value already committed
+  // before dispatch). The facts that are not re-derived from `current()` per
+  // use re-apply here: the web seam's selection (its private field is written,
+  // not read back from config) and the TUI section (its option lists are frozen
+  // into the declaration). Typed structurally because the event is declared by
+  // `cordis-plugin-loader`, which is not a peer of this bundle.
   const loaderEvents = ctx as unknown as {
     on(event: 'loader/volatile-update', listener: () => void): unknown
   }

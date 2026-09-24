@@ -198,7 +198,6 @@ function AdvancedSection({
             hint={t('workingDirHint')}
             state={state.workingDir}
             disabled={disabled}
-            placeholder={state.defaultWorkingDir}
             onEdit={(text) => onEdit('workingDir', text)}
             onReset={() => onReset('workingDir')}
             t={t}

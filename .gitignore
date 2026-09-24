@@ -1,4 +1,8 @@
 node_modules/
+# Local scratch from aligning the checkout's peers with the engine release
+# (a workspace-local npm cache, since ~/.npm is outside the sandbox).
+node_modules.bak/
+.npm-cache/
 # DSH STORE reviews the fixed Git Commit, so the built runtime files ship in
 # git. `lib/` artifacts are committed explicitly with `git add -f`; the ignore
 # stays so map churn and stray local rebuilds do not show up as noise.

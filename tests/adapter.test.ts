@@ -42,8 +42,8 @@ import {
   requiresMessagesEndpoint,
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
-import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CoreImagePolicy } from '../src/adapter.ts'
-import type { ContentBlock, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, SurfaceImagePolicy } from '../src/adapter.ts'
+import type { ContentBlock, Message, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {
   AttachmentStore,
@@ -145,6 +145,24 @@ function fakeAttachments(images: Record<string, Uint8Array>): AttachmentStore {
       if (!data) throw new Error(`no stored image for ${ref.attachmentId}`)
       return { ref, data }
     },
+    // The request version the abstract contract requires: this fake serves the
+    // admitted bytes unchanged, at whatever target the route projected.
+    async readImageRequest(ref: ImageAttachmentRef, target: { width: number; height: number; maxBytes: number }) {
+      const data = images[ref.attachmentId]
+      if (!data) throw new Error(`no stored image for ${ref.attachmentId}`)
+      return {
+        variantId: `fake-${ref.attachmentId}-${target.width}x${target.height}`,
+        attachment: ref,
+        data,
+        mediaType: ref.mediaType,
+        bytes: data.byteLength,
+        width: target.width,
+        height: target.height,
+        depth: 'uchar',
+        space: 'srgb',
+        hasAlpha: false,
+      }
+    },
   } as unknown as AttachmentStore
 }
 
@@ -184,6 +202,22 @@ function wireAnswers(message: WireMessage): string | undefined {
     if (part) return String((part as { toolCallId: unknown }).toolCallId)
   }
   return undefined
+}
+
+/**
+ * One `role: 'tool'` message answering `callId`, exactly as the harness models a
+ * tool result: the id and error flag live on the MESSAGE, and the content blocks
+ * are the tool's own output.
+ */
+function toolMessage(callId: ToolCallId, content: readonly ContentBlock[], isError = false): Message {
+  return {
+    id: messageId(),
+    role: 'tool',
+    content,
+    toolCallId: callId,
+    isError,
+    source: { kind: 'tool', callId },
+  }
 }
 
 /**
@@ -303,12 +337,7 @@ function parallelTurn(
     const blocks: ContentBlock[] = []
     if (result.text !== undefined) blocks.push({ type: 'text', text: result.text })
     for (const attachment of result.images ?? []) blocks.push({ type: 'image', attachment })
-    messages.push({
-      id: messageId(),
-      role: 'user',
-      content: [{ type: 'tool-result', toolCallId: ToolCallId(id), isError: result.isError ?? false, content: blocks }],
-      source: { kind: 'tool', callId: ToolCallId(id) },
-    })
+    messages.push(toolMessage(ToolCallId(id), blocks, result.isError ?? false))
   }
   return messages
 }
@@ -317,29 +346,16 @@ function parallelTurn(
 // Message conversion (via stream() request capture)
 // ---------------------------------------------------------------------------
 
-// The development peers still type the pre-0.1.7 envelope. Use the modern
-// runtime shape explicitly; test:engine also exercises the engine's constructor.
-function modernToolResults(messages: Message[]): Message[] {
-  return messages.map((message) => {
-    const block = message.content[0]
-    if (message.role !== 'user' || block?.type !== 'tool-result') return message
-    return {
-      ...message,
-      role: 'tool',
-      toolCallId: block.toolCallId,
-      isError: block.isError,
-      content: block.content,
-    } as unknown as Message
-  })
-}
-
 for (const protocol of ['cli', 'openai'] as const) {
   test(`${protocol} replays DSH 0.1.7 tool calls and results into the next request`, async () => {
-    const history = [userMessage('inspect the repository'), ...modernToolResults(parallelTurn(
-      ['call-status', 'call-diff'],
-      [{ text: 'working tree clean' }, { text: 'diff unavailable', isError: true }],
-      { assistantText: 'Let me inspect the changes.' },
-    ))]
+    const history = [
+      userMessage('inspect the repository'),
+      ...parallelTurn(
+        ['call-status', 'call-diff'],
+        [{ text: 'working tree clean' }, { text: 'diff unavailable', isError: true }],
+        { assistantText: 'Let me inspect the changes.' },
+      ),
+    ]
     const messages = await captureWire(protocol, history, {})
     assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool'])
     assert.deepEqual(wireCallIds(messages[1]!), ['call-status', 'call-diff'])
@@ -351,20 +367,23 @@ for (const protocol of ['cli', 'openai'] as const) {
     assertToolGroupsAnswered(messages, protocol)
   })
 
-  test(`${protocol} preserves mixed-generation results, aliased ids and modern tool images`, async () => {
+  test(`${protocol} preserves aliased ids and carries a tool result's images`, async () => {
     const ref = imageRef()
     const longId = 'long-call-'.repeat(12)
-    const old = parallelTurn([longId, 'call-legacy'], [{ images: [ref, ref] }, { text: 'legacy output' }])
-    const modern = modernToolResults(old)
-    const history = [userMessage('inspect images'), modern[0]!, modern[1]!, old[2]!, userMessage('continue')]
+    const history = [
+      userMessage('inspect images'),
+      ...parallelTurn([longId, 'call-plain'], [{ images: [ref, ref] }, { text: 'plain output' }]),
+      userMessage('continue'),
+    ]
     const messages = await captureWire(protocol, history, { [ref.attachmentId]: pngBytes })
     assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'user', 'user'])
     const [alias] = wireCallIds(messages[1]!)
     assert.ok(alias && alias.length <= 64)
     assert.equal(wireAnswers(messages[2]!), alias)
-    assert.equal(wireAnswers(messages[3]!), 'call-legacy')
+    assert.equal(wireAnswers(messages[3]!), 'call-plain')
     assert.match(JSON.stringify(messages[2]), /image returned/)
     assert.match(JSON.stringify(messages[4]), new RegExp(`Attached image\\(s\\) from tool result \\(${alias}\\)`))
+    // The same attachment twice in one result is paid for once.
     assert.equal(JSON.stringify(messages[4]).split(Buffer.from(pngBytes).toString('base64')).length - 1, 1)
     assertToolGroupsAnswered(messages, protocol)
   })
@@ -446,11 +465,7 @@ test('stream() replays reasoning blocks on the CLI transport', async () => {
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
-        source: { kind: 'tool', callId },
-      },
+      toolMessage(callId, [{ type: 'text', text: 'file1' }]),
     ],
   }))
 
@@ -598,11 +613,7 @@ test('stream() replays only paired tool calls', async () => {
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
-        source: { kind: 'tool', callId },
-      },
+      toolMessage(callId, [{ type: 'text', text: 'file1' }]),
     ],
   }))
 
@@ -651,21 +662,9 @@ test('stream() remaps overlong cross-provider tool-call ids to the gateway limit
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: longId, isError: false, content: [{ type: 'text', text: 'a' }] }],
-        source: { kind: 'tool', callId: longId },
-      },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: ToolCallId('cc-1'), isError: false, content: [{ type: 'text', text: 'b' }] }],
-        source: { kind: 'tool', callId: ToolCallId('cc-1') },
-      },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: ToolCallId('call-short'), isError: false, content: [{ type: 'text', text: 'c' }] }],
-        source: { kind: 'tool', callId: ToolCallId('call-short') },
-      },
+      toolMessage(longId, [{ type: 'text', text: 'a' }], false),
+      toolMessage(ToolCallId('cc-1'), [{ type: 'text', text: 'b' }], false),
+      toolMessage(ToolCallId('call-short'), [{ type: 'text', text: 'c' }], false),
     ],
   }))
 
@@ -706,11 +705,7 @@ test('stream() falls back to "unknown" for an empty tool-call name', async () =>
         content: [{ type: 'tool-call', id: callId, name: '', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
-        source: { kind: 'tool', callId },
-      },
+      toolMessage(callId, [{ type: 'text', text: 'file1' }]),
     ],
   }))
 
@@ -746,16 +741,7 @@ function readImageTurn(ref: ImageAttachmentRef, extra: ContentBlock[] = []): Mes
       content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
       source: { kind: 'model', provider: 'commandcode', model: 'm' },
     },
-    { id: messageId(),
-      role: 'user',
-      content: [{
-        type: 'tool-result',
-        toolCallId: callId,
-        isError: false,
-        content: [{ type: 'text', text: 'image/png image, 1x1 px, 10 bytes' }, { type: 'image', attachment: ref }, ...extra],
-      }],
-      source: { kind: 'tool', callId: callId },
-    },
+    toolMessage(callId, [{ type: 'text', text: 'image/png image, 1x1 px, 10 bytes' }, { type: 'image', attachment: ref }, ...extra], false),
   ]
 }
 
@@ -853,16 +839,7 @@ test('stream() gives an image-only tool result a non-empty tool message', async 
         content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: callId,
-          isError: false,
-          content: [{ type: 'image', attachment: ref }],
-        }],
-        source: { kind: 'tool', callId: callId },
-      },
+      toolMessage(callId, [{ type: 'image', attachment: ref }], false),
     ],
   }))
 
@@ -952,26 +929,8 @@ test('stream() keeps parallel tool results consecutive before their image carrie
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call-a'),
-          isError: false,
-          content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }],
-        }],
-        source: { kind: 'tool', callId: ToolCallId('call-a') },
-      },
-      { id: messageId(),
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call-b'),
-          isError: false,
-          content: [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }],
-        }],
-        source: { kind: 'tool', callId: ToolCallId('call-b') },
-      },
+      toolMessage(ToolCallId('call-a'), [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }], false),
+      toolMessage(ToolCallId('call-b'), [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }], false),
     ],
   }))
 
@@ -1032,26 +991,8 @@ test('openai protocol groups carried images after the whole parallel tool turn',
         ],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call-a'),
-          isError: false,
-          content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }],
-        }],
-        source: { kind: 'tool', callId: ToolCallId('call-a') },
-      },
-      { id: messageId(),
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call-b'),
-          isError: false,
-          content: [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }],
-        }],
-        source: { kind: 'tool', callId: ToolCallId('call-b') },
-      },
+      toolMessage(ToolCallId('call-a'), [{ type: 'text', text: 'a' }, { type: 'image', attachment: refA }], false),
+      toolMessage(ToolCallId('call-b'), [{ type: 'text', text: 'b' }, { type: 'image', attachment: refB }], false),
     ],
   }))
 
@@ -1099,16 +1040,7 @@ test('stream() names a remapped call id in the carrier note, not the harness id'
         content: [{ type: 'tool-call', id: longId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: longId,
-          isError: false,
-          content: [{ type: 'text', text: 'a' }, { type: 'image', attachment: ref }],
-        }],
-        source: { kind: 'tool', callId: longId },
-      },
+      toolMessage(longId, [{ type: 'text', text: 'a' }, { type: 'image', attachment: ref }], false),
     ],
   }))
 
@@ -1184,108 +1116,6 @@ test('both transports drop a user message that converted to nothing', async () =
     const carried = messages.filter((m) => m.role === 'user')
     assert.match(JSON.stringify(carried[1]), /Attached image/)
     assert.match(JSON.stringify(messages.at(-1)), /and now\?/)
-  }
-})
-
-/**
- * A message as a third-party producer can actually emit it: `Message.source` is
- * declared required in dsh-llm's type, but the field is producer-supplied and
- * the runtime never validates it, so an untagged message is a real runtime shape
- * (issue #47) that the type system cannot express — hence the cast.
- */
-function untaggedMessage(role: 'user' | 'assistant', content: ContentBlock[]): Message {
-  return { id: messageId(), role, content } as unknown as Message
-}
-
-test('both transports convert an untagged message instead of crashing on it (issue #47)', async () => {
-  // `messagesToCC` read `message.source.kind` at four sites. A producer that
-  // omits `source` — legal nowhere, survivable everywhere else, because the
-  // shipped adapters never read the field — made the FIRST of them throw
-  // `TypeError: Cannot read properties of undefined (reading 'kind')` in the
-  // serialization phase: the whole stream died 0–8 ms in, before a request was
-  // sent, with an error that named neither the message nor the adapter. Both
-  // transports must now treat an untagged message as the plain user message its
-  // content says it is.
-  for (const protocol of ['cli', 'openai'] as const) {
-    const messages = await captureWire(
-      protocol,
-      [untaggedMessage('user', [{ type: 'text', text: 'from a producer that forgot the tag' }]), userMessage('tagged')],
-      {},
-    )
-    assert.deepEqual(
-      messages.map((message) => message.role),
-      ['user', 'user'],
-      `${protocol}: an untagged user message must survive as a user message`,
-    )
-    assert.match(JSON.stringify(messages[0]), /forgot the tag/)
-  }
-})
-
-test('an untagged tool result stays a tool result, so its call is not left unanswered (issue #47)', async () => {
-  // An untagged legacy result must be recognized by both pairing and emission:
-  // treating it as a plain user message would silently lose completed work.
-  for (const protocol of ['cli', 'openai'] as const) {
-    const callId = ToolCallId('call-untagged')
-    const messages = await captureWire(
-      protocol,
-      [
-        userMessage('read the file'),
-        {
-          id: messageId(),
-          role: 'assistant',
-          content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
-          source: { kind: 'model', provider: 'commandcode', model: 'm' },
-        },
-        untaggedMessage('user', [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'ok' }] }]),
-        userMessage('and now?'),
-      ],
-      {},
-    )
-    assert.deepEqual(
-      messages.map((message) => message.role),
-      ['user', 'assistant', 'tool', 'user'],
-      `${protocol}: the untagged tool result must still answer its call`,
-    )
-    assert.equal(wireAnswers(messages[2]!), 'call-untagged')
-    assertToolGroupsAnswered(messages, `${protocol}: untagged tool result`)
-  }
-})
-
-test('a present source tag stays authoritative over the content shape (issue #47)', async () => {
-  // The fallback above is only for an ABSENT tag. A message that declares who
-  // produced it is taken at its word — a `kind: 'user'` message carrying a
-  // tool-result block is still not replayed as a tool answer, which keeps the
-  // rule "the tag answers who produced this" intact.
-  for (const protocol of ['cli', 'openai'] as const) {
-    const callId = ToolCallId('call-tagged-user')
-    const messages = await captureWire(
-      protocol,
-      [
-        userMessage('read the file'),
-        {
-          id: messageId(),
-          role: 'assistant',
-          content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{"file_path":"/tmp/a.png"}' }],
-          source: { kind: 'model', provider: 'commandcode', model: 'm' },
-        },
-        // Tagged `user` while shaped like a tool result: dropped at emission on
-        // both transports. Its call must also be excluded from pairing.
-        {
-          id: messageId(),
-          role: 'user',
-          content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'ok' }] }],
-          source: { kind: 'user' },
-        } as unknown as Message,
-        userMessage('and now?'),
-      ],
-      {},
-    )
-    assert.deepEqual(
-      messages.map((message) => message.role),
-      ['user', 'user'],
-      `${protocol}: a tagged non-tool message must not be replayed as a tool answer`,
-    )
-    assertToolGroupsAnswered(messages, `${protocol}: non-tool source must not pair a call`)
   }
 })
 
@@ -1368,11 +1198,7 @@ test('both transports answer every parallel tool group consecutively', async () 
       messages: [
         userMessage('go'),
         ...parallelTurn(['c1', 'c2'], [{ images: [refA] }, { images: [refB] }]),
-        { id: messageId(),
-          role: 'user',
-          content: [{ type: 'tool-result', toolCallId: ToolCallId('c-orphan'), isError: false, content: [{ type: 'text', text: 'orphan' }, { type: 'image', attachment: refC }] }],
-          source: { kind: 'tool', callId: ToolCallId('c-orphan') },
-        },
+        toolMessage(ToolCallId('c-orphan'), [{ type: 'text', text: 'orphan' }, { type: 'image', attachment: refC }], false),
       ],
     },
     {
@@ -1408,11 +1234,7 @@ test('stream() leaves text-only tool results untouched', async () => {
         content: [{ type: 'tool-call', id: callId, name: 'bash', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'file1' }] }],
-        source: { kind: 'tool', callId: callId },
-      },
+      toolMessage(callId, [{ type: 'text', text: 'file1' }], false),
     ],
   }))
 
@@ -1439,16 +1261,7 @@ test('stream() drops images of an unpaired tool result with the result itself', 
     model: 'claude-sonnet-5',
     messages: [
       userMessage('hi'),
-      { id: messageId(),
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call-orphan'),
-          isError: false,
-          content: [{ type: 'text', text: 'x' }, { type: 'image', attachment: ref }],
-        }],
-        source: { kind: 'tool', callId: ToolCallId('call-orphan') },
-      },
+      toolMessage(ToolCallId('call-orphan'), [{ type: 'text', text: 'x' }, { type: 'image', attachment: ref }], false),
     ],
   }))
 
@@ -1584,10 +1397,8 @@ test('stream() sends the request version of an image at the documented target (C
     }],
   }))
 
-  // 1568 px long edge with the aspect kept, the byte budget both attachment
-  // generations honour, and the projected area <=0.1.5 re-projects from.
+  // 1568 px long edge with the aspect kept, plus the encoded-byte budget.
   assert.deepEqual(targets.map((call) => call.target), [{
-    maxPixels: 1568 * 980,
     width: 1568,
     height: 980,
     maxBytes: 1024 * 1024,
@@ -1631,66 +1442,35 @@ test('openai protocol sends the request version too (C2)', async () => {
   )
 })
 
-test('a service that produces no request version still sends the stored original (C2)', async () => {
-  // The defensive path: a backend predating request versions must still serve
-  // images instead of failing the request outright.
-  let capturedBody: Record<string, unknown> | undefined
-  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-    capturedBody = JSON.parse(String(init?.body))
-    return okStream('cli')
-  }) as unknown as typeof fetch
-  const ref = sizedImageRef(0, pngBytes.length)
-  const adapter = makeAdapter({
-    fetchImpl,
-    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: sizedImageBytes(0) }),
-  })
-  await collect(adapter.stream({
-    provider: 'commandcode',
-    model: 'claude-sonnet-5',
-    messages: [{
-      id: messageId(),
-      role: 'user',
-      content: [{ type: 'image', attachment: ref }],
-      source: { kind: 'user' },
-    }],
-  }))
-
-  const wire = (capturedBody!.params as { messages: Record<string, unknown>[] }).messages
-  const part = (wire.find((m) => m.role === 'user')!.content as Record<string, unknown>[])[0]!
-  assert.equal(
-    (part.source as { data: string }).data,
-    Buffer.from(sizedImageBytes(0)).toString('base64'),
-  )
-})
-
 test('imageRequestPricing() prices a retained image at its request target (C3)', () => {
   const pricing = makeAdapter().imageRequestPricing('commandcode', 'claude-sonnet-5')
   assert.ok(pricing !== undefined)
   const ref = { ...sizedImageRef(0, pngBytes.length), width: 2880, height: 1800 }
-  // The >=0.1.6 payload shape (blocks); the bare-reference shape this checkout
-  // compiles against is the last assertion.
-  const [price] = pricing!.priceImages([{ type: 'image', attachment: ref } as never])
+  const [price] = pricing!.priceImages([{ type: 'image', attachment: ref }])
   // Anthropic's rule at the target this route would send: 1568x980.
   assert.equal(price!.visualTokens, Math.ceil((1568 * 980) / 750))
   // The pixels are inlined, so a retained occurrence carries no model-visible text.
   assert.equal(price!.text, '')
   // The token meter throws unless one price comes back per occurrence, in order.
-  assert.equal(pricing!.priceImages([ref as never, ref as never]).length, 2)
+  assert.equal(pricing!.priceImages([
+    { type: 'image', attachment: ref },
+    { type: 'image', attachment: ref },
+  ]).length, 2)
 })
 
 test('imageRequestPricing() prices an offloaded occurrence as its placeholder (C3)', () => {
   const pricing = makeAdapter().imageRequestPricing('commandcode', 'claude-sonnet-5')!
   const ref = sizedImageRef(0, pngBytes.length)
-  const [price] = pricing.priceImages([{ type: 'image', attachment: ref, offloaded: true } as never])
+  const [price] = pricing.priceImages([{ type: 'image', attachment: ref, offloaded: true }])
   // The surface renders this one as text in every later request, so it costs no
   // vision tokens and is priced by the caller's text estimator instead.
   assert.equal(price!.visualTokens, 0)
   assert.match(price!.text, /image omitted to fit request image limits/)
-  // A bare reference (the <=0.1.5 payload) is a retained occurrence, and a tiny
-  // image still costs at least one token rather than rounding to zero.
-  const [bare] = pricing.priceImages([ref as never])
-  assert.equal(bare!.visualTokens, 1)
-  assert.equal(bare!.text, '')
+  // A retained occurrence still costs at least one token rather than rounding
+  // to zero, even for a 1x1 image.
+  const [retained] = pricing.priceImages([{ type: 'image', attachment: ref }])
+  assert.equal(retained!.visualTokens, 1)
+  assert.equal(retained!.text, '')
 })
 
 test('imageRequestPricing() prices a text-only route as placeholder text (C3)', () => {
@@ -1698,7 +1478,7 @@ test('imageRequestPricing() prices a text-only route as placeholder text (C3)', 
   assert.ok(!KNOWN_IMAGE_MODELS.has(model), 'the case under test needs a model outside the Vision snapshot')
   const pricing = makeAdapter().imageRequestPricing('commandcode', model)!
   const ref = sizedImageRef(0, pngBytes.length)
-  const [price] = pricing.priceImages([{ type: 'image', attachment: ref } as never])
+  const [price] = pricing.priceImages([{ type: 'image', attachment: ref }])
   assert.equal(price!.visualTokens, 0)
   assert.match(price!.text, /accepts text only/)
 })
@@ -1776,7 +1556,7 @@ async function runAttempts(
   messages: Message[],
   images: Record<string, Uint8Array>,
   status: (attempt: number) => number = () => 200,
-  imageOffload?: CoreImagePolicy,
+  imageOffload?: SurfaceImagePolicy,
 ): Promise<{ bodies: Record<string, unknown>[]; error?: unknown }> {
   const bodies: Record<string, unknown>[] = []
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1857,155 +1637,56 @@ test('stream() sends every image while the history is inside the image budget', 
   assert.deepEqual(survivingImageIndices(bodies[0]!, 'cli'), [...Array(20).keys()])
 })
 
-test('stream() evicts the oldest images once the history exceeds the image-count budget (issue #37)', async () => {
-  // 61 images: one past the 60-image budget, and the 30-count quantum means
-  // the oldest 30 go at once rather than one per request.
+test('stream() asks for an offload once the history exceeds the image-count budget (issue #37)', async () => {
+  // 61 images: one past the 60-image budget, and the 30-count quantum means the
+  // oldest 30 are named at once rather than one per request. The route does NOT
+  // evict on its own — it reports the shortfall so the session can record the
+  // omission durably across restore and fork.
   const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
   const { bodies, error } = await runAttempts('cli', messages, images)
 
-  assert.equal(error, undefined)
-  const body = bodies[0]!
-  const survivors = survivingImageIndices(body, 'cli')
-  // The newest 31 keep their pixels; the oldest 30 became placeholders.
-  assert.deepEqual(survivors, [...Array(61).keys()].slice(30))
-  const placeholders = placeholderTexts(body, 'cli')
-  assert.equal(placeholders.length, 30)
-  // The placeholder names the attachment it replaced, so the model can tell
-  // which image is gone (or ask for it again) instead of silently losing it.
-  assert.match(placeholders[0]!, /sha256:budget-image-0/)
-  // The eviction happens IN PLACE: the message keeps its own text block and
-  // gains a placeholder part where its image was.
-  const firstUser = (body.params as { messages: Record<string, unknown>[] }).messages
-    .filter((m) => m.role === 'user')[0]!
-  assert.deepEqual(
-    (firstUser.content as Record<string, unknown>[]).map((p) => p.type),
-    ['text', 'text'],
-  )
+  assert.equal(bodies.length, 0, 'nothing is sent until the surface has recorded the omission')
+  const e = error as { code?: string; failure?: { offloadImages?: number } }
+  assert.equal(e.code, 'IMAGE_OFFLOAD_REQUIRED')
+  assert.equal(e.failure?.offloadImages, 30)
 })
 
-test('stream() evicts the oldest images once the history exceeds the image-byte budget (issue #37)', async () => {
-  // Ten images of 4 MiB each: 53.3 MiB of base64, past the 32 MiB budget, with
-  // the 16 MiB byte quantum deciding how many go at once.
+test('stream() counts the encoded bytes of the request rung (issue #37)', async () => {
+  // Ten images of 4 MiB each: ~53 MiB of base64, past the 32 MiB budget. The
+  // byte accounting is the base64 the wire actually carries, not the stored
+  // size, so the shortfall is real regardless of the count budget.
   const { messages, images } = imageHistory(Array.from({ length: 10 }, () => 4 * 1024 * 1024))
   const { bodies, error } = await runAttempts('cli', messages, images)
 
-  assert.equal(error, undefined)
-  const body = bodies[0]!
-  const survivors = survivingImageIndices(body, 'cli')
-  // Eviction always removes a PREFIX, so what survives is the newest suffix.
-  assert.deepEqual(survivors, [...Array(10).keys()].slice(10 - survivors.length))
-  const placeholders = placeholderTexts(body, 'cli')
-  assert.equal(placeholders.length, 10 - survivors.length)
-  assert.ok(placeholders.length > 0, 'a history past the byte budget must lose images')
-  // The remaining request really is inside the budget (base64 accounting).
-  const keptBytes = survivors.length * Math.ceil((4 * 1024 * 1024) / 3) * 4
-  assert.ok(keptBytes <= 32 * 1024 * 1024, `kept ${keptBytes} base64 bytes, over the budget`)
+  assert.equal(bodies.length, 0)
+  const e = error as { code?: string; failure?: { offloadImages?: number } }
+  assert.equal(e.code, 'IMAGE_OFFLOAD_REQUIRED')
+  assert.ok((e.failure?.offloadImages ?? 0) > 0, 'a history past the byte budget must name occurrences to offload')
 })
 
-test('stream() carries an evicted tool-result image as placeholder tool text (issue #37)', async () => {
-  // A vision self-check loop's history in miniature: a huge `read_image`
-  // result the budget must drop, plus a newer user image it must keep.
+test('stream() counts images nested in a tool result (issue #37)', async () => {
+  // A vision self-check loop's history in miniature: one huge `read_image`
+  // result past the budget. It counts like any other occurrence, so the route
+  // reports it rather than sending a body the gateway would refuse.
   const toolRef = sizedImageRef(0, 40 * 1024 * 1024)
-  const laterRef = sizedImageRef(1, pngBytes.length)
-  const laterImage: Message = {
-    id: messageId(),
-    role: 'user',
-    content: [{ type: 'text', text: 'shot 1' }, { type: 'image', attachment: laterRef }],
-    source: { kind: 'user' },
-  }
   const { bodies, error } = await runAttempts(
     'cli',
-    [userMessage('what is in /tmp/a.png?'), ...readImageTurn(toolRef), laterImage],
-    { [toolRef.attachmentId]: sizedImageBytes(0), [laterRef.attachmentId]: sizedImageBytes(1) },
+    [userMessage('what is in /tmp/a.png?'), ...readImageTurn(toolRef)],
+    { [toolRef.attachmentId]: sizedImageBytes(0) },
   )
 
-  assert.equal(error, undefined)
-  const body = bodies[0]!
-  const messages = (body.params as { messages: Record<string, unknown>[] }).messages
-  // Only the newer user image survives; the evicted tool image is not re-sent
-  // as a carrier message either.
-  assert.deepEqual(survivingImageIndices(body, 'cli'), [1])
-  assert.equal(placeholderTexts(body, 'cli').length, 0)
-  // Neither transport can hold an image inside a tool result, so an evicted
-  // one has to surface as the tool message's OWN text — otherwise the model
-  // would read a tool result that mentions an image and then never see one.
-  const tool = messages.find((m) => m.role === 'tool')!
-  const output = ((tool.content as Record<string, unknown>[])[0]!.output as { value: string }).value
-  assert.match(output, /^image\/png image, 1x1 px, 10 bytes\n\[image omitted to fit request image limits/)
-  assert.match(output, /sha256:budget-image-0/)
-  const afterTool = messages[messages.indexOf(tool) + 1]!
-  assert.ok(
-    !JSON.stringify(afterTool).includes('Attached image(s) from tool result'),
-    'an evicted tool image must not emit a carrier message',
-  )
-})
-
-test('stream() keeps parallel tool groups consecutive when the budget evicts one result image (issue #37)', async () => {
-  // Two parallel `read_image` calls where only the first result is over the
-  // budget: the eviction must not disturb the issue #33 ordering rule — the
-  // tool messages stay consecutive and the surviving carrier still lands
-  // after the whole group.
-  const hugeRef = sizedImageRef(0, 40 * 1024 * 1024)
-  const smallRef = sizedImageRef(1, pngBytes.length)
-  const { bodies, error } = await runAttempts(
-    'cli',
-    [
-      userMessage('read both'),
-      ...parallelTurn(
-        ['call-a', 'call-b'],
-        [{ images: [hugeRef] }, { text: 'second result', images: [smallRef] }],
-      ),
-    ],
-    { [hugeRef.attachmentId]: sizedImageBytes(0), [smallRef.attachmentId]: sizedImageBytes(1) },
-  )
-
-  assert.equal(error, undefined)
-  const wire = (bodies[0]!.params as { messages: WireMessage[] }).messages
-  assertToolGroupsAnswered(wire, 'issue #37 eviction')
-  // The evicted result explains itself in place; the kept one still travels as
-  // a carrier message directly after the group, naming its own call.
-  const tools = wire.filter((m) => m.role === 'tool')
-  assert.equal(tools.length, 2)
-  const evictedOutput = ((tools[0]!.content as Record<string, unknown>[])[0]!.output as { value: string }).value
-  assert.match(evictedOutput, /^\[image omitted to fit request image limits; sha256:budget-image-0\./)
-  assert.equal(wire[wire.indexOf(tools[1]!) + 1]!.role, 'user')
-  assert.match(JSON.stringify(wire[wire.indexOf(tools[1]!) + 1]!), /call-b/)
+  assert.equal(bodies.length, 0)
+  const e = error as { code?: string; failure?: { offloadImages?: number } }
+  assert.equal(e.code, 'IMAGE_OFFLOAD_REQUIRED')
+  assert.ok((e.failure?.offloadImages ?? 0) > 0)
 })
 
 test('openai protocol applies the same image budget (issue #37)', async () => {
   const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
   const { bodies, error } = await runAttempts('openai', messages, images)
 
-  assert.equal(error, undefined)
-  const body = bodies[0]!
-  assert.deepEqual(survivingImageIndices(body, 'openai'), [...Array(61).keys()].slice(30))
-  assert.equal(placeholderTexts(body, 'openai').length, 30)
-  // Chat Completions carries the placeholder as an ordinary text part.
-  const evicted = userParts(body, 'openai')
-    .filter((p) => p.type === 'text' && (p.text as string).startsWith(PLACEHOLDER_PREFIX))
-  assert.match(evicted[0]!.text as string, /sha256:budget-image-0/)
-})
-
-test('stream() retries once with a tighter image budget when the gateway answers 413 (issue #37)', async () => {
-  // 61 images: attempt 1 keeps 31 under the standing budget, the 413 steps
-  // down to the retry rung (12 images / 8 MiB), which keeps 7.
-  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
-  const { bodies, error } = await runAttempts('cli', messages, images, (attempt) => (attempt === 1 ? 413 : 200))
-
-  assert.equal(error, undefined, 'the eviction retry must recover the session')
-  assert.equal(bodies.length, 2)
-  assert.deepEqual(survivingImageIndices(bodies[0]!, 'cli'), [...Array(61).keys()].slice(30))
-  assert.deepEqual(survivingImageIndices(bodies[1]!, 'cli'), [...Array(61).keys()].slice(54))
-  assert.ok(
-    placeholderTexts(bodies[1]!, 'cli').length > placeholderTexts(bodies[0]!, 'cli').length,
-    'the retry must drop strictly more images than the first attempt',
-  )
-  // The retry is a pre-stream resend of the SAME request: the key is not
-  // rotated and the account sees one logical call.
-  assert.equal(
-    (bodies[1]!.params as { model: string }).model,
-    (bodies[0]!.params as { model: string }).model,
-  )
+  assert.equal(bodies.length, 0)
+  assert.equal((error as { code?: string }).code, 'IMAGE_OFFLOAD_REQUIRED')
 })
 
 test('stream() reports a 413 as a request-size failure and never resends an image-free body (issue #37)', async () => {
@@ -2021,17 +1702,6 @@ test('stream() reports a 413 as a request-size failure and never resends an imag
   assert.match(e.message ?? '', /size limit/)
   // Bilingual, like the 401 branch: the harness renders it verbatim.
   assert.match(e.message ?? '', /请求体超过服务端的体积上限/)
-})
-
-test('stream() fails after the eviction retry is also rejected with 413 (issue #37)', async () => {
-  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
-  const { bodies, error } = await runAttempts('cli', messages, images, () => 413)
-
-  // Bounded: one standing attempt plus exactly one eviction retry.
-  assert.equal(bodies.length, 2)
-  const e = error as { code?: string; failure?: { status?: number } }
-  assert.equal(e.code, 'PROVIDER_HTTP_ERROR')
-  assert.equal(e.failure?.status, 413)
 })
 
 // ---------------------------------------------------------------------------
@@ -2069,10 +1739,12 @@ interface SurfacePolicyCalls {
  */
 function makeSurfacePolicy(
   count: number | ((budget: Record<string, unknown>) => number) = 0,
-): { policy: CoreImagePolicy; calls: SurfacePolicyCalls } {
+): { policy: SurfaceImagePolicy; calls: SurfacePolicyCalls } {
   const calls: SurfacePolicyCalls = { projected: 0, required: 0, budgets: [], versionBytes: [] }
-  const policy: CoreImagePolicy = {
-    projectOffloadedImages(messages, placeholder) {
+  // One cast at the seam: the engine's helpers are overloaded on Message vs
+  // RequestMessage, which a single stub implementation cannot satisfy.
+  const policy = {
+    projectOffloadedImages(messages: readonly RequestMessage[], placeholder: (ref: ImageAttachmentRef) => string) {
       calls.projected += 1
       return messages.map((message) => {
         const content = message.content.map((block) =>
@@ -2084,7 +1756,11 @@ function makeSurfacePolicy(
           : { ...message, content }
       })
     },
-    requiredImageOffload(messages, budget, versionBytes) {
+    requiredImageOffload(
+      messages: readonly RequestMessage[],
+      budget: Parameters<SurfaceImagePolicy['requiredImageOffload']>[1],
+      versionBytes: Parameters<SurfaceImagePolicy['requiredImageOffload']>[2],
+    ) {
       calls.required += 1
       calls.budgets.push(budget)
       for (const message of messages) {
@@ -2096,7 +1772,7 @@ function makeSurfacePolicy(
       }
       return typeof count === 'function' ? count(budget) : count
     },
-  }
+  } as unknown as SurfaceImagePolicy
   return { policy, calls }
 }
 
@@ -2159,27 +1835,6 @@ test("stream() renders the surface's durable offload marks as placeholders (issu
   const placeholders = placeholderTexts(bodies[0]!, 'cli')
   assert.equal(placeholders.length, 1)
   assert.match(placeholders[0]!, /sha256:budget-image-0/)
-})
-
-test('stream() keeps the adapter-owned eviction when the engine exposes only the legacy helper (issue #43)', async () => {
-  // The generation selection must key on the DURABLE pair, not on "the engine
-  // has an image policy": a <=0.1.5 engine has the legacy helper alone, and
-  // the adapter then owns the eviction exactly as before.
-  const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
-  let seen: Record<string, unknown> | undefined
-  const legacy: CoreImagePolicy = {
-    offloadRequestImagesWithPolicy: (history, policy) => {
-      seen = policy
-      return history.slice(-1)
-    },
-  }
-  const { bodies, error } = await runAttempts('cli', messages, images, () => 200, legacy)
-
-  assert.equal(error, undefined)
-  assert.equal(seen?.representation, 'base64')
-  assert.equal(seen?.maxImages, 60)
-  assert.equal(seen?.countQuantum, 30)
-  assert.deepEqual(survivingImageIndices(bodies[0]!, 'cli'), [60], 'the helper output is what travels')
 })
 
 test('stream() asks for the stricter rung when a 413 arrives on a 0.1.6 engine (issue #43)', async () => {
@@ -2956,11 +2611,7 @@ test('openai protocol sends flat body and replays reasoning_content in history',
       ],
       source: { kind: 'model', provider: 'commandcode', model: 'm' },
     },
-    { id: messageId(),
-      role: 'user',
-      content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
-      source: { kind: 'tool', callId: callId },
-    },
+    toolMessage(callId, [{ type: 'text', text: 'sunny' }], false),
   ]
   await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash', messages }))
 
@@ -3014,11 +2665,7 @@ test('openai protocol remaps overlong cross-provider tool-call ids', async () =>
         content: [{ type: 'tool-call', id: longId, name: 'get_weather', arguments: '{}' }],
         source: { kind: 'model', provider: 'commandcode', model: 'm' },
       },
-      { id: messageId(),
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: longId, isError: false, content: [{ type: 'text', text: 'sunny' }] }],
-        source: { kind: 'tool', callId: longId },
-      },
+      toolMessage(longId, [{ type: 'text', text: 'sunny' }], false),
     ],
   }))
 
@@ -4047,6 +3694,9 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-flash'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro-ultraspeed'])
+  // command-code@1.65.0 added Space Bunny Alpha with a three-level set — the
+  // only effort-map change in that release.
+  assert.deepEqual(KNOWN_EFFORTS['stealth/space-bunny-alpha'], ['low', 'medium', 'high'])
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
@@ -4190,6 +3840,10 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-flash'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro-ultraspeed'))
+  // command-code@1.65.0 added Space Bunny Alpha; Vision per the official
+  // registry, the CLI's inputModalities:["text","image"] and the pricing page's
+  // caps.vision: true.
+  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/space-bunny-alpha'))
   // The MiMo V2.6 family does not reason (docs: "Text input, Vision"); only its
   // Vision capability is snapshotted.
   assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.6-pro'))
@@ -4246,6 +3900,9 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['stepfun/Step-5-Preview'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro'], 'go')
+  // command-code@1.65.0 added Space Bunny Alpha on every tier: the pricing
+  // page's availability sets individual-go true ("all":true).
+  assert.equal(KNOWN_PLANS['stealth/space-bunny-alpha'], 'go')
   // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
   // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
@@ -4324,6 +3981,11 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // stays out of the snapshot — the rate row already carries the discounted
   // figures.
   assert.equal(KNOWN_DEALS['Qwen/Qwen3.7-Max'], undefined)
+  // Space Bunny Alpha (command-code@1.65.0) is free "while the stealth preview
+  // lasts" — a permanent-style free deal like Ling's, so no expiresAt.
+  assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.free, true)
+  assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.expiresAt, undefined)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
@@ -4532,6 +4194,24 @@ test('isPeakPricingHour() answers the model-independent half of the same rule', 
 })
 
 test('CLI version and API base constants are stable', () => {
+  // command-code@1.65.0 (2026-09-24 check of the npm `latest`; the official
+  // changelog page and RSS still stop at 1.64.0, so this was read from the
+  // bundle diff and the public sources): the model registry grows 86 -> 87
+  // with exactly one addition, `stealth/space-bunny-alpha` (chatComplete via
+  // openrouter, inputModalities ["text","image"], 1M context, efforts ['low',
+  // 'medium','high'], every plan from Go up, free while the stealth preview
+  // lasts, and NOT routed under ZDR). The 1.62.0 -> 1.65.0 window is otherwise
+  // the additive 1.64.0 train (Claude Opus 5.5 on Provider/Max, gpt-6-sol on
+  // Pro, gpt-6-luna on Go) plus no other change. The public catalog serves 81
+  // models now (80 + it) with its endpoint mix at 63 x chat/completions +
+  // responses, the same 9 Claude ids x messages-only, 9 x chat/completions.
+  // Static inspection finds no transport drift for this adapter: the /alpha/*
+  // endpoint set, the /alpha/generate converters and the stream event
+  // vocabulary differ from 1.64.0 only by minifier variable renames, the
+  // subscription plan maps and the peak/off-peak membership and schedule are
+  // byte-identical, and the documented Provider API endpoint set is unchanged
+  // (the CLI bundle does add a `/alpha/sandbox/*` route family for its own
+  // remote-sandbox feature, which this adapter never calls).
   // command-code@1.62.0 (2026-09-22 check of the 2026-09-21 npm `latest`) is an
   // ADDITIVE release train: 1.58.1 -> 1.62.0 ships five CLI versions whose only
   // model-registry changes are five additions — `xai/grok-4.7` (1.59.0,
@@ -4639,7 +4319,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.64.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.65.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

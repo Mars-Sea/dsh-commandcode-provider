@@ -56,31 +56,6 @@ interface WebRuntimeSearchField {
 }
 
 /**
- * Point the web seam's search selection at this plugin's provider (`commandcode`).
- * Sets the runtime field; the next search call honours it because `search()`
- * re-reads `searchProviderId` each time. Returns the prior id (or undefined).
- * Never throws: a hardened/frozen runtime shape must not break the
- * settings-save path that calls this — the provider simply stays
- * registered-but-unselected (the boot-time `searchProvider: commandcode`
- * cordis patch is the durable alternative).
- *
- * @deprecated Prefer {@link applyCommandCodeSearchSelection}: this overload
- * always overwrites the displaced backend with the factory default on
- * disable, so turning Command Code search off silences whichever provider
- * was selected before (e.g. modsearch) instead of restoring it (issue #26).
- */
-export function selectCommandCodeSearchProvider(web: WebRuntime, enable: boolean): string | undefined {
-  try {
-    const field = web as unknown as WebRuntimeSearchField
-    const prior = field.searchProviderId
-    field.searchProviderId = enable ? COMMANDCODE_SEARCH_PROVIDER_ID : DEFAULT_WEB_SEARCH_PROVIDER_ID
-    return prior
-  } catch {
-    return undefined
-  }
-}
-
-/**
  * Tracked web-search selection state for one mounted `WebRuntime`.
  *
  * `owner` marks whether this plugin currently owns the selection (i.e. it

@@ -62,15 +62,15 @@ import {
 /**
  * The shipped composer stats row (dsh-client-ui-chat `StatsPills`).
  *
- * A PREFERENCE, not a requirement: 0.1.6-alpha.2 dropped this attribute from the
- * row's root while leaving the rest of the markup identical, so a lookup that
- * insisted on it would silently stop finding the row on that engine. When it is
- * absent the search falls back to the dock OUTLET — deliberately the outlet and
- * never the outlet's parent, because from 0.1.6-alpha.2 the parent is the new
- * composer footer, which holds the `ContextMeter` as well, and that meter's
- * trigger is itself a `button[aria-haspopup="dialog"]` rendered AFTER the dock.
- * A parent-scoped "last trigger wins" would therefore append the cost to the
- * context ring instead of the token pill.
+ * A PREFERENCE, not a requirement: the attribute has already been dropped once
+ * upstream (0.1.6-alpha.2) while the rest of the row's markup stayed identical,
+ * so a lookup that insisted on it would silently stop finding the row. When it
+ * is absent the search falls back to the dock OUTLET — deliberately the outlet
+ * and never the outlet's parent, because the parent is the composer footer,
+ * which holds the `ContextMeter` as well, and that meter's trigger is itself a
+ * `button[aria-haspopup="dialog"]` rendered AFTER the dock. A parent-scoped
+ * "last trigger wins" would therefore append the cost to the context ring
+ * instead of the token pill.
  */
 const STATS_ROOT = '[data-composer-stats]'
 
@@ -251,14 +251,14 @@ export class SessionCostDisplay {
    *
    * The scope is the dock OUTLET (`display: contents`, one per slot), which holds
    * exactly that slot's entries — the shipped `stats` cell and ours, in their
-   * registration order. {@link STATS_ROOT} narrows that to the stats row on the
-   * engines that still mark it; on the engines that do not, the outlet is
-   * already the narrowest correct container, because the composer footer's
-   * `ContextMeter` sits BESIDE the outlet rather than inside it.
+   * registration order. {@link STATS_ROOT} narrows that to the stats row where
+   * the markup marks it; where it does not, the outlet is already the narrowest
+   * correct container, because the composer footer's `ContextMeter` sits BESIDE
+   * the outlet rather than inside it.
    *
    * A missing scope is "no pill", never a document-wide search: the outlet is
    * what makes this lookup per-composer, and a second composer can be live at
-   * once (0.1.6-alpha.2 mounts an embedded Conversation in the sidebar).
+   * once (the sidebar can mount an embedded Conversation).
    */
   private resolvePillButton(): Element | null {
     const scope = this.scope()

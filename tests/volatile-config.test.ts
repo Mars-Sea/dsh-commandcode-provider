@@ -1,18 +1,10 @@
-/** Volatile-config bridge: generation-gated marking and plain-view unwrapping. */
+/** Volatile-config helpers: marking and plain-view unwrapping. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isVolatileRef, markVolatile, unwrapVolatileConfig } from '../src/config-volatile.ts'
 
-test('markVolatile returns the schema untouched when schemastery predates .volatile()', () => {
-  // The checkout pins schemastery 3.18.2, which has no such member — exactly
-  // what an engine from the 0.1.2…0.1.5 era hands the plugin at import time.
-  // Marking must degrade to a no-op instead of throwing during module load.
-  const schema = { meta: { type: 'string' } }
-  assert.equal(markVolatile(schema), schema)
-})
-
-test('markVolatile applies .volatile() and returns its result when the method exists', () => {
+test('markVolatile applies .volatile() and returns its result', () => {
   const marked = { meta: { volatile: true } }
   let called = 0
   const schema = {
@@ -43,14 +35,15 @@ test('isVolatileRef rejects ordinary config shapes, including frozen ones', () =
   assert.equal(isVolatileRef(Object.freeze({ value: 1 })), false)
 })
 
-test('unwrapVolatileConfig hands a plain config back untouched, preserving identity', () => {
-  // The adapter-options memo keys on object identity; unwrapping a
-  // plain-config engine into a fresh object every read would silently
-  // disable it on every ≤0.1.6 release.
+test('unwrapVolatileConfig reads a plain config into an equivalent plain view', () => {
   const plain = { apiBase: 'https://example.com', visibleModels: ['a'] }
-  assert.equal(unwrapVolatileConfig(plain), plain)
-  const emptyIdentity = {}
-  assert.equal(unwrapVolatileConfig(emptyIdentity), emptyIdentity)
+  assert.deepEqual(unwrapVolatileConfig(plain), plain)
+  assert.deepEqual(unwrapVolatileConfig({}), {})
+})
+
+test('unwrapVolatileConfig passes a non-object through untouched', () => {
+  const value = undefined as unknown as Record<string, unknown>
+  assert.equal(unwrapVolatileConfig(value), value)
 })
 
 test('unwrapVolatileConfig reads each reference and returns a fresh view', () => {
@@ -76,7 +69,7 @@ test('unwrapVolatileConfig only unwraps top-level fields', () => {
   const nested = Object.freeze({ get: () => 'inner' })
   const source = { accounts: [{ label: nested }] }
   const view = unwrapVolatileConfig(source)
-  assert.equal(view, source)
+  assert.notEqual(view, source)
   const [entry] = view.accounts
   assert.ok(entry)
   assert.equal(entry.label, nested)

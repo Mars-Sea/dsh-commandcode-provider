@@ -7,11 +7,13 @@
  * built bundle carried a static ESM named import of a symbol that no longer
  * existed, so on that engine the host half never instantiated — no
  * `commandcode` route, no settings page, no panel — while every check that ran
- * against this checkout's own `node_modules` stayed green, because those peers
- * are pinned at 0.1.2-rc.1 and a `link:`-installed profile resolves them from
- * there instead of from the engine. A named import of an absent export is a
+ * against this checkout's own `node_modules` stayed green, because a
+ * `link:`-installed profile resolves the plugin's peers from the checkout
+ * rather than from the engine. A named import of an absent export is a
  * link-time failure, so no amount of runtime testing short of importing the
- * bundle from a tree whose peers ARE the engine can see it.
+ * bundle from a tree whose peers ARE the engine can see it. The plugin now
+ * declares exactly ONE supported engine, so this is also where a peer bump is
+ * proven to link before it ships.
  *
  * What it does, in order:
  *   1. Resolves the engine — `--engine <dir>`, `$DSH_ENGINE`, or the highest
@@ -24,25 +26,21 @@
  *      SyntaxError.
  *   4. Audits `lib/client.js`'s `require()` calls against the engine's platform
  *      seed table and its mounted `dsh.client` rows.
- *   5. Asserts the engine exposes ONE complete request-image policy generation
- *      and, on the durable (>=0.1.6) one, that `LlmError` carries
+ *   5. Asserts the engine exports the whole durable-offload contract the
+ *      adapter imports by name, and that `LlmError` carries
  *      `failure.offloadImages` — the payload the adapter's offload request is
  *      read from.
- *   6. Asserts the Config schema SPLIT holds on this engine: `Config` marks
- *      every settings-form field volatile (except the composition-only
- *      `apiKey`) and parses to live references, while `LegacySettingsSchema`
- *      carries no mark and parses to a plain, `structuredClone`-able object —
- *      the shape ≤0.1.6's settings registration requires even though
- *      schemastery ≥3.18.3 creates references during parse on every
- *      generation. Skipped with a warning on engines whose schemastery
- *      predates `.volatile()`.
+ *   6. Asserts the Config schema really drives this engine's settings forms:
+ *      every field except the composition-only `apiKey` carries
+ *      `meta.volatile`, and parsing a config through the schema yields a LIVE
+ *      reference (`{ get() }`) the loader can commit a write into. A field with
+ *      no mark is invisible to and unwritable from the settings page.
  *   7. Builds tool history with this engine's message constructors and captures
  *      both transports' next request. Calls AND results must survive; merely
  *      loading the bundle cannot detect message-envelope drift.
  *
  * Usage:
  *   node scripts/verify-engine-load.mjs                     # install + check
- *   node scripts/verify-engine-load.mjs --version 0.1.5-rc.2
  *   node scripts/verify-engine-load.mjs --engine /path/to/dsh-install
  *   node scripts/verify-engine-load.mjs --engine ~/.dsh/profiles/web
  *
@@ -353,10 +351,10 @@ function checkClientRequires(engineModules) {
  *
  * More than the unit tests can cover: that this engine's `LlmAdapter` base
  * accepts the adapter's `imageRequestPricing` override, that the symbols the
- * pricing path imports still resolve on it, and that BOTH payload generations
- * the harness has shipped are priced — the token meter throws unless exactly one
- * price comes back per occurrence, so an unhandled shape is a broken meter
- * rather than a wrong number.
+ * pricing path imports still resolve on it, and that the payload shape it hands
+ * over is priced — the token meter throws unless exactly one price comes back
+ * per occurrence, so an unhandled shape is a broken meter rather than a wrong
+ * number.
  */
 async function checkImagePricing(staged) {
   if (staged === undefined) return
@@ -385,18 +383,14 @@ async function checkImagePricing(staged) {
     height: 2400,
   }
   const asBlock = pricing.priceImages([{ type: 'image', attachment: ref }])
-  const asReference = pricing.priceImages([ref])
-  if (asBlock.length !== 1 || asReference.length !== 1) {
-    fail(`priceImages() must answer one price per occurrence, got ${asBlock.length} and ${asReference.length}`)
+  if (asBlock.length !== 1) {
+    fail(`priceImages() must answer one price per occurrence, got ${asBlock.length}`)
     return
   }
   // Anthropic's published rule (one token per 750 px) at the request target.
   const expected = Math.ceil((1568 * 1045) / 750)
   if (asBlock[0].visualTokens !== expected) {
     fail(`a retained image priced ${asBlock[0].visualTokens} tokens, expected ${expected} at the request target`)
-  }
-  if (asReference[0].visualTokens !== expected) {
-    fail('the bare-reference payload (<=0.1.5) priced differently from the block payload')
   }
   if (asBlock[0].text !== '') fail('a retained image on this route carries no model-visible text')
   const [offloaded] = pricing.priceImages([{ type: 'image', attachment: ref, offloaded: true }])
@@ -409,43 +403,27 @@ async function checkImagePricing(staged) {
 }
 
 /**
- * Check 6: the Config schema split is right for BOTH settings generations.
+ * Check 6: the Config schema really drives this engine's settings forms.
  *
- * Two facts must hold on the engine the bundle will run on:
- *
- *   1. `Config` (the 0.1.7 generation) marks every field volatile except the
- *      composition-only `apiKey`, AND parsing a config through it really does
- *      produce a live reference (`{ get() }`) — the mark is worthless if the
- *      engine's schemastery ignores it.
- *   2. `LegacySettingsSchema` (the ≤0.1.6 registration) carries NO mark and
- *      parses to a plain, `structuredClone`-able object. This is not
- *      bookkeeping: schemastery ≥3.18.3 creates references during PARSE on
- *      EVERY generation (`dsh-settings` through 0.1.6 declares
- *      `schemastery: ^3.18.2`, so a freshly installed old engine resolves
- *      3.18.3), and that generation re-validates the base it is handed and
- *      `structuredClone`s it for the directory — so a marked schema there is a
- *      boot-time `ValidationError`. Check 1 cannot see that: the plugin still
- *      links and evaluates; only a MARKED-schema-on-old-engine parse does.
- *
- * The mark can only exist where the engine's schemastery ships `.volatile()`,
- * so an older engine reports SKIPPED instead of failing a generation that
- * never needed the split.
+ * The mark is worthless if the engine's schemastery ignores it, so this asserts
+ * both halves: every field except the composition-only `apiKey` carries
+ * `meta.volatile`, and parsing a config through the schema produces a LIVE
+ * reference (`{ get() }`) the loader can commit a settings write into. A field
+ * with no mark is invisible to AND unwritable from the settings page, and a
+ * parse that yields plain values means an in-place write cannot reach the
+ * running fiber — either way the plugin's settings page goes dead, which no
+ * amount of local unit testing can see.
  */
 async function checkVolatileConfig(staged) {
   if (staged === undefined) return
   const plugin = await import(pathToFileURL(join(staged, 'lib', 'index.js')).href)
   const fields = plugin.Config?.dict
-  const legacyFields = plugin.LegacySettingsSchema?.dict
   if (fields === undefined || fields.apiBase === undefined) {
     fail('the staged Config schema carries no dict, so its settings-form surface cannot be checked')
     return
   }
-  if (legacyFields === undefined || legacyFields.apiBase === undefined) {
-    fail('the staged bundle exports no LegacySettingsSchema — ≤0.1.6 registration cannot be checked')
-    return
-  }
   if (typeof fields.apiBase.volatile !== 'function') {
-    warn('engine schemastery predates .volatile(); skipped the settings-form field audit')
+    fail('this engine\'s schemastery has no .volatile(); the settings page would render no editable field')
     return
   }
   for (const [name, field] of Object.entries(fields)) {
@@ -454,67 +432,45 @@ async function checkVolatileConfig(staged) {
       if (marked) fail('Config.apiKey must stay unmarked: it is the composition-only secret literal')
       continue
     }
-    if (!marked) fail(`Config.${name} is not volatile — 0.1.7 settings forms cannot see or write it`)
+    if (!marked) fail(`Config.${name} is not volatile — settings forms cannot see or write it`)
   }
-  for (const [name, field] of Object.entries(legacyFields)) {
-    if (field?.meta?.volatile === true) {
-      fail(`LegacySettingsSchema.${name} carries a volatile mark — ≤0.1.6 settings would throw at boot`)
-    }
-  }
-  // Parse through both schemas. `Config` must yield references; the legacy one
-  // must stay plain AND survive the clone the old service performs on it.
-  let marked
+  let parsed
   try {
-    marked = plugin.Config({ apiKeyEnv: 'engine-load-probe' })
+    parsed = plugin.Config({ apiKeyEnv: 'engine-load-probe' })
   } catch (error) {
     fail(`Config rejected the engine-load probe config: ${error.message}`)
     return
   }
-  const ref = marked?.apiKeyEnv
+  const ref = parsed?.apiKeyEnv
   if (ref === null || typeof ref !== 'object' || typeof ref.get !== 'function') {
     fail('Config parses to plain values on this engine, so volatile writes cannot commit in place')
-  }
-  let legacy
-  try {
-    legacy = plugin.LegacySettingsSchema({ apiKeyEnv: 'engine-load-probe' })
-  } catch (error) {
-    fail(`LegacySettingsSchema rejected the engine-load probe config: ${error.message}`)
-    return
-  }
-  if (legacy?.apiKeyEnv !== 'engine-load-probe') {
-    fail(`LegacySettingsSchema parsed apiKeyEnv as ${String(legacy?.apiKeyEnv)}, expected the plain string`)
-  }
-  try {
-    structuredClone(legacy)
-  } catch (error) {
-    fail(`LegacySettingsSchema parses to a non-cloneable object (${error.name}) — ≤0.1.6 describe would throw`)
+  } else if (ref.get() !== 'engine-load-probe') {
+    fail(`the parsed reference answered ${String(ref.get())}, expected the probe value`)
   }
 }
 
-/** Check 4: the engine has one complete request-image policy, payload included. */
+/** Check 4: the engine exports the whole durable-offload contract the adapter speaks. */
 async function checkImagePolicy(engineModules) {
   const specifier = `${SCOPE}/dsh-llm`
   const require = createRequire(join(dirname(engineModules), 'probe.cjs'))
   const module = await import(pathToFileURL(require.resolve(specifier)).href)
-  const durable = typeof module.requiredImageOffload === 'function' && typeof module.projectOffloadedImages === 'function'
-  const transient = typeof module.offloadRequestImagesWithPolicy === 'function'
-  if (!durable && !transient) {
-    fail(`${specifier} exposes neither request-image policy generation; the adapter cannot budget images`)
+  // Every one of these is a STATIC import of lib/index.js, so a missing export
+  // is a link-time failure the child probe above already reports; naming them
+  // here is what turns "the bundle did not load" into "this symbol is gone".
+  const missing = ['requiredImageOffload', 'projectOffloadedImages', 'IMAGE_OFFLOAD_REQUIRED_CODE']
+    .filter((name) => module[name] === undefined)
+  if (missing.length > 0) {
+    fail(`${specifier} is missing ${missing.join(', ')}; the adapter cannot budget images`)
     return 'none'
   }
-  if (durable && transient) {
-    warn(`${specifier} exposes both policy generations; the adapter speaks the durable one`)
+  // The adapter throws this code with `offloadImages`; dsh-compaction-image-offload
+  // reads it back off `failure`, so a dropped field would silently break offload.
+  const error = new module.LlmError('engine-load probe', module.IMAGE_OFFLOAD_REQUIRED_CODE, { offloadImages: 3 })
+  if (error.code !== 'IMAGE_OFFLOAD_REQUIRED') fail(`LlmError code round-trip returned ${String(error.code)}`)
+  if (error.failure?.offloadImages !== 3) {
+    fail('LlmError does not carry failure.offloadImages, so the harness cannot read the offload count')
   }
-  if (durable) {
-    // The adapter throws this code with `offloadImages`; dsh-compaction-image-offload
-    // reads it back off `failure`, so a dropped field would silently break offload.
-    const error = new module.LlmError('engine-load probe', module.IMAGE_OFFLOAD_REQUIRED_CODE, { offloadImages: 3 })
-    if (error.code !== 'IMAGE_OFFLOAD_REQUIRED') fail(`LlmError code round-trip returned ${String(error.code)}`)
-    if (error.failure?.offloadImages !== 3) {
-      fail('LlmError does not carry failure.offloadImages, so the harness cannot read the offload count')
-    }
-  }
-  return durable ? 'durable' : 'transient'
+  return 'durable'
 }
 
 /** Check 7: real engine messages survive both request serializers (no network). */
@@ -598,7 +554,7 @@ async function verify(argv) {
     await checkVolatileConfig(staged)
     await checkToolHistory(staged, engine.modules)
     const policy = await checkImagePolicy(engine.modules)
-    process.stdout.write(`request-image policy on this engine: ${policy}\n`)
+    process.stdout.write(`request-image offload contract on this engine: ${policy}\n`)
     if (version !== undefined && engine.version !== version) {
       warn(`engine reports ${engine.version}, expected ${version}`)
     }

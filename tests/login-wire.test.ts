@@ -44,10 +44,10 @@ test('the three login descriptors target the usage service under one namespace',
       const codec = parameter?.codec
       assert.equal(codec?.mode, 'strict')
       if (codec?.mode === 'strict') {
-        assert.equal(codec.schema.parse('COMMANDCODE_API_KEY_2'), 'COMMANDCODE_API_KEY_2')
-        assert.equal(codec.schema.parse(undefined), undefined)
-        assert.throws(() => codec.schema.parse(42))
-        assert.equal((codec as typeof codec & { create(): unknown }).create(), codec.schema)
+        const schema = codec.create()
+        assert.equal(schema.parse('COMMANDCODE_API_KEY_2'), 'COMMANDCODE_API_KEY_2')
+        assert.equal(schema.parse(undefined), undefined)
+        assert.throws(() => schema.parse(42))
       }
     } else {
       assert.deepEqual(descriptor.parameters, [])

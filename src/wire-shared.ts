@@ -13,7 +13,6 @@
  *
  * @module dsh-commandcode-provider/wire-shared
  */
-
 import type { InvocationDescriptor, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
 
 /** The npm package identity every contribution and descriptor claims. */
@@ -71,47 +70,22 @@ export function makeBoundaryValidator(prefix: string): BoundaryValidator {
 }
 
 /**
- * One strict result codec written in BOTH Typert generations' vocabulary.
+ * One strict result codec.
  *
- * The protocol changed shape under the same `mode: 'strict'` tag, and each
- * engine generation validates the member it knows while ignoring the other:
- *
- * - Every RELEASED engine (0.1.2-rc.1 … 0.1.6-alpha.1, i.e. all 21 published
- *   versions) declares `schema: TypertSchema`; its registry throws
- *   `typert: <subject> strict codec has no parse() method` unless
- *   `codec.schema.parse` is a function, and its Gateway validates with
- *   `codec.schema.parse(value)`.
- * - master after commit `e459e3263` (`perf(typert): materialize generated
- *   schemas on first use`) replaced that member with the lazy factory
- *   `create: () => TypertSchema`, throws `typert: <subject> strict codec has no
- *   create() factory` unless `typeof codec.create === 'function'`, and
- *   validates with `codec.create().parse(value)`.
- *
- * So the one codec carries both, which is a version-agnostic fix rather than a
- * probe: neither validator inspects the member it does not know, and the
- * member the running engine does not read is inert. Carrying only one of them
- * breaks half the engines the manifest declares compatible — that is exactly
- * issue #49, whose one-line patch (`schema` → `create`) would have fixed
- * unreleased master by breaking every install that exists today.
- *
- * This interface also stands in for the local typings: no published
- * `@deepseek-ai/dsh-typert-protocol` carries `create` yet, so the two-member
- * shape is stated here and handed to the protocol type by assignment (the
- * older generation's `InvocationDescriptor` requires `schema` and ignores the
- * extra `create`; the newer one requires `create`, so neither needs a cast).
+ * `mode: 'strict'` carries a LAZY schema factory (`create()`), which the
+ * registry requires and the Gateway validates with (`codec.create().parse`).
+ * The schema is built by `makeStrictCodec` from the endpoint's hand-rolled
+ * validator, so nothing here depends on a generated codec.
  */
 interface StrictCodec<Output> {
   readonly mode: 'strict'
   readonly typeSymbol: string
-  /** Read by released engines (≤ `0.1.6-alpha.1`). */
-  readonly schema: TypertSchema<Output>
-  /** Read by engines after `e459e3263` — the lazy replacement for `schema`. */
   readonly create: () => TypertSchema<Output>
 }
 
 /** Use the same strict-codec shape for invocation parameters and results. */
 export function makeStrictCodec<Output>(typeSymbol: string, schema: TypertSchema<Output>): StrictCodec<Output> {
-  return { mode: 'strict', typeSymbol, schema, create: () => schema }
+  return { mode: 'strict', typeSymbol, create: () => schema }
 }
 
 /**
@@ -127,12 +101,6 @@ export function makeRemoteDescriptor<Output>(
   typeSymbol: string,
   schema: TypertSchema<Output>,
 ): InvocationDescriptor {
-  // Both members name the SAME hand-rolled schema: `create()` is the newer
-  // generation's lazy accessor for what the older one reads directly, so the
-  // two generations can never validate against different rules. Defined as a
-  // value (not inline) so the older typings' excess-property check does not
-  // reject the member they do not declare.
-  const result = makeStrictCodec(typeSymbol, schema)
   return {
     id: `${REMOTE_PACKAGE}#${endpoint}`,
     service: REMOTE_SERVICE,
@@ -140,6 +108,6 @@ export function makeRemoteDescriptor<Output>(
     method,
     invocation: { kind: 'direct' },
     parameters: [],
-    result,
+    result: makeStrictCodec(typeSymbol, schema),
   }
 }

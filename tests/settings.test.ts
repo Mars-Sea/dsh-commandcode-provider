@@ -118,20 +118,12 @@ function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<s
 function makeController(opts?: {
   scope?: ReturnType<typeof makeScope>
   api?: ReturnType<typeof makeApi>
-  hostDescription?: { cwd?: string } | undefined
 }) {
   const scope = opts?.scope ?? makeScope({})
   const api = opts?.api ?? makeApi({})
-  const hostDescription = opts?.hostDescription === undefined
-    ? undefined
-    : {
-        getSnapshot: () => opts.hostDescription,
-        subscribe: () => () => {},
-      }
   const controller = new CommandCodeSettingsController(
     scope,
     api as unknown as SettingsPageApi,
-    hostDescription,
   )
   return { controller, scope, api }
 }
@@ -187,17 +179,6 @@ test('mirrors section values into the field drafts', () => {
   assert.equal(state.apiBase.overridden, true)
   assert.equal(state.requestTimeoutMs.text, '30000')
   assert.equal(state.requestTimeoutMs.overridden, false)
-})
-
-test('exposes the Host cwd as the workingDir default placeholder', () => {
-  const { controller } = makeController({ hostDescription: { cwd: '/home/me/proj' } })
-  const state = controller.state()
-  assert.equal(state.defaultWorkingDir, '/home/me/proj')
-})
-
-test('has no workingDir default when the Host description is absent', () => {
-  const { controller } = makeController()
-  assert.equal(controller.state().defaultWorkingDir, undefined)
 })
 
 // ---------------------------------------------------------------------------
@@ -524,34 +505,15 @@ test('save() refuses when a numeric draft is invalid', async () => {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-test('dispose() releases external subscriptions and stops publishing', () => {
-  let hostListener: (() => void) | undefined
-  let hostSubscribed = false
-  const host = {
-    cwd: '/home/me/proj',
-    getSnapshot: () => ({ cwd: host.cwd }),
-    subscribe(fn: () => void) {
-      hostSubscribed = true
-      hostListener = fn
-      return () => {
-        hostSubscribed = false
-        hostListener = undefined
-      }
-    },
-  }
-  const scope = makeScope({})
-  const api = makeApi({})
-  const controller = new CommandCodeSettingsController(scope, api as unknown as SettingsPageApi, host)
-  assert.equal(controller.state().defaultWorkingDir, '/home/me/proj')
-  assert.equal(hostSubscribed, true)
-
+test('dispose() releases external subscriptions and stops publishing', async () => {
+  const { controller, scope } = makeController()
+  let published = 0
+  controller.subscribe(() => { published += 1 })
   controller.dispose()
-  // The host subscription was released, so an external cwd change no longer
-  // reaches the controller.
-  assert.equal(hostSubscribed, false)
-  host.cwd = '/elsewhere'
-  hostListener?.()
-  assert.equal(controller.state().defaultWorkingDir, '/home/me/proj')
+  // A scope update after disposal must not reach subscribers: every external
+  // subscription was released with the controller.
+  await scope.set('apiBase', 'https://elsewhere.example')
+  assert.equal(published, 0)
 })
 
 // ---------------------------------------------------------------------------

@@ -84,12 +84,6 @@ export interface SettingsPageApi {
   models?(): Promise<RemoteResult<{ models: CatalogModelOption[] }>>
 }
 
-/** The Host-description observable the page reads the process cwd from. */
-export interface HostDescriptionSource {
-  getSnapshot(): { cwd?: string } | undefined
-  subscribe(fn: () => void): () => void
-}
-
 /** One editable text field's staged state (blank = keep stored value). */
 export interface StagedField {
   /** Live draft text the input shows. */
@@ -174,12 +168,6 @@ export interface SettingsPageState {
   apiBase: StagedField
   /** workingDir draft. */
   workingDir: StagedField
-  /**
-   * The working directory a blank `workingDir` resolves to: the Host
-   * process cwd (`host.describe().cwd`). Shown as the field's placeholder so
-   * the user sees what "leave it empty" means — no configuration needed.
-   */
-  defaultWorkingDir: string | undefined
   /** requestTimeoutMs draft. */
   requestTimeoutMs: StagedField
   /** streamIdleTimeoutMs draft. */
@@ -417,7 +405,6 @@ export class CommandCodeSettingsController {
   private readonly listeners = new Set<() => void>()
   private readonly disposers: Array<() => void> = []
   private disposed = false
-  private defaultWorkingDir: string | undefined
   /** The credential reference the default account resolves. */
   private credentialRef = DEFAULT_API_KEY_REF
   /** Host-reported configured/writable state per credential reference. */
@@ -462,13 +449,10 @@ export class CommandCodeSettingsController {
   /**
    * @param scope - bound scope for the `llm-commandcode` namespace.
    * @param api - credentials wire face.
-   * @param hostDescription - the Host-description observable whose `cwd` is
-   *   shown as the placeholder a blank `workingDir` field resolves to.
    */
   constructor(
     scope: SettingsScope<Record<string, unknown>>,
     api: SettingsPageApi,
-    hostDescription?: HostDescriptionSource,
   ) {
     this.scope = scope
     this.api = api
@@ -477,17 +461,6 @@ export class CommandCodeSettingsController {
       void this.describeAll()
       this.publish()
     }))
-    if (hostDescription !== undefined) {
-      this.defaultWorkingDir = hostDescription.getSnapshot()?.cwd
-      this.disposers.push(hostDescription.subscribe(() => {
-        if (this.disposed) return
-        const cwd = hostDescription.getSnapshot()?.cwd
-        if (cwd !== this.defaultWorkingDir) {
-          this.defaultWorkingDir = cwd
-          this.publish()
-        }
-      }))
-    }
     this.recomputeCredentialRef()
     void this.describeAll()
     this.refreshCatalog()
@@ -548,7 +521,6 @@ export class CommandCodeSettingsController {
       apiKeyClearStaged: this.keyClears.has(this.credentialRef),
       apiBase: this.field('apiBase'),
       workingDir: this.field('workingDir'),
-      defaultWorkingDir: this.defaultWorkingDir,
       requestTimeoutMs: this.field('requestTimeoutMs'),
       streamIdleTimeoutMs: this.field('streamIdleTimeoutMs'),
       transportMaxRetries: this.field('transportMaxRetries'),

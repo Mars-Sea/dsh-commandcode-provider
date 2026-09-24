@@ -135,20 +135,16 @@ test('longEdgeDimensions() projects onto the long edge and never enlarges', () =
   assert.deepEqual(longEdgeDimensions(20000, 3, 1568), { width: 1568, height: 1 })
 })
 
-test('requestImageTarget() speaks both attachment generations at once', () => {
-  const target = requestImageTarget(refAt(2880, 1800))
-  // <=0.1.5 reads maxPixels; >=0.1.6 reads width/height. Both must describe the
-  // SAME geometry, or the two generations would encode differently sized images.
-  assert.deepEqual(target, {
-    maxPixels: 1568 * 980,
+test('requestImageTarget() is the projected geometry the encoder is handed', () => {
+  // The target IS what readImageRequest passes to the encoder, so it must carry
+  // exactly the target vocabulary — no pixel-budget field may ride along.
+  assert.deepEqual(requestImageTarget(refAt(2880, 1800)), {
     width: 1568,
     height: 980,
     maxBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
   })
-  assert.equal(target.maxPixels, target.width * target.height)
   // A source already inside the budget is requested unchanged.
   assert.deepEqual(requestImageTarget(refAt(800, 600)), {
-    maxPixels: 800 * 600,
     width: 800,
     height: 600,
     maxBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,

@@ -160,6 +160,14 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // automatic reasoning and no selectable efforts, so the effort map is
   // unchanged by that release.
   'MiniMaxAI/MiniMax-M3': ['low', 'medium', 'high'],
+  // command-code@1.65.0 added `stealth/space-bunny-alpha` (Space Bunny Alpha) —
+  // the only model-registry change in the release (no official changelog entry
+  // exists for it yet; read from the 1.65.0 bundle and the public catalog,
+  // which now serves it). OpenRouter-served (`chatComplete`), text+image, 1M
+  // context, reasoning with the three-level set. It is free during the stealth
+  // preview (see KNOWN_DEALS) and is NOT routed under ZDR (see
+  // KNOWN_NON_ZDR_MODELS).
+  'stealth/space-bunny-alpha': ['low', 'medium', 'high'],
 }
 
 /**
@@ -247,6 +255,10 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'moonshotai/Kimi-K2.7-Code-Highspeed',
   'moonshotai/Kimi-K3',
   'sakana/fugu-ultra',
+  // command-code@1.65.0 added Space Bunny Alpha; Vision per the official
+  // registry and the CLI's inputModalities:["text","image"] (the pricing page
+  // also carries caps.vision: true).
+  'stealth/space-bunny-alpha',
   'stepfun/Step-3.7-Flash',
   // command-code@1.60.0 added Step 5 Preview; Vision per the official registry
   // ("Text input, Vision, Reasoning") and the CLI's
@@ -283,7 +295,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.64.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
+ * registry (`command-code@1.65.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the union is this
  * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
@@ -309,9 +321,12 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * is the snapshot of the exclusion set and nothing more. The 1.62.0 → 1.64.0
  * diff of that union is EMPTY: both anchors were extracted from both bundles
  * during the 2026-09-23 check and each carries the same 20 members — which is
- * how rare a change here is expected to be. `meituan/LongCat-2.0` is the one
- * member the two anchors disagree about (it is in `modelSupportsZdr`'s set in
- * both releases and in neither `knownModelSupportsZdr` set), so the union is
+ * how rare a change here is expected to be. The 1.64.0 → 1.65.0 diff (2026-09-24)
+ * is the counterexample that proves the check still runs: exactly one member
+ * joins (`stealth/space-bunny-alpha`), and it is in both anchors. `meituan/
+ * LongCat-2.0` is the one member the two anchors disagree about (it is in
+ * `modelSupportsZdr`'s set in both releases and in neither `knownModelSupportsZdr`
+ * set), so the union is
  * what this table follows; reading only the sibling route table would drop it.
  */
 export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
@@ -326,6 +341,11 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'minimax/minimax-m3-free',
   'poolside/laguna-s-2.1-free',
   'sakana/fugu-ultra',
+  // command-code@1.65.0 added `stealth/space-bunny-alpha` — the first change to
+  // this set since the 1.62.0 check. It is in BOTH anchors of the 1.65.0 bundle
+  // and the pricing page's own tip says it: "Free while the preview lasts. Not
+  // routed under ZDR."
+  'stealth/space-bunny-alpha',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
   'xai/grok-4.5',
@@ -474,7 +494,11 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * and 1.60.0 added `stepfun/Step-5-Preview` (Go); command-code@1.62.0 added the
  * MiMo V2.6 family — `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (Go) and
  * `xiaomi/mimo-v2.6-pro-ultraspeed` (GOAT) — so the 1.58.0 -> 1.62.0 window's
- * only tier changes are additions and the superset chain still holds.
+ * only tier changes are additions and the superset chain still holds. The
+ * 1.62.0 -> 1.65.0 window continues the pattern: 1.64.0 added
+ * `claude-opus-5-5` (Provider/Max), `gpt-6-sol` (Pro) and `gpt-6-luna` (Go),
+ * and 1.65.0 added `stealth/space-bunny-alpha` (Go, every tier) — additions
+ * only, no tier moves.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -552,6 +576,11 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // Go plan page's rendered table lists it — while GOAT/Pro/Max list it too,
   // which is the superset chain this map encodes.
   'stepfun/Step-5-Preview': 'go',
+  // command-code@1.65.0 added Space Bunny Alpha; the pricing page's embedded
+  // availability grants every tier (individual-go through teams-pro, the same
+  // "all":true shape as the Qwen 3.8 family), so it is a Go model that every
+  // higher plan also serves. Free during the stealth preview (see KNOWN_DEALS).
+  'stealth/space-bunny-alpha': 'go',
   'tencent/hy3-paid': 'go',
   'tencent/hy4-preview': 'go',
   'thinkingmachines/inkling': 'go',
@@ -831,6 +860,13 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   // day" while the promo lasts — a permanent-style deal (no fixed end date,
   // like LongCat 2.0 used to be). Free requests cost no credits on every plan.
   'inclusionai/ling-3.0-flash-sante:free': { label: 'FREE', free: true },
+  // command-code@1.65.0 added Space Bunny Alpha as a stealth-preview free model
+  // ("Free while the stealth preview lasts", 100% off, auto-applied) — a
+  // permanent-style free deal like Ling's, so no expiresAt. It is NOT routed
+  // under ZDR (see KNOWN_NON_ZDR_MODELS). The pricing page publishes its rates
+  // as a literal zero, and `modelPriceTable()` serves free models explicitly at
+  // zero, so no row is added to the vendored price table.
+  'stealth/space-bunny-alpha': { label: 'FREE', free: true },
 }
 
 /**

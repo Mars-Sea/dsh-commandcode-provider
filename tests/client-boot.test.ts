@@ -2,19 +2,19 @@
  * Client-boot integration tests (node:test). Run with `npm test`.
  *
  * These drive the *real* `apply()` from `src/client/index.ts` against a Cordis
- * context that mirrors the DSH 0.1.2 (rc.1) client assembly, and assert that
- * both browser UI surfaces register:
+ * context that mirrors the dsh 0.1.7-rc.1 client assembly, and assert that both
+ * browser UI surfaces register:
  *
  *   - the "Command Code" settings page (`settings.section`, id `commandcode`),
  *   - the Models-page provider card (`settings.models.provider-card`,
  *     key `llm-commandcode`).
  *
- * The registration is gated by `remote.credentials`: DSH 0.1.2 (rc.1) exposes
+ * The registration is gated by `remote.credentials`: the harness exposes
  * credentials through a Typert Remote namespace, and the plugin waits on
  * `ctx.inject(['remote.credentials'], ...)` before mounting the surfaces. This
- * is exactly the suspicion raised in GitHub issue #15 (that alpha2 "does not
+ * is exactly the suspicion raised in GitHub issue #15 (that a build "does not
  * mount a `credentials` remote namespace", so the surfaces never register).
- * These tests prove the opposite for the real alpha2 assembly: mounting the
+ * These tests prove the opposite for the real assembly: mounting the
  * `credentials` remote contribution lets both surfaces register.
  *
  * Because `src/client/index.ts` statically imports the React component tree
@@ -45,9 +45,9 @@ const { apply, inject } = await import('../src/client/index.ts')
 
 /**
  * Boot the real plugin `apply()` on a fresh Cordis root provisioned with the
- * DSH 0.1.2 (rc.1) service set: `remote` (reporting `$host.isLoopback`, carrying
- * the `credentials` + `commandcode` namespaces and the `settings` directory the
- * plugin's own scope reads), `slots`, `locale`, `connection`, and — when
+ * dsh 0.1.7-rc.1 client service set: `remote` (reporting `$host.isLoopback`,
+ * carrying the `credentials` + `commandcode` namespaces and the `settings`
+ * directory the plugin's own scope reads), `slots`, `locale`, and — when
  * `mountLayout` is set — `layout`.
  *
  * There is deliberately NO `settingsScope` service here: 0.1.7 removed it, and
@@ -60,8 +60,7 @@ const { apply, inject } = await import('../src/client/index.ts')
  *   `false`, the plugin must not register any surface (it parks on the
  *   `inject(['remote.credentials'])` gate). `mountLayout` controls the
  *   `layout` service, whose `selectPanel` is what makes the sidebar card
- *   openable; `layoutSelectPanel` optionally omits that method to model a
- *   pre-0.1.5 layout. `mountSettings` controls the settings directory.
+ *   openable. `mountSettings` controls the settings directory.
  * @returns the registered slot surfaces, keyed by `id` (settings.section,
  *   panel entries) or `key` (provider-card), after boot settles. Every
  *   registration per key is kept, in registration order.
@@ -70,23 +69,14 @@ async function boot(
   {
     mountCredentials = true,
     mountLayout = true,
-    layoutSelectPanel = true,
     // Whether the core contribution's `remote.settings` namespace is mounted.
     // It is on every real profile (api-remotes mounts it with
     // `immediately: true`), and `false` models the degraded profile the scope
     // must survive without gating the plugin.
     mountSettings = true,
-    // Whether that `selectPanel` accepts layout's `null` "show the
-    // Conversation" selection. Every release that has `selectPanel` at all
-    // accepts it; `false` models a hypothetical engine that only accepts a
-    // registered key, which is what the dashboard's Close action falls back
-    // from.
-    layoutSelectPanelNull = true,
-    // The slots the engine declares. The default is the 0.1.5 set; a pre-0.1.5
-    // engine declares the composer dock and the sidebar foot (both since
-    // 0.1.1-rc.2) but has no keyed `main` — the centre column is `conversation`
-    // — so passing that set is how the version boundary is exercised. The
-    // settings seats have been declared since 0.1.2 and are always present.
+    // The slots the engine declares. The default is the full dsh 0.1.7-rc.1
+    // set; a narrower set models a client assembly that declares fewer seats
+    // (a composition difference, not an engine version).
     declaredSlots = new Set([
       'settings.section',
       'settings.models.provider-card',
@@ -104,8 +94,6 @@ async function boot(
     mountCredentials?: boolean
     mountLayout?: boolean
     mountSettings?: boolean
-    layoutSelectPanel?: boolean
-    layoutSelectPanelNull?: boolean
     declaredSlots?: Set<string>
     immediateUsageMount?: boolean
   } = {},
@@ -215,7 +203,6 @@ async function boot(
     ],
   })
 
-  ctx.provide('connection', {})
   const localeNamespaces: string[] = []
   ctx.provide('locale', {
     register: (ns: string) => {
@@ -276,24 +263,19 @@ async function boot(
     })
   }
 
-  // ui-layout's selection seam. Present from 0.1.5-rc.1; `layoutSelectPanel:
-  // false` models the 0.1.2/0.1.3/0.1.5-alpha.1 layouts, which provide the
-  // service but no way to select a panel.
+  // ui-layout's selection seam.
   if (mountLayout) {
-    ctx.provide('layout', layoutSelectPanel
-      ? {
-          selectPanel: (id: string | null) => {
-            // The real controller throws on a key the `main` registry does not
-            // hold; `null` is the "show the Conversation" selection. An engine
-            // without that form rejects `null` the same way it would reject an
-            // unregistered id.
-            if (id === null && !layoutSelectPanelNull) {
-              throw new Error('layout.selectPanel: main panel "null" is not registered')
-            }
-            selectedPanels.push(id)
-          },
+    ctx.provide('layout', {
+      selectPanel: (id: string | null) => {
+        // The real controller throws on a non-null key the `main` registry does
+        // not hold; `null` is the "show the Conversation" selection and never
+        // throws.
+        if (id !== null && !declaredSlots.has('main')) {
+          throw new Error(`layout.selectPanel: main panel "${id}" is not registered`)
         }
-      : {})
+        selectedPanels.push(id)
+      },
+    })
   }
 
   // Keyed by slot id/key, but ACCUMULATING: the panel registers one `main`
@@ -391,10 +373,9 @@ test('the same apply() also seats the sidebar panel and the composer cost readou
   assert.equal(registered.get('llm-commandcode')![0]!.name, 'settings.models.provider-card')
 })
 
-test('app registers no surface when remote.credentials is absent (the alpha2 gate holds)', async () => {
+test('app registers no surface when remote.credentials is absent (the gate holds)', async () => {
   // Without the credentials namespace the plugin parks on
-  // `inject(['remote.credentials'])` and must not register either surface —
-  // the legacy `connection.api.credentials` adapter also stays inactive here.
+  // `inject(['remote.credentials'])` and must not register either surface.
   const { registered } = await boot({ mountCredentials: false })
 
   assert.deepEqual([...registered.keys()], [], 'no surface should register without remote.credentials')
@@ -418,43 +399,22 @@ test('the sidebar card is withheld when the layout cannot open the panel', async
     'no layout means no card to open a panel with',
   )
 
-  // The same for a 0.1.2-style layout that mounts the service without the
-  // method (0.1.2-rc.1, 0.1.3-alpha.2, 0.1.5-alpha.1). This is the version
-  // boundary the plugin's own docs used to get wrong: the sidebar seat exists
-  // and renders there, so an ungated card would be a visible dead button.
-  const older = await boot({ layoutSelectPanel: false })
-  assert.deepEqual(
-    (older.registered.get('commandcode-panel') ?? []).map((entry) => entry.name),
-    ['main'],
-    'a layout without selectPanel must not get the card',
-  )
-
-  // And a pre-0.1.5 engine declares no keyed `main` at all, so the dashboard
-  // cell cannot seat there. The CARD still does — that seat exists and the
-  // layout can select panels — but it points at a cell that never registered,
-  // which is exactly why the version floor has to be stated per slot: "the
-  // panel needs 0.1.5" is true of the `main` seat, not of the sidebar seat.
-  //
-  // This is a synthetic mix on purpose. In the real releases `selectPanel` and
-  // `main` arrive together in the 0.1.5 line (`main` in alpha.2, `selectPanel`
-  // in rc.1), and `selectPanel` is absent in everything a user can install
-  // before it — so the gate above is what keeps the card off those engines.
-  const preMain = await boot({
+  // A layout that mounts the service but declares no keyed `main` seat still
+  // gets the CARD: the seat for it exists and the layout can select panels, but
+  // the cell it points at never registers. The composer readout is independent
+  // of that seam — it needs the dock slot — and the shipped surfaces are
+  // untouched either way.
+  const noMain = await boot({
     declaredSlots: new Set(['settings.section', 'settings.models.provider-card', 'sidebar.footer.action', 'conversation.composer.dock']),
   })
   assert.deepEqual(
-    (preMain.registered.get('commandcode-panel') ?? []).map((entry) => entry.name),
+    (noMain.registered.get('commandcode-panel') ?? []).map((entry) => entry.name),
     ['sidebar.footer.action'],
-    'a pre-0.1.5 layout has no keyed main cell to seat',
+    'a layout without a keyed main seat gets no dashboard cell',
   )
-
-  // The composer readout is independent of that seam: it needs the dock slot,
-  // which every supported release declares, so it still registers.
-  assert.equal(older.registered.has('commandcode-session-cost'), true)
-  assert.equal(preMain.registered.has('commandcode-session-cost'), true)
-  // ...and the shipped surfaces are untouched either way.
-  assert.equal(older.registered.get('commandcode')![0]!.name, 'settings.section')
-  assert.equal(older.registered.get('llm-commandcode')![0]!.name, 'settings.models.provider-card')
+  assert.equal(noMain.registered.has('commandcode-session-cost'), true)
+  assert.equal(noMain.registered.get('commandcode')![0]!.name, 'settings.section')
+  assert.equal(noMain.registered.get('llm-commandcode')![0]!.name, 'settings.models.provider-card')
 })
 
 test('the footer card reads the sidebar-quota toggle through its inject face', async () => {
@@ -497,15 +457,17 @@ test('the dashboard has an exit: close returns to the conversation', async () =>
   assert.deepEqual(selectedPanels, [null])
 })
 
-test('close falls back to the reserved conversation key on a pre-null layout', async () => {
-  // A layout whose `selectPanel` only accepts a registered key must still have
-  // a way back: ui-conversation's reserved `main` seat is the exit.
-  const { registered, selectedPanels } = await boot({ layoutSelectPanelNull: false })
+test('close() with no layout mounted is a no-op, never a throw', async () => {
+  // The footer card is gated on the layout service, but `close()` is reachable
+  // from the dashboard cell whether or not that service is still live — a
+  // layout that unmounted after the cell registered must not make the exit
+  // button throw.
+  const { registered, selectedPanels } = await boot({ mountLayout: false })
   const cell = registered.get('commandcode-panel')?.find((entry) => entry.name === 'main')
   assert.ok(cell?.inject, 'the main cell carries its inject face')
   const face = cell.inject() as { close: () => void }
   face.close()
-  assert.deepEqual(selectedPanels, ['conversation'])
+  assert.deepEqual(selectedPanels, [])
 })
 
 test('both panel seats bind the panel locale namespace, which is registered', async () => {
@@ -597,12 +559,14 @@ test('a profile without the settings transport still registers every surface', a
   assert.equal(settingsCalls.describe, 0, 'there is no directory to read')
 })
 
-test('the client apply gates only on the services every generation shares', () => {
-  // `settingsScope` used to sit in this list and must NOT return: the 0.1.7
-  // settings rewrite removed that wrapper service entirely, so gating on it
-  // would silently disable every client surface (settings page, provider card,
-  // usage card, panel, session cost) on the newest engine. The settings scope
-  // now speaks `remote.settings` directly — a wire every supported release
-  // ships — and degrades on its own instead of gating the plugin.
-  assert.deepEqual(inject, ['slots', 'locale', 'connection', 'remote'])
+test('the client apply gates only on the services every surface needs', () => {
+  // `settingsScope` must NOT return to this list: the 0.1.7 settings rewrite
+  // removed that wrapper service entirely, so gating on it would silently
+  // disable every client surface (settings page, provider card, usage card,
+  // panel, session cost). The settings scope speaks `remote.settings` directly
+  // and degrades on its own instead of gating the plugin. `connection` is gone
+  // too: nothing reads that service any more (the pre-0.1.2 ApiProxy credential
+  // face it carried is out of support), and a gate on it would park the whole
+  // bundle on a service some profiles never mount.
+  assert.deepEqual(inject, ['slots', 'locale', 'remote'])
 })

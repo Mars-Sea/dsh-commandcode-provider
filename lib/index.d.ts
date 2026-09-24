@@ -1,13 +1,13 @@
 import z from "@deepseek-ai/schemastery";
-import { GenerateOptions, LlmAdapter, LlmImageRequestPricing, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, Message, ResolvedRetryPolicy, StreamChunk } from "@deepseek-ai/dsh-llm";
+import { GenerateOptions, LlmAdapter, LlmImageRequestPricing, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, projectOffloadedImages, requiredImageOffload } from "@deepseek-ai/dsh-llm";
 import { CredentialRef } from "@deepseek-ai/dsh-credentials";
 import { TypertRemoteService, TypertSchema } from "@deepseek-ai/dsh-typert-protocol";
 import { WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
 import { Context } from "@deepseek-ai/cordis";
-import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
+import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.64.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.65.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -22,26 +22,20 @@ declare const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000;
 declare function projectSlugFromPath(pathName: string): string;
 /** Read a usable Command Code credential from the official CLI auth file. */
 declare function resolveAuthFileApiKey(): string | undefined;
-/** One occurrence's exact request-version byte length, as the core counter wants it. */
-type ImageVersionBytes = (block: {
-  attachment: ImageAttachmentRef;
-}) => number;
 /**
- * The installed engine's request-image policy, whichever generation it is.
+ * The engine's durable-offload contract, as one object.
  *
- * Every member is optional because the two generations never coexist: a
- * ≤0.1.5 engine has only `offloadRequestImagesWithPolicy`, a ≥0.1.6 engine has
- * only the other two. `CORE_IMAGE_POLICY` is the namespace object viewed
- * through this shape, and `surfaceImagePolicy()` is the ONE place that decides
- * which contract this process speaks.
+ * Both members are required together: a half-populated policy would either lose
+ * the surface's marks (re-sending evicted images as pixels) or lose the count
+ * (silently sending an over-budget body), and neither is worth a partial
+ * opt-in. The defaults are the engine's own helpers; the object exists so tests
+ * can substitute a counting stub.
  */
-interface CoreImagePolicy {
-  /** ≤0.1.5: project history under a byte/count budget, adapter-owned and transient. */
-  offloadRequestImagesWithPolicy?: (messages: readonly Message[], policy: Record<string, unknown>) => readonly Message[];
-  /** ≥0.1.6: render the surface's durable offload marks as placeholder text. */
-  projectOffloadedImages?: (messages: readonly Message[], placeholder: (ref: ImageAttachmentRef) => string) => readonly Message[];
-  /** ≥0.1.6: how many more leading retained occurrences must be offloaded. */
-  requiredImageOffload?: (messages: readonly Message[], budget: Record<string, unknown>, versionBytes: ImageVersionBytes) => number;
+interface SurfaceImagePolicy {
+  /** Render the surface's durable offload marks as placeholder text. */
+  projectOffloadedImages: typeof projectOffloadedImages;
+  /** How many more leading retained occurrences must be offloaded. */
+  requiredImageOffload: typeof requiredImageOffload;
 }
 /** Connection facts resolved fresh per request by the plugin entry. */
 interface CommandCodeConnectionOptions {
@@ -175,12 +169,11 @@ interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = Comman
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
   resolveAttachments?: ResolveAttachments;
   /**
-   * Request-image policy override (tests); defaults to the installed engine's
-   * own helpers, whichever generation they belong to. Injecting it is the only
-   * way to exercise the ≥0.1.6 durable-offload contract while this checkout
-   * still compiles against the 0.1.2 peers.
+   * Request-image policy override (tests); defaults to the engine's own
+   * `projectOffloadedImages`/`requiredImageOffload`. Injecting a stub is how a
+   * test observes the budget rungs a 413 walks.
    */
-  imageOffload?: CoreImagePolicy;
+  imageOffload?: SurfaceImagePolicy;
 }
 /** Account identity from `/alpha/whoami`. */
 interface CommandCodeAccount {
@@ -282,13 +275,9 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   private catalog;
   private readonly fetchImpl;
   private readonly resolveAttachments;
-  /** The engine's request-image policy, resolved once (tests may inject one). */
-  private readonly imagePolicy;
   /**
-   * The ≥0.1.6 durable contract, or `undefined` on a ≤0.1.5 engine — where the
-   * adapter must evict its own history. Resolved once: the contract a process
-   * speaks cannot change while it runs, and resolving here keeps every request
-   * on the same branch (see {@link surfaceImagePolicy}).
+   * The durable-offload contract, resolved once (tests may inject a stub). The
+   * contract cannot change while the process runs.
    */
   private readonly surfaceOffload;
   private readonly billingAccess;
@@ -790,7 +779,7 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.64.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
+ * registry (`command-code@1.65.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the union is this
  * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
@@ -816,9 +805,12 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * is the snapshot of the exclusion set and nothing more. The 1.62.0 → 1.64.0
  * diff of that union is EMPTY: both anchors were extracted from both bundles
  * during the 2026-09-23 check and each carries the same 20 members — which is
- * how rare a change here is expected to be. `meituan/LongCat-2.0` is the one
- * member the two anchors disagree about (it is in `modelSupportsZdr`'s set in
- * both releases and in neither `knownModelSupportsZdr` set), so the union is
+ * how rare a change here is expected to be. The 1.64.0 → 1.65.0 diff (2026-09-24)
+ * is the counterexample that proves the check still runs: exactly one member
+ * joins (`stealth/space-bunny-alpha`), and it is in both anchors. `meituan/
+ * LongCat-2.0` is the one member the two anchors disagree about (it is in
+ * `modelSupportsZdr`'s set in both releases and in neither `knownModelSupportsZdr`
+ * set), so the union is
  * what this table follows; reading only the sibling route table would drop it.
  */
 declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
@@ -883,7 +875,11 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * and 1.60.0 added `stepfun/Step-5-Preview` (Go); command-code@1.62.0 added the
  * MiMo V2.6 family — `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (Go) and
  * `xiaomi/mimo-v2.6-pro-ultraspeed` (GOAT) — so the 1.58.0 -> 1.62.0 window's
- * only tier changes are additions and the superset chain still holds.
+ * only tier changes are additions and the superset chain still holds. The
+ * 1.62.0 -> 1.65.0 window continues the pattern: 1.64.0 added
+ * `claude-opus-5-5` (Provider/Max), `gpt-6-sol` (Pro) and `gpt-6-luna` (Go),
+ * and 1.65.0 added `stealth/space-bunny-alpha` (Go, every tier) — additions
+ * only, no tier moves.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -1553,21 +1549,6 @@ declare const COMMANDCODE_SEARCH_PROVIDER_ID = "commandcode";
  */
 declare const DEFAULT_WEB_SEARCH_PROVIDER_ID = "deepseek-official";
 /**
- * Point the web seam's search selection at this plugin's provider (`commandcode`).
- * Sets the runtime field; the next search call honours it because `search()`
- * re-reads `searchProviderId` each time. Returns the prior id (or undefined).
- * Never throws: a hardened/frozen runtime shape must not break the
- * settings-save path that calls this — the provider simply stays
- * registered-but-unselected (the boot-time `searchProvider: commandcode`
- * cordis patch is the durable alternative).
- *
- * @deprecated Prefer {@link applyCommandCodeSearchSelection}: this overload
- * always overwrites the displaced backend with the factory default on
- * disable, so turning Command Code search off silences whichever provider
- * was selected before (e.g. modsearch) instead of restoring it (issue #26).
- */
-declare function selectCommandCodeSearchProvider(web: WebRuntime, enable: boolean): string | undefined;
-/**
  * Tracked web-search selection state for one mounted `WebRuntime`.
  *
  * `owner` marks whether this plugin currently owns the selection (i.e. it
@@ -1979,34 +1960,17 @@ interface Config {
   lang?: string;
 }
 /**
- * The 0.1.7-generation schema: every field volatile except the
- * composition-only `apiKey` secret.
+ * The Config schema: every field volatile except the composition-only `apiKey`
+ * secret.
  *
  * dsh 0.1.7's settings forms are projected from the schema's `meta.volatile`
  * nodes, so an unmarked field would be invisible to AND unwritable from the
- * settings page and refused by form-edit path validation — and on that
- * generation the loader hands `apply()` a live reference per marked field,
- * committing later writes without remounting this fiber (the
- * `loader/volatile-update` listener at the bottom of `apply` covers the facts
- * that are not re-derived per read). The mark is inert on engines whose
- * schemastery predates `.volatile()`.
+ * settings page and refused by form-edit path validation — and the loader
+ * hands `apply()` a live reference per marked field, committing later writes
+ * without remounting this fiber (the `loader/volatile-update` listener at the
+ * bottom of `apply` covers the facts that are not re-derived per read).
  */
 declare const Config: z<Config>;
-/**
- * The ≤0.1.6-generation registration schema: the same fields, NO volatile
- * marks.
- *
- * The legacy `installSection(owner, ns, schema, entry, hooks)` re-validates the
- * `entry` it is handed (`register()` → `resolve()` → `schema(mergeLayers(base,
- * section))`) and its `describe()` structuredClones that same `entry`. Since
- * schemastery ≥3.18.3 creates references at parse time on EVERY generation —
- * `dsh-settings` through 0.1.6 declares `schemastery: ^3.18.2`, so old engines
- * freshly installed today resolve 3.18.3 — a marked schema plus the raw
- * reference-carrying `config` is a boot-time `ValidationError` there. This
- * schema is therefore unmarked, and `apply` pairs it with
- * `unwrapVolatileConfig(config)`.
- */
-declare const LegacySettingsSchema: z<Config>;
 /** One resolution's complete request facts: connection plus credential reference. */
 interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
   apiKeyEnv: CredentialRef;
@@ -2020,5 +1984,5 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, LegacySettingsSchema, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, selectCommandCodeSearchProvider, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey };
+export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, accountUsable, apply, applyCommandCodeSearchSelection, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey };
 //# sourceMappingURL=index.d.ts.map

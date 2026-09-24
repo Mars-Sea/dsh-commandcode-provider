@@ -59,9 +59,18 @@ export const PAGE_CSS = `
 .cc-ruleCaret{flex-shrink:0;border-right:1.5px solid var(--dsw-alias-label-tertiary);border-bottom:1.5px solid var(--dsw-alias-label-tertiary);width:6px;height:6px;margin-right:4px;margin-bottom:2px;transform:rotate(45deg)}
 .cc-checkRow{align-items:center;gap:8px;display:inline-flex;min-width:0}
 .cc-checkRow:hover{cursor:pointer}
-.cc-check{appearance:none;flex-shrink:0;width:15px;height:15px;margin:0;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:var(--dsw-alias-bg-layer-1);position:relative}
+/* A hand-drawn box rather than the platform's accent-color checkbox: the
+ * native control's colours come from color-scheme, which the theme sets once
+ * at BOOT (it is not re-applied when the theme is switched in-session), so a
+ * native box can paint light-chrome white on a dark page. Drawn from tokens it
+ * cannot. The mark rides a brand-primary fill, so it takes the theme's brand
+ * foreground — the platform's pairing for anything painted on that fill, and
+ * the only one that survives the dark mode's near-white brand. The box
+ * outline is a border-l3 hairline: border-l2 (#ffffff1f in dark) leaves an
+ * unchecked box all but invisible against the menu surface. */
+.cc-check{box-sizing:border-box;appearance:none;flex-shrink:0;width:16px;height:16px;margin:0;border:1px solid var(--dsw-alias-border-l3);border-radius:4px;background:0 0;position:relative}
 .cc-check:checked{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
-.cc-check:checked::after{content:'';position:absolute;top:2px;left:5px;width:3px;height:7px;border:solid #fff;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.cc-check:checked::after{content:'';position:absolute;top:3px;left:5px;width:3px;height:7px;border:solid var(--dsw-alias-label-primary-foreground,#fff);border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
 .cc-checkName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* The model multi-select search box: stacked under the trigger while the
  * dropdown is open, same input sizing so the pair reads as one control. The
@@ -100,10 +109,29 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-accountLoginHint{padding:0 0 12px}
 .cc-toggleRow{align-items:center;gap:8px;cursor:pointer;display:flex}
 .cc-toggleRow:has(.cc-toggle:disabled){cursor:default}
-.cc-toggle{appearance:none;flex-shrink:0;background:var(--dsw-alias-border-l2);border-radius:999px;width:30px;height:18px;margin:0;cursor:pointer;position:relative;transition:background .15s ease}
+/* Modelled on the platform's own Switch primitive (ui-primitives
+ * Switch.module.css, dsh 0.1.6+): a 36x20 capsule that pads its track by 2px
+ * and slides a 16px thumb across the 32px content box, so the control is the
+ * same shape, size and motion as every other switch in the app.
+ *
+ * Three things are load-bearing. (1) corner-shape:round on BOTH the track and
+ * the thumb: the theme sets a global superellipse corner shape on every
+ * element, and a superellipse capsule squares its ends off around a round
+ * thumb (the primitive's own comment is about exactly this).
+ * (2) No literal colours. --dsw-alias-brand-primary INVERTS between the two
+ * modes (near-black in light, near-white in dark, on every engine generation
+ * this plugin supports), so the old hardcoded white thumb vanished on the
+ * checked track in dark mode; the brand foreground is the token the platform
+ * paints on that fill, so it contrasts in both modes and in any brand pack.
+ * (3) --dsw-alias-border-l3 as the off track: --dsw-alias-border-l2
+ * (#ffffff1f in dark) left the unchecked track indistinguishable from the card
+ * — the dark-mode half of the same report. */
+.cc-toggle{box-sizing:border-box;appearance:none;flex-shrink:0;width:36px;height:20px;margin:0;padding:2px;border:0;border-radius:10px;corner-shape:round;background:var(--dsw-alias-border-l3);cursor:pointer;position:relative}
 .cc-toggle:checked{background:var(--dsw-alias-brand-primary)}
-.cc-toggle::after{content:'';background:#fff;border-radius:50%;width:14px;height:14px;position:absolute;top:2px;left:2px;transition:left .15s ease}
-.cc-toggle:checked::after{left:14px}
+.cc-toggle::after{content:'';display:block;width:16px;height:16px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-primary-foreground);box-shadow:0 0 0 .5px var(--dsw-alias-border-l2);transition:transform .12s ease}
+/* 32px content box minus the 16px thumb. */
+.cc-toggle:checked::after{transform:translateX(16px)}
+.cc-toggle:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 .cc-toggle:disabled{cursor:default;opacity:.5}
 .cc-failed{min-width:0;color:var(--dsw-alias-label-error);flex:1;margin:0;font-size:12px;line-height:1.5}
 .cc-usageCard{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;padding:14px 16px;flex-direction:column;gap:12px;display:flex}
@@ -131,7 +159,7 @@ select.cc-input{appearance:none;-webkit-appearance:none;-moz-appearance:none;box
 .cc-usageBar{overflow:hidden;background:var(--dsw-alias-bg-layer-1);border-radius:999px;height:6px}
 .cc-usageBarFill{background:var(--dsw-alias-brand-primary);border-radius:999px;height:100%;transition:width .3s ease}
 .cc-usageBarFillWarn{background:var(--dsw-alias-label-error)}
-@media (prefers-reduced-motion:reduce){.cc-chevron,.cc-toggle,.cc-toggle::after,.cc-usageBarFill{transition:none}}.cc-usageWindowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
+@media (prefers-reduced-motion:reduce){.cc-chevron,.cc-toggle::after,.cc-usageBarFill{transition:none}}.cc-usageWindowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 .cc-usageMeta{align-items:center;gap:8px;display:flex}
 .cc-accountReport{flex-direction:column;gap:12px;display:flex}
 .cc-tabs{flex-wrap:wrap;gap:6px;display:flex}

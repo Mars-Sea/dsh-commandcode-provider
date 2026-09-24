@@ -21,6 +21,7 @@ import { redactSecrets } from '@deepseek-ai/dsh-settings'
 import type z from '@deepseek-ai/schemastery'
 
 import { Config, resolveAdapterOptions } from '../src/index.ts'
+import { unwrapVolatileConfig } from '../src/config-volatile.ts'
 
 test('literal API keys are declared secret and stripped from a settings descriptor', () => {
   const value = {
@@ -55,8 +56,14 @@ test('literal API keys are declared secret and stripped from a settings descript
 
 test('a literal API key still configures the route from a composition config', () => {
   // Redaction is a descriptor-facing concern only: the resolved runtime config
-  // keeps the literal, which is how the composition path serves requests.
-  const config = Config({ apiKey: 'sk-literal-123' })
+  // keeps the literal, which is how the composition path serves requests. The
+  // parse turns every MARKED field into a live reference, so the route resolves
+  // through the same unwrap `apply()` performs on every read — the reference is
+  // what the loader commits settings writes into.
+  const parsed = Config({ apiKey: 'sk-literal-123' })
+  const config = unwrapVolatileConfig(parsed)
   assert.equal(config.apiKey, 'sk-literal-123')
   assert.equal(resolveAdapterOptions(config).apiKeyEnv, 'COMMANDCODE_API_KEY')
+  // A write lands on the next read without re-parsing.
+  assert.equal(unwrapVolatileConfig(parsed).apiKeyEnv, 'COMMANDCODE_API_KEY')
 })

@@ -99,6 +99,9 @@ test('the denylist refuses to judge the classics', () => {
     ['shred -u secret.txt', 'filesystem-write'],
     ['dd if=/dev/zero of=/dev/sda', 'raw-device-write'],
     ['cat image.iso > /dev/sda', 'device-redirect'],
+    ['cat image.iso>/dev/sda', 'device-redirect'],
+    ['cat image.iso>>/dev/nvme0n1', 'device-redirect'],
+    ['echo x 2>/dev/disk1', 'device-redirect'],
     [':(){ :|:& };:', 'fork-bomb'],
     ['sudo rm -rf /var', 'privilege-escalation'],
     ['echo x | sudo tee /etc/hosts', 'privilege-escalation'],
@@ -265,6 +268,15 @@ test('a denylisted command is delegated without asking the model', async () => {
   const result = await guard.guard.judge({ toolName: 'bash', callId: 'c1' })
   assert.equal(result.kind, 'delegate')
   assert.match(result.kind === 'delegate' ? result.reason : '', /denylisted command \(rm-root\)/)
+  assert.equal(guard.calls.length, 0)
+})
+
+test('a device redirect without a preceding space never reaches the model', async () => {
+  const guard = makeGuard({ probability: 1 })
+  guard.guard.noteExecution(execution('c1', 'cat image.iso>/dev/sda'))
+  const result = await guard.guard.judge({ toolName: 'bash', callId: 'c1' })
+  assert.equal(result.kind, 'delegate')
+  assert.match(result.kind === 'delegate' ? result.reason : '', /denylisted command \(device-redirect\)/)
   assert.equal(guard.calls.length, 0)
 })
 

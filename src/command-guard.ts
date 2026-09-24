@@ -122,7 +122,7 @@ export const COMMAND_GUARD_DENY_LIST: readonly { readonly id: string; readonly p
   // Disk and filesystem primitives.
   { id: 'filesystem-write', pattern: /\b(?:mkfs(?:\.\w+)?|wipefs|fdisk|parted|shred)\b/ },
   { id: 'raw-device-write', pattern: /\bdd\b[^\n]*\bof=\/dev\// },
-  { id: 'device-redirect', pattern: /(?:^|[^0-9\w])>{1,2}\s*\/dev\/(?:sd|disk|nvme|hd)/ },
+  { id: 'device-redirect', pattern: />{1,2}\s*\/dev\/(?:sd|disk|nvme|hd)/ },
   { id: 'fork-bomb', pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/ },
   // Privilege and ownership.
   { id: 'privilege-escalation', pattern: /\b(?:sudo|doas)\b/ },

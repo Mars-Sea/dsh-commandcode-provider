@@ -33,9 +33,9 @@ test('every Harness peer and development package shares one supported release ra
   }
   // Why an exact-version disjunction rather than a caret: semver only admits a
   // prerelease inside the SAME major.minor.patch tuple as the comparator, so
-  // `^0.1.2-rc.1` resolves to 0.1.2-rc.1 alone — it never admits 0.1.3-alpha.1,
-  // 0.1.5-rc.2 or 0.1.6-alpha.1, which is how a broken engine pairing stayed
-  // invisible (issue #43).
+  // `^0.1.7-rc.1` resolves to 0.1.7-rc.1 alone. That exactness is the point —
+  // this bundle supports ONE engine release, and a range that quietly admitted
+  // a neighbour is how a broken pairing stayed invisible (issue #43).
   assert.ok(!range.includes('x') && !range.includes('>='), 'no compact comparator form can express this')
   for (const version of Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})) {
     assert.ok(
@@ -45,26 +45,15 @@ test('every Harness peer and development package shares one supported release ra
   }
 })
 
-test('per-release DSH compatibility is declared for every supported release', () => {
+test('per-release DSH compatibility names exactly the one supported release', () => {
   // DSH STORE only restores a listing from exact per-release records under
   // dsh.compatibility.dshReleases; a peer range alone is not evidence, and a
-  // release with no record reads as `unknown`. Records are additive: each
-  // release keeps its own entry, so the catalog can still list the plugin for a
-  // user who has not moved to the newest engine.
+  // release with no record reads as `unknown`. Exactly one record ships: this
+  // bundle is maintained against dsh 0.1.7-rc.1 and nothing else, so a stale
+  // entry for an older engine would advertise a pairing no test covers.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  for (const version of [
-    '0.1.2-rc.1',
-    '0.1.3-alpha.1',
-    '0.1.3-alpha.2',
-    '0.1.5-alpha.1',
-    '0.1.5-rc.1',
-    '0.1.5-rc.2',
-    '0.1.6-alpha.1',
-    '0.1.6-alpha.2',
-    '0.1.7-alpha.1',
-  ]) {
-    assert.equal(releases[version], 'compatible', `dshReleases[${version}]`)
-  }
+  assert.deepEqual(Object.keys(releases), ['0.1.7-rc.1'])
+  assert.equal(releases['0.1.7-rc.1'], 'compatible')
 })
 
 test('the manifest declares the same engine range it supports', () => {
@@ -77,7 +66,7 @@ test('the manifest declares the same engine range it supports', () => {
   assert.equal(pkg.engines?.node, '>=22')
 })
 
-test('the rc.1 Web client remains enabled without dsh-client-runtime', () => {
+test('the Web client remains enabled without dsh-client-runtime', () => {
   assert.equal(pkg.dsh?.client?.platform, 'web')
   assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-runtime'], undefined)
   assert.equal(pkg.devDependencies?.['@deepseek-ai/dsh-client-runtime'], undefined)
@@ -88,13 +77,12 @@ test('only the client-seeded UI peers are optional, and each stays a development
   // react, react/jsx-runtime, react-dom, react-dom/client,
   // @deepseek-ai/cordis, @deepseek-ai/dsh-client-store,
   // @deepseek-ai/dsh-client-ui-slots, @deepseek-ai/dsh-client-ui-primitives,
-  // read out of the 0.1.2-rc.1, 0.1.5-rc.2 and 0.1.6-alpha.2 engines alike — and
-  // lib/client.js requires exactly three of them: react, react/jsx-runtime (both
-  // from the `react` package) and @deepseek-ai/dsh-client-ui-primitives. No
-  // installed copy is therefore needed at runtime, while an older Desktop
-  // release — which validates the whole peer closure of every active plugin and
-  // ships host packages only — refuses to start unless those three are optional
-  // (`desktop profile: … requires missing …`).
+  // @deepseek-ai/dsh-client-ui-dockkit — and lib/client.js requires exactly
+  // three of them: react, react/jsx-runtime (both from the `react` package) and
+  // @deepseek-ai/dsh-client-ui-primitives. No installed copy is therefore needed
+  // at runtime, while a Desktop release — which validates the whole peer closure
+  // of every active plugin and ships host packages only — refuses to start
+  // unless those three are optional (`desktop profile: … requires missing …`).
   //
   // The set is load-bearing in BOTH directions, which is why it is pinned as an
   // exact list rather than merely checked for well-formedness:
@@ -102,10 +90,8 @@ test('only the client-seeded UI peers are optional, and each stays a development
   //     missing non-optional peers), so every name here must also be a
   //     devDependency or the authortime tree silently loses it. `react` is the
   //     live case: tests/client-boot.test.ts imports the React component tree at
-  //     runtime, and the committed lock still carries react only because
-  //     @deepseek-ai/dsh-client-ui-primitives@0.1.2-rc.1 depends on it — the
-  //     0.1.6-alpha.2 line declares no dependencies at all, so the next
-  //     package-lock.json refresh would drop it.
+  //     runtime, and the engine's @deepseek-ai/dsh-client-ui-primitives declares
+  //     no dependency on it, so nothing else would pull it in.
   //   - a host-required peer marked optional here would stop being installed in a
   //     fresh marketplace generation, and no other check can see that:
   //     test:engine stages the ENGINE's own peers, and test:install only asserts

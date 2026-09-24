@@ -27,7 +27,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **Plan-aware picker** — models above your subscription tier are hidden by default (toggleable); an optional **Model allowlist** keeps only your favorites in the picker.
 - **Reasoning-effort support** — models with selectable reasoning effort levels expose them in the picker.
 - **Image input** — Vision-capable models accept images.
-- **Plans & quota panel** — an optional Command Code card at the bottom of the sidebar (directly above Settings) shows the serving account's plan and its 5-hour and weekly windows; clicking it opens a dashboard with the billing period, both windows as progress bars with reset times, monthly credit consumption, and the purchased/free balances. The dashboard's **×** button hands the center column back to your conversation (the current session is untouched). **Off by default** — turn on *"Show the quota card in the sidebar"* under **Settings → Command Code → Advanced** to show it, and the same switch hides it again (a hidden card draws nothing at all and runs no background usage poll); the change lands as soon as you save. The panel follows your harness language (中文 / English) and needs dsh 0.1.5 (rc.1) or newer.
+- **Plans & quota panel** — an optional Command Code card at the bottom of the sidebar (directly above Settings) shows the serving account's plan and its 5-hour and weekly windows; clicking it opens a dashboard with the billing period, both windows as progress bars with reset times, monthly credit consumption, and the purchased/free balances. The dashboard's **×** button hands the center column back to your conversation (the current session is untouched). **Off by default** — turn on *"Show the quota card in the sidebar"* under **Settings → Command Code → Advanced** to show it, and the same switch hides it again (a hidden card draws nothing at all and runs no background usage poll); the change lands as soon as you save. The panel follows your harness language (中文 / English).
 - **Session cost estimate** — published-rate estimates (`≈`) beside the composer token counter and in its usage dialog, using each request's model, request time and context tier from durable session history. Model switches and viewing the session later do not reprice earlier requests. Mixed-provider or unpriced usage shows a labeled subtotal (`≥`); missing history or wholly unpriceable usage stays hidden. These are estimates from the installed price snapshot, not provider invoices. Also English on every harness language.
 - **Web search** — the dsh `web_search` tool is backed by the Command Code Provider API (`/alpha/web-search`) with the same key/endpoint as chat, so no separate search key or base URL is needed. See [Web search](#web-search).
 
@@ -35,26 +35,29 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-Pick the release line that matches your DeepSeek Harness version:
+This release supports **dsh 0.1.7-rc.1 and nothing else** — the plugin's peer
+range is that one version, and its compatibility record names it alone:
 
-- **dsh 0.1.2-rc.1 or later** (the current 0.1.2 line — what `@latest` installs today):
+```sh
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
+```
+
+- **Older dsh releases.** The 0.1.2–0.1.6 line is no longer supported: those
+  engines predate the 0.1.7 settings rewrite, the `RequestMessage` envelope, and
+  the durable image-offload contract, and the compatibility code that bridged
+  the two was removed. The last plugin release covering them is 0.11.11; the
+  0.5.0-era Harness line's last release is 0.9.1. Both are installed by exact
+  version and neither is maintained:
 
   ```sh
-  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11   # dsh 0.1.2–0.1.6
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1     # dsh 0.5.0 line
   ```
-
-- **Older dsh releases** (the 0.5.0 line and earlier, which use the rc-era Host/browser APIs) — the last plugin version supporting them is 0.9.1, installed by exact version. That line is no longer under active maintenance:
-
-  ```sh
-  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1
-  ```
-
-> The `latest` tag points at the current 0.1.2-line plugin release. Users on the old 0.5.0-era Harness line must pin `@0.9.1` explicitly.
 
 **pnpm 11 holds back new releases.** Its `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly:
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.12
 ```
 
 The same applies to every profile you install into, including the terminal UI below.
@@ -66,14 +69,14 @@ Fresh pnpm 10 marketplace generations are supported directly. Do not add a separ
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.2-rc.1+
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.7-rc.1
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
 Each profile updates separately — the terminal UI owns its own plugin list (see below):
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.11
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.12
 ```
 
 To move to a version published less than 24 hours ago, name it exactly as in Install above; pnpm 11's age gate resolves `@latest` to the previous release instead.
@@ -102,7 +105,7 @@ After restart, enter your API key in **Settings → Command Code** and save; **S
 The plugin also works under a terminal front door. **Each dsh profile owns its own plugin list**, so the web install above does not reach the terminal — add the plugin to the `dsh-tui` profile as well:
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.11
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.12
 ```
 
 Pin the exact version here. For the first 24 hours after a release, a bare package name (or `@latest`) is silently resolved to the previous one: the install succeeds, but the profile gets the older build — which is how a fresh terminal install ends up with no **`/settings` → Command Code** page and no `commandcode` models at all.
@@ -140,7 +143,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin needs a dsh engine that exports `ToolCallId` from `@deepseek-ai/dsh-llm` — **dsh 0.1.2-alpha.3 or later**. That includes the engine dsh-TUI recommends (0.1.2-rc.1) and every later release, but *not* the oldest engines its peer range nominally allows: on dsh 0.1.0-rc.6 or 0.1.1-rc.2 the plugin's module import fails and the TUI will not start. Upgrade the engine, or use the web profile.
+**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.1.7-rc.1**. Its `@deepseek-ai/dsh-*` peer range is `^0.1.7-rc.1` (semver resolves that to 0.1.7-rc.1 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
 
 ## Usage dashboard
 

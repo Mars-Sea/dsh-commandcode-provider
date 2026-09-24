@@ -316,7 +316,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   cardTitle: 'Command Code',
   cardRouteActive: '已启用',
   cardLoadingHint: '正在读取 Command Code 配置…',
-  cardRegistrationHint: '此卡片随 Command Code 插件注册，需要较新版本的 DeepSeek Harness 才会显示完整内容。',
+  cardRegistrationHint: '此卡片由 Command Code 插件提供，正在等待设置页装配，稍后即可显示完整内容。',
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
@@ -501,5 +501,5 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   cardTitle: 'Command Code',
   cardRouteActive: 'Active',
   cardLoadingHint: 'Loading the Command Code configuration…',
-  cardRegistrationHint: 'This card is contributed by the Command Code plugin; a newer DeepSeek Harness is needed to show the full controls.',
+  cardRegistrationHint: 'This card is contributed by the Command Code plugin and is waiting for the settings page to finish assembling.',
 }

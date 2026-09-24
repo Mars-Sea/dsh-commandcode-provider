@@ -27,32 +27,29 @@
 - **按套餐过滤**：默认隐藏超出订阅套餐的模型，可一键关闭；「模型白名单」可进一步只保留常用模型。
 - **推理强度支持**：支持推理强度的模型可在选择器中选择档位。
 - **图片输入**：Vision 模型支持发送图片。
-- **套餐与配额面板**：可选的 Command Code 卡片位于侧边栏底部（Settings 正上方），显示当前服务账号的套餐与 5 小时 / 每周两个配额窗口；点击后在中间栏打开面板，包含计费周期、两个窗口的进度条与重置时间、月度额度消耗，以及已购买 / 赠送余额。面板右上角的 **×** 按钮可随时把中间栏交还给会话（不会切换当前会话）。**默认关闭**——在 **设置 → Command Code → 高级设置** 中打开「在侧边栏显示额度卡片」即可显示，同一开关也能随时隐藏（隐藏时左侧不渲染任何内容，也不会为其后台刷新用量）。面板文案跟随 Harness 显示语言（中文 / English），需要 dsh 0.1.5（rc.1）或更高版本。
+- **套餐与配额面板**：可选的 Command Code 卡片位于侧边栏底部（Settings 正上方），显示当前服务账号的套餐与 5 小时 / 每周两个配额窗口；点击后在中间栏打开面板，包含计费周期、两个窗口的进度条与重置时间、月度额度消耗，以及已购买 / 赠送余额。面板右上角的 **×** 按钮可随时把中间栏交还给会话（不会切换当前会话）。**默认关闭**——在 **设置 → Command Code → 高级设置** 中打开「在侧边栏显示额度卡片」即可显示，同一开关也能随时隐藏（隐藏时左侧不渲染任何内容，也不会为其后台刷新用量）。面板文案跟随 Harness 显示语言（中文 / English）。
 - **会话费用估算**：在输入框下方的 token 计数旁及用量对话框中显示估算金额（`≈`），根据持久化历史中每次请求的模型、请求时间和上下文阶梯分别计价。切换模型或稍后查看不会重新定价之前的请求。混合供应商或缺少费率时显示已定价部分的小计（`≥`）；缺少历史事实或完全无法定价时不显示金额。结果基于插件内的价格快照，不等同于供应商账单。同样固定为英文。
 - **联网搜索**：dsh 的 `web_search` 工具由 Command Code Provider API（`/alpha/web-search`）承载，复用聊天同一个 key 与端点，无需单独配置搜索 key 或地址。详见[联网搜索](#联网搜索)。
 
 ## 安装
 
-按你的 DeepSeek Harness 版本选择对应的发布线：
+本版本**只支持 dsh 0.1.7-rc.1**：插件的 peer 范围就是这一个版本，兼容性记录里也只列它。
 
-- **dsh 0.1.2-rc.1 或更高版本**（当前 0.1.2 线，即 `@latest` 现在安装的版本）：
+```sh
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
+```
 
-  ```sh
-  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
-  ```
-
-- **更早的 dsh 版本**（0.5.0 线及更早，使用 rc 时代的 Host/浏览器 API）——支持它们的最后一个插件版本是 0.9.1，按精确版本安装。该线不再积极维护：
+- **更早的 dsh 版本。** 0.1.2–0.1.6 线已不再支持：那些引擎早于 0.1.7 的设置重写、`RequestMessage` 消息封装和持久化图片卸载契约，用来桥接两代引擎的兼容代码已经删除。覆盖它们的最后一个插件版本是 0.11.11；0.5.0 时代 Harness 线的最后一个版本是 0.9.1。两者都按精确版本安装，且都不再维护：
 
   ```sh
-  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11   # dsh 0.1.2–0.1.6
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1     # dsh 0.5.0 线
   ```
-
-> `latest` tag 指向当前 0.1.2 线的插件版本。旧 0.5.0 时代的 Harness 用户必须显式钉住 `@0.9.1`。
 
 **pnpm 11 会拦下刚发布的新版本。** 它的 `minimumReleaseAge` 默认为 1440 分钟，发布不足一天的版本会被跳过，`@latest` 解析到**上一个**版本 —— 而且是静默的，命令照样以成功退出。想装 24 小时内发布的版本，必须写精确版本号：
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.12
 ```
 
 这一点对每个 profile 都成立，包括下面的终端界面。
@@ -64,14 +61,14 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11
 用与安装时相同的 tag 更新：
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.2-rc.1 及以上
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.7-rc.1
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 更早的 dsh（0.5.0 线，不再维护）
 ```
 
 每个 profile 各自更新 —— 终端界面有独立的插件列表（见下文）：
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.11
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.12
 ```
 
 要更新到发布不足 24 小时的版本，和上面的安装一样写精确版本号；pnpm 11 的年龄门禁会把 `@latest` 解析成上一个版本。
@@ -100,7 +97,7 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 插件同样支持终端前端。**每个 dsh profile 有独立的插件列表**，所以上面那条 Web 安装命令不会装到终端里 —— 还要把插件装进 `dsh-tui` profile：
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.11
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.12
 ```
 
 这里请写精确版本号。新版本发布后的 24 小时内，只写包名（或 `@latest`）会被静默解析到上一个版本 —— 安装命令照样成功，但 profile 里拿到的是旧版本，结果就是全新的终端安装里既没有 **`/settings` → Command Code** 页面，也看不到任何 `commandcode` 模型。
@@ -138,7 +135,7 @@ cmd login                               # 写入 ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**引擎版本要求。** 插件需要导出了 `ToolCallId` 的 dsh 引擎，即 **dsh 0.1.2-alpha.3 或更高**。这覆盖了 dsh-TUI 推荐的引擎（0.1.2-rc.1）以及之后的所有版本，但不包含它 peer 范围里名义上允许的最老引擎：在 dsh 0.1.0-rc.6 / 0.1.1-rc.2 上，插件的模块导入会失败，TUI 无法启动。请升级引擎，或改用 web profile。
+**引擎版本要求。** 插件只针对一个引擎维护：**dsh 0.1.7-rc.1**。它的 `@deepseek-ai/dsh-*` peer 范围是 `^0.1.7-rc.1`（按 semver，这只会解析到 0.1.7-rc.1），`dsh.compatibility.dshReleases` 也只记录这一个版本。在更早的引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
 
 ## 用量面板
 

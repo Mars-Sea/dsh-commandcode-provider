@@ -2,7 +2,8 @@
  * System One decision-client tests (node:test, zero deps). Run with `npm test`.
  *
  * These pin the wire contract this plugin reads from
- * `POST {apiBase}/provider/v1/systemone` (command-code@1.64.0), which is the
+ * `POST {apiBase}/provider/v1/systemone` (command-code@1.65.0, unchanged since
+ * 1.64.0), which is the
  * whole reason the guard can exist:
  *
  * - the request body `{ model, state, questions }` with the typed-question

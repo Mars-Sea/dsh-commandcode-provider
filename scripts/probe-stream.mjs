@@ -30,7 +30,7 @@ if (!KEY) {
 
 const tracePath = process.env.PROBE_TRACE ?? join(tmpdir(), 'dsh-commandcode-probe.jsonl')
 process.env.DSH_COMMANDCODE_TRACE = tracePath
-console.log(`credential: resolved (${KEY.length} chars); trace -> ${tracePath}`)
+console.log(`credential: resolved; trace -> ${tracePath}`)
 
 const adapter = new CommandCodeAdapter({
   options: () => ({

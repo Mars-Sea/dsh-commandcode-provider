@@ -28,8 +28,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { createSettingsScope, type SettingsRemoteNamespace, type SettingsScopeContext } from './settings-scope.ts'
 import { CommandCodeSettingsController, COMMANDCODE_NS, type SettingsPageState } from './settings.ts'
-import type { HostDescriptionSource, SettingsPageApi } from './settings.ts'
-import { adaptLegacyCredentials, type LegacyCredentialsApi } from './legacy-credentials.ts'
+import type { SettingsPageApi } from './settings.ts'
 import { CommandCodeUsageController, type UsagePageState, type UsageRemote } from './usage.ts'
 import { CommandCodePricesController, type SessionCostPricesState } from './prices.ts'
 import { CommandCodeLoginController, type LoginPageState, type LoginRemote } from './login.ts'
@@ -93,16 +92,6 @@ function injectPanelCss(): () => void {
 const PANEL_ID = 'commandcode-panel'
 
 /**
- * ui-conversation's reserved `main` key, used only as the exit fallback for a
- * layout whose `selectPanel` predates the `null` "show the Conversation"
- * selection (see `close` in {@link applyClientSurfaces}). Declared locally for
- * the same reason as {@link PANEL_ID}: ui-conversation is not a dependency of
- * this bundle, and the key is a published contract of the layout (its README
- * names `conversation` as reserved for the Conversation).
- */
-const CONVERSATION_PANEL_ID = 'conversation'
-
-/**
  * The composer figure's entry id in `conversation.composer.dock`. Its own id,
  * not the shipped `stats` cell's: reusing `stats` would REPLACE the tokens /
  * cache-hit / throughput readout rather than inject into it, and that readout
@@ -125,21 +114,10 @@ interface LayoutSelectionSeam {
 }
 
 /**
- * Connection fields retained by pre-0.1.2 clients and absent from the current
- * transport handle. Only the credential face and the host description are read.
- */
-interface LegacyConnectionLike {
-  api?: { credentials?: LegacyCredentialsApi }
-  hostDescription?: HostDescriptionSource
-}
-
-/**
- * Client plugin body. Gates on the services shared by both client generations
- * (`slots`, `locale`, `connection`, `remote`) — never on `settingsScope`,
- * which 0.1.7 removed and which the settings scope here replaces for every
- * generation. Current clients mount the page after `remote.credentials`
- * appears; legacy clients mount it from the connection ApiProxy credential
- * face.
+ * Client plugin body. Gates on `slots`, `locale` and `remote` — never on
+ * `settingsScope`, whose wrapper service the 0.1.7 settings rewrite removed
+ * (the settings scope here speaks the `remote.settings` wire directly). The
+ * page mounts once `remote.credentials` appears.
  */
 export function apply(ctx: Context): void {
   injectPageCss()
@@ -153,23 +131,14 @@ export function apply(ctx: Context): void {
   // The plans & quota panel's copy is a namespace of its own: the panel is not
   // part of the settings page, but it follows the SAME active language (both
   // panel registrations declare it below, which is what binds their `t` seat).
-  // Registered here rather than next to those registrations so the namespace
-  // exists even on the legacy credential path, which returns early below.
   ctx.effect(
     () => ctx.locale.register(PANEL_LOCALE_NS, { zh: PANEL_COPY_ZH, en: PANEL_COPY_EN }),
     'dsh-commandcode-provider: panel copy',
   )
 
-  const connection = ctx.get('connection') as LegacyConnectionLike | undefined
-  const legacyApi = adaptLegacyCredentials(connection?.api?.credentials)
-  if (legacyApi !== undefined) {
-    applyClientSurfaces(ctx, legacyApi, connection?.hostDescription)
-    return
-  }
-
-  // DSH 0.1.2 exposes credentials through a Typert Remote namespace. Keep it
-  // optional at the root so a legacy client without `remote.credentials` can
-  // still activate through the ApiProxy branch above.
+  // Credentials reach the browser as a Typert Remote namespace. The inject is
+  // the activation gate for every surface below, so a profile whose Host serves
+  // no credentials namespace simply never mounts the page.
   ctx.inject(['remote.credentials'], (remoteCtx) => {
     const credentials = (remoteCtx.remote as unknown as {
       credentials: SettingsPageApi['credentials']
@@ -178,11 +147,10 @@ export function apply(ctx: Context): void {
   })
 }
 
-/** Mount the one shared UI implementation over either credential transport. */
+/** Mount the one shared UI implementation. */
 function applyClientSurfaces(
   ctx: Context,
   api: SettingsPageApi,
-  hostDescription?: HostDescriptionSource,
 ): void {
   // The settings scope: this plugin's own binding of the `llm-commandcode`
   // namespace over `remote.settings` (see `./settings-scope.ts`). The harness
@@ -230,7 +198,6 @@ function applyClientSurfaces(
   const controller = new CommandCodeSettingsController(
     scope,
     { ...api, models: () => modelsRemote?.() ?? Promise.resolve({ ok: false, error: { message: 'commandcode/models remote is not mounted' } }) },
-    hostDescription,
   )
   ctx.effect(() => () => controller.dispose(), 'dsh-commandcode-provider: settings controller')
   const store = createSnapshotStore<SettingsPageState>(controller.state())
@@ -494,19 +461,16 @@ function applyClientSurfaces(
   // the harness's active language and a switch re-renders it (the renderer
   // mints a fresh `t` per revision, and its identity is the invalidation).
   //
-  // Version reality, measured across 0.1.1-rc.2 … 0.1.5-rc.2 (see AGENTS.md):
-  // `sidebar.footer.action` and `conversation.composer.dock` exist and RENDER in
-  // every one of those releases, while the layout's keyed `main` slot and its
-  // `selectPanel` arrive in 0.1.5 (alpha.2 and rc.1 respectively). So the three
-  // slots do NOT share a version floor, and the honest boundary is the layout
-  // seam: without `selectPanel` the card would register, render, and do nothing
-  // when clicked — a dead button. The footer registration is therefore gated on
-  // the `layout` service, which arrives with the same package that owns `main`.
+  // The footer card opens the panel through `layout.selectPanel`, so it is
+  // gated on the `layout` SERVICE rather than only on its slot: a profile whose
+  // `main` declaration exists but whose layout never mounted (a headless client)
+  // would otherwise register a card that renders and does nothing when clicked
+  // — a dead button.
   //
   // The dashboard cell itself needs no such gate: registering a cell for a
   // declaration that never arrives is a no-op by construction (the callback only
-  // runs while the declaration is live), so on an older engine it simply never
-  // registers. Only the always-declared footer seat needed an explicit guard.
+  // runs while the declaration is live). Only the always-declared footer seat
+  // needed an explicit guard.
   //
   // Shape notes:
   //   * The stylesheet gets its own `ctx.effect` rather than riding an `inject`
@@ -533,28 +497,17 @@ function applyClientSurfaces(
     // last line of defence against a layout that renames it.
     open: () => {
       const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
-      if (typeof layout?.selectPanel === 'function') layout.selectPanel(PANEL_ID)
+      layout?.selectPanel(PANEL_ID)
     },
     // The dashboard's way out (issue #41). It occupies the center column in
     // place of the Conversation, and `open()` above is the ONLY other panel
     // selection this plugin makes — so without an exit the panel is a one-way
     // door: clicking the sidebar card just re-selects it. `selectPanel(null)`
     // is layout's "show the Conversation" selection and leaves the current
-    // Session untouched. A layout whose `selectPanel` predates that `null`
-    // form accepts only a registered key, so fall back to ui-conversation's
-    // reserved `main` seat; a failure here must not take the surface down.
+    // Session untouched.
     close: () => {
       const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
-      if (typeof layout?.selectPanel !== 'function') return
-      try {
-        layout.selectPanel(null)
-      } catch {
-        try {
-          layout.selectPanel(CONVERSATION_PANEL_ID)
-        } catch (error: unknown) {
-          console.error('[dsh-commandcode-provider] could not close the plans & quota panel:', error)
-        }
-      }
+      layout?.selectPanel(null)
     },
   })
 
@@ -573,13 +526,9 @@ function applyClientSurfaces(
   // panel behind it. `ctx.inject(['layout'], …)` runs its body when that service
   // is live and re-runs it if the service is replaced, mirroring how the Remote
   // namespace is mounted — so a profile without ui-layout (the TUI, a headless
-  // client) never registers the card, and a pre-0.1.5 engine that mounts a
-  // layout lacking `selectPanel` is filtered out by the explicit capability
-  // check below. Without this gate the card would render and silently do
-  // nothing on click, which is worse than not being there.
+  // client) never registers the card. Without this gate the card would render
+  // and silently do nothing on click, which is worse than not being there.
   ctx.inject(['layout'], (layoutCtx) => {
-    const layout = layoutCtx.get('layout') as LayoutSelectionSeam | undefined
-    if (typeof layout?.selectPanel !== 'function') return
     try {
       layoutCtx.slots.inject('sidebar.footer.action', () => layoutCtx.slots.register(
         // `order` is the only control over position inside a list slot, and the
@@ -612,9 +561,7 @@ function applyClientSurfaces(
   // (`useProjection`), which the owner supplies to every occupant.
   //
   // No `locale` namespace and no `t` seat: the figure is English by
-  // construction, from `./session-cost.ts`. dsh builds before 0.1.5 have no
-  // `conversation.composer.dock`, so this registration silently does not happen
-  // there — as does the injection itself, whose DOM anchors are 0.1.5 markup.
+  // construction, from `./session-cost.ts`.
   const sessionCostFace = (): SessionCostInjected => ({
     hooks: { commandCodePrices: pricesStore },
   })
@@ -634,6 +581,5 @@ function applyClientSurfaces(
 export const inject: readonly string[] = [
   'slots',
   'locale',
-  'connection',
   'remote',
 ]

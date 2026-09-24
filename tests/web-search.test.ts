@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection, selectCommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID } from '../src/web-search.ts'
+import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection, COMMANDCODE_SEARCH_PROVIDER_ID } from '../src/web-search.ts'
 import { COMMAND_CODE_CLI_VERSION } from '../src/adapter.ts'
 
 /** A fetch stub that records the request and returns a scripted response. */
@@ -257,28 +257,6 @@ test('available() is false for a blank or non-parseable apiBase', async () => {
   assert.equal(good.available(), true)
 })
 
-test('selectCommandCodeSearchProvider rewrites the runtime selection field', () => {
-  // A minimal structural stand-in for WebRuntime: the runtime selection field
-  // is a plain writable property (see web-search.ts for the rationale).
-  const web = { searchProviderId: 'deepseek-official' } as unknown as { searchProviderId?: string }
-
-  const prior = selectCommandCodeSearchProvider(web as never, true)
-  assert.equal(prior, 'deepseek-official')
-  assert.equal((web as { searchProviderId?: string }).searchProviderId, COMMANDCODE_SEARCH_PROVIDER_ID)
-
-  // Disabling restores the shipped default (legacy behaviour, kept for
-  // compatibility; new code prefers applyCommandCodeSearchSelection).
-  selectCommandCodeSearchProvider(web as never, false)
-  assert.equal((web as { searchProviderId?: string }).searchProviderId, DEFAULT_WEB_SEARCH_PROVIDER_ID)
-})
-
-test('selectCommandCodeSearchProvider keeps an undefined field when prior was undefined', () => {
-  const web = {} as { searchProviderId?: string }
-  const prior = selectCommandCodeSearchProvider(web as never, true)
-  assert.equal(prior, undefined)
-  assert.equal(web.searchProviderId, COMMANDCODE_SEARCH_PROVIDER_ID)
-})
-
 test('applyCommandCodeSearchSelection restores a sibling pin (e.g. modsearch) on disable', () => {
   // The issue #26 repro: a sibling plugin pinned `searchProvider: modsearch`
   // at construction time. Enabling must remember it; disabling must hand the
@@ -358,30 +336,52 @@ test('applyCommandCodeSearchSelection never throws on a hardened runtime', () =>
   applyCommandCodeSearchSelection(frozen, state, false)
 })
 
+
+/**
+ * One config object shaped the way dsh 0.1.7's loader hands it to `apply()`:
+ * every marked field is a frozen `{ get() }` reference whose value the loader
+ * commits in place. `plain` is the reference-carrying object; `set()` stands in
+ * for a settings write, and the caller then dispatches `loader/volatile-update`
+ * exactly as `cordis-plugin-loader` does.
+ */
+/**
+ * Dispatch `loader/volatile-update`, the event `cordis-plugin-loader` raises on
+ * the owning fiber after committing a settings write in place. Typed events do
+ * not declare it (the loader is not a peer of this bundle), so the dispatch goes
+ * through a structural view, exactly as the plugin's own listener does.
+ */
+function emitVolatileUpdate(ctx: unknown): void {
+  (ctx as { emit(event: string, paths: readonly (readonly string[])[]): void })
+    .emit('loader/volatile-update', [['webSearch']])
+}
+
+function volatileProbeConfig(values: Record<string, unknown>): {
+  plain: Record<string, unknown>
+  set(field: string, value: unknown): void
+} {
+  const live = new Map(Object.entries(values))
+  const plain: Record<string, unknown> = {}
+  for (const field of live.keys()) {
+    plain[field] = Object.freeze({ get: () => live.get(field) })
+  }
+  return {
+    plain,
+    set(field, value) {
+      live.set(field, value)
+    },
+  }
+}
+
 test('host apply() hands the selection back to the prior backend when webSearch turns off', async () => {
   // End-to-end over the real plugin boot: the `web` service starts with a
   // sibling's pin (`modsearch`, as its own cordis patch would leave it).
-  // Booting with webSearch on displaces it; flipping the toggle off through
-  // the settings seam restores it — the exact issue #26 flow.
+  // Booting with webSearch on displaces it; flipping the volatile `webSearch`
+  // field and dispatching `loader/volatile-update` — the event dsh 0.1.7's
+  // loader raises after committing a settings write in place — restores it,
+  // which is the exact issue #26 flow.
   const { Context } = await import('@deepseek-ai/cordis')
   const { apply } = await import('../src/index.ts')
   const { WebRuntime } = await import('@deepseek-ai/dsh-web')
-  const SettingsService = await import('@deepseek-ai/dsh-settings')
-
-  // A minimal concrete SettingsProvider: the abstract base's init only needs
-  // `load()` (published as the document) plus the real
-  // register/installSection/update machinery it ships.
-  class MemorySettings extends SettingsService.SettingsProvider {
-    override readonly writable = true
-    override async load(): Promise<Record<string, unknown>> {
-      return {}
-    }
-    protected override async persist(
-      _ns: unknown,
-      _section: Record<string, unknown>,
-    ): Promise<void> {
-    }
-  }
 
   const ctx = new Context()
   ctx.provide('llm', {
@@ -389,49 +389,36 @@ test('host apply() hands the selection back to the prior backend when webSearch 
     registerAdapter: () => {},
   })
   await ctx.plugin(WebRuntime, { searchProvider: 'modsearch' })
-  // `SettingsProvider`'s constructor takes only the context, so the plugin
-  // declares no config and takes none.
-  await ctx.plugin(MemorySettings)
 
-  let settingsNs: string | undefined
-  const seen: string[] = []
-  const settings = ctx.get('settings') as {
-    register: (ns: string, schema: unknown, opts: unknown) => unknown
-    installSection: (
-      owner: unknown,
-      ns: string,
-      schema: unknown,
-      entry: unknown,
-      hooks: { setSource: (s: () => unknown) => void; onChange: () => void },
-    ) => void
-  }
-  const origInstall = settings.installSection.bind(settings)
-  settings.installSection = (owner, ns, schema, entry, hooks) => {
-    settingsNs = ns
-    return origInstall(owner, ns, schema, entry, hooks)
-  }
-  const origRegister = settings.register.bind(settings)
-  settings.register = ((ns: string, schema: unknown, opts: unknown) => {
-    seen.push(ns)
-    return origRegister(ns, schema, opts)
-  }) as typeof settings.register
+  // A settings service stub: the plugin declares its auto-form policy on it,
+  // and this records that declaration.
+  const policies: unknown[] = []
+  ctx.provide('settings', {
+    configure: (presentation: unknown) => {
+      policies.push(presentation)
+      return () => {}
+    },
+  })
 
-  await ctx.plugin(apply, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
-  assert.equal(seen.includes('llm-commandcode'), true)
-  assert.equal(settingsNs, 'llm-commandcode')
+  const config = volatileProbeConfig({ webSearch: true })
+  apply(ctx, config.plain as never)
 
+  // The settings inject resolves on its own tick; the policy declaration is
+  // an effect on the settings child, so let it run before asserting.
+  await new Promise((resolve) => setImmediate(resolve))
   const web = ctx.get('web') as unknown as { searchProviderId?: string }
+  assert.deepEqual(policies, [{ auto: false }])
   assert.equal(web.searchProviderId, 'commandcode')
 
-  await (settings as unknown as {
-    update: (ns: string, patch: Record<string, unknown>) => Promise<unknown>
-  }).update('llm-commandcode', { webSearch: false })
+  // The loader commits a settings write in place and notifies the owning
+  // fiber; the plugin re-applies the facts config alone cannot carry.
+  config.set('webSearch', false)
+  emitVolatileUpdate(ctx)
   assert.equal(web.searchProviderId, 'modsearch')
 
   // And back on: the remembered backend is displaced again.
-  await (settings as unknown as {
-    update: (ns: string, patch: Record<string, unknown>) => Promise<unknown>
-  }).update('llm-commandcode', { webSearch: true })
+  config.set('webSearch', true)
+  emitVolatileUpdate(ctx)
   assert.equal(web.searchProviderId, 'commandcode')
 })
 
@@ -448,19 +435,6 @@ test('host apply() leaves a pre-existing commandcode pin alone when webSearch tu
   const { Context } = await import('@deepseek-ai/cordis')
   const { apply } = await import('../src/index.ts')
   const { WebRuntime } = await import('@deepseek-ai/dsh-web')
-  const SettingsService = await import('@deepseek-ai/dsh-settings')
-
-  class MemorySettings extends SettingsService.SettingsProvider {
-    override readonly writable = true
-    override async load(): Promise<Record<string, unknown>> {
-      return {}
-    }
-    protected override async persist(
-      _ns: unknown,
-      _section: Record<string, unknown>,
-    ): Promise<void> {
-    }
-  }
 
   const ctx = new Context()
   ctx.provide('llm', {
@@ -468,14 +442,14 @@ test('host apply() leaves a pre-existing commandcode pin alone when webSearch tu
     registerAdapter: () => {},
   })
   await ctx.plugin(WebRuntime, { searchProvider: 'commandcode' })
-  await ctx.plugin(MemorySettings)
-  await ctx.plugin(apply, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
+
+  const config = volatileProbeConfig({ webSearch: true })
+  apply(ctx, config.plain as never)
 
   const web = ctx.get('web') as unknown as { searchProviderId?: string }
   assert.equal(web.searchProviderId, 'commandcode')
 
-  await (ctx.get('settings') as unknown as {
-    update: (ns: string, patch: Record<string, unknown>) => Promise<unknown>
-  }).update('llm-commandcode', { webSearch: false })
+  config.set('webSearch', false)
+  emitVolatileUpdate(ctx)
   assert.equal(web.searchProviderId, 'commandcode')
 })
