@@ -55,8 +55,7 @@ interface FakeRemote {
   fireConnectionReset(): void
 }
 
-function fakeContext(options?: { loopback?: boolean; mountSettings?: boolean }): FakeRemote {
-  const loopback = options?.loopback ?? true
+function fakeContext(options?: { mountSettings?: boolean }): FakeRemote {
   let mounted = options?.mountSettings ?? true
   let viewAnswer: View | { error: string } = {
     writable: true,
@@ -88,7 +87,6 @@ function fakeContext(options?: { loopback?: boolean; mountSettings?: boolean }):
   // getter is the regression guard — the scope must reach its
   // namespace through the inject-captured seam, never through `ctx.remote`.
   const remote = {
-    $host: { isLoopback: loopback },
     $on(event: string, listener: () => void) {
       listeners.set(event, listener)
       return () => { listeners.delete(event) }
@@ -131,7 +129,7 @@ const row = (overrides?: Row): Row => ({
   ...overrides,
 })
 
-test('a loopback scope derives ready state from the directory row', async () => {
+test('a Host-backed scope derives ready state from the directory row', async () => {
   const fake = fakeContext()
   fake.answerDescribe({ writable: true, namespaces: [row()] })
   const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
@@ -319,17 +317,20 @@ test('an unmounted namespace rejects writes instead of throwing', async () => {
   await scope.dispose()
 })
 
-test('a remote (non-loopback) page stays process-local: no reads, no writes', async () => {
-  const fake = fakeContext({ loopback: false })
+test('a remote page uses Host persistence; the Host supplies write authority', async () => {
+  const fake = fakeContext()
   fake.answerDescribe({ writable: true, namespaces: [row()] })
   const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
   await flush()
   const snapshot = scope.getSnapshot()
-  assert.equal(snapshot.status, 'unavailable')
-  assert.equal(snapshot.mode, 'memory')
-  assert.equal(fake.describeCalls(), 0, 'memory persistence never reads the Host')
-  await scope.set('apiBase', 'https://nowhere.example')
-  assert.equal(fake.mutateCalls().length, 0, 'memory persistence never writes the Host')
+  assert.equal(snapshot.status, 'ready')
+  assert.equal(snapshot.mode, 'host')
+  assert.equal(snapshot.writable, true)
+  assert.equal(fake.describeCalls(), 1, 'the client asks the Host for the directory regardless of page origin')
+  fake.answerMutate(row({ user: { apiBase: 'https://remote.example' }, revision: 4 }))
+  await scope.set('apiBase', 'https://remote.example')
+  assert.equal(fake.mutateCalls().length, 1, 'the Host, not the browser origin, receives and authorizes the write')
+  assert.deepEqual(scope.getSnapshot().user, { apiBase: 'https://remote.example' })
   await scope.dispose()
 })
 

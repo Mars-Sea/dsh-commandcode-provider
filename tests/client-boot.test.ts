@@ -45,9 +45,9 @@ const { apply, inject } = await import('../src/client/index.ts')
 
 /**
  * Boot the real plugin `apply()` on a fresh Cordis root provisioned with the
- * dsh 0.1.7-rc.1 client service set: `remote` (reporting `$host.isLoopback`,
- * carrying the `credentials` + `commandcode` namespaces and the `settings`
- * directory the plugin's own scope reads), `slots`, `locale`, and — when
+ * dsh 0.1.7-rc.1 client service set: `remote` (carrying the `credentials` +
+ * `commandcode` namespaces and the `settings` directory the plugin's own scope
+ * reads), `slots`, `locale`, and — when
  * `mountLayout` is set — `layout`.
  *
  * There is deliberately NO `settingsScope` service here: 0.1.7 removed it, and
@@ -136,16 +136,11 @@ async function boot(
   }
 
   // The api-gateway `ClientRemoteService` stand-in. It is a real Service (so
-  // nested namespace resolution behaves like the engine's) reporting the facts
-  // the plugin reads off `remote` itself: `$host.isLoopback` (the settings
-  // scope's persistence rule), `$mount` (the contribution installer) and `$on`
-  // (the forwarded-event face).
+  // nested namespace resolution behaves like the engine's) reporting the
+  // `$mount` contribution installer and `$on` forwarded-event face the plugin
+  // reads. The settings scope takes its persistence decision from the Host
+  // settings directory, not from a browser-origin flag.
   class FakeRemoteService extends Service {
-    // The real gateway reports whether this page is loopback; the settings
-    // scope takes Host persistence from it (a remote page stays process-local,
-    // exactly as both generations of ui-settings decide).
-    $host = { isLoopback: true }
-
     constructor(owner: Context) {
       super(owner, 'remote')
     }

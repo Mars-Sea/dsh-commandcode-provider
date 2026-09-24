@@ -25,9 +25,10 @@
  *     in the directory — and writes through a single-flight `mutate` queue
  *     fenced by the row's revision, folding each accepted answer back into
  *     the mirror and re-reading after a rejected one.
- *   - Persistence follows the rule both generations of `ui-settings` use: a
- *     loopback page edits the Host, a remote page stays process-local
- *     (`mode: 'memory'`, status `unavailable`, writes become no-ops).
+ *   - Every page asks the Host for the current directory and writes through
+ *     the Host's `settings` Remote. The Host/gateway owns the authenticated
+ *     remote-write decision and reports it as `view.writable`; this client does
+ *     not infer write permission from localhost, URL shape, or browser origin.
  *
  * The namespace object is NOT read off the context: `remote.settings` is a
  * Cordis service nested under `remote`, and Cordis throws
@@ -110,7 +111,6 @@ export type SettingsRemoteResolver = () => SettingsRemoteNamespace | undefined
  */
 export interface SettingsScopeContext {
   remote: {
-    $host?: { isLoopback?: boolean } | undefined
     $on?: ((event: string, listener: () => void) => (() => void) | undefined) | undefined
   }
   /** Connection lifecycle; older clients and tests may omit it. */
@@ -123,8 +123,6 @@ interface MirrorState {
   view: SettingsView | null
   error: string | null
 }
-
-const MEMORY_STATUS: MirrorState['status'] = 'unavailable'
 
 /**
  * Backoff before re-reading a directory whose FIRST read failed, in millis.
@@ -185,7 +183,6 @@ function decodeRow(value: unknown): Record<string, unknown> | undefined {
  */
 class SettingsDescribeMirror {
   private readonly store: SnapshotStore<MirrorState>
-  private readonly persistence: 'host' | 'memory'
   private inFlight: Promise<void> | undefined
   private rerun = false
   private generation = 0
@@ -196,17 +193,14 @@ class SettingsDescribeMirror {
 
   /**
    * @param resolveRemote - Reads the inject-captured `remote.settings` namespace.
-   * @param persistence - Client-selected Host persistence; non-loopback pages may stay process-local.
    * @param timer - Retry timer seam (see {@link SETTINGS_DESCRIBE_RETRY_MS}).
    */
   constructor(
     private readonly resolveRemote: SettingsRemoteResolver,
-    persistence: 'host' | 'memory',
     private readonly timer: SettingsRetryTimer = REAL_SETTINGS_TIMER,
   ) {
-    this.persistence = persistence
     this.store = createSnapshotStore<MirrorState>({
-      status: persistence === 'host' ? 'idle' : MEMORY_STATUS,
+      status: 'idle',
       view: null,
       error: null,
     })
@@ -220,7 +214,7 @@ class SettingsDescribeMirror {
     return this.store.subscribe(listener)
   }
 
-  /** The cheap idempotent entry: kick a first read (a no-op on memory persistence). */
+  /** The cheap idempotent entry: kick a first read. */
   ensure(): void {
     void this.load()
   }
@@ -231,9 +225,7 @@ class SettingsDescribeMirror {
    * @returns settlement after this call's freshness is reflected.
    */
   load(): Promise<void> {
-    // Memory persistence: the mirror never loads (the initial snapshot IS the
-    // terminal state), matching both generations of ui-settings.
-    if (this.disposed || this.persistence === 'memory') return Promise.resolve()
+    if (this.disposed) return Promise.resolve()
     // A live read supersedes a scheduled retry: the retry exists only to
     // revive a mirror that nothing else would ever re-read.
     this.clearRetry()
@@ -358,7 +350,6 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
   private readonly store: SnapshotStore<SettingsScopeSnapshot<T>>
   private readonly mirror: SettingsDescribeMirror
   private readonly namespace: string
-  private readonly persistence: 'host' | 'memory'
   private tail: Promise<void> = Promise.resolve()
   private writeGeneration = 0
   private disposed = false
@@ -370,25 +361,21 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
     resolveRemote: SettingsRemoteResolver,
     mirror: SettingsDescribeMirror,
     namespace: string,
-    persistence: 'host' | 'memory',
   ) {
     this.resolveRemote = resolveRemote
     this.mirror = mirror
     this.namespace = namespace
-    this.persistence = persistence
     this.store = createSnapshotStore<SettingsScopeSnapshot<T>>({
-      status: persistence === 'host' ? 'loading' : 'unavailable',
+      status: 'loading',
       value: undefined,
       base: undefined,
       user: undefined,
       revision: undefined,
       writable: false,
-      mode: persistence,
+      mode: 'host',
     })
-    if (persistence === 'host') {
-      this.unsubscribe = mirror.subscribe(() => { this.derive() })
-      this.derive()
-    }
+    this.unsubscribe = mirror.subscribe(() => { this.derive() })
+    this.derive()
   }
 
   getSnapshot(): SettingsScopeSnapshot<T> {
@@ -507,9 +494,9 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
     this.store.set(candidate)
   }
 
-  /** Queue operations one at a time; memory persistence and disposal are no-ops. */
+  /** Queue operations one at a time; disposal makes the queue inert. */
   private enqueue(operation: () => Promise<void>): Promise<void> {
-    if (this.persistence === 'memory' || this.disposed) return Promise.resolve()
+    if (this.disposed) return Promise.resolve()
     const task = this.tail.then(async () => {
       if (this.disposed) return
       await operation()
@@ -563,24 +550,21 @@ export function createSettingsScope<T>(
   resolveRemote: SettingsRemoteResolver,
   timer: SettingsRetryTimer = REAL_SETTINGS_TIMER,
 ): ManagedSettingsScope<T> {
-  // Persistence follows ui-settings on both generations: a loopback page
-  // edits the Host; a remote page stays process-local.
-  const loopback = context.remote.$host?.isLoopback === true
-  const persistence: 'host' | 'memory' = loopback ? 'host' : 'memory'
-  const mirror = new SettingsDescribeMirror(resolveRemote, persistence, timer)
-  const scope = new RemoteSettingsScope<T>(resolveRemote, mirror, namespace, persistence)
+  // The Host/gateway owns the remote-write decision. The client always reads
+  // the settings directory and submits writes; `view.writable` is the Host's
+  // rendered authorization fact, not a local hostname or Origin guess.
+  const mirror = new SettingsDescribeMirror(resolveRemote, timer)
+  const scope = new RemoteSettingsScope<T>(resolveRemote, mirror, namespace)
   const disposers: Array<() => void> = []
-  if (loopback) {
-    if (typeof context.remote.$on === 'function') {
-      const off = context.remote.$on('settings/document-updated', () => { mirror.ensure() })
-      if (typeof off === 'function') disposers.push(off)
-    }
-    if (typeof context.on === 'function') {
-      const off = context.on('connection/reset', () => { void mirror.load() })
-      if (typeof off === 'function') disposers.push(off as () => void)
-    }
-    mirror.ensure()
+  if (typeof context.remote.$on === 'function') {
+    const off = context.remote.$on('settings/document-updated', () => { mirror.ensure() })
+    if (typeof off === 'function') disposers.push(off)
   }
+  if (typeof context.on === 'function') {
+    const off = context.on('connection/reset', () => { void mirror.load() })
+    if (typeof off === 'function') disposers.push(off as () => void)
+  }
+  mirror.ensure()
   return {
     getSnapshot: () => scope.getSnapshot(),
     subscribe: (listener) => scope.subscribe(listener),

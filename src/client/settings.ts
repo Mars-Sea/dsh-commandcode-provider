@@ -46,7 +46,7 @@ export interface SettingsScopeSnapshot<T> {
   user: unknown
   revision: number | undefined
   writable: boolean
-  mode: 'host' | 'memory'
+  mode: 'host'
 }
 
 /** Current settings-scope service face used without importing a browser plugin value. */
