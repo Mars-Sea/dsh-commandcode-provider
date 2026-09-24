@@ -738,6 +738,16 @@ declare class CommandCodeAccountPool {
   private pick;
 }
 //#endregion
+//#region src/command-guard.d.ts
+/**
+ * The auto-approve strictness a user picks (`Config.commandGuardLevel`). Each
+ * level is the probability every verdict must reach before the guard grants
+ * `allowed-once`; a higher level approves less, on stronger evidence. Three
+ * presets replace a free-form probability because the useful range is narrow
+ * and a hand-typed 0.6 silently turns the guard into a rubber stamp.
+ */
+type CommandGuardLevel = 'high' | 'medium' | 'low';
+//#endregion
 //#region src/capabilities.d.ts
 /**
  * Static capability snapshot for the Command Code provider: model →
@@ -1915,23 +1925,18 @@ interface Config {
    * opt-in, and the command text (plus the agent's own description of it) is
    * sent to Command Code to judge. Only commands a policy already wanted a
    * human to look at are ever judged, and only a confident "safe" verdict
-   * (`commandGuardThreshold`) skips the prompt — every other outcome, including
+   * (`commandGuardLevel`) skips the prompt — every other outcome, including
    * any failure of the decision call itself, delegates to the normal approval
    * flow. See `./command-guard.ts`.
    */
   commandGuard?: boolean;
   /**
-   * Minimum probability of "safe" that lets the guard skip the approval prompt;
-   * defaults to 0.9. Lowering it approves more, on less evidence.
+   * How confident every verdict must be before the guard skips the approval
+   * prompt: `high` (0.95), `medium` (0.9, the default) or `low` (0.8). A lower
+   * level approves more, on less evidence. The decision budget is fixed
+   * (`COMMAND_GUARD_TIMEOUT_MS`), so this is the guard's only tuning knob.
    */
-  commandGuardThreshold?: number;
-  /**
-   * Milliseconds the guard waits for a decision before falling back to the
-   * human prompt; defaults to 1500. This is a latency budget for an interactive
-   * approval, not a request timeout — a decision that arrives late is useless,
-   * because the user is staring at a prompt.
-   */
-  commandGuardTimeoutMs?: number;
+  commandGuardLevel?: CommandGuardLevel;
   /**
    * Whether requests enforce zero data retention: the provider then routes
    * them only through upstreams that keep no prompts/completions and never

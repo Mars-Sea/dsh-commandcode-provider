@@ -204,8 +204,6 @@ export interface PanelViewInput {
   usage: UsagePageState
   /** Whether any account holds a credential (the settings controller's fact). */
   apiKeyConfigured: boolean
-  /** Account ids staged for removal; hidden here immediately, like the settings card. */
-  removingIds?: readonly string[]
   /**
    * Locale translator for every label the view composes. The panel slots bind
    * their `t` seat to the `panel.commandcode` namespace and pass it here, so
@@ -436,16 +434,13 @@ function panelStrings(t: PanelTranslator): Record<PanelKey, string> {
  * Project the shared usage snapshot into the panel's render tree.
  *
  * Deduplication matches the settings card: hand-edited settings can name one
- * credential twice, and removal staging hides an account before the post-save
- * refresh lands.
+ * credential twice.
  */
 export function buildPanelView(input: PanelViewInput): PanelView {
   const { usage } = input
   const t = input.t ?? panelTextEN
-  const hidden = new Set(input.removingIds ?? [])
   const seen = new Set<string>()
   const entries = (usage.report?.accounts ?? []).filter((entry) => {
-    if (hidden.has(entry.id)) return false
     if (seen.has(entry.id)) return false
     seen.add(entry.id)
     return true

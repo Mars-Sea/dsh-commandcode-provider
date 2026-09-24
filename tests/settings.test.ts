@@ -4,8 +4,8 @@
  * These pin the "Command Code" settings page's write path: the API key is
  * written through the credentials domain under the reference the plugin
  * resolves (never through the settings namespace, so the literal cannot leak
- * into a settings document), while connection facts (`apiBase`, `workingDir`,
- * timeouts) are written through the `llm-commandcode` namespace scope. The
+ * into a settings document), while connection facts (`apiBase`, timeouts)
+ * are written through the `llm-commandcode` namespace scope. The
  * Host stays the single fact source — every write is read back from the
  * scope before the state is republished.
  */
@@ -14,16 +14,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  accountModelMap,
+  COMMAND_GUARD_DEFAULT_LEVEL_CHOICE,
+  COMMAND_GUARD_LEVEL_CHOICES,
   CommandCodeSettingsController,
   DEFAULT_API_KEY_REF,
   type SettingsPageApi,
 } from '../src/client/settings.ts'
 import {
-  COMMAND_GUARD_DEFAULT_THRESHOLD,
-  COMMAND_GUARD_MAX_THRESHOLD,
-  COMMAND_GUARD_MAX_TIMEOUT_MS,
-  COMMAND_GUARD_MIN_THRESHOLD,
-  COMMAND_GUARD_MIN_TIMEOUT_MS,
+  COMMAND_GUARD_DEFAULT_LEVEL,
+  COMMAND_GUARD_LEVELS,
 } from '../src/command-guard.ts'
 
 // ---------------------------------------------------------------------------
@@ -305,13 +305,13 @@ test('save() writes connection fields through the settings scope', async () => {
 
 test('save() clears a field when its draft is emptied', async () => {
   const scope = makeScope({
-    value: { workingDir: '/tmp/x', apiBase: 'https://a.com' },
-    user: { workingDir: '/tmp/x' },
+    value: { apiBase: 'https://a.com' },
+    user: { apiBase: 'https://a.com' },
   })
   const { controller } = makeController({ scope })
-  controller.edit('workingDir', '')
+  controller.edit('apiBase', '')
   await controller.save()
-  assert.equal(scope.state.value.workingDir, undefined)
+  assert.equal(scope.state.value.apiBase, undefined)
 })
 
 test('resetField() stages a clear back to the inherited value', async () => {
@@ -517,410 +517,292 @@ test('dispose() releases external subscriptions and stops publishing', async () 
 })
 
 // ---------------------------------------------------------------------------
-// Multi-account management
+// Immediate account management
 // ---------------------------------------------------------------------------
+
+const TWO_ACCOUNTS = [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }]
 
 test('starts with no extra accounts and stays clean', () => {
   const { controller } = makeController()
   assert.deepEqual(controller.state().accounts, [])
+  assert.equal(controller.state().activeAccount, '')
+  assert.deepEqual(controller.state().accountModels, {})
+  assert.equal(controller.state().accountBusy, false)
   assert.equal(controller.state().dirty, false)
 })
 
-test('addAccount stages a new account with a free credential reference', async () => {
-  const scope = makeScope({
-    value: { accounts: [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-    user: { accounts: [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-  })
-  const { controller } = makeController({ scope })
-  controller.addAccount()
-  const accounts = controller.state().accounts
-  assert.equal(accounts.length, 2)
-  assert.equal(accounts[0]?.ref, 'COMMANDCODE_API_KEY_2')
-  assert.equal(accounts[0]?.label, 'Go #2')
-  assert.equal(accounts[0]?.added, false)
-  // The staged addition takes the first free ref and is marked unsaved.
-  assert.equal(accounts[1]?.ref, 'COMMANDCODE_API_KEY_3')
-  assert.equal(accounts[1]?.added, true)
-  assert.equal(controller.state().dirty, true)
+test('createAccount with a key stores the key, then the row, without a page save', async () => {
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS }, user: { accounts: TWO_ACCOUNTS } })
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  const ref = await controller.createAccount({ label: 'Go #3', key: ' sk-third ' })
+
+  assert.equal(ref, 'COMMANDCODE_API_KEY_3')
+  // The key literal went to the credentials domain, never the settings doc.
+  assert.equal(api.store.get('COMMANDCODE_API_KEY_3'), 'sk-third')
+  assert.deepEqual(scope.state.value.accounts, [...TWO_ACCOUNTS, { label: 'Go #3', apiKeyEnv: 'COMMANDCODE_API_KEY_3' }])
+  await flush()
+  const account = controller.state().accounts[1]
+  assert.equal(account?.configured, true)
+  assert.equal(controller.state().dirty, false, 'account operations never stage')
+  assert.equal(controller.state().accountFailed, undefined)
 })
 
-test('addAccount derives new refs from a renamed apiKeyEnv prefix', async () => {
-  const scope = makeScope({ value: { apiKeyEnv: 'MY_CUSTOM_REF' } })
-  const { controller } = makeController({ scope })
-  controller.addAccount()
-  const accounts = controller.state().accounts
-  assert.equal(accounts[0]?.ref, 'MY_CUSTOM_REF_2')
-  assert.equal(accounts[0]?.label, 'Account 2')
-  assert.equal(accounts[0]?.added, true)
-  assert.equal(controller.state().dirty, true)
-})
-
-test('saving an added account writes the key through credentials and the list through the scope', async () => {
+test('createAccount without a key stores a keyless row a browser sign-in can target', async () => {
   const scope = makeScope({})
   const api = makeApi({})
   const { controller } = makeController({ scope, api })
-  controller.addAccount()
-  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
-  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
-  await controller.save()
-
-  // The key literal went to the credentials domain, never the settings doc.
-  assert.equal(api.store.get('COMMANDCODE_API_KEY_2'), 'sk-second')
-  const stored = scope.state.value.accounts as Array<Record<string, unknown>>
-  assert.deepEqual(stored, [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }])
-  assert.ok(!('apiKey' in stored[0]!))
-  // After the landed save the staging cleared and the account shows configured.
-  const account = controller.state().accounts[0]
-  assert.equal(account?.added, false)
-  assert.equal(account?.configured, true)
-  assert.equal(controller.state().dirty, false)
+  const ref = await controller.createAccount({ label: 'Pending' })
+  assert.equal(ref, 'COMMANDCODE_API_KEY_2')
+  assert.equal(api.store.size, 0)
+  assert.deepEqual(scope.state.value.accounts, [{ label: 'Pending', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }])
+  await flush()
+  assert.equal(controller.state().accounts[0]?.configured, false)
 })
 
-test('a blank key draft keeps the stored key but still saves label edits', async () => {
-  const scope = makeScope({
-    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-    user: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-  })
-  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-kept']]) })
+test('createAccount derives new refs from a renamed apiKeyEnv prefix', async () => {
+  const scope = makeScope({ value: { apiKeyEnv: 'MY_CUSTOM_REF' } })
+  const { controller } = makeController({ scope })
+  assert.equal(await controller.createAccount({ label: 'x' }), 'MY_CUSTOM_REF_2')
+})
+
+test('a refused key write stores no row', async () => {
+  const scope = makeScope({})
+  const api = makeApi({ failSet: true })
   const { controller } = makeController({ scope, api })
-  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
-  await controller.save()
-  assert.equal(api.store.get('COMMANDCODE_API_KEY_2'), 'sk-kept')
-  const stored = scope.state.value.accounts as Array<Record<string, unknown>>
-  assert.equal(stored[0]?.label, 'Go #2')
-})
-
-test('removeAccount stages removal of a stored account and save persists it', async () => {
-  const scope = makeScope({
-    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-    user: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-  })
-  const { controller } = makeController({ scope })
-  controller.removeAccount('COMMANDCODE_API_KEY_2')
-  assert.deepEqual(controller.state().accounts, [])
-  assert.equal(controller.state().dirty, true)
-  await controller.save()
-  assert.deepEqual(scope.state.value.accounts, [])
-  assert.equal(controller.state().dirty, false)
-})
-
-test('removing an unsaved addition drops it without touching the scope', async () => {
-  const scope = makeScope({})
-  const { controller } = makeController({ scope })
-  controller.addAccount()
-  controller.removeAccount('COMMANDCODE_API_KEY_2')
-  assert.deepEqual(controller.state().accounts, [])
-  assert.equal(controller.state().dirty, false)
-})
-
-test('discard clears staged account edits', () => {
-  const { controller } = makeController()
-  controller.addAccount()
-  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-draft')
-  controller.discard()
-  assert.deepEqual(controller.state().accounts, [])
-  assert.equal(controller.state().dirty, false)
-})
-
-test('extra account credential state comes from the credentials domain', async () => {
-  const scope = makeScope({
-    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-  })
-  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-stored']]) })
-  const { controller } = makeController({ scope, api })
-  // describeAll() ran from the constructor; wait for it to land.
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  const account = controller.state().accounts[0]
-  assert.equal(account?.configured, true)
-  assert.equal(account?.writable, true)
-})
-
-test('activeAccount stages through the generic field machinery and saves to the section', async () => {
-  const scope = makeScope({})
-  const { controller } = makeController({ scope })
-  assert.equal(controller.state().activeAccount.text, '')
-  controller.edit('activeAccount', 'COMMANDCODE_API_KEY_2')
-  assert.equal(controller.state().activeAccount.text, 'COMMANDCODE_API_KEY_2')
-  assert.equal(controller.state().activeAccount.overridden, true)
-  assert.equal(controller.state().dirty, true)
-  await controller.save()
-  assert.equal(scope.state.value.activeAccount, 'COMMANDCODE_API_KEY_2')
-  assert.equal(controller.state().dirty, false)
-  // Selecting "auto" ('') on a stored value stages a clear; save unsets it.
-  controller.edit('activeAccount', '')
-  await controller.save()
-  assert.equal('activeAccount' in scope.state.value, false)
-})
-
-test('removing the pinned active account also stages the selection clear', async () => {
-  const scope = makeScope({
-    value: {
-      accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }],
-      activeAccount: 'COMMANDCODE_API_KEY_2',
-    },
-    user: {
-      accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }],
-      activeAccount: 'COMMANDCODE_API_KEY_2',
-    },
-  })
-  const { controller } = makeController({ scope })
-  controller.removeAccount('COMMANDCODE_API_KEY_2')
-  // The removal stages the activeAccount clear; one save persists both.
-  await controller.save()
-  assert.deepEqual(scope.state.value.accounts, [])
-  assert.equal('activeAccount' in scope.state.value, false)
-})
-
-test('a failed key write aborts the save before the accounts list lands', async () => {
-  const scope = makeScope({})
-  const store = new Map<string, string>()
-  const api = {
-    credentials: {
-      describe: async (refs: string[]) => ({
-        ok: true as const,
-        value: Object.fromEntries(refs.map((ref) => [ref, { configured: store.has(ref), writable: true }])),
-      }),
-      // The credentials domain rejects every write.
-      set: async () => ({ ok: false as const, error: { message: 'read-only' } }),
-    },
-  }
-  const { controller } = makeController({ scope, api: api as unknown as ReturnType<typeof makeApi> })
-  controller.addAccount()
-  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
-  await controller.save()
-
-  assert.equal(controller.state().failed, true)
-  // The accounts list write never ran (short-circuit at the failed key write),
-  // so nothing partial landed…
+  const ref = await controller.createAccount({ label: 'Go #2', key: 'sk-second' })
+  assert.equal(ref, undefined)
   assert.equal('accounts' in scope.state.value, false)
-  // …and the staged addition survives exactly once for the retry — no
-  // stored-plus-staged duplication.
-  assert.equal(controller.state().accounts.length, 1)
-  assert.equal(controller.state().accounts[0]?.added, true)
+  assert.equal(controller.state().accountFailed, 'create')
 })
 
-test('staged removals surface in accountsRemoving until the save lands', async () => {
-  const scope = makeScope({
-    value: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-    user: { accounts: [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] },
-  })
+test('a refused list write rolls the new key back', async () => {
+  const scope = makeScope({})
+  scope.set = async (field: string) => {
+    throw new Error(`${field} write refused`)
+  }
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  const ref = await controller.createAccount({ label: 'Go #2', key: 'sk-second' })
+  assert.equal(ref, undefined)
+  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), false, 'no orphaned key under the unused ref')
+  assert.equal(controller.state().accountFailed, 'create')
+})
+
+test('renameAccount rewrites only that entry', async () => {
+  const accounts = [...TWO_ACCOUNTS, { label: 'third', apiKeyEnv: 'COMMANDCODE_API_KEY_3' }]
+  const scope = makeScope({ value: { accounts }, user: { accounts } })
   const { controller } = makeController({ scope })
-  assert.deepEqual(controller.state().accountsRemoving, [])
-  controller.removeAccount('COMMANDCODE_API_KEY_2')
-  // Staged: hidden from the accounts list, visible to the usage card.
-  assert.deepEqual(controller.state().accounts, [])
-  assert.deepEqual(controller.state().accountsRemoving, ['COMMANDCODE_API_KEY_2'])
-  await controller.save()
-  assert.deepEqual(controller.state().accountsRemoving, [])
+  assert.equal(await controller.renameAccount('COMMANDCODE_API_KEY_3', '  Go #3 '), true)
+  assert.deepEqual(scope.state.value.accounts, [...TWO_ACCOUNTS, { label: 'Go #3', apiKeyEnv: 'COMMANDCODE_API_KEY_3' }])
+  // A blank name is refused rather than stored.
+  assert.equal(await controller.renameAccount('COMMANDCODE_API_KEY_3', '   '), false)
+  assert.equal(controller.state().accountFailed, 'rename')
 })
 
-// ---------------------------------------------------------------------------
-// Clearing a stored (bad) key — the credentials.unset path
-// ---------------------------------------------------------------------------
+test('removeAccount drops the key, the row, its dedicated models and a pin naming it', async () => {
+  const stored = {
+    accounts: TWO_ACCOUNTS,
+    activeAccount: 'COMMANDCODE_API_KEY_2',
+    modelAccountRules: [
+      { models: ['a-model'], account: 'COMMANDCODE_API_KEY_2' },
+      { models: ['b-model'], account: 'default' },
+    ],
+  }
+  const scope = makeScope({ value: stored, user: stored })
+  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-second']]) })
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.equal(await controller.removeAccount('COMMANDCODE_API_KEY_2'), true)
+  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), false)
+  assert.deepEqual(scope.state.value.accounts, [])
+  assert.deepEqual(scope.state.value.modelAccountRules, [{ models: ['b-model'], account: 'default' }])
+  assert.equal('activeAccount' in scope.state.value, false)
+  assert.equal(controller.state().activeAccount, '')
+})
 
-test('a staged default-key clear unsets the credential on save', async () => {
-  const store = new Map<string, string>([[DEFAULT_API_KEY_REF, 'sk-expired']])
-  const api = makeApi({ store })
-  const { controller } = makeController({ api })
+test('a refused key removal keeps the row, so the stored key never outlives its account', async () => {
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS } })
+  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-second']]), failUnset: true })
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.equal(await controller.removeAccount('COMMANDCODE_API_KEY_2'), false)
+  assert.deepEqual(scope.state.value.accounts, TWO_ACCOUNTS)
+  assert.equal(controller.state().accountFailed, 'remove')
+})
+
+test('setAccountKey and clearAccountKey address the default slot through its reference', async () => {
+  const scope = makeScope({ value: { apiKeyEnv: 'MY_CUSTOM_REF' } })
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  assert.equal(await controller.setAccountKey('default', ' sk-new '), true)
+  assert.equal(api.store.get('MY_CUSTOM_REF'), 'sk-new')
+  assert.equal(api.store.has(DEFAULT_API_KEY_REF), false)
   await flush()
   assert.equal(controller.state().apiKeyConfigured, true)
-  controller.toggleKeyClear('default')
-  assert.equal(controller.state().apiKeyClearStaged, true)
-  assert.equal(controller.state().dirty, true)
-  await controller.save()
-  assert.equal(store.has(DEFAULT_API_KEY_REF), false)
-  assert.equal(controller.state().apiKeyConfigured, false)
-  assert.equal(controller.state().apiKeyClearStaged, false)
-  assert.equal(controller.state().savedCount, 1)
-})
-
-test('toggleKeyClear toggles, and typing a replacement cancels the staged clear', async () => {
-  const store = new Map<string, string>([[DEFAULT_API_KEY_REF, 'sk-old']])
-  const api = makeApi({ store })
-  const { controller } = makeController({ api })
+  assert.equal(await controller.clearAccountKey('default'), true)
+  assert.equal(api.store.has('MY_CUSTOM_REF'), false)
   await flush()
-  controller.toggleKeyClear('default')
-  assert.equal(controller.state().apiKeyClearStaged, true)
-  controller.toggleKeyClear('default')
-  assert.equal(controller.state().apiKeyClearStaged, false)
-  // Staging again, then typing a replacement: the clear must be dropped so
-  // the typed key is what lands.
-  controller.toggleKeyClear('default')
-  controller.edit('apiKey', 'sk-new')
-  assert.equal(controller.state().apiKeyClearStaged, false)
-  await controller.save()
-  assert.equal(store.get(DEFAULT_API_KEY_REF), 'sk-new')
-})
-
-test('staging a clear on an unconfigured key is a no-op', async () => {
-  const api = makeApi({ store: new Map() })
-  const { controller } = makeController({ api })
-  controller.toggleKeyClear('default')
-  assert.equal(controller.state().apiKeyClearStaged, false)
+  assert.equal(controller.state().apiKeyConfigured, false)
   assert.equal(controller.state().dirty, false)
 })
 
-test('an extra account key can be cleared through its reference', async () => {
-  const store = new Map<string, string>([['COMMANDCODE_API_KEY_2', 'sk-bad']])
-  const api = makeApi({ store })
-  const scope = makeScope({ value: { accounts: [{ label: 'Go #2', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }] } })
+test('an extra account key is replaced and cleared through its own reference', async () => {
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS } })
+  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-bad']]) })
   const { controller } = makeController({ scope, api })
   await flush()
-  assert.equal(controller.state().accounts[0]?.configured, true)
-  controller.toggleKeyClear('COMMANDCODE_API_KEY_2')
-  assert.equal(controller.state().accounts[0]?.clearStaged, true)
-  await controller.save()
-  assert.equal(store.has('COMMANDCODE_API_KEY_2'), false)
+  assert.equal(await controller.setAccountKey('COMMANDCODE_API_KEY_2', 'sk-good'), true)
+  assert.equal(api.store.get('COMMANDCODE_API_KEY_2'), 'sk-good')
+  assert.equal(await controller.clearAccountKey('COMMANDCODE_API_KEY_2'), true)
+  await flush()
   assert.equal(controller.state().accounts[0]?.configured, false)
-  assert.equal(controller.state().accounts[0]?.clearStaged, false)
+  // A blank key is refused, not written as an empty credential.
+  assert.equal(await controller.setAccountKey('COMMANDCODE_API_KEY_2', '  '), false)
+  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), false)
 })
 
-test('a failed unset keeps the staged clear and reports the failure', async () => {
+test('a failed key removal is reported and keeps the key', async () => {
   const store = new Map<string, string>([[DEFAULT_API_KEY_REF, 'sk-expired']])
   const api = makeApi({ store, failUnset: true })
   const { controller } = makeController({ api })
   await flush()
-  controller.toggleKeyClear('default')
-  await controller.save()
-  assert.equal(controller.state().failed, true)
-  // The clear did not land; it stays staged so a retry re-attempts it.
-  assert.equal(controller.state().apiKeyClearStaged, true)
+  assert.equal(await controller.clearAccountKey('default'), false)
+  assert.equal(controller.state().accountFailed, 'key')
   assert.equal(store.has(DEFAULT_API_KEY_REF), true)
-  assert.equal(controller.state().savedCount, 0)
 })
 
-// ---------------------------------------------------------------------------
-// Model → account routing rules
-// ---------------------------------------------------------------------------
-
-test('starts with the stored routing rules and stays clean', () => {
-  const scope = makeScope({
-    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'COMMANDCODE_API_KEY_2' }] },
-    user: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'COMMANDCODE_API_KEY_2' }] },
-  })
+test('setActiveAccount pins and unpins immediately', async () => {
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS } })
   const { controller } = makeController({ scope })
-  const rules = controller.state().rules
-  assert.equal(rules.length, 1)
-  assert.deepEqual(rules[0]?.models, ['deepseek/deepseek-v4-pro'])
-  assert.equal(rules[0]?.account, 'COMMANDCODE_API_KEY_2')
-  assert.equal(rules[0]?.added, false)
+  assert.equal(await controller.setActiveAccount('COMMANDCODE_API_KEY_2'), true)
+  assert.equal(scope.state.value.activeAccount, 'COMMANDCODE_API_KEY_2')
+  assert.equal(controller.state().activeAccount, 'COMMANDCODE_API_KEY_2')
   assert.equal(controller.state().dirty, false)
+  assert.equal(await controller.setActiveAccount(''), true)
+  assert.equal('activeAccount' in scope.state.value, false)
 })
 
-test('addRule stages a new rule with the default account target', () => {
-  const { controller } = makeController()
-  controller.addRule()
-  const rules = controller.state().rules
-  assert.equal(rules.length, 1)
-  assert.equal(rules[0]?.added, true)
-  assert.deepEqual(rules[0]?.models, [])
-  assert.equal(rules[0]?.account, 'default')
-  assert.equal(controller.state().dirty, true)
-})
-
-test('saving a staged rule writes modelAccountRules through the scope', async () => {
-  const scope = makeScope({})
-  const { controller } = makeController({ scope })
-  controller.addRule()
-  controller.editRuleModels('new-0', ['deepseek/deepseek-v4-pro'])
-  controller.editRuleAccount('new-0', 'COMMANDCODE_API_KEY_2')
-  await controller.save()
-  assert.deepEqual(scope.state.value.modelAccountRules, [
-    { models: ['deepseek/deepseek-v4-pro'], account: 'COMMANDCODE_API_KEY_2' },
-  ])
-  assert.equal(controller.state().dirty, false)
-})
-
-test('editing a stored rule is dirty until saved', async () => {
-  const scope = makeScope({
-    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
-    user: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
-  })
-  const { controller } = makeController({ scope })
-  assert.equal(controller.state().dirty, false)
-  controller.editRuleModels('rule-0', ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash-vision-exp'])
-  assert.equal(controller.state().dirty, true)
-  await controller.save()
-  assert.deepEqual(scope.state.value.modelAccountRules, [
-    { models: ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash-vision-exp'], account: 'default' },
-  ])
-  assert.equal(controller.state().dirty, false)
-})
-
-test('removing a stored rule persists the shorter list', async () => {
-  const scope = makeScope({
-    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
-    user: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
-  })
-  const { controller } = makeController({ scope })
-  controller.removeRule('rule-0')
-  assert.deepEqual(controller.state().rules, [])
-  assert.equal(controller.state().dirty, true)
-  await controller.save()
-  assert.deepEqual(scope.state.value.modelAccountRules, [])
-  assert.equal(controller.state().dirty, false)
-})
-
-test('discard clears staged rule edits', () => {
-  const { controller } = makeController()
-  controller.addRule()
-  controller.editRuleModels('new-0', ['deepseek/deepseek-v4-pro'])
-  controller.discard()
-  assert.deepEqual(controller.state().rules, [])
-  assert.equal(controller.state().dirty, false)
-})
-
-test('a partially landed save does not duplicate a staged rule on retry', async () => {
-  // Add rule R; the rules write lands but a later write fails. The retry
-  // must not persist R twice — reconcile drops the landed addition.
+test('account operations run one at a time, in call order', async () => {
   const scope = makeScope({})
   const realSet = scope.set.bind(scope)
-  let failNext = false
+  const order: string[] = []
   scope.set = async (field: string, value: unknown) => {
-    if (failNext && field === 'visibleModels') throw new Error('later write refused')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    order.push(field)
     return realSet(field, value)
   }
   const { controller } = makeController({ scope })
-  controller.addRule()
-  controller.editRuleModels('new-0', ['deepseek/deepseek-v4-pro'])
-  controller.editVisibleModels(['deepseek/deepseek-v4-pro'])
-  failNext = true
-  await controller.save()
-  assert.equal(controller.state().failed, true)
-  const rules = scope.state.value.modelAccountRules as Array<{ models: string[] }>
-  assert.equal(rules.length, 1)
-  // Retry with the later write fixed: still exactly one rule.
-  failNext = false
-  await controller.save()
-  assert.equal(controller.state().failed, false)
-  assert.equal((scope.state.value.modelAccountRules as unknown[]).length, 1)
-  assert.equal(controller.state().dirty, false)
+  const first = controller.createAccount({ label: 'one' })
+  assert.equal(controller.state().accountBusy, true)
+  const second = controller.createAccount({ label: 'two' })
+  assert.deepEqual(await Promise.all([first, second]), ['COMMANDCODE_API_KEY_2', 'COMMANDCODE_API_KEY_3'])
+  // The second op saw the first's row, so neither overwrote the other.
+  assert.deepEqual((scope.state.value.accounts as Array<{ label: string }>).map((entry) => entry.label), ['one', 'two'])
+  assert.deepEqual(order, ['accounts', 'accounts'])
+  assert.equal(controller.state().accountBusy, false)
 })
 
-test('a staged removal still filters its row after stored ids shift', async () => {
-  // Remove rule-1 (of two), then a failed save lands an unrelated change
-  // that shifts positional ids. Reconcile is content-based, so the removal
-  // still addresses the snapshotted row — not the shifted id.
+test('account operations refuse a read-only scope', async () => {
+  const scope = makeScope({ writable: false })
+  const { controller } = makeController({ scope })
+  assert.equal(await controller.createAccount({ label: 'x' }), undefined)
+  assert.equal(await controller.setActiveAccount('default'), false)
+  assert.equal('accounts' in scope.state.value, false)
+})
+
+test('a landed accounts write preserves entries the page cannot name', async () => {
+  // A composition-config entry may carry a literal `apiKey` (or a shape this
+  // page has no row for). The settings layer replaces the whole `accounts`
+  // array, so rebuilding the list from the page's rows would silently delete
+  // every such entry — and strip the literal key from the entries it keeps.
   const scope = makeScope({
     value: {
-      modelAccountRules: [
-        { models: ['a-model'], account: 'default' },
-        { models: ['b-model'], account: 'default' },
-      ],
-    },
-    user: {
-      modelAccountRules: [
-        { models: ['a-model'], account: 'default' },
-        { models: ['b-model'], account: 'default' },
+      accounts: [
+        { label: 'env-account', apiKeyEnv: 'COMMANDCODE_API_KEY_2' },
+        { label: 'literal-account', apiKey: 'sk-literal-compose' },
       ],
     },
   })
   const { controller } = makeController({ scope })
-  controller.removeRule('rule-1')
-  assert.deepEqual(controller.state().rules.map((rule) => rule.models), [['a-model']])
-  await controller.save()
-  assert.deepEqual(scope.state.value.modelAccountRules, [{ models: ['a-model'], account: 'default' }])
+  // The literal entry has no row (nothing to address it by)…
+  assert.deepEqual(controller.state().accounts.map((account) => account.label), ['env-account'])
+  // …but an unrelated write that rewrites the accounts list must not drop it.
+  const added = await controller.createAccount({ label: 'third', key: 'sk-third' })
+  const stored = scope.state.value.accounts as Array<Record<string, unknown>>
+  assert.deepEqual(stored.map((entry) => entry.label), ['env-account', 'literal-account', 'third'])
+  assert.equal(stored[1]!.apiKey, 'sk-literal-compose')
+  assert.equal(stored[1]!.apiKeyEnv, undefined)
+  assert.equal(stored[2]!.apiKeyEnv, added)
 })
+
+test('the stored working directory is no longer a page field, and survives saves', async () => {
+  const scope = makeScope({ value: { workingDir: '/tmp/x' }, user: { workingDir: '/tmp/x' } })
+  const { controller } = makeController({ scope })
+  assert.equal('workingDir' in controller.state(), false)
+  assert.throws(() => controller.edit('workingDir', '/elsewhere'))
+  controller.edit('apiBase', 'https://new.example.com')
+  await controller.save()
+  assert.equal(scope.state.value.workingDir, '/tmp/x')
+})
+
+// ---------------------------------------------------------------------------
+// Dedicated models (stored as modelAccountRules)
+// ---------------------------------------------------------------------------
+
+test('accountModelMap folds rules first-match-wins, so a model sits under the account that serves it', () => {
+  const map = accountModelMap([
+    { models: ['a', 'b'], account: 'default' },
+    { models: ['b', 'c'], account: 'COMMANDCODE_API_KEY_2' },
+    { models: ['d'], account: 'default' },
+  ])
+  assert.deepEqual(Object.fromEntries(map), {
+    default: ['a', 'b', 'd'],
+    COMMANDCODE_API_KEY_2: ['c'],
+  })
+})
+
+test('the stored rules project into per-account dedicated models', () => {
+  const rules = [{ models: ['deepseek/deepseek-v4-pro'], account: 'COMMANDCODE_API_KEY_2' }]
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS, modelAccountRules: rules } })
+  const { controller } = makeController({ scope })
+  assert.deepEqual(controller.state().accountModels, { COMMANDCODE_API_KEY_2: ['deepseek/deepseek-v4-pro'] })
+  assert.equal(controller.state().dirty, false)
+})
+
+test('setAccountModels writes one rule per account, immediately', async () => {
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS } })
+  const { controller } = makeController({ scope })
+  assert.equal(await controller.setAccountModels('COMMANDCODE_API_KEY_2', ['a-model', 'b-model', 'a-model']), true)
+  assert.deepEqual(scope.state.value.modelAccountRules, [
+    { models: ['a-model', 'b-model'], account: 'COMMANDCODE_API_KEY_2' },
+  ])
+  assert.equal(controller.state().dirty, false)
+})
+
+test('setAccountModels moves a model out of the account that held it', async () => {
+  const scope = makeScope({
+    value: {
+      accounts: TWO_ACCOUNTS,
+      modelAccountRules: [{ models: ['a-model', 'b-model'], account: 'default' }],
+    },
+  })
+  const { controller } = makeController({ scope })
+  await controller.setAccountModels('COMMANDCODE_API_KEY_2', ['b-model'])
+  assert.deepEqual(scope.state.value.modelAccountRules, [
+    { models: ['a-model'], account: 'default' },
+    { models: ['b-model'], account: 'COMMANDCODE_API_KEY_2' },
+  ])
+  // Emptying an account's list drops its rule rather than storing `models: []`.
+  await controller.setAccountModels('default', [])
+  assert.deepEqual(scope.state.value.modelAccountRules, [
+    { models: ['b-model'], account: 'COMMANDCODE_API_KEY_2' },
+  ])
+})
+
+// ---------------------------------------------------------------------------
+// Model catalog
+// ---------------------------------------------------------------------------
 
 test('loads the model catalog through the api models seam', async () => {
   const api = makeApi({
@@ -1058,163 +940,7 @@ test('discard clears a staged visible-model selection', () => {
   assert.equal(controller.state().dirty, false)
 })
 
-// ---------------------------------------------------------------------------
-// Accounts write fidelity (composition entries this page cannot name)
-// ---------------------------------------------------------------------------
-
-test('a landed accounts write preserves entries the page cannot name', async () => {
-  // A composition-config entry may carry a literal `apiKey` (or a shape this
-  // page has no row for). The settings layer replaces the whole `accounts`
-  // array, so rebuilding the list from the page's rows would silently delete
-  // every such entry — and strip the literal key from the entries it keeps.
-  const scope = makeScope({
-    value: {
-      accounts: [
-        { label: 'env-account', apiKeyEnv: 'COMMANDCODE_API_KEY_2' },
-        { label: 'literal-account', apiKey: 'sk-literal-compose' },
-      ],
-    },
-  })
-  const { controller } = makeController({ scope })
-  // The literal entry has no row (nothing to address it by)…
-  assert.deepEqual(controller.state().accounts.map((account) => account.label), ['env-account'])
-  // …but an unrelated save that rewrites the accounts list must not drop it.
-  controller.addAccount()
-  const added = controller.state().accounts.at(-1)!.ref
-  controller.editAccountKey(added, 'sk-third')
-  await controller.save()
-
-  const stored = scope.state.value.accounts as Array<Record<string, unknown>>
-  assert.deepEqual(
-    stored.map((entry) => entry.label),
-    ['env-account', 'literal-account', added === 'COMMANDCODE_API_KEY_3' ? 'Account 3' : stored[2]!.label],
-  )
-  assert.equal(stored[1]!.apiKey, 'sk-literal-compose')
-  assert.equal(stored[1]!.apiKeyEnv, undefined)
-  // The managed entry keeps its reference and gains the staged key's ref.
-  assert.equal(stored[2]!.apiKeyEnv, added)
-})
-
-test('a label draft survives a save that failed before the accounts write', async () => {
-  // Failure order 1: the key write is refused, so the accounts list (which
-  // carries the label) never lands. Treating "not stored" as "already
-  // applied" silently reverted the typed label and persisted the generated
-  // name on the retry.
-  const scope = makeScope({})
-  const api = makeApi({ failSet: true })
-  const { controller } = makeController({ scope, api: api as unknown as ReturnType<typeof makeApi> })
-  controller.addAccount()
-  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
-  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
-  await controller.save()
-
-  assert.equal(controller.state().failed, true)
-  assert.equal(controller.state().accounts[0]?.label, 'Go #2')
-
-  // Retry with the key write fixed: the label the user typed is what lands.
-  api.credentials.set = async (ref: string, value: string) => {
-    api.store.set(ref, value)
-    return { ok: true as const, value: undefined }
-  }
-  await controller.save()
-  assert.equal(controller.state().failed, false)
-  assert.equal(
-    (scope.state.value.accounts as Array<{ label: string }>)[0]?.label,
-    'Go #2',
-  )
-})
-
-test('a label draft survives a failed accounts write itself', async () => {
-  const scope = makeScope({})
-  const realSet = scope.set.bind(scope)
-  scope.set = async (field: string, value: unknown) => {
-    if (field === 'accounts') throw new Error('accounts write refused')
-    return realSet(field, value)
-  }
-  const { controller } = makeController({ scope })
-  controller.addAccount()
-  controller.editAccountLabel('COMMANDCODE_API_KEY_2', 'Go #2')
-  controller.editAccountKey('COMMANDCODE_API_KEY_2', 'sk-second')
-  await controller.save()
-
-  assert.equal(controller.state().failed, true)
-  assert.equal(controller.state().accounts[0]?.label, 'Go #2')
-  assert.equal(controller.state().dirty, true, 'the retry stays available')
-})
-
-// ---------------------------------------------------------------------------
-// Routing-rule drafts on a failed save
-// ---------------------------------------------------------------------------
-
-test('a rule draft survives a save that failed before the rules write', async () => {
-  // Writes run in order and stop at the first failure, so a failure BEFORE the
-  // rules write leaves every positional id untouched: the draft still
-  // addresses its row and clearing it would revert the edit with dirty=false
-  // (no retry). Dropping is only correct once the rules write actually landed.
-  const scope = makeScope({
-    value: { modelAccountRules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }] },
-  })
-  const api = makeApi({ failSet: true })
-  const { controller } = makeController({ scope, api: api as unknown as ReturnType<typeof makeApi> })
-  const id = controller.state().rules[0]!.id
-  controller.editRuleModels(id, ['deepseek/deepseek-v4-pro', 'claude-sonnet-5'])
-  controller.editAccountKey(DEFAULT_API_KEY_REF, 'sk-typed')
-  await controller.save()
-
-  assert.equal(controller.state().failed, true)
-  assert.deepEqual(
-    controller.state().rules[0]?.models,
-    ['deepseek/deepseek-v4-pro', 'claude-sonnet-5'],
-  )
-  assert.equal(controller.state().dirty, true, 'the retry stays available')
-})
-
-test('a rule draft is dropped when the rules write landed and ids shifted', async () => {
-  // The pre-existing behavior, kept: once the rules write lands, positional
-  // ids shift. A kept draft would then be applied to whichever row now holds
-  // that id — here the appended rule N — so the page would show the wrong
-  // models on the wrong row. Dropping the draft is what keeps the retry honest.
-  const scope = makeScope({
-    value: {
-      modelAccountRules: [
-        { models: ['a-model'], account: 'default' },
-        { models: ['b-model'], account: 'default' },
-      ],
-    },
-  })
-  const realSet = scope.set.bind(scope)
-  let failNext = false
-  scope.set = async (field: string, value: unknown) => {
-    if (failNext && field === 'visibleModels') throw new Error('later write refused')
-    return realSet(field, value)
-  }
-  const { controller } = makeController({ scope })
-  // Remove the first rule and edit the second (pre-save id `rule-1`), then add
-  // N: the landed write leaves [B(edited), N] at ids rule-0 / rule-1.
-  controller.removeRule('rule-0')
-  controller.editRuleModels('rule-1', ['b-model', 'b-extra'])
-  controller.addRule()
-  controller.editRuleModels('new-0', ['n-model'])
-  controller.editVisibleModels(['a-model'])
-  failNext = true
-  await controller.save()
-
-  assert.equal(controller.state().failed, true)
-  // The rules write landed with the edit applied…
-  const stored = scope.state.value.modelAccountRules as Array<{ models: string[] }>
-  assert.deepEqual(stored, [
-    { models: ['b-model', 'b-extra'], account: 'default' },
-    { models: ['n-model'], account: 'default' },
-  ])
-  // …and the draft that addressed the pre-save id is gone, so the appended
-  // rule shows its OWN models instead of inheriting the stale draft.
-  assert.deepEqual(controller.state().rules.map((rule) => rule.models), [
-    ['b-model', 'b-extra'],
-    ['n-model'],
-  ])
-})
-
-test('the command-guard fields stage like their neighbours and mirror the Host bounds', () => {
+test('the command-guard fields stage like their neighbours and mirror the Host levels', () => {
   const { controller } = makeController()
   const state = controller.state()
 
@@ -1225,27 +951,30 @@ test('the command-guard fields stage like their neighbours and mirror the Host b
   controller.edit('commandGuard', 'true')
   assert.equal(controller.state().commandGuard.text, 'true')
 
-  // The numeric bounds are mirrored into the client bundle from
+  // The level choices are mirrored into the client bundle from
   // `src/command-guard.ts` (which this bundle cannot import at runtime), so a
   // draft can never be saved in a shape the Host schema rejects.
-  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MIN_THRESHOLD))
-  assert.equal(controller.state().commandGuardThreshold.invalid, false)
-  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MAX_THRESHOLD))
-  assert.equal(controller.state().commandGuardThreshold.invalid, false)
-  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MIN_THRESHOLD - 0.01))
-  assert.equal(controller.state().commandGuardThreshold.invalidReason, 'tooSmall')
-  controller.edit('commandGuardThreshold', String(COMMAND_GUARD_MAX_THRESHOLD + 0.01))
-  assert.equal(controller.state().commandGuardThreshold.invalidReason, 'tooLarge')
-  // The default is inside the bounds the client enforces.
-  assert.ok(COMMAND_GUARD_DEFAULT_THRESHOLD >= COMMAND_GUARD_MIN_THRESHOLD)
-  assert.ok(COMMAND_GUARD_DEFAULT_THRESHOLD <= COMMAND_GUARD_MAX_THRESHOLD)
+  assert.deepEqual([...COMMAND_GUARD_LEVEL_CHOICES], [...COMMAND_GUARD_LEVELS])
+  assert.equal(COMMAND_GUARD_DEFAULT_LEVEL_CHOICE, COMMAND_GUARD_DEFAULT_LEVEL)
+  assert.equal(state.commandGuardLevel.text, '')
+  for (const level of COMMAND_GUARD_LEVELS) {
+    controller.edit('commandGuardLevel', level)
+    assert.equal(controller.state().commandGuardLevel.invalid, false)
+  }
+  controller.edit('commandGuardLevel', '0.9')
+  assert.equal(controller.state().commandGuardLevel.invalid, true)
+  // The decision budget is fixed on the Host, so it is not a page field.
+  assert.equal('commandGuardTimeoutMs' in controller.state(), false)
+  assert.equal('commandGuardThreshold' in controller.state(), false)
+})
 
-  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MIN_TIMEOUT_MS))
-  assert.equal(controller.state().commandGuardTimeoutMs.invalid, false)
-  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MAX_TIMEOUT_MS))
-  assert.equal(controller.state().commandGuardTimeoutMs.invalid, false)
-  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MIN_TIMEOUT_MS - 1))
-  assert.equal(controller.state().commandGuardTimeoutMs.invalidReason, 'tooSmall')
-  controller.edit('commandGuardTimeoutMs', String(COMMAND_GUARD_MAX_TIMEOUT_MS + 1))
-  assert.equal(controller.state().commandGuardTimeoutMs.invalidReason, 'tooLarge')
+test('saving a guard level writes the level string', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  controller.edit('commandGuardLevel', 'high')
+  await controller.save()
+  assert.equal(scope.state.value.commandGuardLevel, 'high')
+  controller.resetField('commandGuardLevel')
+  await controller.save()
+  assert.equal('commandGuardLevel' in scope.state.value, false)
 })

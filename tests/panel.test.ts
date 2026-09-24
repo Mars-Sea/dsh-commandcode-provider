@@ -114,7 +114,7 @@ test('a first fetch with no data renders the loading state', () => {
   assert.equal(view.noKey, false)
 })
 
-test('accounts are deduplicated by id and staged removals are hidden', () => {
+test('accounts are deduplicated by id', () => {
   const view = buildPanelView({
     usage: usage({
       report: {
@@ -126,9 +126,8 @@ test('accounts are deduplicated by id and staged removals are hidden', () => {
       },
     }),
     apiKeyConfigured: true,
-    removingIds: ['COMMANDCODE_API_KEY_2'],
   })
-  assert.deepEqual(view.accounts.map((account) => account.id), ['default'])
+  assert.deepEqual(view.accounts.map((account) => account.id), ['default', 'COMMANDCODE_API_KEY_2'])
 })
 
 test('the panel opens on the serving account, not the first one', () => {

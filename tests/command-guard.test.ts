@@ -21,13 +21,18 @@ import type { Context } from '@deepseek-ai/cordis'
 import {
   COMMAND_GUARD_DECISION_TTL_MS,
   COMMAND_GUARD_DEFAULT_THRESHOLD,
-  COMMAND_GUARD_DEFAULT_TIMEOUT_MS,
   COMMAND_GUARD_DENY_LIST,
+  COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID,
+  COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID,
   COMMAND_GUARD_MAX_COMMAND_CHARS,
+  COMMAND_GUARD_LEVEL_THRESHOLDS,
+  COMMAND_GUARD_LEVELS,
   COMMAND_GUARD_QUESTION_ID,
+  COMMAND_GUARD_TIMEOUT_MS,
   CommandGuard,
   applyCommandGuard,
   buildSafetyRequest,
+  commandGuardThreshold,
   denyReasonOf,
   safeProbabilityOf,
   shellCommandOf,
@@ -41,14 +46,28 @@ function settings(overrides: Partial<CommandGuardSettings> = {}): CommandGuardSe
   return {
     enabled: true,
     threshold: COMMAND_GUARD_DEFAULT_THRESHOLD,
-    timeoutMs: COMMAND_GUARD_DEFAULT_TIMEOUT_MS,
+    timeoutMs: COMMAND_GUARD_TIMEOUT_MS,
     ...overrides,
   }
 }
 
-/** A decision response carrying one `noul` verdict. */
-function verdict(probability: number | string): SystemOneResponse {
-  return { answers: { [COMMAND_GUARD_QUESTION_ID]: { type: 'noul', noul: probability as number } } }
+/** A decision response carrying the primary verdict and the escalation guards. */
+function verdict(
+  probability: number | string,
+  escalationProbability = probability,
+  necessityProbability = escalationProbability,
+): SystemOneResponse {
+  const noul = (value: number | string): { type: 'noul'; noul: number } => ({
+    type: 'noul',
+    noul: value as number,
+  })
+  return {
+    answers: {
+      [COMMAND_GUARD_QUESTION_ID]: noul(probability),
+      [COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID]: noul(escalationProbability),
+      [COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID]: noul(necessityProbability),
+    },
+  }
 }
 
 /** A recorded decision call. */
@@ -201,7 +220,7 @@ test('only shell executions with a command string are remembered', () => {
   assert.equal(shellCommandOf('bash', { command: 42 }), undefined)
 })
 
-test('the decision request carries the command, its context and one noul question', () => {
+test('the decision request carries the command context and explicit escalation guards', () => {
   const request = buildSafetyRequest({
     tool: 'bash',
     command: 'rm -rf ./build',
@@ -216,12 +235,28 @@ test('the decision request carries the command, its context and one noul questio
   assert.match(state, /Working directory: \/repo/)
   assert.match(state, /workspace-write/)
   assert.match(state, /the sandbox denied this write/)
+  assert.deepEqual(Object.keys(request.questions), [
+    COMMAND_GUARD_QUESTION_ID,
+    COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID,
+    COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID,
+  ])
   const question = request.questions[COMMAND_GUARD_QUESTION_ID]
   assert.equal(question?.type, 'noul')
   if (question?.type !== 'noul') return
   assert.match(String(question.instructions), /WITHOUT asking the user first/)
+  assert.match(String(question.instructions), /sandbox escalation/)
   assert.equal(typeof question.criteria?.true, 'string')
   assert.equal(typeof question.criteria?.false, 'string')
+  for (const id of [COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID, COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID]) {
+    const escalation = request.questions[id]
+    assert.equal(escalation?.type, 'noul')
+    if (escalation?.type === 'noul') assert.equal(typeof escalation.criteria?.true, 'string')
+  }
+})
+
+test('a normal approval keeps the cheap one-question protocol', () => {
+  const request = buildSafetyRequest({ tool: 'bash', command: 'ls -la' })
+  assert.deepEqual(Object.keys(request.questions), [COMMAND_GUARD_QUESTION_ID])
 })
 
 test('only a noul answer counts as a verdict', () => {
@@ -280,13 +315,26 @@ test('a device redirect without a preceding space never reaches the model', asyn
   assert.equal(guard.calls.length, 0)
 })
 
+test('the three levels map to strictly ordered thresholds, and an unknown level reads as the default', () => {
+  assert.deepEqual(COMMAND_GUARD_LEVELS, ['high', 'medium', 'low'])
+  assert.ok(COMMAND_GUARD_LEVEL_THRESHOLDS.high > COMMAND_GUARD_LEVEL_THRESHOLDS.medium)
+  assert.ok(COMMAND_GUARD_LEVEL_THRESHOLDS.medium > COMMAND_GUARD_LEVEL_THRESHOLDS.low)
+  assert.equal(commandGuardThreshold('high'), 0.95)
+  assert.equal(commandGuardThreshold('medium'), 0.9)
+  assert.equal(commandGuardThreshold('low'), 0.8)
+  assert.equal(commandGuardThreshold(undefined), COMMAND_GUARD_DEFAULT_THRESHOLD)
+  assert.equal(commandGuardThreshold(0.6), COMMAND_GUARD_DEFAULT_THRESHOLD, 'a legacy numeric threshold is not honoured')
+  assert.equal(commandGuardThreshold('toString'), COMMAND_GUARD_DEFAULT_THRESHOLD)
+  assert.equal(COMMAND_GUARD_TIMEOUT_MS, 3000)
+})
+
 test('a confident verdict above the threshold grants exactly one approval', async () => {
   const guard = makeGuard({ probability: 0.97 })
   guard.guard.noteExecution(execution('c1', 'npm test'))
   const result = await guard.guard.judge({ toolName: 'bash', callId: 'c1' })
   assert.deepEqual(result, { kind: 'approve', probability: 0.97, source: 'model', command: 'npm test' })
   assert.equal(guard.calls.length, 1)
-  assert.equal(guard.calls[0]?.timeoutMs, COMMAND_GUARD_DEFAULT_TIMEOUT_MS)
+  assert.equal(guard.calls[0]?.timeoutMs, COMMAND_GUARD_TIMEOUT_MS)
   const state = guard.calls[0]?.request.state as string
   assert.match(state, /npm test/)
 })
@@ -301,6 +349,75 @@ test('the threshold is inclusive, and one step below it delegates', async () => 
   const result = await below.guard.judge({ toolName: 'bash', callId: 'c1' })
   assert.equal(result.kind, 'delegate')
   assert.match(result.kind === 'delegate' ? result.reason : '', /below 0\.9/)
+})
+
+test('JEV can approve a narrow Go cache escalation when both guards agree', async () => {
+  const guard = makeGuard({ probability: 0.95 })
+  guard.guard.noteExecution({
+    callId: 'go-cache',
+    name: 'bash',
+    arguments: {
+      command: 'go test ./...',
+      workdir: '/repo',
+      description: 'Run the full repository test suite',
+      sandbox_permissions: 'danger-full-access',
+    },
+  })
+  const result = await guard.guard.judge({
+    toolName: 'bash',
+    callId: 'go-cache',
+    reason: 'Go needs the shared build cache outside the workspace',
+  })
+  assert.deepEqual(result, {
+    kind: 'approve',
+    probability: 0.95,
+    source: 'model',
+    escalation: { scope: 0.95, necessity: 0.95 },
+    command: 'go test ./...',
+  })
+  assert.equal(guard.calls.length, 1)
+  assert.deepEqual(Object.keys(guard.calls[0]?.request.questions ?? {}), [
+    COMMAND_GUARD_QUESTION_ID,
+    COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID,
+    COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID,
+  ])
+})
+
+test('an escalation needs both scope and necessity above the threshold', async () => {
+  const narrow = makeGuard({ decide: async () => verdict(0.99, 0.89) })
+  narrow.guard.noteExecution({
+    callId: 'scope-low',
+    name: 'bash',
+    arguments: { command: 'go test ./...', sandbox_permissions: 'danger-full-access' },
+  })
+  const scopeResult = await narrow.guard.judge({ toolName: 'bash', callId: 'scope-low' })
+  assert.equal(scopeResult.kind, 'delegate')
+  assert.match(scopeResult.kind === 'delegate' ? scopeResult.reason : '', /sandbox scope probability 0\.890 below 0\.9/)
+
+  const unnecessary = makeGuard({ decide: async () => verdict(0.99, 0.99, 0.89) })
+  unnecessary.guard.noteExecution({
+    callId: 'necessity-low',
+    name: 'bash',
+    arguments: { command: 'go test ./...', sandbox_permissions: 'danger-full-access' },
+  })
+  const response = await unnecessary.guard.judge({ toolName: 'bash', callId: 'necessity-low' })
+  assert.equal(response.kind, 'delegate')
+})
+
+test('a missing escalation guard answer fails closed even when safe is high', async () => {
+  const guard = makeGuard({
+    decide: async () => ({
+      answers: { [COMMAND_GUARD_QUESTION_ID]: { type: 'noul', noul: 1 } },
+    }),
+  })
+  guard.guard.noteExecution({
+    callId: 'missing-guards',
+    name: 'bash',
+    arguments: { command: 'go test ./...', sandbox_permissions: 'danger-full-access' },
+  })
+  const result = await guard.guard.judge({ toolName: 'bash', callId: 'missing-guards' })
+  assert.equal(result.kind, 'delegate')
+  assert.match(result.kind === 'delegate' ? result.reason : '', /no complete sandbox-escalation verdict/)
 })
 
 test('the asker reason reaches the decision and the budget is the configured one', async () => {

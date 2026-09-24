@@ -113,7 +113,6 @@ function usePanelView(props: PanelComponentProps): PanelView {
   return buildPanelView({
     usage,
     apiKeyConfigured: settings.anyAccountConfigured,
-    removingIds: settings.accountsRemoving,
     t: props.t ?? panelTextEN,
   })
 }

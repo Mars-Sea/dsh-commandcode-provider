@@ -28,7 +28,8 @@ if (commands.length === 0) {
   console.log(`denylist: ${COMMAND_GUARD_DENY_LIST.length} rules, never sent to the model`)
   for (const entry of COMMAND_GUARD_DENY_LIST) console.log(`  ${entry.id.padEnd(24)} ${entry.pattern}`)
   console.log('')
-  console.log(`everything else: sent to typesafe/jev, approved only at P(safe) >= ${COMMAND_GUARD_DEFAULT_THRESHOLD}`)
+  console.log(`ordinary commands: sent to typesafe/jev, approved only at P(safe) >= ${COMMAND_GUARD_DEFAULT_THRESHOLD}`)
+  console.log('sandbox escalations: also require P(scope) and P(necessity) to reach the same threshold')
   console.log(`commands longer than ${COMMAND_GUARD_MAX_COMMAND_CHARS} characters are delegated without judging`)
   process.exit(0)
 }

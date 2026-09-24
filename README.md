@@ -17,7 +17,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 ## What you get
 
 - **Plugin bundle** — install into any dsh profile with `dsh plugin add`; registers a `commandcode` provider route with a live model catalog.
-- **Dedicated settings page** — API key, connection options, a live account-usage card, and a "Hide out-of-plan models" toggle.
+- **Dedicated settings page** — one account list (keys, sign-in, live quota, dedicated models), model visibility, privacy switches, and connection options.
 - **Works in the terminal too** — the same install serves a [dsh-TUI](#terminal-ui-dsh-tui) profile, with its own **`/settings` → Command Code** page for the API key and the model controls.
 - **Models-page key card** — the **Settings → Models → Command Code** card carries the key status, a paste field, and the sign-in button inline.
 - **In-browser sign-in for keys** — start the official authorization flow (the same one `cmd login` runs) from the settings page; the approved key lands in the local credential service automatically. Manual paste remains the fallback.
@@ -27,7 +27,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **Plan-aware picker** — models above your subscription tier are hidden by default (toggleable); an optional **Model allowlist** keeps only your favorites in the picker.
 - **Reasoning-effort support** — models with selectable reasoning effort levels expose them in the picker.
 - **Image input** — Vision-capable models accept images.
-- **Plans & quota panel** — an optional Command Code card at the bottom of the sidebar (directly above Settings) shows the serving account's plan and its 5-hour and weekly windows; clicking it opens a dashboard with the billing period, both windows as progress bars with reset times, monthly credit consumption, and the purchased/free balances. The dashboard's **×** button hands the center column back to your conversation (the current session is untouched). **Off by default** — turn on *"Show the quota card in the sidebar"* under **Settings → Command Code → Advanced** to show it, and the same switch hides it again (a hidden card draws nothing at all and runs no background usage poll); the change lands as soon as you save. The panel follows your harness language (中文 / English).
+- **Plans & quota panel** — an optional Command Code card at the bottom of the sidebar (directly above Settings) shows the serving account's plan and its 5-hour and weekly windows; clicking it opens a dashboard with the billing period, both windows as progress bars with reset times, monthly credit consumption, and the purchased/free balances. The dashboard's **×** button hands the center column back to your conversation (the current session is untouched). **Off by default** — turn on *"Show the quota card in the sidebar"* under **Settings → Command Code → Integrations & display** to show it, and the same switch hides it again (a hidden card draws nothing at all and runs no background usage poll); the change lands as soon as you save. The panel follows your harness language (中文 / English).
 - **Session cost estimate** — published-rate estimates (`≈`) beside the composer token counter and in its usage dialog, using each request's model, request time and context tier from durable session history. Model switches and viewing the session later do not reprice earlier requests. Mixed-provider or unpriced usage shows a labeled subtotal (`≥`); missing history or wholly unpriceable usage stays hidden. These are estimates from the installed price snapshot, not provider invoices. Also English on every harness language.
 - **Web search** — the dsh `web_search` tool is backed by the Command Code Provider API (`/alpha/web-search`) with the same key/endpoint as chat, so no separate search key or base URL is needed. See [Web search](#web-search).
 
@@ -57,7 +57,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 **pnpm 11 holds back new releases.** Its `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly:
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.12
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.13
 ```
 
 The same applies to every profile you install into, including the terminal UI below.
@@ -76,7 +76,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 Each profile updates separately — the terminal UI owns its own plugin list (see below):
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.12
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.13
 ```
 
 To move to a version published less than 24 hours ago, name it exactly as in Install above; pnpm 11's age gate resolves `@latest` to the previous release instead.
@@ -105,7 +105,7 @@ After restart, enter your API key in **Settings → Command Code** and save; **S
 The plugin also works under a terminal front door. **Each dsh profile owns its own plugin list**, so the web install above does not reach the terminal — add the plugin to the `dsh-tui` profile as well:
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.12
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.13
 ```
 
 Pin the exact version here. For the first 24 hours after a release, a bare package name (or `@latest`) is silently resolved to the previous one: the install succeeds, but the profile gets the older build — which is how a fresh terminal install ends up with no **`/settings` → Command Code** page and no `commandcode` models at all.
@@ -159,11 +159,11 @@ The command's user-facing copy follows the shell's locale: explicit `lang: 'en' 
 
 With several Command Code subscriptions, the plugin **switches to the next account automatically** when one hits its usage limit:
 
-- **Setup** — use the **Account rotation** card at Settings → **Command Code** to add an account and label it. Paste its API key, or use the page's global **Save** button, then **Sign in to Command Code** and open the authorization link shown on that account's row in a new browser tab. The global Save/Discard bar stays inside the settings panel, attached to the bottom of its scrolling area. The top-level key always serves first as the `default` account.
-- **Manual switching** — the **Active account** dropdown pins a preferred account; if it is exhausted, requests fall back to other accounts and return once its window resets.
-- **Route models to accounts** — the **Route models to accounts** card picks catalog models (multi-select, fetched from the live catalog) and routes them to an account. A request whose model is in a rule serves from that account while it is usable; an exhausted or invalid routed account falls back to the normal rotation. Rules match in list order — the first hit wins.
-- **Show only favorite models** — the **Model allowlist** card keeps only the checked models in the model picker; unchecked shows all (the default).
-- **Status** — the **Account usage** card and `/commandcode` report per-account state.
+- **Setup** — click **Add account** in the **Accounts** card at Settings → **Command Code**, optionally name it, then either **Sign in to Command Code** (the key is stored when you approve in the browser; a sign-in that does not complete leaves no empty account behind) or paste an API key. Account actions — add, rename, replace or clear a key, remove, pin — apply immediately; only the other settings on the page wait for the Save bar. The top-level key always serves first as the `default` account.
+- **Manual switching** — **Pin this account** in an account's **⋯** menu makes it the preferred account; if it is exhausted, requests fall back to other accounts and return once its window resets. **Unpin** returns to automatic rotation.
+- **Dedicated models** — expand an account and pick its **Dedicated models** from the live catalog. A request for one of those models serves from that account while it is usable; an exhausted or invalid account falls back to the normal rotation. A model belongs to one account at a time — picking it for another account moves it. (Stored as `modelAccountRules`.)
+- **Show only favorite models** — the **Visible models** picker in the **Models** card keeps only the checked models in the model picker; unchecked shows all (the default).
+- **Status** — each account row shows its plan, status and 5-hour/weekly meters; expand it for the full report. `/commandcode` reports the same per-account state.
 
 The equivalent YAML (`$DSH_HOME/settings.yaml` or composition config):
 
@@ -191,7 +191,7 @@ llm-commandcode:
 
 ## Configure
 
-**Settings → Command Code** covers the API key, API base URL, working directory, and request/stream timeouts; once a key is saved, a live **Account usage** card appears at the top of the page. The **Advanced** card holds the toggles — hide out-of-plan models, serve web search with Command Code, show the quota card in the sidebar (off by default), the AI command guard (off by default, see below), and zero data retention (off by default, see below).
+**Settings → Command Code** is organized as **Accounts** (keys, sign-in, live quota, pinning, dedicated models), **Models** (hide out-of-plan models, visible models), **Privacy & security** (zero data retention and the AI command guard, both off by default, see below), **Integrations & display** (serve web search with Command Code, show the quota card in the sidebar, off by default), and a collapsed **Advanced** section (API base URL, request/stream timeouts, transport retries). The working directory is no longer on the page; `workingDir` in config still works.
 
 The same options live in `$DSH_HOME/settings.yaml` (changes apply immediately, no restart):
 
@@ -205,8 +205,7 @@ llm-commandcode:
   streamIdleTimeoutMs: 300000      # default 300s
   showSidebarQuota: true           # optional: show the plans & quota card in the sidebar (default off)
   commandGuard: true               # optional: let the decision model auto-approve safe shell commands (default off)
-  commandGuardThreshold: 0.9       # optional: probability of "safe" needed to skip the prompt (0.5-1, default 0.9)
-  commandGuardTimeoutMs: 1500      # optional: decision budget in ms (200-10000, default 1500)
+  commandGuardLevel: medium        # optional: auto-approve threshold, high (0.95) | medium (0.9, default) | low (0.8)
   zdr: true                        # optional: route requests only through zero-data-retention upstreams (default off)
 ```
 
@@ -226,21 +225,22 @@ When your deployment's dsh shell mounts the web capability (`@deepseek-ai/dsh-we
 
 When dsh is about to ask you to approve a shell command (`bash`/`pwsh`) — a permission preset, a `PreToolUse` hook, or a sandbox escalation — this plugin can ask the Command Code decision model `typesafe/jev` whether the command is safe to run without asking. A confident *yes* turns into a one-shot `allowed-once` grant; everything else asks you exactly as before.
 
-**Off by default.** Turn it on with the *"Let AI judge shell commands"* toggle (`commandGuard`) in the Advanced card, or in your profile config. What the guard does and does not do:
+**Off by default.** Turn it on with the *"Let AI judge shell commands"* toggle (`commandGuard`) in the Privacy & security card, or in your profile config. What the guard does and does not do:
 
 - It only ever sees commands dsh had **already decided to ask about** — it never widens a permission policy, and it never answers a session whose policy is "never ask".
-- Only a `yes` with probability at least `commandGuardThreshold` (default 0.9) skips the prompt. A `no`, a low-confidence answer, a timeout (default 1500 ms), a rate limit, a missing key, an unreadable answer, a command longer than 6000 characters, or a match against the built-in denylist (`sudo`, `rm -rf /`, `git push`, publish/upload commands, piping a download into a shell, …) all fall back to the normal prompt.
-- The **command text** (plus the agent's own one-line description, the working directory and the asker's reason) is sent to Command Code to be judged — with the same API key and base URL as chat.
+- A normal approval asks one `safe` question. A call carrying `sandboxPermissions` also asks `escalation_scope` and `escalation_necessity`; the primary safety probability and both escalation probabilities must reach the threshold of the chosen `commandGuardLevel` — **High** 0.95, **Medium** 0.9 (default) or **Low** 0.8; a higher level prompts more often. Thus a narrow case such as `go test ./...` needing an outside build cache can be approved by JEV without prompting the user every time.
+- A low-confidence answer, a broad or unnecessary escalation, a timeout (fixed at 3 seconds), a rate limit, a missing key, an unreadable answer, a command longer than 6000 characters, or a match against the built-in denylist (`sudo`, `rm -rf /`, `git push`, publish/upload commands, piping a download into a shell, …) all fall back to the normal prompt.
+- The **command text** (plus the agent's own one-line description, the working directory, the requested sandbox mode and the asker's reason) is sent to Command Code to be judged — with the same API key and base URL as chat.
 - The decision model has **no zero-data-retention upstream**, so this feature is incompatible with a ZDR-only policy. Leave it off if that matters to you.
 - The endpoint is free through 2026-09-24; after that it bills $0.042 per 1M input tokens (output free) — a single decision is a few hundred tokens, and an identical command with the same approval context in the same agent reuses the previous verdict for 10 minutes.
 
-Every AI decision is logged on the Host — `llm-commandcode: command guard auto-approved a bash call (safe probability 0.97, model): <the command>` for a grant, `… delegated a bash call: <reason> — <the command>` for everything that fell through — and the outcome lands in the session's own approval audit (`approval/asked` / `approval/decided`), so a grant can always be traced back to the verdict that produced it. The log goes to the Host's console (the terminal running `dsh web`, or the desktop app's log), not to the browser.
+Every AI decision is logged on the Host — an ordinary grant is `llm-commandcode: command guard auto-approved a bash call (safe probability 0.97, model): <the command>`; a sandbox grant also records its `sandbox scope` and `necessity` probabilities; everything that fell through is `… delegated a bash call: <reason> — <the command>` — and the outcome lands in the session's own approval audit (`approval/asked` / `approval/decided`), so a grant can always be traced back to the verdict that produced it. The log goes to the Host's console (the terminal running `dsh web`, or the desktop app's log), not to the browser.
 
 ## Zero data retention (ZDR)
 
 Command Code can serve a request only through upstreams that retain no prompts or completions and never train on them — the same opt-in the official CLI exposes as `CMD_ZDR=1`, and the `x-cmd-zdr: 1` header on the Provider API ([official docs](https://commandcode.ai/docs/resources/zdr)).
 
-**Off by default.** Turn it on with the *"Zero data retention (ZDR)"* toggle (`zdr`) in the Advanced card, or in your profile config. How this plugin implements it:
+**Off by default.** Turn it on with the *"Zero data retention (ZDR)"* toggle (`zdr`) in the Privacy & security card, or in your profile config. How this plugin implements it:
 
 - The header is sent on **every chat request** while ZDR is on. The plugin maintains an informational exception list (`KNOWN_NON_ZDR_MODELS`, synced from the official CLI — about 20 models, e.g. `xai/grok-4.5`, `stepfun/Step-3.7-Flash`, `meta/muse-spark-1.3`). A model without an available ZDR upstream fails with `422 cmd_zdr_no_providers`; the request is never retried without the header.
 - If a refusal still happens (coverage churn, or no ZDR upstream with spare capacity at that moment), the error names the cause and how to turn ZDR off, instead of surfacing as a bare HTTP 422.
@@ -310,6 +310,6 @@ MIT — see [LICENSE](./LICENSE). Portions ported from [pi-commandcode-provider]
 
 <img src="assets/screenshots/usage-dashboard.png" alt="Usage dashboard" width="520">
 
-**Settings page** — API key, connection knobs, account rotation and the live account-usage card:
+**Settings page** — the account list with live quota, model visibility, privacy switches and connection options:
 
 <img src="assets/screenshots/settings-page.png" alt="Command Code settings page with the account usage card" width="640">

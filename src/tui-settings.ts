@@ -374,41 +374,34 @@ export function buildCommandCodeTuiSection(
         kind: 'boolean',
         label: 'AI command guard',
         descriptions: { zh: 'AI 命令安全预判' },
-        hint: 'typesafe/jev judges whether a shell command is safe and auto-approves it;'
-          + ' everything else asks as usual. Off by default.',
-        hintDescriptions: { zh: '由 typesafe/jev 判断 shell 命令是否安全，安全则自动放行，其余照常弹窗。默认关闭。' },
+        hint: 'typesafe/jev judges whether a shell command is safe; sandbox escalations'
+          + ' also need separate scope and necessity verdicts. All must be confident'
+          + ' enough; everything else asks as usual. Off by default.',
+        hintDescriptions: { zh: '由 typesafe/jev 判断 shell 命令是否安全；沙箱提权还要分别判断范围与必要性，三项都足够确定才自动放行，其余照常弹窗。默认关闭。' },
         // Off is the shipped default and the safe reading of an unset document.
         format: (value) => (value === true ? 'true' : 'false'),
         parse: (text) => ({ kind: 'set', value: text.trim() === 'true' }),
       },
       {
-        path: ['commandGuardThreshold'],
+        path: ['commandGuardLevel'],
         group: 'advanced',
-        kind: 'number',
-        label: 'Auto-approve threshold (0.5-1)',
-        descriptions: { zh: '自动放行阈值（0.5-1）' },
-        hint: 'Approve when typesafe/jev rates the command "safe" at least this likely; default 0.9.',
-        hintDescriptions: { zh: 'typesafe/jev 判定"安全"的概率达到该值即放行，默认 0.9。' },
+        kind: 'select',
+        label: 'Auto-approve threshold',
+        descriptions: { zh: '自动放行阈值' },
+        hint: 'How confident typesafe/jev must be before a command runs without asking. Default: medium.',
+        hintDescriptions: { zh: 'typesafe/jev 需要多确定才免弹窗放行；默认「中」。' },
+        // Mirrors COMMAND_GUARD_LEVELS / COMMAND_GUARD_LEVEL_THRESHOLDS in ./command-guard.ts.
+        options: [
+          { value: 'high', label: 'High (0.95, approves least)', descriptions: { zh: '高（0.95，放行最少）' } },
+          { value: 'medium', label: 'Medium (0.9)', descriptions: { zh: '中（0.9）' } },
+          { value: 'low', label: 'Low (0.8, approves most)', descriptions: { zh: '低（0.8，放行最多）' } },
+        ],
+        format: (value) => (value === 'high' || value === 'low' ? value : 'medium'),
         parse: (text) => {
           const trimmed = text.trim()
-          if (trimmed === '') return { kind: 'clear' }
-          const parsed = Number(trimmed)
-          return Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 1 ? { kind: 'set', value: parsed } : undefined
-        },
-      },
-      {
-        path: ['commandGuardTimeoutMs'],
-        group: 'advanced',
-        kind: 'number',
-        label: 'Judgement timeout (ms, 200-10000)',
-        descriptions: { zh: '判定超时（毫秒，200-10000）' },
-        hint: 'If typesafe/jev does not answer in time, the normal prompt appears; default 1500.',
-        hintDescriptions: { zh: 'typesafe/jev 超过该时间未返回就照常弹窗，默认 1500。' },
-        parse: (text) => {
-          const trimmed = text.trim()
-          if (trimmed === '') return { kind: 'clear' }
-          const parsed = Number(trimmed)
-          return Number.isFinite(parsed) && parsed >= 200 && parsed <= 10000 ? { kind: 'set', value: parsed } : undefined
+          return trimmed === 'high' || trimmed === 'medium' || trimmed === 'low'
+            ? { kind: 'set', value: trimmed }
+            : undefined
         },
       },
       {

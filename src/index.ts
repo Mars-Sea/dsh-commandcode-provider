@@ -63,13 +63,12 @@ import {
 } from './transport-retry.ts'
 import { KNOWN_PLANS } from './capabilities.ts'
 import {
-  COMMAND_GUARD_DEFAULT_THRESHOLD,
-  COMMAND_GUARD_DEFAULT_TIMEOUT_MS,
-  COMMAND_GUARD_MAX_THRESHOLD,
-  COMMAND_GUARD_MAX_TIMEOUT_MS,
-  COMMAND_GUARD_MIN_THRESHOLD,
-  COMMAND_GUARD_MIN_TIMEOUT_MS,
+  COMMAND_GUARD_DEFAULT_LEVEL,
+  COMMAND_GUARD_LEVELS,
+  COMMAND_GUARD_TIMEOUT_MS,
   applyCommandGuard,
+  commandGuardThreshold,
+  type CommandGuardLevel,
   type CommandGuardSettings,
 } from './command-guard.ts'
 import { runSystemOne } from './systemone.ts'
@@ -285,23 +284,18 @@ export interface Config {
    * opt-in, and the command text (plus the agent's own description of it) is
    * sent to Command Code to judge. Only commands a policy already wanted a
    * human to look at are ever judged, and only a confident "safe" verdict
-   * (`commandGuardThreshold`) skips the prompt — every other outcome, including
+   * (`commandGuardLevel`) skips the prompt — every other outcome, including
    * any failure of the decision call itself, delegates to the normal approval
    * flow. See `./command-guard.ts`.
    */
   commandGuard?: boolean
   /**
-   * Minimum probability of "safe" that lets the guard skip the approval prompt;
-   * defaults to 0.9. Lowering it approves more, on less evidence.
+   * How confident every verdict must be before the guard skips the approval
+   * prompt: `high` (0.95), `medium` (0.9, the default) or `low` (0.8). A lower
+   * level approves more, on less evidence. The decision budget is fixed
+   * (`COMMAND_GUARD_TIMEOUT_MS`), so this is the guard's only tuning knob.
    */
-  commandGuardThreshold?: number
-  /**
-   * Milliseconds the guard waits for a decision before falling back to the
-   * human prompt; defaults to 1500. This is a latency budget for an interactive
-   * approval, not a request timeout — a decision that arrives late is useless,
-   * because the user is staring at a prompt.
-   */
-  commandGuardTimeoutMs?: number
+  commandGuardLevel?: CommandGuardLevel
   /**
    * Whether requests enforce zero data retention: the provider then routes
    * them only through upstreams that keep no prompts/completions and never
@@ -385,14 +379,11 @@ export const Config: z<Config> = z.object(markVolatileFields({
     models: z.array(z.string()),
     account: z.string(),
   })),
-  // The command guard. The probability bounds mirror
-  // COMMAND_GUARD_MIN/MAX_THRESHOLD and the budget bounds mirror
-  // COMMAND_GUARD_MIN/MAX_TIMEOUT_MS in `./command-guard.ts`; the client's
-  // field specs mirror them again (the browser bundle cannot import that
-  // node-side module), and `tests/command-guard.test.ts` pins the pair.
+  // The command guard. The level list mirrors COMMAND_GUARD_LEVELS in
+  // `./command-guard.ts`; the client's field spec mirrors it again (the browser
+  // bundle cannot import that node-side module).
   commandGuard: z.boolean().default(false),
-  commandGuardThreshold: z.number().min(COMMAND_GUARD_MIN_THRESHOLD).max(COMMAND_GUARD_MAX_THRESHOLD),
-  commandGuardTimeoutMs: z.number().min(COMMAND_GUARD_MIN_TIMEOUT_MS).max(COMMAND_GUARD_MAX_TIMEOUT_MS),
+  commandGuardLevel: z.union([...COMMAND_GUARD_LEVELS]).default(COMMAND_GUARD_DEFAULT_LEVEL),
   // Off by default: turning it on changes which upstream serves the request
   // (and usually what it costs), so nobody gets ZDR routing by accident.
   zdr: z.boolean().default(false),
@@ -852,8 +843,8 @@ export function apply(ctx: Context, config: Config): void {
     const raw = current()
     return {
       enabled: raw.commandGuard === true,
-      threshold: raw.commandGuardThreshold ?? COMMAND_GUARD_DEFAULT_THRESHOLD,
-      timeoutMs: raw.commandGuardTimeoutMs ?? COMMAND_GUARD_DEFAULT_TIMEOUT_MS,
+      threshold: commandGuardThreshold(raw.commandGuardLevel),
+      timeoutMs: COMMAND_GUARD_TIMEOUT_MS,
     }
   }
 

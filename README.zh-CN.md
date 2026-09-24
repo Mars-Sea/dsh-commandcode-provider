@@ -17,7 +17,7 @@
 ## 功能一览
 
 - **插件包**：一条 `dsh plugin add` 命令安装到任意 dsh 配置，注册 `commandcode` provider 路由，带实时模型目录。
-- **专属设置页**：API key 输入、连接参数、实时「账户用量」卡片和「隐藏套餐外模型」开关。
+- **专属设置页**：统一的账户列表（密钥、网页登录、实时额度、专用模型）、模型显示、隐私开关与连接参数。
 - **终端界面同样可用**：同一次安装即可服务 [dsh-TUI](#终端界面dsh-tui) 配置，终端里有自己的 **`/settings` → Command Code** 页面来填 key 和调模型。
 - **Models 页快捷卡片**：**设置 → Models → Command Code** 卡片内直接显示 key 状态、粘贴输入框和登录按钮。
 - **浏览器内登录获取 key**：设置页一键发起官方授权（与 `cmd login` 同一流程），完成后密钥自动写入本机凭据服务，无需手动创建或粘贴；不可用时随时退回手动粘贴。
@@ -27,7 +27,7 @@
 - **按套餐过滤**：默认隐藏超出订阅套餐的模型，可一键关闭；「模型白名单」可进一步只保留常用模型。
 - **推理强度支持**：支持推理强度的模型可在选择器中选择档位。
 - **图片输入**：Vision 模型支持发送图片。
-- **套餐与配额面板**：可选的 Command Code 卡片位于侧边栏底部（Settings 正上方），显示当前服务账号的套餐与 5 小时 / 每周两个配额窗口；点击后在中间栏打开面板，包含计费周期、两个窗口的进度条与重置时间、月度额度消耗，以及已购买 / 赠送余额。面板右上角的 **×** 按钮可随时把中间栏交还给会话（不会切换当前会话）。**默认关闭**——在 **设置 → Command Code → 高级设置** 中打开「在侧边栏显示额度卡片」即可显示，同一开关也能随时隐藏（隐藏时左侧不渲染任何内容，也不会为其后台刷新用量）。面板文案跟随 Harness 显示语言（中文 / English）。
+- **套餐与配额面板**：可选的 Command Code 卡片位于侧边栏底部（Settings 正上方），显示当前服务账号的套餐与 5 小时 / 每周两个配额窗口；点击后在中间栏打开面板，包含计费周期、两个窗口的进度条与重置时间、月度额度消耗，以及已购买 / 赠送余额。面板右上角的 **×** 按钮可随时把中间栏交还给会话（不会切换当前会话）。**默认关闭**——在 **设置 → Command Code → 集成与显示** 中打开「在侧边栏显示额度卡片」即可显示，同一开关也能随时隐藏（隐藏时左侧不渲染任何内容，也不会为其后台刷新用量）。面板文案跟随 Harness 显示语言（中文 / English）。
 - **会话费用估算**：在输入框下方的 token 计数旁及用量对话框中显示估算金额（`≈`），根据持久化历史中每次请求的模型、请求时间和上下文阶梯分别计价。切换模型或稍后查看不会重新定价之前的请求。混合供应商或缺少费率时显示已定价部分的小计（`≥`）；缺少历史事实或完全无法定价时不显示金额。结果基于插件内的价格快照，不等同于供应商账单。同样固定为英文。
 - **联网搜索**：dsh 的 `web_search` 工具由 Command Code Provider API（`/alpha/web-search`）承载，复用聊天同一个 key 与端点，无需单独配置搜索 key 或地址。详见[联网搜索](#联网搜索)。
 
@@ -49,7 +49,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 **pnpm 11 会拦下刚发布的新版本。** 它的 `minimumReleaseAge` 默认为 1440 分钟，发布不足一天的版本会被跳过，`@latest` 解析到**上一个**版本 —— 而且是静默的，命令照样以成功退出。想装 24 小时内发布的版本，必须写精确版本号：
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.12
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.13
 ```
 
 这一点对每个 profile 都成立，包括下面的终端界面。
@@ -68,7 +68,7 @@ dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 
 每个 profile 各自更新 —— 终端界面有独立的插件列表（见下文）：
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.12
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.13
 ```
 
 要更新到发布不足 24 小时的版本，和上面的安装一样写精确版本号；pnpm 11 的年龄门禁会把 `@latest` 解析成上一个版本。
@@ -97,7 +97,7 @@ cmd login        # macOS/Linux；Windows 原生版：cmdc login
 插件同样支持终端前端。**每个 dsh profile 有独立的插件列表**，所以上面那条 Web 安装命令不会装到终端里 —— 还要把插件装进 `dsh-tui` profile：
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.12
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.13
 ```
 
 这里请写精确版本号。新版本发布后的 24 小时内，只写包名（或 `@latest`）会被静默解析到上一个版本 —— 安装命令照样成功，但 profile 里拿到的是旧版本，结果就是全新的终端安装里既没有 **`/settings` → Command Code** 页面，也看不到任何 `commandcode` 模型。
@@ -151,11 +151,11 @@ cmd login                               # 写入 ~/.commandcode/auth.json
 
 有多个 Command Code 订阅时，插件可以在一个账户达到用量限额后**自动切换到下一个账户**：
 
-- **配置**：在 **设置 → Command Code** 的「多账户轮换」卡片添加账户并填写备注名。可直接填写 API key，或先点击页面底部的全局「保存」，再在该账户行点击「登录 Command Code」并打开出现的授权链接，在新网页授权获取 key；全局「放弃 / 保存」操作栏在设置面板内部随滚动吸附于底部。顶层 key 始终是第一顺位的 `default` 账户。
-- **手动切换**：卡片上的「当前使用账户」下拉框可指定优先账户；所选账户耗尽时自动回落到其他账户，窗口重置后自动恢复。
-- **按模型切换账户**：在「按模型切换账户」卡片从实时模型目录**多选**模型并固定到某个账户。请求的模型在规则列表中且该账户可用时使用该账户；账户耗尽或密钥失效时自动回落到常规轮换。规则按列表顺序匹配，第一条命中生效。
-- **只显示常用模型**：在「模型白名单」卡片勾选要保留的模型，模型选择器只列出这些；不勾选则显示全部（默认行为不变）。
-- **状态展示**：「账户用量」卡片与 `/commandcode` 均按账户分别显示状态。
+- **配置**：在 **设置 → Command Code** 的「账户」卡片点击「添加账户」，可填写备注名，然后选择「网页登录」（在浏览器授权后自动保存 key；登录未完成不会留下空账户）或「粘贴密钥」。添加、重命名、更换或清除密钥、移除、固定等账户操作**立即生效**，无需点击页面底部的「保存」；「保存」只作用于页面上的其他设置。顶层 key 始终是第一顺位的 `default` 账户。
+- **手动切换**：在账户行的「⋯」菜单中选择「固定使用此账户」即可指定优先账户；所选账户耗尽时自动回落到其他账户，窗口重置后自动恢复。「取消固定」回到自动轮换。
+- **专用模型**：展开某个账户，从实时模型目录**多选**它的「专用模型」。请求这些模型且该账户可用时使用该账户；账户耗尽或密钥失效时自动回落到常规轮换。一个模型同一时间只属于一个账户，给另一个账户选择它会自动移过去（仍保存为 `modelAccountRules`）。
+- **只显示常用模型**：在「模型」卡片的「可见模型」中勾选要保留的模型，模型选择器只列出这些；不勾选则显示全部（默认行为不变）。
+- **状态展示**：每个账户行直接显示套餐、状态以及 5 小时 / 每周额度条，展开可查看完整报告；`/commandcode` 同样按账户显示状态。
 
 等价的 YAML（`$DSH_HOME/settings.yaml` 或组合配置）：
 
@@ -183,7 +183,7 @@ llm-commandcode:
 
 ## 配置
 
-**设置 → Command Code** 可配置 API key、API 地址、工作目录与请求/流超时；配置好 key 后，页面顶部会显示实时「账户用量」卡片。**高级设置**卡片里集中了各个开关：隐藏套餐外模型、用 Command Code 承载联网搜索、在侧边栏显示额度卡片（默认关闭）、AI 命令安全预判（默认关闭，见下），以及零数据保留 ZDR（默认关闭，见下）。
+**设置 → Command Code** 分为：**账户**（密钥、网页登录、实时额度、固定账户、专用模型）、**模型**（隐藏套餐外模型、可见模型）、**隐私与安全**（零数据保留 ZDR 与 AI 命令安全预判，均默认关闭，见下）、**集成与显示**（用 Command Code 承载联网搜索、在侧边栏显示额度卡片，默认关闭），以及默认折叠的**高级设置**（API 地址、请求/流超时、传输重试次数）。工作目录已不在页面上显示，配置中的 `workingDir` 仍然有效。
 
 同一组选项也位于 `$DSH_HOME/settings.yaml`（修改即刻生效，无需重启）：
 
@@ -197,8 +197,7 @@ llm-commandcode:
   streamIdleTimeoutMs: 300000      # 默认 300s
   showSidebarQuota: true           # 可选：在侧边栏显示套餐与配额卡片（默认关闭）
   commandGuard: true               # 可选：让决策模型自动放行安全的 shell 命令（默认关闭）
-  commandGuardThreshold: 0.9       # 可选：跳过弹窗所需的「安全」概率（0.5-1，默认 0.9）
-  commandGuardTimeoutMs: 1500      # 可选：决策等待上限（毫秒，200-10000，默认 1500）
+  commandGuardLevel: medium        # 可选：自动放行阈值，high（0.95）| medium（0.9，默认）| low（0.8）
   zdr: true                        # 可选：请求只经由零数据保留上游（默认关闭）
 ```
 
@@ -218,21 +217,22 @@ llm-commandcode:
 
 当 dsh 准备就某条 shell 命令（`bash`/`pwsh`）征求你同意时——无论是权限预设、`PreToolUse` 钩子还是沙箱提权——本插件可以先让 Command Code 的决策模型 `typesafe/jev` 判断这条命令是否安全到无需询问。判断为「安全」且把握足够高时，直接放行这一次调用；其余情况一律照旧询问你。
 
-**默认关闭。** 在高级设置里打开「用 AI 预判命令是否安全」（`commandGuard`），或写进 profile 配置。它的行为边界：
+**默认关闭。** 在「隐私与安全」卡片里打开「用 AI 预判命令是否安全」（`commandGuard`），或写进 profile 配置。它的行为边界：
 
 - 它只会看到 dsh **本来就要询问你**的命令——不会放宽任何权限策略，也不会替「从不询问」（policy 为 `never`）的会话作答。
-- 只有「安全」概率不低于 `commandGuardThreshold`（默认 0.9）时才跳过弹窗。判为不安全、把握不足、超时（默认 1500ms）、限流、缺 key、返回体读不懂、命令超过 6000 字符，或命中内置危险名单（`sudo`、`rm -rf /`、`git push`、发布/上传类命令、把下载内容管进 shell 等），全部回到普通弹窗。
-- 送往 Command Code 判断的内容包括**命令原文**、模型自己写的一行描述、工作目录与询问原因；使用与聊天相同的 API key 与 base URL。
+- 普通审批只问一个 `safe` 问题；带有 `sandboxPermissions` 的沙箱提权会额外问 `escalation_scope` 与 `escalation_necessity`。只有主安全概率以及这两个提权概率都不低于所选「自动放行阈值」（`commandGuardLevel`：高 0.95、中 0.9（默认）、低 0.8；阈值越高弹窗越多）时才跳过弹窗；因此像 `go test ./...` 需要访问工作区外构建缓存的场景，只要 JEV 确认提权范围狭窄且必要，就能由 AI 放行，不必每次打扰用户。
+- 任一概率不足、提权范围过宽或没有必要、超时（固定 3 秒）、限流、缺 key、返回体读不懂、命令超过 6000 字符，或命中内置危险名单（`sudo`、`rm -rf /`、`git push`、发布/上传类命令、把下载内容管进 shell 等），全部回到普通弹窗。
+- 送往 Command Code 判断的内容包括**命令原文**、模型自己写的一行描述、工作目录、请求的 sandbox 模式与询问原因；使用与聊天相同的 API key 与 base URL。
 - 该决策模型**没有零数据保留（ZDR）上游**，因此本功能与「只走 ZDR」的合规要求不兼容；如果你在意这一点，请保持关闭。
 - 该端点 2026-09-24 前免费，之后按输入 $0.042/1M tokens 计费（输出免费）——单次判断只有几百 tokens；同一 agent 中命令和审批场景都相同时，10 分钟内复用上一次结论。
 
-每次 AI 决策都会在 Host 侧写日志——放行是 `llm-commandcode: command guard auto-approved a bash call (safe probability 0.97, model): <命令>`，其余是 `… delegated a bash call: <原因> — <命令>`——并进入会话自身的审批审计（`approval/asked` / `approval/decided`），所以任何一次放行都能追溯到产生它的判断。日志打到 Host 控制台（运行 `dsh web` 的终端，或桌面端日志），不进浏览器。
+每次 AI 决策都会在 Host 侧写日志——普通放行是 `llm-commandcode: command guard auto-approved a bash call (safe probability 0.97, model): <命令>`；沙箱提权还会附带 `sandbox scope` 与 `necessity` 概率；其余是 `… delegated a bash call: <原因> — <命令>`——并进入会话自身的审批审计（`approval/asked` / `approval/decided`），所以任何一次放行都能追溯到产生它的判断。日志打到 Host 控制台（运行 `dsh web` 的终端，或桌面端日志），不进浏览器。
 
 ## 零数据保留（ZDR）
 
 Command Code 可以让请求只经由「不留存提示词与回复、也不用于训练」的上游——官方 CLI 的开关是 `CMD_ZDR=1`，Provider API 上则是在请求头发 `x-cmd-zdr: 1`（[官方文档](https://commandcode.ai/docs/resources/zdr)）。
 
-**默认关闭。** 在高级设置里打开「零数据保留（ZDR）」（`zdr`），或写进 profile 配置。本插件的实现方式：
+**默认关闭。** 在「隐私与安全」卡片里打开「零数据保留（ZDR）」（`zdr`），或写进 profile 配置。本插件的实现方式：
 
 - 开启后，**每次聊天请求**都会带上 ZDR 请求头。插件仍维护官方 CLI 的例外名单（`KNOWN_NON_ZDR_MODELS`，约 20 个模型，例如 `xai/grok-4.5`、`stepfun/Step-3.7-Flash`、`meta/muse-spark-1.3`）供查询。没有可用 ZDR 上游时，服务端返回 `422 cmd_zdr_no_providers`；插件不会去掉请求头重试。
 - 万一仍被拒绝（名单过期，或那一刻没有空闲的 ZDR 上游容量），错误信息会说明原因并给出关闭 ZDR 的办法，而不是抛出一个光秃秃的 HTTP 422。
@@ -301,6 +301,6 @@ MIT —— 见 [LICENSE](./LICENSE)。部分内容移植自 [pi-commandcode-prov
 
 <img src="assets/screenshots/usage-dashboard.png" alt="用量面板" width="520">
 
-**设置页** —— API 密钥、连接参数、多账户轮换与实时账户用量卡片：
+**设置页** —— 带实时额度的账户列表、模型显示、隐私开关与连接参数：
 
 <img src="assets/screenshots/settings-page.png" alt="Command Code 设置页面（含账户用量卡片）" width="640">

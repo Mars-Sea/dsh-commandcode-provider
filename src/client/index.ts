@@ -366,6 +366,10 @@ function applyClientSurfaces(
     loginStore.set(loginController.state())
   })
 
+  const refreshUsageOn = (ok: boolean): boolean => {
+    if (ok) void usageController.refresh()
+    return ok
+  }
   const injected = () => ({
     hooks: { commandCodeSettings: store, commandCodeUsage: usageStore, commandCodeLogin: loginStore },
     edit: (field: string, text: string) => controller.edit(field, text),
@@ -380,15 +384,18 @@ function applyClientSurfaces(
     refreshUsage: () => void usageController.refresh(),
     beginLogin: (targetRef?: string) => void loginController.begin(targetRef),
     cancelLogin: () => void loginController.cancel(),
-    addAccount: () => controller.addAccount(),
-    removeAccount: (id: string) => controller.removeAccount(id),
-    editAccountLabel: (id: string, text: string) => controller.editAccountLabel(id, text),
-    editAccountKey: (id: string, text: string) => controller.editAccountKey(id, text),
-    toggleKeyClear: (id: string) => controller.toggleKeyClear(id),
-    addRule: () => controller.addRule(),
-    removeRule: (id: string) => controller.removeRule(id),
-    editRuleModels: (id: string, ids: string[]) => controller.editRuleModels(id, ids),
-    editRuleAccount: (id: string, text: string) => controller.editRuleAccount(id, text),
+    // Account operations commit immediately. The ones that change which keys
+    // exist refetch the usage report so the account rows follow.
+    createAccount: (input: { label: string; key?: string }) => controller.createAccount(input).then((ref) => {
+      if (ref !== undefined && input.key) void usageController.refresh()
+      return ref
+    }),
+    renameAccount: (ref: string, label: string) => controller.renameAccount(ref, label),
+    removeAccount: (ref: string) => controller.removeAccount(ref).then(refreshUsageOn),
+    setAccountKey: (target: string, key: string) => controller.setAccountKey(target, key).then(refreshUsageOn),
+    clearAccountKey: (target: string) => controller.clearAccountKey(target).then(refreshUsageOn),
+    setActiveAccount: (id: string) => controller.setActiveAccount(id).then(refreshUsageOn),
+    setAccountModels: (target: string, ids: string[]) => controller.setAccountModels(target, ids),
     editVisibleModels: (ids: string[]) => controller.editVisibleModels(ids),
     clearVisibleModels: () => controller.clearVisibleModels(),
   })

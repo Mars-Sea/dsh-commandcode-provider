@@ -6,9 +6,12 @@
  * module inserts one answerer in front of the human: the Command Code decision
  * model `typesafe/jev` (see `./systemone.ts`) is asked whether the command is
  * safe to run without asking, and only a confident *yes* turns into a one-shot
- * `allowed-once` grant. Everything else — a lower probability, a malformed
- * answer, a timeout, a rate limit, a missing key, a command we refuse to judge —
- * delegates to the next answerer with `next()`, which is the human.
+ * `allowed-once` grant. A sandbox escalation is judged as a separate, explicit
+ * decision: JEV must confirm both that the wider access has a narrow purpose and
+ * that it is necessary, rather than treating a sandbox string as a harmless
+ * detail. Everything else — a lower probability, a malformed answer, a timeout,
+ * a rate limit, a missing key, a command we refuse to judge — delegates to the
+ * next answerer with `next()`, which is the human.
  *
  * Why this seam and not the decision one: `approval/request` fires only after a
  * policy already decided to ask, so a grant here can never widen a policy (a
@@ -32,9 +35,11 @@
  *    model;
  * 4. the command is too long to judge in full (a truncated state would invite a
  *    verdict on a command the model did not see);
- * 5. the decision call fails for any reason (timeout, HTTP, credential,
+ * 5. a sandbox escalation lacks either explicit scope or necessity support;
+ * 6. the decision call fails for any reason (timeout, HTTP, credential,
  *    network, unreadable body);
- * 6. the probability is below the configured threshold.
+ * 7. the primary probability or either escalation probability is below the
+ *    configured threshold.
  *
  * The model is billed per request ($0.042/1M input tokens once the free window
  * ends on 2026-09-24) and the endpoint has no ZDR upstream (its requests never
@@ -48,7 +53,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  SYSTEMONE_DEFAULT_TIMEOUT_MS,
   type SystemOneQuestion,
   type SystemOneRequest,
   type SystemOneResponse,
@@ -57,22 +61,55 @@ import {
 /** Tool names whose `arguments.command` this guard judges. */
 export const COMMAND_GUARD_SHELL_TOOLS: readonly string[] = ['bash', 'pwsh']
 
-/** Question id the safety verdict is keyed by. */
+/** Question id the primary safety verdict is keyed by. */
 export const COMMAND_GUARD_QUESTION_ID = 'safe'
 
-/** Probability of "safe" at or above which the guard grants `allowed-once`. */
-export const COMMAND_GUARD_DEFAULT_THRESHOLD = 0.9
+/** Question id for the narrow-purpose part of a sandbox escalation. */
+export const COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID = 'escalation_scope'
 
-/** Decision budget; the approval prompt must not wait longer than this. */
-export const COMMAND_GUARD_DEFAULT_TIMEOUT_MS = SYSTEMONE_DEFAULT_TIMEOUT_MS
+/** Question id for the necessity/proportionality part of a sandbox escalation. */
+export const COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID = 'escalation_necessity'
 
-/** Bounds of the configurable probability, mirrored by the settings schemas. */
-export const COMMAND_GUARD_MIN_THRESHOLD = 0.5
-export const COMMAND_GUARD_MAX_THRESHOLD = 1
+/**
+ * The auto-approve strictness a user picks (`Config.commandGuardLevel`). Each
+ * level is the probability every verdict must reach before the guard grants
+ * `allowed-once`; a higher level approves less, on stronger evidence. Three
+ * presets replace a free-form probability because the useful range is narrow
+ * and a hand-typed 0.6 silently turns the guard into a rubber stamp.
+ */
+export type CommandGuardLevel = 'high' | 'medium' | 'low'
 
-/** Bounds of the configurable budget, mirrored by the settings schemas. */
-export const COMMAND_GUARD_MIN_TIMEOUT_MS = 200
-export const COMMAND_GUARD_MAX_TIMEOUT_MS = 10_000
+/** The selectable levels, strictest first (the order the settings surfaces list them in). */
+export const COMMAND_GUARD_LEVELS: readonly CommandGuardLevel[] = ['high', 'medium', 'low']
+
+/** Each level's probability threshold. */
+export const COMMAND_GUARD_LEVEL_THRESHOLDS: Readonly<Record<CommandGuardLevel, number>> = {
+  high: 0.95,
+  medium: 0.9,
+  low: 0.8,
+}
+
+/** The level an unset config reads as. */
+export const COMMAND_GUARD_DEFAULT_LEVEL: CommandGuardLevel = 'medium'
+
+/** Probability of "safe" at or above which the guard grants `allowed-once` by default. */
+export const COMMAND_GUARD_DEFAULT_THRESHOLD = COMMAND_GUARD_LEVEL_THRESHOLDS[COMMAND_GUARD_DEFAULT_LEVEL]
+
+/** The threshold for a stored level; anything unrecognized reads as the default level. */
+export function commandGuardThreshold(level: unknown): number {
+  return typeof level === 'string' && Object.hasOwn(COMMAND_GUARD_LEVEL_THRESHOLDS, level)
+    ? COMMAND_GUARD_LEVEL_THRESHOLDS[level as CommandGuardLevel]
+    : COMMAND_GUARD_DEFAULT_THRESHOLD
+}
+
+/**
+ * Decision budget; the approval prompt must not wait longer than this. Fixed
+ * rather than configurable: it only bounds how long a late verdict can delay
+ * the prompt, and every failure (a timeout included) already falls back to
+ * asking the user, so there is nothing for a user to tune. 3 s leaves room for
+ * credential resolution plus one decision round trip on a slow link.
+ */
+export const COMMAND_GUARD_TIMEOUT_MS = 3000
 
 /**
  * Longest command the guard will send for judgement. A longer one is delegated
@@ -222,17 +259,21 @@ export function shellCommandOf(name: string, args: unknown): Omit<ShellCommandFa
 /**
  * Build the decision request for one command.
  *
- * The question is deliberately one `noul`: a single probability is a decision
- * rule that can be explained, thresholded and logged in one line, and the
- * criteria carry the whole distinction between "reads, or writes reversibly
- * inside the project" and "everything else". The agent's own `description` is
- * included as context, but the criteria say the command text itself decides — a
+ * A normal approval asks one question. A call that explicitly requests a wider
+ * sandbox gets the same safety question plus two veto questions. This keeps the
+ * common case cheap while making the broader permission change an explicit
+ * decision: JEV must agree that the extra access has a narrow purpose and is
+ * necessary, not merely that the command text looks familiar.
+ *
+ * The agent's own `description` and the harness's `reason` are included as
+ * context, but the criteria say the command text itself decides — a
  * model-written description is a claim, not evidence.
  *
  * @param fact - the command and its context.
  * @returns the request to send.
  */
 export function buildSafetyRequest(fact: ShellCommandFact): SystemOneRequest {
+  const escalated = fact.sandboxPermissions !== undefined
   const lines = [
     `Tool: ${fact.tool}`,
     'Command:',
@@ -246,25 +287,50 @@ export function buildSafetyRequest(fact: ShellCommandFact): SystemOneRequest {
   ]
   const question: SystemOneQuestion = {
     type: 'noul',
-    instructions: 'Is it safe to run this command right now WITHOUT asking the user first? Judge the command text itself; a description is only a claim about it.',
+    instructions: escalated
+      ? 'Is it safe to run this command right now WITHOUT asking the user first, including the requested sandbox escalation? Judge the command text itself; a description or stated reason is only a claim about it.'
+      : 'Is it safe to run this command right now WITHOUT asking the user first? Judge the command text itself; a description is only a claim about it.',
     criteria: {
-      true: 'Read-only, or its effects stay inside the current project and are trivially reversible: no data leaves the machine, nothing outside the project is modified, and no credentials, git history or remote state are touched.',
-      false: 'Anything else. Deleting or overwriting files outside the project, rewriting or publishing git history, uploading data anywhere, installing system or global packages, changing permissions, ownership or credentials, killing processes, running as another user or as root, piping a download into a shell, or a command obfuscated enough that its effect cannot be read.',
+      true: escalated
+        ? 'A normal, non-obfuscated read, build, or test operation whose outside-workspace effects are limited to conventional build/dependency caches or temporary files and are easily reversible: no unrelated user or system data is accessed, no data leaves the machine, and no credentials, git history or remote state are touched.'
+        : 'Read-only, or its effects stay inside the current project and are trivially reversible: no data leaves the machine, nothing outside the project is modified, and no credentials, git history or remote state are touched.',
+      false: 'Anything else. Broad or unrelated outside-workspace access, deleting or overwriting files outside the project, rewriting or publishing git history, uploading data anywhere, installing system or global packages, changing permissions, ownership or credentials, killing processes, running as another user or as root, piping a download into a shell, or a command obfuscated enough that its effect cannot be read.',
     },
+  }
+  const questions: Record<string, SystemOneQuestion> = {
+    [COMMAND_GUARD_QUESTION_ID]: question,
+  }
+  if (escalated) {
+    questions[COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID] = {
+      type: 'noul',
+      instructions: 'Is the requested wider sandbox access limited to a narrow, conventional purpose supported by this command, such as a build cache, dependency cache, or temporary directory, rather than unrelated user files, credentials, other projects, or the network?',
+      criteria: {
+        true: 'The wider access is plausibly limited to conventional local build/dependency caches or temporary files required by the command, with no unrelated host data or remote transfer in scope.',
+        false: 'The command needs broad or unrelated host access, cannot establish a narrow purpose, or would use the wider permission to reach credentials, other projects, user files, or the network.',
+      },
+    }
+    questions[COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID] = {
+      type: 'noul',
+      instructions: 'Is the requested sandbox escalation necessary and proportionate for this one command, rather than broader than the command needs? Treat the stated reason as a claim to check against the command, not as proof.',
+      criteria: {
+        true: 'The command and its stated purpose support a one-shot escalation that is needed for the task and is no broader than the requested effect requires.',
+        false: 'The wider mode is unnecessary, broader than needed, unsupported by the command, or the command is too ambiguous to justify the extra authority.',
+      },
+    }
   }
   return {
     state: lines.join('\n'),
-    questions: { [COMMAND_GUARD_QUESTION_ID]: question },
+    questions,
   }
 }
 
 /**
- * Read the safety probability out of a decision response.
+ * Read a probability out of a decision response.
  *
  * @param response - the parsed response.
  * @param questionId - the question id to read (defaults to the guard's own).
- * @returns the probability of "safe", or undefined when the answer is missing
- *   or is not a `noul` verdict.
+ * @returns the probability, or undefined when the answer is missing or is not
+ *   a `noul` verdict.
  */
 export function safeProbabilityOf(
   response: SystemOneResponse,
@@ -301,6 +367,11 @@ export type CommandGuardVerdict =
     readonly kind: 'approve'
     readonly probability: number
     readonly source: 'model' | 'memo'
+    /** The two explicit sandbox-escalation guard probabilities, when applicable. */
+    readonly escalation?: {
+      readonly scope: number
+      readonly necessity: number
+    }
     /** One-line excerpt of the command, for the audit log. */
     readonly command?: string
   }
@@ -345,6 +416,11 @@ export interface CommandGuardDeps {
 /** A memoized decision for one exact command. */
 interface MemoEntry {
   readonly probability: number
+  /** The two extra probabilities required by a sandbox escalation. */
+  readonly escalation?: {
+    readonly scope: number
+    readonly necessity: number
+  }
   readonly at: number
 }
 
@@ -439,7 +515,7 @@ export class CommandGuard {
     const memo = agentDecisions?.get(memoKey)
     if (memo !== undefined) {
       if (now - memo.at < COMMAND_GUARD_DECISION_TTL_MS) {
-        return this.verdict(memo.probability, settings.threshold, 'memo', excerpt)
+        return this.verdict(memo, settings.threshold, 'memo', excerpt, full.sandboxPermissions !== undefined)
       }
       agentDecisions?.delete(memoKey)
     }
@@ -458,10 +534,28 @@ export class CommandGuard {
     if (probability === undefined) {
       return { kind: 'delegate', reason: 'the decision carried no safe verdict', command: excerpt }
     }
+    let escalation: { readonly scope: number; readonly necessity: number } | undefined
+    if (full.sandboxPermissions !== undefined) {
+      const scope = safeProbabilityOf(response, COMMAND_GUARD_ESCALATION_SCOPE_QUESTION_ID)
+      const necessity = safeProbabilityOf(response, COMMAND_GUARD_ESCALATION_NECESSITY_QUESTION_ID)
+      if (scope === undefined || necessity === undefined) {
+        return {
+          kind: 'delegate',
+          reason: 'the decision carried no complete sandbox-escalation verdict',
+          command: excerpt,
+        }
+      }
+      escalation = { scope, necessity }
+    }
+    const memoEntry: MemoEntry = {
+      probability,
+      ...(escalation === undefined ? {} : { escalation }),
+      at: now,
+    }
 
     if (request.agent !== undefined) {
       const decisions = agentDecisions ?? new Map<string, MemoEntry>()
-      decisions.set(memoKey, { probability, at: now })
+      decisions.set(memoKey, memoEntry)
       while (decisions.size > COMMAND_GUARD_CACHE_ENTRIES) {
         const oldest = decisions.keys().next()
         if (oldest.done === true) break
@@ -469,24 +563,54 @@ export class CommandGuard {
       }
       this.decisions.set(request.agent, decisions)
     }
-    return this.verdict(probability, settings.threshold, 'model', excerpt)
+    return this.verdict(memoEntry, settings.threshold, 'model', excerpt, full.sandboxPermissions !== undefined)
   }
 
-  /** Apply the threshold to one probability. */
+  /** Apply the threshold to the primary verdict and any escalation vetoes. */
   private verdict(
-    probability: number,
+    entry: MemoEntry,
     threshold: number,
     source: 'model' | 'memo',
     command: string,
+    escalated: boolean,
   ): CommandGuardVerdict {
-    return probability >= threshold
-      ? { kind: 'approve', probability, source, command }
-      : {
+    if (entry.probability < threshold) {
+      return {
         kind: 'delegate',
-        reason: `safe probability ${probability.toFixed(3)} below ${threshold}`,
-        probability,
+        reason: `safe probability ${entry.probability.toFixed(3)} below ${threshold}`,
+        probability: entry.probability,
         command,
       }
+    }
+    if (!escalated) {
+      return { kind: 'approve', probability: entry.probability, source, command }
+    }
+    if (entry.escalation === undefined) {
+      return { kind: 'delegate', reason: 'the cached sandbox-escalation verdict was incomplete', command }
+    }
+    if (entry.escalation.scope < threshold) {
+      return {
+        kind: 'delegate',
+        reason: `sandbox scope probability ${entry.escalation.scope.toFixed(3)} below ${threshold}`,
+        probability: entry.probability,
+        command,
+      }
+    }
+    if (entry.escalation.necessity < threshold) {
+      return {
+        kind: 'delegate',
+        reason: `sandbox necessity probability ${entry.escalation.necessity.toFixed(3)} below ${threshold}`,
+        probability: entry.probability,
+        command,
+      }
+    }
+    return {
+      kind: 'approve',
+      probability: entry.probability,
+      source,
+      ...(entry.escalation === undefined ? {} : { escalation: entry.escalation }),
+      command,
+    }
   }
 }
 
@@ -550,7 +674,11 @@ export function applyCommandGuard(ctx: Context, deps: CommandGuardDeps): () => v
     if (verdict.kind === 'approve') {
       deps.log?.(
         `command guard auto-approved a ${request.toolName} call`
-        + ` (safe probability ${verdict.probability.toFixed(3)}, ${verdict.source}): ${verdict.command ?? '(command unknown)'}`,
+        + ` (safe probability ${verdict.probability.toFixed(3)}`
+        + `${verdict.escalation === undefined
+          ? ''
+          : `, sandbox scope ${verdict.escalation.scope.toFixed(3)}, necessity ${verdict.escalation.necessity.toFixed(3)}`}`
+        + `, ${verdict.source}): ${verdict.command ?? '(command unknown)'}`,
       )
       return 'allowed-once'
     }

@@ -625,3 +625,19 @@ test('a malformed seam is ignored rather than trusted', async () => {
     await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
   }
 })
+
+test('the command-guard level is a three-way select that renders its effective default', () => {
+  const { section } = build()
+  const level = field(section, 'commandGuardLevel')
+  // Unset reads as the schema default, so there is no "unset" to keep
+  // reachable and a plain select is the right control (like the booleans).
+  assert.equal(level.kind, 'select')
+  assert.deepEqual(level.options?.map((option) => option.value), ['high', 'medium', 'low'])
+  assert.equal(level.format?.(undefined), 'medium')
+  assert.equal(level.format?.(0.6), 'medium')
+  assert.equal(level.format?.('high'), 'high')
+  assert.deepEqual(parse(level, 'low'), { kind: 'set', value: 'low' })
+  assert.equal(level.parse?.('0.6'), undefined)
+  assert.equal(section.fields.some((entry) => entry.path[0] === 'commandGuardTimeoutMs'), false)
+  assert.equal(section.fields.some((entry) => entry.path[0] === 'commandGuardThreshold'), false)
+})
