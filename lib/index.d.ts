@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.65.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.65.2";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -789,8 +789,9 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.65.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
- * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
+ * registry (`command-code@1.65.2` `dist/cli.mjs`, unchanged from 1.65.0:
+ * `modelSupportsZdr(id)` is exactly `!nonZdrSet.has(canonicalize(id))`, and
+ * `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the union is this
  * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
  * — "99% of our models have ZDR-capable upstreams … only a small handful of

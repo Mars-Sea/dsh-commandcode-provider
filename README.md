@@ -35,7 +35,7 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-This release supports **dsh 0.1.7-rc.1 and nothing else** — the plugin's peer
+This release supports **dsh 0.1.7-rc.2 and nothing else** — the plugin's peer
 range is that one version, and its compatibility record names it alone:
 
 ```sh
@@ -57,7 +57,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 **pnpm 11 holds back new releases.** Its `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly:
 
 ```sh
-dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.13
+dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.15
 ```
 
 The same applies to every profile you install into, including the terminal UI below.
@@ -69,14 +69,14 @@ Fresh pnpm 10 marketplace generations are supported directly. Do not add a separ
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.7-rc.1
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.7-rc.2
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
 Each profile updates separately — the terminal UI owns its own plugin list (see below):
 
 ```sh
-dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.13
+dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@0.11.15
 ```
 
 To move to a version published less than 24 hours ago, name it exactly as in Install above; pnpm 11's age gate resolves `@latest` to the previous release instead.
@@ -105,7 +105,7 @@ After restart, enter your API key in **Settings → Command Code** and save; **S
 The plugin also works under a terminal front door. **Each dsh profile owns its own plugin list**, so the web install above does not reach the terminal — add the plugin to the `dsh-tui` profile as well:
 
 ```sh
-dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.13
+dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@0.11.15
 ```
 
 Pin the exact version here. For the first 24 hours after a release, a bare package name (or `@latest`) is silently resolved to the previous one: the install succeeds, but the profile gets the older build — which is how a fresh terminal install ends up with no **`/settings` → Command Code** page and no `commandcode` models at all.
@@ -143,7 +143,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.1.7-rc.1**. Its `@deepseek-ai/dsh-*` peer range is `^0.1.7-rc.1` (semver resolves that to 0.1.7-rc.1 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
+**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.1.7-rc.2**. Its `@deepseek-ai/dsh-*` peer range is `^0.1.7-rc.2` (semver resolves that to 0.1.7-rc.2 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
 
 ## Usage dashboard
 

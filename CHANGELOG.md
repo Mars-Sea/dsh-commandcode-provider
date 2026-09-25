@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.16] - 2026-09-25
+
+### Changed
+
+- **Synced with the official command-code@1.65.2 CLI.** `COMMAND_CODE_CLI_VERSION` and the `x-command-code-version` header now report `1.65.2`. The public catalog already exposed Step 3.5 Flash's corrected 262,144-token context, so no picker or price row moves; the full effort, Vision, automatic-reasoning, plan, subscription, deal, peak-pricing and ZDR snapshots remain unchanged.
+
+- **Updated the exact DeepSeek Harness pairing from `0.1.7-rc.1` to `0.1.7-rc.2`.** Every Harness peer and development range, `dsh.compatibility.dsh`, `engines.dsh`, and the single `dshReleases` record now name rc.2 together. The rc.2 client graph no longer carries the obsolete `dsh-client-connection` edge or peer; the browser bundle still exports only the live `slots`, `locale`, and `remote` service face. `npm run test:engine` is the compatibility proof for this exact pairing.
+
+### Added
+
+- **Command Code models can receive newly enabled tools during an existing conversation.** The adapter advertises rc.2's `toolUpdate: 'addition-only'` capability. Both Command Code transports already send the complete active tool declaration list, so the harness can project a tool addition into the current request without a new conversation; tool removals are represented by omission from that active list. This is deliberately not advertised as `in-history`, because the provider wire has no native tool-removal event.
+
+- **The browser follows rc.2 credential updates and safer API-key autofill.** The client now refreshes key state for both `credentials/reference-updated` and rc.2's `credentials/record-updated`, and both Command Code API-key inputs use `autocomplete="new-password"` so browsers are less likely to fill a saved login password into a secret field.
+
+### Fixed
+
+- **CLI-stream cache writes are no longer under-reported.** command-code@1.65.2 added a standalone `cache-write-tokens` JSONL event for requests whose finish usage reports zero or omits `cacheWriteTokens`. The adapter now retains the last finite non-negative reading and uses it under the same zero/missing fallback as the official CLI, including when the finish event carries no `totalUsage`. Positive finish usage still wins, so the event cannot double-count cache writes.
+
 ## [0.11.14] - 2026-09-24
 
 ### Fixed

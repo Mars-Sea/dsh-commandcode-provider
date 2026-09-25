@@ -295,8 +295,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.65.0` `dist/cli.mjs`: `modelSupportsZdr(id)` is
- * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
+ * registry (`command-code@1.65.2` `dist/cli.mjs`, unchanged from 1.65.0:
+ * `modelSupportsZdr(id)` is exactly `!nonZdrSet.has(canonicalize(id))`, and
+ * `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the union is this
  * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
  * — "99% of our models have ZDR-capable upstreams … only a small handful of
@@ -406,6 +407,9 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.7-Plus',
   'moonshotai/Kimi-K2.7-Code',
   'moonshotai/Kimi-K2.7-Code-Highspeed',
+  // command-code@1.65.2 corrected Step 3.5 Flash's registry context from
+  // 1,000,000 to 262,144 tokens; the public catalog already served 262,144.
+  // Reasoning and the absence of selectable efforts are unchanged.
   'stepfun/Step-3.5-Flash',
   'stepfun/Step-3.7-Flash',
   'tencent/hy3-paid',

@@ -9,7 +9,14 @@ node_modules.bak/
 lib/
 *.tgz
 .DS_Store
-.agents/
+# Keep the reusable DSH release audit skill in the repository; other local
+# agent scratch and the existing upstream-data skill remain ignored.
+.agents/*
+!.agents/
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/dsh-release-upgrade/
+!.agents/skills/dsh-release-upgrade/**
 
 # The official Command Code CLI's per-project state (e.g. `taste/`), created by
 # running the CLI inside this checkout. Local-only: never commit, never publish.
@@ -17,3 +24,4 @@ lib/
 
 # Maintainer-local release guide: never commit, never publish.
 RELEASES.local.md
+__pycache__/

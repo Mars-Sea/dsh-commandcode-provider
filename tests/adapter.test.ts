@@ -1891,6 +1891,7 @@ test('resolveModel() advertises plan tier, deal, Image, and context', async () =
     // Without a catalog entry the context window is unknown; the description
     // still carries plan, deal, and Image markers.
     const vision = await adapter.resolveModel('commandcode', 'claude-sonnet-5')
+    assert.equal(vision.toolUpdate, 'addition-only')
     assert.deepEqual(vision.inputModalities, ['text', 'image'])
     assert.equal(vision.description, 'Pro · Image')
     const textOnly = await adapter.resolveModel('commandcode', 'deepseek/deepseek-v4-flash')
@@ -1907,6 +1908,7 @@ test('resolveModel() advertises plan tier, deal, Image, and context', async () =
     assert.equal(provider.description, 'Provider · Image')
     // Unknown models fall back to the bare plan-less summary (empty here).
     const unknown = await adapter.resolveModel('commandcode', 'some-future-model')
+    assert.equal(unknown.toolUpdate, 'addition-only')
     assert.deepEqual(unknown.inputModalities, ['text'])
     assert.equal(unknown.description, '')
   } finally {
@@ -2528,6 +2530,71 @@ test('stream() emits text blocks, usage, then finish', async () => {
   assert.equal(usage.usage.cacheReadTokens, 2)
   const finish = chunks.find((c) => c.type === 'finish') as { reason: { kind: string } }
   assert.equal(finish.reason.kind, 'stop')
+})
+
+test('stream() uses the CLI cache-write event only when finish reports zero', async () => {
+  const run = async (events: object[]) => {
+    const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
+    const adapter = makeAdapter({ fetchImpl: fetchReturning(200, body) })
+    return collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'm',
+      messages: [userMessage('hi')],
+    }))
+  }
+
+  const fallback = await run([
+    { type: 'text-delta', text: 'ok' },
+    { type: 'cache-write-tokens', cacheWriteTokens: 7 },
+    {
+      type: 'finish',
+      finishReason: 'stop',
+      totalUsage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        inputTokenDetails: { cacheReadTokens: 2, cacheWriteTokens: 0, noCacheTokens: 8 },
+      },
+    },
+  ])
+  assert.equal((fallback.find((c) => c.type === 'usage') as { usage: { cacheWriteTokens: number } }).usage.cacheWriteTokens, 7)
+
+  const reported = await run([
+    { type: 'text-delta', text: 'ok' },
+    { type: 'cache-write-tokens', cacheWriteTokens: 7 },
+    {
+      type: 'finish',
+      finishReason: 'stop',
+      totalUsage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        inputTokenDetails: { cacheReadTokens: 2, cacheWriteTokens: 4 },
+      },
+    },
+  ])
+  assert.equal((reported.find((c) => c.type === 'usage') as { usage: { cacheWriteTokens: number } }).usage.cacheWriteTokens, 4)
+})
+
+test('stream() accepts a standalone cache-write event and ignores invalid readings', async () => {
+  const run = async (cacheWriteTokens: number) => {
+    const body = [
+      { type: 'text-delta', text: 'ok' },
+      { type: 'cache-write-tokens', cacheWriteTokens },
+      { type: 'finish', finishReason: 'stop' },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
+    const adapter = makeAdapter({ fetchImpl: fetchReturning(200, body) })
+    return collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'm',
+      messages: [userMessage('hi')],
+    }))
+  }
+
+  const captured = await run(5)
+  assert.deepEqual(captured.find((c) => c.type === 'usage'), {
+    type: 'usage',
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 5 },
+  })
+  assert.equal((await run(-1)).some((c) => c.type === 'usage'), false)
 })
 
 test('stream() separates reasoning blocks from text', async () => {
@@ -4194,6 +4261,15 @@ test('isPeakPricingHour() answers the model-independent half of the same rule', 
 })
 
 test('CLI version and API base constants are stable', () => {
+  // command-code@1.65.2 (2026-09-25 check of the npm `latest`; the official
+  // changelog still stops at 1.64.0) changes one existing registry row:
+  // `stepfun/Step-3.5-Flash` now declares a 262,144-token context instead of
+  // 1,000,000. The public catalog already served the corrected value. The CLI
+  // stream consumer also adds the standalone `cache-write-tokens` event and
+  // uses it when finish usage reports zero; the adapter mirrors that fallback
+  // above. Effort, modality, plan, subscription, deal, peak-pricing and ZDR
+  // snapshots are unchanged, as are the request converters, auth/login,
+  // billing, web-search and System One call sites.
   // command-code@1.65.0 (2026-09-24 check of the npm `latest`; the official
   // changelog page and RSS still stop at 1.64.0, so this was read from the
   // bundle diff and the public sources): the model registry grows 86 -> 87
@@ -4319,7 +4395,7 @@ test('CLI version and API base constants are stable', () => {
   // daily-window CLI guidance. There is no CLI changelog entry for
   // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
   // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.65.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.65.2')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

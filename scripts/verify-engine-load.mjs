@@ -529,6 +529,66 @@ async function checkToolHistory(staged, engineModules) {
       fail(`${protocol} lost or rejected this engine's tool history: ${error.message}`)
     }
   }
+  // rc.2 dynamic tool projection: a newly enabled tool must survive the
+  // harness projection and reach both Command Code transports in the same
+  // conversation. The provider has no native tool-update event, so the
+  // adapter's addition-only contract intentionally sends the complete active
+  // declaration list and drops the developer marker from the wire.
+  const dynamicTool = {
+    name: 'engine-dynamic-tool',
+    description: 'A tool enabled after the conversation started.',
+    parameters: { type: 'object', properties: {} },
+  }
+  const dynamicMessage = llm.createDeveloperMessage({
+    source: { kind: 'tool-registry' },
+    content: [{ type: 'tool-addition', toolName: dynamicTool.name }],
+  })
+  const dynamicProjection = llm.projectToolUpdates(
+    [dynamicMessage, llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'use it' }] })],
+    [dynamicTool],
+    'addition-only',
+    { tools: [], updates: [{ messageId: dynamicMessage.id, additions: [dynamicTool] }] },
+  )
+  if (dynamicProjection.tools?.[0]?.name !== dynamicTool.name) {
+    fail('rc.2 projectToolUpdates() dropped the newly enabled tool')
+  }
+  for (const protocol of ['cli', 'openai']) {
+    try {
+      let body
+      const adapter = new plugin.CommandCodeAdapter({
+        options: () => ({
+          apiBase: 'https://engine-probe.invalid', workingDir: '/tmp/engine-probe',
+          modelsCachePath: '/tmp/engine-probe-unused.json', protocol,
+          requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+        }),
+        resolveApiKey: async () => 'engine-load-probe',
+        fetchImpl: async (_url, init) => {
+          body = JSON.parse(init.body)
+          return new Response(protocol === 'cli'
+            ? 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+            : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+          { headers: { 'content-type': 'text/event-stream' } })
+        },
+      })
+      const options = {
+        provider: 'commandcode', model: 'engine-dynamic-tool-probe',
+        messages: [...dynamicProjection.messages], tools: dynamicProjection.tools,
+        maxTokens: 100, temperature: 0, stream: true,
+      }
+      for await (const chunk of adapter.stream(options)) {
+        if (chunk.type === 'finish') assert.equal(chunk.reason.kind, 'stop')
+      }
+      const wireTools = protocol === 'cli' ? body.params.tools : body.tools
+      const wireName = protocol === 'cli' ? wireTools[0].name : wireTools[0].function.name
+      if (wireName !== dynamicTool.name) fail(`${protocol} dropped the rc.2 dynamic tool declaration`)
+      const wireMessages = protocol === 'cli' ? body.params.messages : body.messages
+      if (wireMessages.some((message) => message.role === 'developer')) {
+        fail(`${protocol} sent a developer tool-update marker instead of the active declaration`)
+      }
+    } catch (error) {
+      fail(`${protocol} lost the rc.2 dynamic tool update: ${error.message}`)
+    }
+  }
   process.stdout.write(`tool history checked with engine result role: ${messages[2].role}\n`)
 }
 

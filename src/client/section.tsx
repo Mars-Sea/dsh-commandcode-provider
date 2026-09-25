@@ -1044,7 +1044,7 @@ function InlineInput({ id, label, secret, initial, placeholder, confirmLabel, di
         className="cc-input"
         type={secret && !visible ? 'password' : 'text'}
         aria-label={label}
-        autoComplete="off"
+        autoComplete="new-password"
         spellCheck={false}
         autoFocus
         placeholder={placeholder}

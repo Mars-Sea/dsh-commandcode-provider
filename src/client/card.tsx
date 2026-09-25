@@ -191,7 +191,7 @@ function CardKeyField({ state, disabled, t, onEdit }: {
         id="cc-card-api-key"
         className="cc-input"
         type={visible ? 'text' : 'password'}
-        autoComplete="off"
+        autoComplete="new-password"
         spellCheck={false}
         value={state.text}
         disabled={disabled}

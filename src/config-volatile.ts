@@ -36,7 +36,7 @@
  * Mark one schema field volatile.
  *
  * `.volatile()` is unconditional: the mark is a schemastery 3.18.3 feature and
- * the only engine this bundle supports (`dsh 0.1.7-rc.1`) pins `~3.18.4`, so
+ * the only engine this bundle supports (`dsh 0.1.7-rc.2`) pins `~3.18.4`, so
  * the method is always present. It is reached through a structural member
  * rather than schemastery's own typing so the function can keep the caller's
  * declared field type, which is what lets `Config` stay the plain shape every

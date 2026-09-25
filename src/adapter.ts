@@ -6,13 +6,12 @@
  * and API key or subscription, and Command Code's terms apply.
  *
  * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified against command-code@1.62.0 — endpoints, request shape, and
- * stream events unchanged):
+ * re-verified through command-code@1.65.2):
  *   POST {apiBase}/alpha/generate
  *   body: { config, memory, taste, skills, params: { model, messages, tools,
  *          system, max_tokens, temperature, stream, reasoning_effort? }, threadId }
  *   SSE-ish JSONL events: text-delta | reasoning-start/delta/end | tool-call
- *                         | tool-result | finish | error
+ *                         | tool-result | cache-write-tokens | finish | error
  *   Model catalog: GET {apiBase}/provider/v1/models -> { object: 'list', data: [...] }
  *
  * The adapter is deliberately free of cordis/schemastery: it receives a
@@ -81,7 +80,7 @@ import {
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.65.0'
+export const COMMAND_CODE_CLI_VERSION = '1.65.2'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -1896,6 +1895,13 @@ interface BlockAssembler {
   sawContent: boolean
   /** Provider spelling, retained for terminal diagnostics rather than inferred from usage. */
   finishReason: string | undefined
+  /**
+   * command-code@1.65.2's standalone cache-write reading. The finish event's
+   * totalUsage can report zero even though the request wrote cache entries;
+   * the official CLI keeps this last valid event and uses it only as the
+   * zero/missing fallback.
+   */
+  cliCacheWriteTokens: number | undefined
   /** Buffered OpenAI tool-call fragments, flushed at finish. */
   openAiToolCalls: Array<{ index: number; id?: string; name: string; arguments: string }>
 }
@@ -1910,6 +1916,7 @@ function createBlockAssembler(): BlockAssembler {
     reasoningContent: '',
     sawContent: false,
     finishReason: undefined,
+    cliCacheWriteTokens: undefined,
     openAiToolCalls: [],
   }
 }
@@ -2153,6 +2160,15 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       name: entry ? `${entry.name} (CC)` : model,
       description: capabilityDescription(model, entry?.contextWindow),
       inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
+      // Both Command Code transports send the complete active tool declaration
+      // list on every request. They do not need a provider-native deferred
+      // tool marker, but they can still consume the rc.2 harness projection:
+      // `tool-addition` messages are ignored by the wire converters and the
+      // projected `options.tools` already contains the newly active schema.
+      // Advertising addition-only lets dsh keep one conversation/request
+      // series when a plugin enables a tool mid-session; removals are handled
+      // by omission from that active list, not by a removal event.
+      toolUpdate: 'addition-only' as const,
       ...(entry
         ? {
             context: { contextWindow: entry.contextWindow },
@@ -3188,25 +3204,34 @@ function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
       )
       break
     }
+    case 'cache-write-tokens': {
+      const cacheWrite = numberValue(event.cacheWriteTokens)
+      if (cacheWrite !== undefined && cacheWrite >= 0) asm.cliCacheWriteTokens = cacheWrite
+      break
+    }
     case 'finish': {
       asm.finishReason = stringValue(event.finishReason)
       chunks.push(...closeText(asm), ...closeReasoning(asm))
       const usage = isRecord(event.totalUsage) ? event.totalUsage : undefined
-      if (usage) {
-        const details = isRecord(usage.inputTokenDetails) ? usage.inputTokenDetails : undefined
-        const totalInput = numberValue(usage.inputTokens) ?? 0
+      const capturedCacheWrite = asm.cliCacheWriteTokens
+      if (usage || capturedCacheWrite !== undefined) {
+        const details = isRecord(usage?.inputTokenDetails) ? usage.inputTokenDetails : undefined
+        const totalInput = numberValue(usage?.inputTokens) ?? 0
         const cacheRead = numberValue(details?.cacheReadTokens) ?? 0
-        const cacheWrite = numberValue(details?.cacheWriteTokens) ?? 0
+        const reportedCacheWrite = numberValue(details?.cacheWriteTokens) ?? 0
+        const cacheWrite = reportedCacheWrite === 0 && capturedCacheWrite !== undefined
+          ? capturedCacheWrite
+          : reportedCacheWrite
         // Harness TokenUsage counts are disjoint: uncached input only.
         const tokenUsage: TokenUsage = {
           inputTokens:
             numberValue(details?.noCacheTokens) ?? Math.max(0, totalInput - cacheRead - cacheWrite),
-          outputTokens: numberValue(usage.outputTokens) ?? 0,
+          outputTokens: numberValue(usage?.outputTokens) ?? 0,
           cacheReadTokens: cacheRead,
           cacheWriteTokens: cacheWrite,
         }
-        const outputDetails = isRecord(usage.outputTokenDetails) ? usage.outputTokenDetails : undefined
-        const reasoningTokens = numberValue(outputDetails?.reasoningTokens) ?? numberValue(usage.reasoningTokens)
+        const outputDetails = isRecord(usage?.outputTokenDetails) ? usage.outputTokenDetails : undefined
+        const reasoningTokens = numberValue(outputDetails?.reasoningTokens) ?? numberValue(usage?.reasoningTokens)
         if (reasoningTokens !== undefined) tokenUsage.reasoningTokens = reasoningTokens
         chunks.push({ type: 'usage', usage: tokenUsage })
       }

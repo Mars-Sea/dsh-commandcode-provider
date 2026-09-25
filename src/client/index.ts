@@ -203,9 +203,24 @@ function applyClientSurfaces(
   const store = createSnapshotStore<SettingsPageState>(controller.state())
   controller.subscribe(() => store.set(controller.state()))
   ctx.effect(
-    () => (ctx.remote as unknown as {
-      $on(event: 'credentials/reference-updated', listener: (ref: string) => void): () => void
-    }).$on('credentials/reference-updated', () => { controller.refreshCredentials() }),
+    () => {
+      const remote = ctx.remote as unknown as {
+        $on(
+          event: 'credentials/reference-updated' | 'credentials/record-updated',
+          listener: (ref: string) => void,
+        ): () => void
+      }
+      const unregisterReference = remote.$on('credentials/reference-updated', () => {
+        controller.refreshCredentials()
+      })
+      const unregisterRecord = remote.$on('credentials/record-updated', () => {
+        controller.refreshCredentials()
+      })
+      return () => {
+        unregisterReference()
+        unregisterRecord()
+      }
+    },
     'dsh-commandcode-provider: credential invalidations',
   )
 

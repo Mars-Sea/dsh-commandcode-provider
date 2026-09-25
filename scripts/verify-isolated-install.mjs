@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const PNPM_VERSION = '10.34.5'
 const repositoryDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const npmCache = join(repositoryDir, '.npm-cache')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 
@@ -16,7 +17,7 @@ function run(command, args, cwd) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
-    env: process.env,
+    env: { ...process.env, npm_config_cache: npmCache },
   })
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
   if (result.error !== undefined) throw result.error

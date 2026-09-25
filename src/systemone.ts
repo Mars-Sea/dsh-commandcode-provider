@@ -9,7 +9,7 @@
  * as an internal advisor instead: the command guard in `./command-guard.ts`
  * asks it whether a shell command is safe to auto-approve.
  *
- * The three question types are the whole vocabulary (command-code@1.65.0
+ * The three question types are the whole vocabulary (command-code@1.65.2
  * `systemOneRequestSchema`, unchanged since 1.64.0):
  *
  * - `noul` — "is this true?", optional `criteria: { true, false }` describing
@@ -50,7 +50,7 @@ export const SYSTEMONE_ROUTE = '/provider/v1/systemone'
 /** The one decision model the endpoint serves today (aliases: `jev`, `jev-latest`, `typesafe-ai/jev`). */
 export const SYSTEMONE_MODEL = 'typesafe/jev'
 
-/** Server-enforced ceiling on questions per request (command-code@1.65.0 `zP`). */
+/** Server-enforced ceiling on questions per request (command-code@1.65.2 `zP`). */
 export const SYSTEMONE_MAX_QUESTIONS = 20
 
 /** Milliseconds a decision may take before the caller gives up on it. */

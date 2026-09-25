@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 
 interface PackageManifest {
   dsh?: {
-    client?: { platform?: string }
+    client?: { platform?: string; inject?: string[] }
     compatibility?: { dshReleases?: Record<string, string>; dsh?: string }
   }
   engines?: { node?: string; dsh?: string }
@@ -33,7 +33,7 @@ test('every Harness peer and development package shares one supported release ra
   }
   // Why an exact-version disjunction rather than a caret: semver only admits a
   // prerelease inside the SAME major.minor.patch tuple as the comparator, so
-  // `^0.1.7-rc.1` resolves to 0.1.7-rc.1 alone. That exactness is the point —
+  // `^0.1.7-rc.2` resolves to 0.1.7-rc.2 alone. That exactness is the point —
   // this bundle supports ONE engine release, and a range that quietly admitted
   // a neighbour is how a broken pairing stayed invisible (issue #43).
   assert.ok(!range.includes('x') && !range.includes('>='), 'no compact comparator form can express this')
@@ -49,11 +49,11 @@ test('per-release DSH compatibility names exactly the one supported release', ()
   // DSH STORE only restores a listing from exact per-release records under
   // dsh.compatibility.dshReleases; a peer range alone is not evidence, and a
   // release with no record reads as `unknown`. Exactly one record ships: this
-  // bundle is maintained against dsh 0.1.7-rc.1 and nothing else, so a stale
+  // bundle is maintained against dsh 0.1.7-rc.2 and nothing else, so a stale
   // entry for an older engine would advertise a pairing no test covers.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  assert.deepEqual(Object.keys(releases), ['0.1.7-rc.1'])
-  assert.equal(releases['0.1.7-rc.1'], 'compatible')
+  assert.deepEqual(Object.keys(releases), ['0.1.7-rc.2'])
+  assert.equal(releases['0.1.7-rc.2'], 'compatible')
 })
 
 test('the manifest declares the same engine range it supports', () => {
@@ -70,6 +70,17 @@ test('the Web client remains enabled without dsh-client-runtime', () => {
   assert.equal(pkg.dsh?.client?.platform, 'web')
   assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-runtime'], undefined)
   assert.equal(pkg.devDependencies?.['@deepseek-ai/dsh-client-runtime'], undefined)
+})
+
+test('the client manifest contains only live client graph edges', () => {
+  assert.deepEqual(pkg.dsh?.client?.inject, [
+    '@deepseek-ai/dsh-client-locale',
+    '@deepseek-ai/dsh-client-ui-settings',
+    '@deepseek-ai/dsh-api-remotes',
+  ])
+  assert.equal(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-connection'), false)
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-connection'], undefined)
+  assert.equal(pkg.devDependencies?.['@deepseek-ai/dsh-client-connection'], undefined)
 })
 
 test('only the client-seeded UI peers are optional, and each stays a development package', () => {

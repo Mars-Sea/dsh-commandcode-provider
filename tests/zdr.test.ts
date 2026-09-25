@@ -5,7 +5,7 @@
  * never uses the table to omit `x-cmd-zdr: 1` when ZDR is enabled: the provider
  * REFUSES an unsupported request (422 `cmd_zdr_no_providers`) rather than
  * serving it from a retaining provider. The table is the CLI's exclusion set (`modelSupportsZdr` in
- * command-code@1.65.0's dist/cli.mjs), so this file pins both the list — a sync
+ * command-code@1.65.2's dist/cli.mjs), so this file pins both the list — a sync
  * that moves membership must be a deliberate diff — and the helper's two
  * directions. Run with `npm test`.
  */
@@ -18,7 +18,7 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.65.0)', () => {
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.65.2)', () => {
   // Verbatim from `dist/cli.mjs`: `modelSupportsZdr(id) = !iD.has(canonicalId)`
   // (21 entries) unioned with the sibling route table's `br` set (the same 20
   // less `meituan/LongCat-2.0`, which stays in the union), cross-checked against
@@ -26,7 +26,8 @@ test('the ZDR exception list is the CLI registry exclusion set (command-code@1.6
   // `minimax/minimax-m3-free` is served by `/provider/v1/models` today. The
   // 1.65.0 diff against 1.64.0 is exactly one addition:
   // `stealth/space-bunny-alpha` (the stealth-preview free model the pricing
-  // page's own tip calls "Not routed under ZDR").
+  // page's own tip calls "Not routed under ZDR"). The 1.65.2 bundle preserves
+  // that exact 21-model union.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
