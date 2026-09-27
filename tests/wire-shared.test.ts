@@ -2,15 +2,11 @@
  * Strict-codec contract: every Remote descriptor this plugin ships must
  * register on dsh 0.1.7-rc.2 (node:test; issue #49).
  *
- * The Typert protocol carries a strict result codec as a LAZY schema factory —
- * `{ mode: 'strict', typeSymbol, create: () => TypertSchema }` — and both the
- * registry and the Gateway read exactly that member: registration refuses a
- * codec without `create` (`typert: <subject> strict codec has no create()
- * factory`), and the Gateway validates with `codec.create().parse(value)`.
- *
- * These tests drive the REAL shipped descriptors through a transcription of
- * that registration check and through `makeRemoteDescriptor()`, so the shape
- * cannot drift out from under the wire contract.
+ * The Typert strict result codec is a LAZY schema factory — `{ mode: 'strict',
+ * typeSymbol, create: () => TypertSchema }` — and both the registry and the
+ * Gateway read exactly that member. These drive the REAL shipped descriptors
+ * through a transcription of the registration check and through
+ * `makeRemoteDescriptor()`, so the shape cannot drift.
  */
 
 import { test } from 'node:test'
@@ -47,8 +43,7 @@ const fakeSchema: TypertSchema<string> = { parse: (value: unknown) => String(val
 
 /**
  * Every descriptor the plugin crosses the Gateway with, gathered from the
- * contributions themselves rather than a hand-written list: a new endpoint
- * added to a host or client contribution is covered the moment it exists.
+ * contributions themselves so a new endpoint is covered the moment it exists.
  */
 const SHIPPED_DESCRIPTORS: readonly InvocationDescriptor[] = [
   ...USAGE_HOST_CONTRIBUTION.invocations,

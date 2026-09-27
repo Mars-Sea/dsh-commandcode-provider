@@ -1,10 +1,8 @@
 /**
  * Vendored price-table tests (node:test, zero deps). Run with `npm test`.
  *
- * The table is the Host half of the composer's session-cost readout, so what
- * matters here is the JOIN with the catalog: a catalog model the table cannot
- * reach shows no cost at all, which looks identical to "this model is free" to
- * a user. These tests therefore pin the join itself, not just the numbers.
+ * The JOIN with the catalog is what matters: a catalog model the table cannot
+ * reach shows no cost at all, indistinguishable from "this model is free".
  */
 
 import { test } from 'node:test'
@@ -21,10 +19,9 @@ test('every catalog model is either priced or explicitly free', () => {
     if (isFreeModel(id) || id.endsWith(':free')) return false
     return byId.get(id) === undefined
   })
-  // A new catalog model without a price row fails HERE rather than silently
-  // rendering no cost in the composer. When upstream adds a model: sync
-  // `MODEL_PRICE_ROWS` from the pricing page (see the dsh-commandcode-upstream
-  // skill) or record it in the corpus below.
+  // A new catalog model without a price row fails HERE rather than rendering no
+  // cost: sync `MODEL_PRICE_ROWS` (see the dsh-commandcode-upstream skill) or
+  // record the model below.
   assert.deepEqual(unreachable, [])
 })
 
@@ -60,7 +57,7 @@ test('time-of-day models carry a peak override and flat models do not', () => {
   assert.ok(pro?.peak, 'the hourly-priced model keeps its peak block')
   assert.equal(pro.peak.inputCost, 1.32)
   // The table stores only the override: the top-level rates ARE the off-peak
-  // half, which is what `ratesAt()` prices with outside the windows.
+  // half `ratesAt()` prices with outside the windows.
   assert.equal(pro.inputCost, 0.66)
 
   // `deepseek-v4-flash-fast` is flat-priced and must stay out of the peak set.
@@ -80,7 +77,7 @@ test('the peak windows travel with the table', () => {
 test('price rows no catalog model claims are still served, keyed by slug', () => {
   const slugs = new Set(table.models.map((price) => price.slug))
   // The page names models the catalog snapshot has not learned yet; serving
-  // them under the slug is what lets a session on such a model still price.
+  // them by slug lets a session on such a model still price.
   assert.ok(slugs.size > 0)
   for (const price of table.models) {
     assert.equal(typeof price.slug, 'string')

@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.11.17] - 2026-09-27
+
+### Changed
+
+- **Synced with the official command-code@1.66.0 CLI.** `COMMAND_CODE_CLI_VERSION` and the `x-command-code-version` header now report `1.66.0`. The release is additive with exactly one change against `1.65.5` (the newest version the official changelog page still documents, so the bundle diff is the evidence): the CLI registry gains `stealth/pixel-canary` (Pixel Canary) — Vercel AI Gateway-served, text+image, 262,144-token context, reasoning with the selectable `low`/`medium`/`high` set, available on every plan from Go up, and **free while the stealth preview lasts**. The public catalog serves it too (82 models), on `/chat/completions` + `/responses`. It is the **second change to the ZDR exception set since the 1.62.0 check**: it enters through `modelSupportsZdr` alone (the 1.66.0 bundle's `knownModelSupportsZdr` set does not repeat it), the pricing page says it plainly ("Free while the preview lasts. Not routed under ZDR."), so `KNOWN_NON_ZDR_MODELS` grows 21 → 22 and `tests/zdr.test.ts` pins the new membership deliberately. It is also the second free stealth model to carry no vendored price row, exactly like Space Bunny Alpha — the price table's free-model branch prices it at $0. **The wire protocol is untouched**: the 26 `/alpha/*` and `/provider/v1/*` routes, the `x-command-code-version` / `x-cmd-zdr` header table, the account-rejection code vocabulary, the stream event names and the subscription-plan maps are the same set as in 1.65.5. Everything else was re-verified against the live catalog and the pricing/docs pages on 2026-09-27 and is unchanged: the catalog's 82 models and its 65 × chat/completions + responses / 9 Claude ids × messages / 8 × chat/completions route mix, the plan map at 52/60/74/82, the full effort map, the Vision set, every other deal, and the DeepSeek peak schedule.
+
+- **Two vendored price rows moved.** The official pricing page lowers Step 3.5 Flash's input rate from $0.10 to **$0.09** per 1M tokens, and publishes a `typesafe/jev` row the page did not carry before. Neither changes what the picker shows: Step 3.5 Flash's badge and plan tier are unchanged, and `typesafe/jev` is not in the public catalog and is not served by either chat transport — the System One decision client that used to price it is removed in this same release, so the row simply keeps the table in step with the page. One promotion is on its own clock rather than in this table: Grok 4.7's 40%-off deal lapses at `2026-09-27T23:59:59Z`, at which point the picker badge hides itself and the row returns to the $2.00 / $6.00 / $0.50 list rates on the next sync. Re-run `node scripts/sync-model-prices.mjs` to pick up either move.
+
+### Fixed
+
+- **The opt-in stream trace now fingerprints the request, not just the response.** `DSH_COMMANDCODE_TRACE` recorded the raw response chunks and how the stream ended, but nothing about what was asked, so a provider cache hit or miss could not be tied to a request shape. Every attempt now appends a `request` record before it is sent — transport, model, thread id, the message and tool counts, and a SHA-256 of the body, config, system prompt, tool list and message list. It is the same privacy contract as the rest of the trace (counts and hashes only, never the text, and a record that cannot be written never fails the request it observes), and it is skipped entirely when the trace is off, so the default path stays one environment read. `tests/stream-trace.test.ts` pins the record on both a finished request and a pre-stream failure, and asserts the prompt text is absent from the file.
+
+- CLI requests now derive a stable UUID thread ID from DSH's prefixed session IDs, so successive requests in an ordinary session keep the same provider thread ID. This preserves request correlation; a cache-hit improvement still requires live evidence.
+
+### Removed
+
+- **The AI command guard is gone; dsh's own approval tooling does this job now.** The opt-in `commandGuard` / `commandGuardLevel` settings, the `approval/request` answerer and the `tools/pre-execute` observer it registered, the `typesafe/jev` decision client for `POST /provider/v1/systemone`, their offline explainer script, and the settings-page / dsh-TUI controls and copy are all removed. The plugin no longer touches the `approval` seam at all and no longer calls the System One decision endpoint — Command Code chat, web search, cost readouts, accounts and ZDR are unaffected. A stored `commandGuard` / `commandGuardLevel` value in an existing profile is simply ignored (schemastery keeps unknown keys without validating them), so nothing needs migrating.
+
 ## [0.11.16] - 2026-09-25
 
 ### Changed

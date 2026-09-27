@@ -3,19 +3,14 @@
  *
  * The section is the only surface a TUI-only user has for entering the Command
  * Code API key (issue #28), and dsh-TUI renders a FIXED declaration — it never
- * re-reads the plugin's config — so these tests pin the parts that would fail
- * silently in a terminal:
- *
- * - the API-key field is a `secret` field whose ref is the plugin's own
- *   credential reference and not one dsh-TUI reserves for the host (a reserved
- *   ref is dropped by the host's guard, leaving a settings page with no key
- *   field at all);
- * - the option-bearing fields express "unset" (a `select` cannot, so they are
- *   `text` + `options` with an `auto` sentinel that parses back to a clear);
- * - the booleans render their EFFECTIVE default rather than the raw stored
- *   value, because the schema leaves them undefined on a fresh install;
- * - re-registration happens exactly when a fact frozen into the declaration
- *   moved, and never on an unrelated refresh.
+ * re-reads the plugin's config — so these tests pin what would otherwise fail
+ * silently in a terminal: the `secret` key field on the plugin's own credential
+ * ref (a host-reserved ref is dropped by the host's guard); option-bearing
+ * fields declared as `text` + `options` with an `auto` sentinel that parses
+ * back to a clear, because a `select` cannot express "unset"; EFFECTIVE boolean
+ * defaults rather than the raw stored value, since the schema leaves them
+ * undefined on a fresh install; and re-registration only when a frozen fact
+ * moved.
  */
 
 import { test } from 'node:test'
@@ -62,18 +57,18 @@ const CATALOG: readonly TuiModelChoice[] = [
   { id: 'provider/delta', tier: 'provider', free: false, hint: 'Provider · 1M' },
 ]
 
-/** Build the section over a mutable slot list and allowlist, like the entry does. */
 /**
- * A stored allowlist as a hand-edited document really holds it. `storedIds()`
+ * A stored allowlist as a hand-edited document really holds it. `storedJunk()`
  * takes `unknown` for exactly this reason — the value comes from a settings
  * document nothing has validated — but `build()`'s `visible` option is declared
  * as the *validated* id list, so a case that deliberately stores junk crosses
- * that boundary here, once, named, and keeps the array literal itself checked.
+ * that boundary here, once, named.
  */
 function storedJunk(ids: readonly unknown[]): readonly string[] {
   return ids as readonly string[]
 }
 
+/** Build the section over a mutable slot list and allowlist, like the entry does. */
 function build(
   overrides: Partial<Deps> & { visible?: readonly string[]; flags?: Record<string, boolean> } = {},
 ): {
@@ -172,14 +167,13 @@ test('the API key is a secret field on the plugin credential reference', () => {
   assert.equal(key.secret?.ref, DEFAULT_REF)
   // dsh-TUI drops a plugin section field whose ref the host owns
   // (DEEPSEEK_API_KEY / DEEPSEEK_* / DSH_*). A ref drifting into that
-  // namespace would silently remove the only key input a TUI user has.
+  // namespace would remove the only key input a TUI user has.
   assert.equal(key.secret?.ref.startsWith('DEEPSEEK_'), false)
   assert.equal(key.secret?.ref.startsWith('DSH_'), false)
   // A secret field is write-only: it never seeds a draft from the settings
   // document, so a format/parse pair here would be dead code.
   assert.equal(key.format, undefined)
   assert.equal(key.parse, undefined)
-  // It is the only credential control in the section.
   const secrets = section.fields.filter((entry) => entry.secret !== undefined)
   assert.deepEqual(secrets.map((entry) => entry.path.join('.')), ['apiKey'])
 })
@@ -216,11 +210,10 @@ test('the plan filter renders its effective default, not the stored undefined', 
 test('every field owns a unique path, so no two drafts collide', () => {
   const { section } = build()
   // dsh-TUI keys a staged draft by the field's PATH and pushes one write op
-  // per field carrying that key. Two fields sharing a path therefore share one
-  // draft, every one of them parses it on save, and only the LAST op survives —
-  // which is how a checkbox list once silently rewrote the allowlist from the
-  // last catalog model instead of the row the user toggled. This invariant is
-  // the whole reason each model gets `modelVisibility.<id>`.
+  // carrying that key, so two fields sharing a path share one draft and only
+  // the LAST op survives — which is how a checkbox list once rewrote the
+  // allowlist from the last catalog model instead of the row the user toggled.
+  // This invariant is the whole reason each model gets `modelVisibility.<id>`.
   const paths = section.fields.map((entry) => entry.path.join('.'))
   assert.equal(new Set(paths).size, paths.length, 'no two fields share a path')
 })
@@ -265,8 +258,7 @@ test('a stored allowlist decides which boxes are checked', () => {
   assert.deepEqual(checked, ['go/alpha', 'pro/gamma'])
   // A malformed document must not break the render, and must be judged the way
   // the adapter judges it: `resolveAdapterOptions` drops a non-array to
-  // `undefined`, which means "show everything" — so every box reads checked
-  // rather than the page claiming the user hid every model.
+  // `undefined`, which means "show everything".
   const alpha = checkbox(section, 'go/alpha')
   assert.equal(alpha.format?.(undefined), 'true')
   // A hand-edited document holds what it holds: the number and the blank are
@@ -282,8 +274,7 @@ test('a checkbox writes an override, and only when it disagrees with the array',
   // Unset means "all visible", so switching one off is a real override…
   assert.deepEqual(parse(checkbox(section, 'go/alpha'), 'false'), { kind: 'set', value: false })
   // …while switching an already-visible model on is not, and must leave no
-  // residue: the clear re-inherits the composition layer and keeps the
-  // document minimal.
+  // residue: the clear re-inherits the composition layer.
   assert.deepEqual(parse(checkbox(section, 'go/alpha'), 'true'), { kind: 'clear' })
 })
 
@@ -295,8 +286,7 @@ test('the array allowlist stays the baseline an override is judged against', () 
   // …and unchecking it again is not.
   assert.deepEqual(parse(beta, 'false'), { kind: 'clear' })
   // A write that landed after this declaration was built changes the baseline:
-  // the inherited state must be read when the save runs, not when the section
-  // was registered.
+  // the inherited state must be read when the save runs, not at registration.
   setVisible([])
   assert.deepEqual(parse(beta, 'false'), { kind: 'set', value: false })
   assert.deepEqual(parse(beta, 'true'), { kind: 'clear' })
@@ -348,8 +338,8 @@ test('the active-account field keeps "unset" reachable', () => {
   const { section } = build()
   const active = field(section, 'activeAccount')
   // `select` can only ever land on a declared option, so an unset value could
-  // never be reached again after the first pin. Text + options is the host's
-  // own preset-plus-custom shape and keeps the clear path.
+  // never be reached again after the first pin. Text + options keeps the clear
+  // path.
   assert.equal(active.kind, 'text')
   assert.deepEqual(active.options?.map((option) => option.value), [
     ACTIVE_ACCOUNT_AUTO,
@@ -408,9 +398,7 @@ test('the language field maps unset to auto and stages a concrete locale', () =>
   assert.deepEqual(parse(lang, 'fr'), { kind: 'set', value: 'fr' })
 })
 
-// ---------------------------------------------------------------------------
 // Registration lifecycle
-// ---------------------------------------------------------------------------
 
 /** A stubbed `tuiSettingsSections` seam that records what it was handed. */
 interface Seam {
@@ -624,20 +612,4 @@ test('a malformed seam is ignored rather than trusted', async () => {
     assert.equal(refresh, undefined, `seam ${JSON.stringify(value)} is not usable`)
     await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
   }
-})
-
-test('the command-guard level is a three-way select that renders its effective default', () => {
-  const { section } = build()
-  const level = field(section, 'commandGuardLevel')
-  // Unset reads as the schema default, so there is no "unset" to keep
-  // reachable and a plain select is the right control (like the booleans).
-  assert.equal(level.kind, 'select')
-  assert.deepEqual(level.options?.map((option) => option.value), ['high', 'medium', 'low'])
-  assert.equal(level.format?.(undefined), 'medium')
-  assert.equal(level.format?.(0.6), 'medium')
-  assert.equal(level.format?.('high'), 'high')
-  assert.deepEqual(parse(level, 'low'), { kind: 'set', value: 'low' })
-  assert.equal(level.parse?.('0.6'), undefined)
-  assert.equal(section.fields.some((entry) => entry.path[0] === 'commandGuardTimeoutMs'), false)
-  assert.equal(section.fields.some((entry) => entry.path[0] === 'commandGuardThreshold'), false)
 })

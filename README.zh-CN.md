@@ -183,7 +183,7 @@ llm-commandcode:
 
 ## 配置
 
-**设置 → Command Code** 分为：**账户**（密钥、网页登录、实时额度、固定账户、专用模型）、**模型**（隐藏套餐外模型、可见模型）、**隐私与安全**（零数据保留 ZDR 与 AI 命令安全预判，均默认关闭，见下）、**集成与显示**（用 Command Code 承载联网搜索、在侧边栏显示额度卡片，默认关闭），以及默认折叠的**高级设置**（API 地址、请求/流超时、传输重试次数）。工作目录已不在页面上显示，配置中的 `workingDir` 仍然有效。
+**设置 → Command Code** 分为：**账户**（密钥、网页登录、实时额度、固定账户、专用模型）、**模型**（隐藏套餐外模型、可见模型）、**隐私与安全**（零数据保留 ZDR，默认关闭，见下）、**集成与显示**（用 Command Code 承载联网搜索、在侧边栏显示额度卡片，默认关闭），以及默认折叠的**高级设置**（API 地址、请求/流超时、传输重试次数）。工作目录已不在页面上显示，配置中的 `workingDir` 仍然有效。
 
 同一组选项也位于 `$DSH_HOME/settings.yaml`（修改即刻生效，无需重启）：
 
@@ -196,8 +196,6 @@ llm-commandcode:
   requestTimeoutMs: 60000          # 默认 60s
   streamIdleTimeoutMs: 300000      # 默认 300s
   showSidebarQuota: true           # 可选：在侧边栏显示套餐与配额卡片（默认关闭）
-  commandGuard: true               # 可选：让决策模型自动放行安全的 shell 命令（默认关闭）
-  commandGuardLevel: medium        # 可选：自动放行阈值，high（0.95）| medium（0.9，默认）| low（0.8）
   zdr: true                        # 可选：请求只经由零数据保留上游（默认关闭）
 ```
 
@@ -213,21 +211,6 @@ llm-commandcode:
 
 > 这里直接使用 Command Code Provider API（与官方 CLI 内置的 `web_search` 相同），因此与 DeepSeek 原生搜索后端不同。
 
-## AI 命令安全预判
-
-当 dsh 准备就某条 shell 命令（`bash`/`pwsh`）征求你同意时——无论是权限预设、`PreToolUse` 钩子还是沙箱提权——本插件可以先让 Command Code 的决策模型 `typesafe/jev` 判断这条命令是否安全到无需询问。判断为「安全」且把握足够高时，直接放行这一次调用；其余情况一律照旧询问你。
-
-**默认关闭。** 在「隐私与安全」卡片里打开「用 AI 预判命令是否安全」（`commandGuard`），或写进 profile 配置。它的行为边界：
-
-- 它只会看到 dsh **本来就要询问你**的命令——不会放宽任何权限策略，也不会替「从不询问」（policy 为 `never`）的会话作答。
-- 普通审批只问一个 `safe` 问题；带有 `sandboxPermissions` 的沙箱提权会额外问 `escalation_scope` 与 `escalation_necessity`。只有主安全概率以及这两个提权概率都不低于所选「自动放行阈值」（`commandGuardLevel`：高 0.95、中 0.9（默认）、低 0.8；阈值越高弹窗越多）时才跳过弹窗；因此像 `go test ./...` 需要访问工作区外构建缓存的场景，只要 JEV 确认提权范围狭窄且必要，就能由 AI 放行，不必每次打扰用户。
-- 任一概率不足、提权范围过宽或没有必要、超时（固定 3 秒）、限流、缺 key、返回体读不懂、命令超过 6000 字符，或命中内置危险名单（`sudo`、`rm -rf /`、`git push`、发布/上传类命令、把下载内容管进 shell 等），全部回到普通弹窗。
-- 送往 Command Code 判断的内容包括**命令原文**、模型自己写的一行描述、工作目录、请求的 sandbox 模式与询问原因；使用与聊天相同的 API key 与 base URL。
-- 该决策模型**没有零数据保留（ZDR）上游**，因此本功能与「只走 ZDR」的合规要求不兼容；如果你在意这一点，请保持关闭。
-- 该端点 2026-09-24 前免费，之后按输入 $0.042/1M tokens 计费（输出免费）——单次判断只有几百 tokens；同一 agent 中命令和审批场景都相同时，10 分钟内复用上一次结论。
-
-每次 AI 决策都会在 Host 侧写日志——普通放行是 `llm-commandcode: command guard auto-approved a bash call (safe probability 0.97, model): <命令>`；沙箱提权还会附带 `sandbox scope` 与 `necessity` 概率；其余是 `… delegated a bash call: <原因> — <命令>`——并进入会话自身的审批审计（`approval/asked` / `approval/decided`），所以任何一次放行都能追溯到产生它的判断。日志打到 Host 控制台（运行 `dsh web` 的终端，或桌面端日志），不进浏览器。
-
 ## 零数据保留（ZDR）
 
 Command Code 可以让请求只经由「不留存提示词与回复、也不用于训练」的上游——官方 CLI 的开关是 `CMD_ZDR=1`，Provider API 上则是在请求头发 `x-cmd-zdr: 1`（[官方文档](https://commandcode.ai/docs/resources/zdr)）。
@@ -237,7 +220,6 @@ Command Code 可以让请求只经由「不留存提示词与回复、也不用�
 - 开启后，**每次聊天请求**都会带上 ZDR 请求头。插件仍维护官方 CLI 的例外名单（`KNOWN_NON_ZDR_MODELS`，约 20 个模型，例如 `xai/grok-4.5`、`stepfun/Step-3.7-Flash`、`meta/muse-spark-1.3`）供查询。没有可用 ZDR 上游时，服务端返回 `422 cmd_zdr_no_providers`；插件不会去掉请求头重试。
 - 万一仍被拒绝（名单过期，或那一刻没有空闲的 ZDR 上游容量），错误信息会说明原因并给出关闭 ZDR 的办法，而不是抛出一个光秃秃的 HTTP 422。
 - **ZDR 通常更贵**：容量有限，按各上游实价透传计费，且每次请求落在哪个上游可能不同。会话费用读数仍按常规目录价估算；真实单价见 Command Code Studio 的用量页。
-- **AI 命令安全预判**背后的决策模型没有 ZDR 上游，因此即使打开 `zdr`，它的请求也永远不带该请求头——两个功能互不影响。
 - 各套餐均可使用；ZDR 请求按套餐的默认额度（而非提升额度）计量。
 
 ## 注意事项与限制
@@ -251,7 +233,7 @@ Command Code 可以让请求只经由「不留存提示词与回复、也不用�
 
 ## 权限与隐私
 
-本插件只在本地与你的 Command Code 账号之间通信：本地仅读写凭据存储与模型缓存文件（兜底读取 `~/.commandcode/auth.json`）；网络仅访问 Command Code API。无遥测。唯一的可选例外是 **AI 命令安全预判**（默认关闭），它会把待判断的命令文本发送出去——见上文。打开**零数据保留**（同样默认关闭）后，聊天请求必须经由 ZDR 上游；没有可用 ZDR 上游的模型会报错，不会按常规方式继续发送。
+本插件只在本地与你的 Command Code 账号之间通信：本地仅读写凭据存储与模型缓存文件（兜底读取 `~/.commandcode/auth.json`）；网络仅访问 Command Code API。无遥测。打开**零数据保留**（同样默认关闭）后，聊天请求必须经由 ZDR 上游；没有可用 ZDR 上游的模型会报错，不会按常规方式继续发送。
 
 ## 关闭 / 卸载
 

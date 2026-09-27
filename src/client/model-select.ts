@@ -1,9 +1,9 @@
 /**
  * Model-select helpers for the settings page's model editors (browser half).
  *
- * The routing-rule editor and the visible-models filter both pick catalog
- * models through the same checkbox multi-select dropdown (`ModelMultiSelect`
- * in section.tsx). The dropdown's data shaping — search filtering, stale-id
+ * The routing-rule editor and the visible-models filter both pick catalog models
+ * through the same checkbox multi-select dropdown (`ModelMultiSelect` in
+ * section.tsx). The dropdown's data shaping — search filtering, stale-id
  * detection, tier grouping — lives here, React-free, so node tests can drive
  * it directly.
  *
@@ -17,10 +17,8 @@
 
 /**
  * Minimum plan tier → dropdown section heading. Mirrors the Host-side
- * `KNOWN_PLANS` values + `PLAN_LABELS` in src/capabilities.ts (kept as a
- * vendored copy because the client bundle cannot import host modules).
- * Covers every tier key `KNOWN_PLANS` uses today; an unknown tier key falls
- * back to the raw key rather than vanishing the row.
+ * `KNOWN_PLANS` tiers + `PLAN_LABELS` in src/capabilities.ts; an unknown tier
+ * key falls back to the raw key rather than vanishing the row.
  */
 const TIER_HEADINGS: Readonly<Record<string, string>> = {
   go: 'Go',
@@ -49,7 +47,6 @@ export function tierHeadingFor(
 export interface SelectableModel {
   /** Catalog model id (e.g. `deepseek/deepseek-v4-pro`). */
   id: string
-  /** Display name from the catalog. */
   name: string
 }
 
@@ -57,7 +54,6 @@ export interface SelectableModel {
 export interface ModelSelectOption {
   /** Catalog model id (stale ids keep their raw id as the value). */
   value: string
-  /** Display name (stale ids fall back to the raw id). */
   label: string
   /** True when the id is selected but the catalog no longer carries it. */
   stale: boolean
@@ -86,14 +82,11 @@ export function matchesModelQuery(
 }
 
 /**
- * Build the dropdown options: the catalog (already in picker order) plus
- * any selected ids the catalog no longer carries, flagged stale so the UI
- * can mark them — a saved selection never silently loses an entry, and the
- * user can see which ones went stale upstream.
- *
- * When `query` is non-blank, catalog rows are filtered by
- * {@link matchesModelQuery}; stale rows are kept only while they match too,
- * so a search for a live model does not surface unrelated stale ids.
+ * Build the dropdown options: the catalog (already in picker order) plus any
+ * selected ids the catalog no longer carries, flagged stale so a saved
+ * selection never silently loses an entry. Stale rows survive a non-blank
+ * {@link matchesModelQuery} search only while they match too, so a search for
+ * a live model does not surface unrelated stale ids.
  */
 export function buildModelSelectOptions(
   catalog: readonly SelectableModel[],
@@ -118,12 +111,10 @@ export function buildModelSelectOptions(
 }
 
 /**
- * Group dropdown options under plan-tier headings (`tierOf` maps a model id
- * to its tier heading, or undefined for unmapped models — see
- * {@link tierHeadingFor}). Live rows keep their relative order; stale ids
- * and unmapped live rows share one trailing unheaded group. Groups merge
- * repeats, so a catalog interleaving two tiers still renders one section
- * per tier.
+ * Group dropdown options under plan-tier headings (`tierOf` maps a model id to
+ * its heading, or undefined for unmapped models — see {@link tierHeadingFor}).
+ * Live rows keep their relative order and repeats merge, so a catalog
+ * interleaving two tiers still renders one section per tier.
  */
 export function groupModelSelectOptions(
   options: readonly ModelSelectOption[],
@@ -171,13 +162,11 @@ export interface CatalogReadiness {
 
 /**
  * Whether the catalog is trustworthy enough to call an unlisted selection
- * "retired". FALSE while the first fetch is still in flight and after a
- * failure, because the catalog is empty then and every selected id would look
- * stale — which turns the one-click stale cleanup into a button that silently
- * empties the allowlist. A successfully loaded but empty catalog is treated as
- * untrustworthy too: an empty list is far more likely a Host problem than every
- * model being retired at once, and the explicit "show all" entry covers the
- * user who really wants to clear the list.
+ * "retired". FALSE while the first fetch is in flight, after a failure, and
+ * for a loaded-but-empty catalog — an empty list makes every selected id look
+ * stale, which would turn the one-click stale cleanup into a button that
+ * silently empties the allowlist. Users who really want it cleared have the
+ * explicit "show all" entry.
  */
 export function catalogIsReady(readiness: CatalogReadiness): boolean {
   return readiness.catalogIds.length > 0 && !readiness.catalogFailed

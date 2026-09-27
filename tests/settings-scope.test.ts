@@ -1,11 +1,7 @@
 /**
- * Settings-scope lifecycle over the `remote.settings` wire.
- *
- * The wire is byte-identical from 0.1.2-rc.1 through 0.1.7-alpha.1
- * (`describe()` → the directory view; `mutate(ns, ops, revision)` → the fresh
- * namespace ROW), so these tests pin the whole contract the settings page
- * and the Models-page card depend on — through a fake remote, no network,
- * no React.
+ * Settings-scope lifecycle over the `remote.settings` wire (node:test, no
+ * network, no React): the whole contract the settings page and the Models-page
+ * card depend on, driven through a fake remote.
  */
 
 import { test } from 'node:test'
@@ -20,12 +16,7 @@ import {
 } from '../src/client/settings-scope.ts'
 import type { SettingsScopeSnapshot } from '../src/client/settings.ts'
 
-/**
- * Drain every pending microtask and nested zero-delay timer. One 5ms macrotask
- * outlasts the whole chain (the fake remote's own answer delay is two nested
- * `setTimeout(0)` hops, i.e. ≤2ms), so a settled state machine is guaranteed
- * to be observable when this resolves.
- */
+/** Drain every pending microtask and zero-delay timer (the fake remote's own answer delay is two nested hops, ≤2ms). */
 const flush = async (): Promise<void> => {
   await new Promise((resolve) => { setTimeout(resolve, 5) })
 }
@@ -84,8 +75,7 @@ function fakeContext(options?: { mountSettings?: boolean }): FakeRemote {
   }
   // The real `remote` service: `settings` is a Cordis service nested under it,
   // so reading the property without `inject(['remote.settings'])` THROWS. This
-  // getter is the regression guard — the scope must reach its
-  // namespace through the inject-captured seam, never through `ctx.remote`.
+  // getter is the regression guard for EVERY test in this file.
   const remote = {
     $on(event: string, listener: () => void) {
       listeners.set(event, listener)
@@ -163,9 +153,8 @@ test('a failed first read holds at loading and recovers on the next invalidation
   const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
   await flush()
   assert.equal(scope.getSnapshot().status, 'loading')
-  // The forwarded invalidation is one retry trigger (the inject-arrival
-  // refresh in the plugin entry funnels through the same load()); the bounded
-  // timer ladder below covers the case where no invalidation ever arrives.
+  // A forwarded invalidation is one retry trigger (the inject-arrival refresh
+  // funnels through the same load()); the ladder below covers no-invalidation.
   fake.answerDescribe({ writable: true, namespaces: [row()] })
   fake.fireDocumentUpdated()
   await flush()
@@ -200,8 +189,8 @@ test('set() fences with the row revision, then folds the answered row in', async
   assert.equal(call.ns, 'llm-commandcode')
   assert.deepEqual(call.ops, [{ op: 'set', path: ['apiBase'], value: 'https://new.example' }])
   assert.equal(call.revision, 3, 'the first write carries the revision it was read at')
-  // The controller's save contract: after set() resolves, the snapshot's user
-  // layer must already show the value (read-your-write without a wire re-read).
+  // The controller's save contract: after set() resolves, the user layer must
+  // already show the value (read-your-write, no wire re-read).
   const snapshot = scope.getSnapshot()
   assert.deepEqual(snapshot.user, { apiBase: 'https://new.example' })
   assert.equal(snapshot.revision, 4, 'the answered row replaces the held one')
@@ -231,8 +220,8 @@ test('a rejected write re-reads the Host instead of folding the stale answer', a
   fake.answerMutate({ error: 'SETTINGS_CONFLICT: revision 3 expected, 9 actual' })
   await scope.set('apiBase', 'https://raced.example')
   assert.equal(fake.describeCalls(), describesBefore + 1, 'recovery is a describe re-read')
-  // The held view still holds the pre-write user layer — the controller reads
-  // that as "the write did not land" and keeps the drafts staged.
+  // The held view keeps the pre-write user layer — the controller reads that as
+  // "the write did not land" and keeps the drafts staged.
   assert.deepEqual(scope.getSnapshot().user, {})
   await scope.dispose()
 })
@@ -266,11 +255,10 @@ test('writes serialize: one mutate in flight, the next queued behind it', async 
 })
 
 test('an unmounted namespace keeps the page read-only until the inject lands', async () => {
-  // The reported failure: the scope read `ctx.remote.settings` directly, cordis
-  // threw `cannot get property "remote.settings" without inject`, the throw was
-  // swallowed by the read's own try/catch, and the page rendered read-only with
-  // every control disabled. The entry now captures the namespace inside
-  // `ctx.inject(['remote.settings'], …)` and re-reads when it lands.
+  // The reported failure: cordis answers a read of `ctx.remote.settings` with
+  // `cannot get property "remote.settings" without inject`, the scope swallowed
+  // it in the read's own try/catch, and every control rendered disabled. The
+  // entry now captures the namespace inside `ctx.inject(['remote.settings'], …)`.
   const fake = fakeContext({ mountSettings: false })
   fake.answerDescribe({ writable: true, namespaces: [row()] })
   const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
@@ -294,9 +282,6 @@ test('an unmounted namespace keeps the page read-only until the inject lands', a
 
 test('the namespace is never read off ctx.remote (the fake context throws)', async () => {
   const fake = fakeContext()
-  // The engine's own answer to a nested-service read without inject; every
-  // test in this file builds its context with this getter, so reading the
-  // namespace off the context anywhere in the module fails the whole suite.
   assert.throws(
     () => (fake.context.remote as unknown as Record<string, unknown>).settings,
     /cannot get property "remote\.settings" without inject/,
@@ -365,9 +350,7 @@ test('subscription listeners notify consumers on snapshot changes', async () => 
   await scope.dispose()
 })
 
-// ---------------------------------------------------------------------------
 // Bounded retry of a failed FIRST read
-// ---------------------------------------------------------------------------
 
 /** A timer seam a test can fire by hand, with the delays it was asked for. */
 function fakeRetryTimer(): SettingsRetryTimer & { delays: number[]; fire(): void; pending(): boolean } {
@@ -394,10 +377,9 @@ function fakeRetryTimer(): SettingsRetryTimer & { delays: number[]; fire(): void
 
 test('a failed first read retries on the injected timer and converges', async () => {
   // Without this retry the scope keeps its initial `loading`/`writable: false`
-  // snapshot forever: every control on the settings page renders disabled
-  // behind a "read-only" banner, and nothing else re-reads (the forwarded
-  // invalidations need a live Host to fire). The failure here is a Host that
-  // was still starting up.
+  // snapshot forever: every control renders disabled and nothing else re-reads
+  // (the forwarded invalidations need a live Host to fire). The failure here is
+  // a Host that was still starting up.
   const fake = fakeContext()
   fake.answerDescribe({ error: 'gateway still starting' })
   const timer = fakeRetryTimer()

@@ -10,9 +10,7 @@ import { CommandCodeAdapter, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIM
 import { commandDefinition } from '../src/commands.ts'
 import type { CommandInvocation } from '@deepseek-ai/dsh-commands'
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /** A fetch stub serving canned per-path responses. */
 function makeFetch(paths: Record<string, { status: number; body: unknown }>): typeof fetch {
@@ -53,16 +51,12 @@ function invoke(
     rawInput,
     signal: new AbortController().signal,
   } as unknown as CommandInvocation
-  // The locale is captured by the def itself (constructed with the right
-  // `getLocale` upstream); this shim exists so older callers passing a
-  // bare `def` keep working. New tests construct the def with the locale
-  // they want and call `invoke(def, rawInput)` directly.
+  // The def carries its own locale; `_getLocale` stays for older bare-`def`
+  // call sites.
   return def.handler(invocation) as Promise<{ kind: string; text: string }>
 }
 
-// ---------------------------------------------------------------------------
 // getUsage parsing
-// ---------------------------------------------------------------------------
 
 test('getUsage parses account, usage, and credits', async () => {
   const adapter = makeAdapter(makeFetch({
@@ -174,9 +168,7 @@ test('getUsage requires a key', async () => {
   await assert.rejects(adapter.getUsage(), /no key/)
 })
 
-// ---------------------------------------------------------------------------
 // /commandcode command rendering
-// ---------------------------------------------------------------------------
 
 test('command renders a full usage report in zh', async () => {
   const adapter = makeAdapter(makeFetch({
@@ -210,7 +202,7 @@ test('command renders a full usage report in zh', async () => {
   assert.match(result.text, /\$1\.3187/)
   assert.match(result.text, /\$8\.68/)
   assert.match(result.text, /5 小时/)
-  assert.match(result.text, /█/) // bar chart glyph present
+  assert.match(result.text, /█/)
 })
 
 test('command rounds the success rate to two decimals', async () => {
@@ -275,7 +267,7 @@ test('command renders a full usage report in en', async () => {
   assert.match(result.text, /\$1\.3187/)
   assert.match(result.text, /\$8\.68/)
   assert.match(result.text, /5-hour/)
-  assert.match(result.text, /█/) // bar chart glyph present
+  assert.match(result.text, /█/)
 })
 
 test('command reports endpoint failures instead of crashing', async () => {

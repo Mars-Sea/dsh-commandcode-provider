@@ -1,15 +1,14 @@
 /**
  * Shared boundary-validation and Remote-descriptor plumbing for the plugin's
  * hand-rolled Typert wire contracts (`commandcode/report`, `commandcode/models`,
- * `commandcode/login*`).
+ * `commandcode/prices`, `commandcode/login*`).
  *
  * Every Remote this plugin serves crosses the Typert Gateway with a strict
  * result schema: the Host half registers a descriptor against a Cordis service
  * (`src/usage-remote.ts`) and the browser half mounts the matching contribution
- * on `ctx.remote` (`src/client/index.ts`). The wire contract is deliberately
- * dependency-free so the client bundle can inline it — a pure-TS helper module
- * imported by the wire files keeps it that way while removing the schema
- * helpers and descriptor boilerplate they used to duplicate.
+ * on `ctx.remote` (`src/client/index.ts`). This module is dependency-free so
+ * the client bundle can inline it, and it holds the schema helpers and
+ * descriptor boilerplate the wire files used to duplicate.
  *
  * @module dsh-commandcode-provider/wire-shared
  */
@@ -39,16 +38,16 @@ export interface BoundaryValidator {
 }
 
 /**
- * Build the validator helpers one endpoint uses. `prefix` names the
- * endpoint in the rejection message (e.g. `commandcode/report result:`), so
- * each wire file keeps its own diagnostic phrasing while sharing the helper
- * bodies.
+ * Build the validator helpers one endpoint uses. `prefix` names the endpoint
+ * in the rejection message (e.g. `commandcode/report result:`), so each wire
+ * file keeps its own diagnostic phrasing while sharing the helper bodies.
  *
  * The helpers return the reject call directly in the failure branch: since
  * `reject` is typed `never`, the ternary's union collapses to the success type
  * without relying on TypeScript's control-flow analysis of a never-returning
  * call (which only recognizes function declarations, not the destructured
- * arrow `reject` callers receive from this factory).
+ * arrow `reject` callers receive from this factory). Callers that need the
+ * narrowing in an `if` must therefore assign inside the positive branch.
  */
 export function makeBoundaryValidator(prefix: string): BoundaryValidator {
   const reject = (field: string): never => {
@@ -70,12 +69,9 @@ export function makeBoundaryValidator(prefix: string): BoundaryValidator {
 }
 
 /**
- * One strict result codec.
- *
- * `mode: 'strict'` carries a LAZY schema factory (`create()`), which the
- * registry requires and the Gateway validates with (`codec.create().parse`).
- * The schema is built by `makeStrictCodec` from the endpoint's hand-rolled
- * validator, so nothing here depends on a generated codec.
+ * One strict result codec: `mode: 'strict'` carries the LAZY schema factory
+ * (`create()`) the registry requires and the Gateway validates with
+ * (`codec.create().parse`). There is NO `schema` member — issue #49.
  */
 interface StrictCodec<Output> {
   readonly mode: 'strict'
@@ -90,10 +86,8 @@ export function makeStrictCodec<Output>(typeSymbol: string, schema: TypertSchema
 
 /**
  * Build one strict invocation descriptor. Every Command Code Remote shares the
- * `commandcode` namespace, the `commandcodeUsage` service, and a strict
- * `mode: 'strict'` result — only the endpoint, method, result type symbol, and
- * schema differ — so the boilerplate lives here once and each endpoint supplies
- * only its own facts.
+ * `commandcode` namespace, the `commandcodeUsage` service, and a strict result
+ * — only the endpoint, method, result type symbol, and schema differ.
  */
 export function makeRemoteDescriptor<Output>(
   endpoint: string,

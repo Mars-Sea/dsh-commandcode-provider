@@ -7,11 +7,9 @@
  * registrations declare it, and the renderer hands the component a `t` seat
  * whose identity changes on a language switch (so a memoized panel re-renders).
  * {@link buildPanelView} takes that translator as an input and builds every
- * string through it — the projection stays React-free and testable, and no
- * component carries copy of its own.
- *
- * The settings page keeps its own `settings.commandcode` namespace (see
- * `./locales.ts`); the two never mix.
+ * string through it, so the projection stays React-free and testable and no
+ * component carries copy of its own. The settings page keeps its own
+ * `settings.commandcode` namespace (see `./locales.ts`); the two never mix.
  *
  * @module dsh-commandcode-provider/client/panel-copy
  */

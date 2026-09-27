@@ -3,19 +3,16 @@ import { withRequestFacts } from './cost-fixture.ts'
  * DOM-injection tests for the composer's session-cost figure
  * (`src/client/session-cost-display.ts`). Run with `npm test`.
  *
- * This module is the highest-risk half of the readout: it reaches into the
- * harness's OWN token-usage markup — the pill's button and the usage dialog's
- * `dl` — appends nodes to them, hides rows, and restores everything on the way
- * out. None of that is covered by `tests/session-cost.test.ts`, which stops at
- * the pure projection, so these tests drive the real class through its two
- * injected seams (`doc` and `observe`) against a small fake DOM.
+ * This module reaches into the harness's OWN token-usage markup — the pill's
+ * button and the usage dialog's `dl` — appends nodes, hides rows and restores
+ * everything on the way out, none of which `tests/session-cost.test.ts` (which
+ * stops at the pure projection) covers. The real class is driven through its
+ * two injected seams (`doc` and `observe`) against a small fake DOM.
  *
- * What is pinned here is the safety contract, not the arithmetic:
- *   · nothing is injected unless the shipped shape confirms (positionally, by
- *     the token count each row must be showing);
- *   · a re-render that drops our nodes is self-healed, not assumed;
- *   · disposal removes every node we added and every style we set;
- *   · a missing anchor degrades to nothing instead of throwing.
+ * What is pinned is the safety contract, not the arithmetic: nothing is
+ * injected unless the shipped shape confirms, a re-render that drops our nodes
+ * is self-healed, disposal gives back every node and style, and a missing
+ * anchor degrades to nothing instead of throwing.
  */
 
 import { test } from 'node:test'
@@ -31,19 +28,16 @@ import type { CommandCodePriceTable } from '../src/usage-wire.ts'
 
 const buildSessionCostView = (input: SessionCostInput) => buildCostView(withRequestFacts(input))
 
-// ---------------------------------------------------------------------------
 // A fake DOM: only what the display actually touches
-// ---------------------------------------------------------------------------
 
 class FakeNode {
   childNodes: FakeNode[] = []
   parentNode: FakeNode | null = null
   /**
-   * Whether this node is part of the document tree. Computed by walking to the
-   * root rather than stored as a flag: the display decides whether its cached
-   * dialog is still live with `isConnected`, so a double that reported a
-   * detached node as connected would test the wrong branch — and a real
-   * `isConnected` is exactly this walk.
+   * Whether this node is part of the document tree, computed by walking to the
+   * root: the display decides whether its cached dialog is still live with
+   * `isConnected`, so a double reporting a detached node as connected would
+   * test the wrong branch.
    */
   get isConnected(): boolean {
     let node: FakeNode = this
@@ -206,8 +200,8 @@ class FakeDocument extends FakeNode {
   /**
    * The document-level collection the ambiguity guard reads: a second composer
    * (0.1.6-alpha.2's embedded sidebar Conversation) can put a second usage
-   * dialog in the page at the same time, and only the COUNT distinguishes that
-   * case from the ordinary one.
+   * dialog in the page, and only the COUNT tells that apart from the ordinary
+   * case.
    */
   querySelectorAll(selector: string): FakeElement[] {
     return this.body.querySelectorAll(selector)
@@ -218,24 +212,20 @@ const doc = (): FakeDocument => new FakeDocument()
 /** The shipped shape is `Element`; the fake is structurally compatible for our use. */
 const asDocument = (fake: FakeDocument): Document => fake as unknown as Document
 
-// ---------------------------------------------------------------------------
 // The shipped markup the injection targets
-// ---------------------------------------------------------------------------
 
 /**
  * The shipped stats row as it really nests: the pills (`StatsPills`), of which
  * the LAST `aria-haspopup` child is the token pill, inside the row's root div.
- * The wrapper matters — the display scopes its lookup to it — and so does the
+ * The wrapper matters (the display scopes its lookup to it) and so does the
  * PRECEDING trigger: once a step carries timing the row starts with the time
- * pill, which is also a `button[aria-haspopup="dialog"]`, so a lookup that took
- * the first trigger instead of the last would decorate the clock. Both shapes
- * are modelled here for that reason.
+ * pill, also a `button[aria-haspopup="dialog"]`, so taking the FIRST trigger
+ * would decorate the clock. Both shapes are modelled for that reason.
  *
- * `marker: false` models dsh 0.1.6-alpha.2, which DELETED
- * `data-composer-stats` from this root while leaving every other part of the
- * markup identical. The row must still be found there — that deletion is what
- * took the readout dark, and a lookup that insists on the attribute is exactly
- * the bug.
+ * `marker: false` models dsh 0.1.6-alpha.2, which deleted `data-composer-stats`
+ * from this root while leaving the rest of the markup identical — the deletion
+ * that took the readout dark, and a lookup insisting on the attribute is
+ * exactly the bug.
  */
 function shippedPill(parent: FakeElement, options: { marker?: boolean } = {}): {
   root: FakeElement
@@ -263,14 +253,11 @@ function shippedPill(parent: FakeElement, options: { marker?: boolean } = {}): {
 }
 
 /**
- * The composer footer's context meter, as 0.1.6-alpha.2 introduces it: a ring
+ * The composer footer's context meter as 0.1.6-alpha.2 introduces it: a ring
  * whose trigger is itself a `button[aria-haspopup="dialog"]`, rendered AFTER the
- * dock outlet as the outlet's SIBLING inside the composer's dock row.
- *
- * It is the reason the scope stops at the outlet. It is out of reach for an
- * outlet-scoped lookup, and it would be the WINNER of a parent-scoped "last
- * trigger wins" — which is how the session cost would end up hanging off the
- * context ring instead of the token pill.
+ * dock outlet as the outlet's SIBLING. It is the reason the scope stops at the
+ * outlet — it is out of reach there, and it would WIN a parent-scoped "last
+ * trigger wins", hanging the cost off the context ring instead of the token pill.
  */
 function contextMeter(parent: FakeElement): FakeElement {
   const root = new FakeElement('span')
@@ -302,9 +289,7 @@ function shippedDialog(parent: FakeElement, values: (string | undefined)[]): Fak
   return dl
 }
 
-// ---------------------------------------------------------------------------
 // The view under test
-// ---------------------------------------------------------------------------
 
 /** A flat table with every rate published, so every row can be priced. */
 const FLAT: CommandCodePriceTable = {
@@ -341,8 +326,8 @@ function view(usage: SessionCostInput['usage']): NonNullable<ReturnType<typeof b
 function makeDisplay(scopeRoot: FakeElement | null) {
   const fake = doc()
   // The composer lives in the page in real life, so attach it: the dialog is
-  // resolved document-wide and the pill is resolved through the scope, and both
-  // need the tree to be whole for the lookups to mean anything.
+  // resolved document-wide and the pill through the scope, and both need the
+  // tree to be whole for the lookups to mean anything.
   if (scopeRoot !== null && scopeRoot.parentNode === null) fake.body.appendChild(scopeRoot)
   const trigger = { fire: (): void => {} }
   const observe: SessionCostObserverFactory = (_target, listener) => {
@@ -360,9 +345,7 @@ function makeDisplay(scopeRoot: FakeElement | null) {
   return { display, fake, trigger }
 }
 
-// ---------------------------------------------------------------------------
 // The pill
-// ---------------------------------------------------------------------------
 
 test('the cost is appended to the shipped pill and removed on dispose', () => {
   const composer = new FakeElement('div')
@@ -376,8 +359,7 @@ test('the cost is appended to the shipped pill and removed on dispose', () => {
   assert.equal(button.childNodes[button.childNodes.length - 1], injected)
   assert.equal(injected.textContent.includes('$2.00'), true, `the amount is in the run: ${injected.textContent}`)
   // The description is how the figure reaches assistive tech, because the
-  // shipped button's own aria-label is computed by the harness and cannot be
-  // extended.
+  // shipped button's own aria-label is harness-computed and cannot be extended.
   assert.equal(button.getAttribute('aria-describedby'), 'dsh-commandcode-session-cost')
   assert.ok(fake.body.querySelector('#dsh-commandcode-session-cost'), 'the description node is in the page')
 
@@ -406,8 +388,8 @@ test("a shipped aria-describedby is never overwritten or taken away", () => {
 test("the figure lands on the token pill, never on the time pill beside it", () => {
   // Both pills announce a dialog, so `button[aria-haspopup="dialog"]` matches
   // two nodes once a step carries timing. The rule is "the LAST one", and this
-  // is the only shape that can fail it: with a single trigger, first and last
-  // are the same node and a wrong rule still passes.
+  // is the only shape that can fail it: with a single trigger a wrong rule
+  // still passes.
   const composer = new FakeElement('div')
   const { button, timeButton } = shippedPill(composer)
   const { display } = makeDisplay(composer)
@@ -439,8 +421,7 @@ test('a re-rendered pill is re-decorated instead of losing the figure', () => {
   assert.ok(first.button.querySelector('[data-composer-session-cost]'))
 
   // React remounts the row: the whole stats root is replaced, so our node goes
-  // with the old tree. The next sync must notice and re-attach to the NEW row —
-  // assuming the old one survived would leave the figure silently gone.
+  // with the old tree. The next sync must notice and re-attach to the NEW row.
   first.button.detach()
   composer.removeChild(first.root)
   const fresh = shippedPill(composer)
@@ -457,8 +438,7 @@ test('a pill whose label text was rewritten keeps its figure', () => {
   const before = button.querySelector('[data-composer-session-cost]')
 
   // React rewrites the LABEL's own text on every token update. Our run is a
-  // sibling node, so it survives: this pins that an ordinary text update does
-  // not detach the cost, which is the case the module's own comment describes.
+  // sibling node, so it survives: an ordinary text update must not detach it.
   const label = button.childNodes[0] as FakeElement
   label.textContent = '1.3M tokens'
   display.sync(view({ uncachedInputTokens: 1_100_000 }))
@@ -481,10 +461,10 @@ test('an unpriceable session removes the injected figure', () => {
 })
 
 // The next three tests are the regression fence for dsh 0.1.6-alpha.2, which
-// deleted `data-composer-stats` AND moved the composer's context meter into a
-// footer beside the dock outlet. The old suite built its own marked root and
-// treated an unmarked row as an acceptable no-op, so the readout could go dark
-// on a real engine with every check green.
+// deleted `data-composer-stats` AND moved the composer's context meter beside
+// the dock outlet. The old suite built its own marked root and treated an
+// unmarked row as an acceptable no-op, so the readout could go dark on a real
+// engine with every check green (CHANGELOG).
 
 test('an unmarked stats row (dsh 0.1.6-alpha.2) still gets the cost', () => {
   const outlet = new FakeElement('div')
@@ -543,9 +523,7 @@ test('a composer with no shipped pill is a no-op that never throws', () => {
   display.dispose()
 })
 
-// ---------------------------------------------------------------------------
 // The usage dialog
-// ---------------------------------------------------------------------------
 
 test('a confirming dialog gets a price per row and gives every node back', () => {
   const composer = new FakeElement('div')
@@ -582,10 +560,10 @@ test('a dialog whose counts do not confirm is left exactly as it shipped', () =>
   assert.equal(dl.querySelectorAll('[data-session-cost-price]').length, 0)
 })
 
-// Two live composers are reachable from dsh 0.1.6-alpha.2 (the sidebar mounts an
-// embedded Conversation), and the dialog is portaled onto `body`, so a
-// document-wide lookup can no longer tell whose dialog it is looking at. The
-// count is the only honest discriminator: with two open, neither may be priced.
+// Two live composers are reachable from dsh 0.1.6-alpha.2 (the sidebar mounts
+// an embedded Conversation) and the dialog is portaled onto `body`, so a
+// document-wide lookup cannot tell whose dialog it sees. The count is the only
+// honest discriminator: with two open, neither may be priced.
 
 test('two open usage dialogs are both left alone rather than mispriced', () => {
   const composer = new FakeElement('div')
@@ -644,10 +622,9 @@ test('a closed dialog gives its hidden rows and styles back', () => {
   shippedPill(composer)
   const { display, fake, trigger } = makeDisplay(composer)
 
-  // A session with real priced spend AND cache-write tokens whose rate the page
-  // does not publish — a mixed session, which is what makes the cache-write row
-  // hidden. (A cache-write-ONLY session on such a model is the case the view
-  // refuses to render at all, so it could not reach the dialog.)
+  // A mixed session — real priced spend AND cache-write tokens whose rate the
+  // page does not publish — is what makes the cache-write row hidden. (A
+  // cache-write-ONLY session on such a model renders nothing at all.)
   const noCacheWrite: CommandCodePriceTable = {
     models: [{ id: 'commandcode/test-flat', slug: 'test-flat', inputCost: 1, outputCost: 2, cacheReadCost: 0.1 }],
     peakHours: [[1, 4], [6, 10]],
@@ -666,15 +643,11 @@ test('a closed dialog gives its hidden rows and styles back', () => {
   const dds = [...dl.childNodes].filter((node): node is FakeElement => node instanceof FakeElement && node.tagName === 'DD')
   assert.equal(dds[3]?.style.display, 'none', 'the unpriced row is hidden')
 
-  // The dialog closes: the harness takes its nodes back, and the style we set on
-  // a detached node must not linger on a recycled one.
+  // The dialog closes: the harness takes its nodes back, and a style we set on
+  // a detached node must not linger on a recycled one. The display writes back
+  // `''`, the DOM's canonical "no inline style".
   fake.body.removeChild(dl)
   trigger.fire()
-  // `delete` leaves no own property at all, so the honest observable is
-  // presence/absence of the inline style rather than a particular falsy value.
-  // `''` is the DOM's canonical "no inline style", which is what the display
-  // writes back — the row returns to the sheet's own styling rather than
-  // staying hidden.
   assert.equal(dds[3]?.style.display, '', 'the hidden style is given back on close')
 })
 

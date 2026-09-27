@@ -1,52 +1,48 @@
 /**
- * Locale copy for the `/commandcode` usage command and the friendly
- * image-gate error rewrite. Distinct from `./client/locales.ts` (the
- * settings-page namespace `settings.commandcode`): the command runs on the
- * Host and has no access to the client's `ctx.locale`, so the dictionaries
- * are exposed as plain constants for direct lookup; the resolver lives in
- * `pickCommandLocale()`. The image-gate wrapper also lives on the client
- * but is reached from a non-React path that has no `t` in scope, so the
- * same dictionaries serve both surfaces.
+ * zh/en copy for the Host-side `/commandcode` usage command, as plain
+ * constants: the command runs on the Host and has no access to the client's
+ * `ctx.locale`, so the active locale is resolved by `pickCommandLocale()` and
+ * the dictionaries are read by direct lookup. Distinct from
+ * `./client/locales.ts` (the settings-page `settings.commandcode` namespace).
  *
- * zh is the source of truth for the key set; en must carry the exact same
- * keys — a mismatch is a compile error at the lookup site.
+ * zh is the source of truth for the key set; `en` must carry exactly the same
+ * keys, which the `Record` type makes a compile error.
  */
 
-/** Active locale id recognized by the command and the image-gate wrapper. */
+/** Active locale id for the `/commandcode` command. */
 export type LocaleId = 'zh' | 'en'
 
-/** Dictionary keys used by the `/commandcode` command and the image-gate wrapper. */
+/** Dictionary keys used by the `/commandcode` command. */
 export type CommandCodeCommandKey =
   | 'title'                   // top heading of a single-account report
   | 'accountTitle'            // per-account heading in the multi-account view
   | 'accountSeparator'        // rule between accounts in the multi-account view
-  | 'activeBadge'             // "currently serving" badge
-  | 'invalidCredentialBadge'  // mark for an account whose key is invalid
-  | 'cooldownBadge'           // mark for an account in rate-limit cooldown
-  | 'rateLimitBadge'          // mark when the pool has marked a key rate-limited
   | 'unconfigured'            // one-account row when the slot has no key
   | 'blockedInvalidKey'       // top-of-report block when the whole account is 401
   | 'blockedServiceUnavailable' // 5xx
   | 'blockedInvalidResponse'  // received an unreadable response body
   | 'blockedNetwork'          // network unreachable
-  | 'planLine'                // "  📦 套餐    {name}{status}{period}"
-  | 'planPeriodSuffix'        // " · 账期截止 {date}" / " · period ends {date}"
-  | 'usageHeader'             // "── 请求 ─────..."
-  | 'requestsLine'            // "  💬 请求    {n} 次 / 失败 {f}  成功率 {r}%"
-  | 'costLine'                // "  💰 花费    {money}  ({credits} credits)"
-  | 'tokensLine'              // "  🔤 Token   {in} 入 / {out} 出"
-  | 'creditsHeader'           // "── 信用 ─────..."
-  | 'monthlyLine'             // "  💳 月额度  {monthly}   (已购 {purchased} / 赠送 {free})"
-  | 'barLine'                 // "     └ {bar}  {pct}%"
-  | 'windowsHeader'           // "── 窗口用量 ─────..."
-  | 'fiveHourLine'            // "  ⏱ 5 小时  {used} / {cap}{warn}"
-  | 'weeklyLine'              // "  📅 每周    {used} / {cap}{warn}"
-  | 'windowBarLine'           // "     └ {bar}  重置 {when}"
-  | 'exceededWarning'         // the trailing "  ⚠️ 超限!" / "  ⚠️ exceeded!"
-  | 'resetSuffix'             // "重置 {when}" (the suffix after the bar)
-  | 'partialFailures'         // "⚠️  部分端点失败: {list}"
-  | 'noData'                  // "(no data — check your API key)"
-  | 'errorText'               // "Could not fetch Command Code usage: {message}"
+  | 'activeBadge'
+  | 'invalidCredentialBadge'
+  | 'cooldownBadge'
+  | 'rateLimitBadge'
+  | 'planLine'
+  | 'planPeriodSuffix'
+  | 'usageHeader'
+  | 'requestsLine'
+  | 'costLine'
+  | 'tokensLine'
+  | 'creditsHeader'
+  | 'monthlyLine'
+  | 'barLine'
+  | 'windowsHeader'
+  | 'fiveHourLine'
+  | 'weeklyLine'
+  | 'windowBarLine'
+  | 'exceededWarning'
+  | 'partialFailures'
+  | 'noData'
+  | 'errorText'
 
 export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, string>> = {
   zh: {
@@ -80,7 +76,6 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
     weeklyLine: '  📅 每周    {used} / {cap}{warn}',
     windowBarLine: '     └ {bar}  重置 {when}',
     exceededWarning: '  ⚠️ 超限!',
-    resetSuffix: '重置 {when}',
     partialFailures: '⚠️  部分端点失败: {list}',
     noData: '（无数据 — 请检查 API 密钥）',
     errorText: '获取 Command Code 用量失败：{message}',
@@ -116,7 +111,6 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
     weeklyLine: '  📅 Weekly   {used} / {cap}{warn}',
     windowBarLine: '     └ {bar}  resets {when}',
     exceededWarning: '  ⚠️ exceeded!',
-    resetSuffix: 'resets {when}',
     partialFailures: '⚠️  some endpoints failed: {list}',
     noData: '(no data — check your API key)',
     errorText: 'Could not fetch Command Code usage: {message}',
@@ -124,18 +118,13 @@ export const commandcodeCommand: Record<LocaleId, Record<CommandCodeCommandKey, 
 }
 
 /**
- * Resolve the active locale for a Host-side command run.
+ * Resolve the active locale for a Host-side command run: explicit `override`
+ * (from `Config.lang`) → `LC_ALL` → `LANG` → the `'zh'` fallback that keeps
+ * unconfigured deployments on their current output.
  *
- * Priority: explicit `override` (from `Config.lang`) → `LC_ALL` → `LANG` →
- * the conventional fallback (`'zh'`, matching the existing single-language
- * behavior so unconfigured deployments keep their current output).
- *
- * The values are matched on the leading tag only — `zh_CN.UTF-8`,
- * `zh-Hans`, `zh` all map to `'zh'`; everything starting with `en` maps to
- * `'en'`; anything else falls back to `'zh'` (a non-`en` shell that
- * already has Chinese in the terminal is the closest sensible default;
- * a Western shell that happens to be neither keeps the existing Chinese
- * output rather than swapping to half-translated English).
+ * Matched on the leading tag only — `zh_CN.UTF-8`, `zh-Hans` and `zh` all
+ * map to `'zh'`, anything starting with `en` maps to `'en'`, everything else
+ * falls back to `'zh'` rather than to half-translated English.
  */
 export function pickCommandLocale(
   override: string | undefined,

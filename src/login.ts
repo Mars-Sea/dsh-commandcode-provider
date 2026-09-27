@@ -1,9 +1,6 @@
 /**
- * Host half of the Command Code browser login (the loopback flow).
- *
- * Mirrors what the official `command-code login` CLI command performs
- * (reverse-engineered from `command-code@1.32.1`, `createAuthFlowController`
- * + `createAuthServer` in its bundle):
+ * Host half of the Command Code browser login (the loopback flow), mirroring
+ * what the official `command-code login` CLI command performs.
  *
  * 1. Bind a temporary HTTP server on `127.0.0.1`, first available port from
  *    5959 upward (10 attempts).
@@ -15,12 +12,12 @@
  * 4. The delivered key is validated against `GET {apiBase}/alpha/whoami`
  *    before anything is stored.
  *
- * Server behaviour is mirrored exactly: POST-only `/callback`, a 10 KB body
- * cap, JSON responses (`{success:true}` / `{success:false,error}`), CORS for
- * the Studio origins only, and state-token equality as the anti-forgery
- * check. One deliberate hardening over the CLI build: the CORS origin is
- * echoed only when it is allowlisted (the CLI falls back to the first
- * origin), which browsers treat identically.
+ * The server contract is CLI-mirrored: POST-only `/callback`, a 10 KB body
+ * cap, JSON responses (`{success:true}` / `{success:false,error}`), and
+ * state-token equality as the anti-forgery check. Three deliberate hardenings
+ * over the CLI build: the CORS origin is echoed only when allowlisted (the
+ * CLI falls back to the first origin), `Connection: close`, and the denial
+ * branch checks the state token before it ends the attempt.
  *
  * Storage stays out of this module: the plugin entry supplies
  * {@link CommandCodeLoginFlowDeps.storeKey}, which writes through the dsh
@@ -195,16 +192,15 @@ export class CommandCodeLoginFlow {
    * asynchronously (`complete()`), and that window is open to a cancel or a
    * fresh `begin()`; the generation lets a late completion recognize that it
    * no longer owns the status face and stop instead of storing a credential
-   * the user cancelled and flipping the page back to success.
+   * the user cancelled.
    */
   private attemptSeq = 0
   /**
-   * The start currently binding a port, if any. Every `begin()` that arrives
-   * before it settles joins it: two independent starts would each bind their
-   * own loopback server, and only the LAST one is reachable by
-   * {@link CommandCodeLoginFlow.teardown} — the orphan keeps listening and
-   * answering `/callback` for the process's lifetime, and ten of them exhaust
-   * the port window so browser login dies until the Host restarts.
+   * The start currently binding a port, if any. Every `begin()` arriving before
+   * it settles joins it: two independent starts would each bind a loopback
+   * server, and only the LAST one is reachable by `teardown()` — the orphan
+   * keeps answering `/callback` for the process's lifetime, and ten of them
+   * exhaust the port window so browser login dies until the Host restarts.
    */
   private starting: Promise<CommandCodeLoginStatus> | undefined
   /** A live attempt's destination; different rows may not rejoin it. */
@@ -240,14 +236,12 @@ export class CommandCodeLoginFlow {
     // torn down means the callback was consumed and the key is being
     // validated: that attempt can no longer receive anything, so handing its
     // dead authUrl back would give the user a link to a closed port. Starting
-    // fresh retires it (the generation check below drops its late completion).
+    // fresh retires it (the generation check drops its late completion).
     if (this.statusValue.state === 'waiting' && this.server !== undefined) {
       if (this.targetRef !== targetRef) throw new Error('another account login is already in progress')
       return this.statusValue
     }
-    // ...and rejoin a start that has not published `waiting` yet. Two GUI tabs
-    // (or a Sign-in that follows a cancel which arrived too early to retire
-    // anything) would otherwise each bind a loopback server; see `starting`.
+    // ...and rejoin a start that has not published `waiting` yet — see `starting`.
     if (this.starting !== undefined) {
       if (this.targetRef !== targetRef) throw new Error('another account login is already in progress')
       return this.starting
@@ -284,11 +278,9 @@ export class CommandCodeLoginFlow {
     await this.bindServer(port, expectedState)
 
     // The attempt may have been retired while the port was being bound: a
-    // `cancel()` (the panel's ×, or a quick Sign-in → Cancel → Sign-in) cannot
-    // see a `waiting` status yet, and a `dispose()` may have unloaded the
-    // plugin. Publishing `waiting` now would hand the user a live authUrl they
-    // already asked to drop and start a watchdog nobody can reach, so the
-    // freshly bound server is closed here instead.
+    // `cancel()` or a `dispose()` can arrive before any `waiting` status is
+    // visible. Publishing one now would hand the user a live authUrl they
+    // already asked to drop, so the freshly bound server is closed here.
     if (this.disposed || this.cancelPending) {
       const cancelled = !this.disposed
       this.cancelPending = false
@@ -346,10 +338,6 @@ export class CommandCodeLoginFlow {
     this.teardown()
     if (wasWaiting) this.setStatus({ state: 'failed', reason: 'cancelled' })
   }
-
-  // -----------------------------------------------------------------------
-  // Internals
-  // -----------------------------------------------------------------------
 
   private readApiBase(): string {
     const raw = typeof this.deps.apiBase === 'function' ? this.deps.apiBase() : this.deps.apiBase

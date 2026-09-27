@@ -2,25 +2,18 @@
  * Client-boot integration tests (node:test). Run with `npm test`.
  *
  * These drive the *real* `apply()` from `src/client/index.ts` against a Cordis
- * context that mirrors the dsh 0.1.7-rc.2 client assembly, and assert that both
- * browser UI surfaces register:
+ * context mirroring the dsh 0.1.7-rc.2 client assembly, and assert that every
+ * browser surface registers: the settings page (`settings.section`, id
+ * `commandcode`), the Models-page provider card
+ * (`settings.models.provider-card`, key `llm-commandcode`), the panel's `main`
+ * cell + `sidebar.footer.action` row, and the composer dock entry.
  *
- *   - the "Command Code" settings page (`settings.section`, id `commandcode`),
- *   - the Models-page provider card (`settings.models.provider-card`,
- *     key `llm-commandcode`).
- *
- * The registration is gated by `remote.credentials`: the harness exposes
- * credentials through a Typert Remote namespace, and the plugin waits on
- * `ctx.inject(['remote.credentials'], ...)` before mounting the surfaces. This
- * is exactly the suspicion raised in GitHub issue #15 (that a build "does not
- * mount a `credentials` remote namespace", so the surfaces never register).
- * These tests prove the opposite for the real assembly: mounting the
- * `credentials` remote contribution lets both surfaces register.
- *
- * Because `src/client/index.ts` statically imports the React component tree
- * (which imports `*.module.css` from `@deepseek-ai/dsh-client-ui-primitives`),
- * the CSS-module loader is registered first and the module is imported
- * dynamically. The boot helper under test is otherwise the authentic `apply`.
+ * Registration is gated on `remote.credentials` — the harness exposes
+ * credentials as a Typert Remote namespace and the plugin parks on
+ * `ctx.inject(['remote.credentials'], …)`, the suspicion raised in issue #15.
+ * These tests prove the opposite for the real assembly, and then carry the
+ * `remote.settings` scope path end to end (directory read, invalidation
+ * re-read, a save over the path-op wire, the degraded profile).
  */
 
 import { register } from 'node:module'
@@ -33,34 +26,28 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { Context, Service } from '@deepseek-ai/cordis'
-// `apply`/`inject` pull the React component tree in (via `section.tsx` /
-// `card.tsx`), which imports `*.module.css` from dsh-client-ui-primitives.
-// Static imports hoist above the `register()` call above, so load this one
-// dynamically — only then is the CSS-module loader in effect.
+// `apply`/`inject` pull in the React tree, which imports `*.module.css`; static
+// imports hoist above the `register()` above, so this must stay dynamic.
 const { apply, inject } = await import('../src/client/index.ts')
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Boot the real plugin `apply()` on a fresh Cordis root provisioned with the
  * dsh 0.1.7-rc.2 client service set: `remote` (carrying the `credentials` +
  * `commandcode` namespaces and the `settings` directory the plugin's own scope
- * reads), `slots`, `locale`, and — when
- * `mountLayout` is set — `layout`.
+ * reads), `slots`, `locale`, and — when `mountLayout` is set — `layout`.
  *
- * There is deliberately NO `settingsScope` service here: 0.1.7 removed it, and
- * the plugin must not depend on it any more (the exported `inject` list is
- * pinned separately). The settings transport is modelled where it really lives —
- * the `remote.settings` namespace — so the boot exercises the same wire the
- * browser uses.
+ * There is deliberately NO `settingsScope` service: 0.1.7 removed it. The
+ * settings transport is modelled where it really lives — the `remote.settings`
+ * namespace — so the boot exercises the same wire the browser uses.
  *
- * @param options - whether to mount the `credentials` remote namespace. When
- *   `false`, the plugin must not register any surface (it parks on the
- *   `inject(['remote.credentials'])` gate). `mountLayout` controls the
- *   `layout` service, whose `selectPanel` is what makes the sidebar card
- *   openable. `mountSettings` controls the settings directory.
+ * @param options `mountCredentials` gates the `remote.credentials` namespace
+ *   (false models a profile that mounts no such contribution);
+ *   `mountLayout` the `layout` service, whose `selectPanel` is what makes the
+ *   sidebar card openable; `mountSettings` the settings directory;
+ *   `declaredSlots` the seats the engine declares; `immediateUsageMount`
+ *   whether `remote.commandcode` lands on the same tick as `$mount`.
  * @returns the registered slot surfaces, keyed by `id` (settings.section,
  *   panel entries) or `key` (provider-card), after boot settles. Every
  *   registration per key is kept, in registration order.
@@ -69,14 +56,13 @@ async function boot(
   {
     mountCredentials = true,
     mountLayout = true,
-    // Whether the core contribution's `remote.settings` namespace is mounted.
-    // It is on every real profile (api-remotes mounts it with
-    // `immediately: true`), and `false` models the degraded profile the scope
-    // must survive without gating the plugin.
+    // The core contribution's `remote.settings` namespace is on every real
+    // profile (api-remotes mounts it with `immediately: true`); `false` models
+    // the degraded profile the scope must survive without gating the plugin.
     mountSettings = true,
-    // The slots the engine declares. The default is the full dsh 0.1.7-rc.2
-    // set; a narrower set models a client assembly that declares fewer seats
-    // (a composition difference, not an engine version).
+    // The slots the engine declares; the default is the full dsh 0.1.7-rc.2 set.
+    // A narrower set models a client assembly that declares fewer seats (a
+    // composition difference, not an engine version).
     declaredSlots = new Set([
       'settings.section',
       'settings.models.provider-card',
@@ -84,11 +70,8 @@ async function boot(
       'sidebar.footer.action',
       'conversation.composer.dock',
     ]),
-    // Whether the plugin's own `remote.commandcode` namespace mounts on the
-    // same tick as `$mount` resolves. `false` defers it by a macrotask, which
-    // is what the real gateway does (the contribution is installed over the
-    // wire, so the namespace can land one round-trip after the plugin asks for
-    // it) — and the window a surface can lose a report race in.
+    // `false` defers `remote.commandcode` by a macrotask, as the real gateway
+    // does — the window a surface can lose a report race in.
     immediateUsageMount = true,
   }: {
     mountCredentials?: boolean
@@ -114,12 +97,10 @@ async function boot(
    *
    * That shape is load-bearing, not cosmetic. A Cordis context resolves a
    * nested service name ONLY on an `inject(['remote.<ns>'])`-scoped read; any
-   * other read is answered with `cannot get property "remote.<ns>" without
-   * inject`. A fake that instead hangs each namespace off a plain object would
-   * let the plugin read `ctx.remote.<ns>` without declaring the inject — which
-   * is exactly how the 0.1.7 settings page shipped read-only: the
-   * throw was swallowed by the read's own try/catch, no describe ever left the
-   * browser, and every control rendered disabled.
+   * other read answers `cannot get property "remote.<ns>" without inject`. A
+   * fake hanging each namespace off a plain object would let the plugin read
+   * `ctx.remote.<ns>` without declaring the inject — which is how the 0.1.7
+   * settings page shipped read-only.
    */
   const mountNamespace = async (namespace: string, implementation: Record<string, unknown> = {}): Promise<void> => {
     await ctx.plugin({
@@ -135,11 +116,9 @@ async function boot(
     })
   }
 
-  // The api-gateway `ClientRemoteService` stand-in. It is a real Service (so
-  // nested namespace resolution behaves like the engine's) reporting the
-  // `$mount` contribution installer and `$on` forwarded-event face the plugin
-  // reads. The settings scope takes its persistence decision from the Host
-  // settings directory, not from a browser-origin flag.
+  // The api-gateway `ClientRemoteService` stand-in: a real Service (so nested
+  // namespace resolution behaves like the engine's) reporting the `$mount`
+  // contribution installer and `$on` forwarded-event face the plugin reads.
   class FakeRemoteService extends Service {
     constructor(owner: Context) {
       super(owner, 'remote')
@@ -190,10 +169,9 @@ async function boot(
     descriptors: [
       // The credentials namespace (dsh-api-settings-controller in alpha2).
       ...(mountCredentials ? [{ namespace: 'credentials', method: 'describe' }] : []),
-      // The plugin's own report/models/prices/login namespace (mounted below).
-      // Not pre-mounted in the deferred variant: there the namespace must NOT
-      // exist until the plugin's own `$mount` installs it, which is the whole
-      // point of that model.
+      // The plugin's own report/models/prices/login namespace. Not pre-mounted
+      // in the deferred variant: there it must NOT exist until the plugin's own
+      // `$mount` installs it, which is the whole point of that model.
       ...(immediateUsageMount ? [{ namespace: 'commandcode', method: 'report' }] : []),
     ],
   })
@@ -207,13 +185,10 @@ async function boot(
     bind: (ns: string) => (key: string) => `${ns}:${key}`,
     getLocale: () => ({ active: 'en' }),
   })
-  // The settings transport: the core contribution's `remote.settings`
-  // namespace (mounted by api-remotes with `immediately: true`, and listed in
-  // this package's `dsh.client.inject`), NOT the ≤0.1.6 `settingsScope`
-  // wrapper service — 0.1.7 removed that service, and the plugin's own scope
-  // speaks this wire directly. One in-memory namespace row stands in for the
-  // Host: `describe()` answers the directory, `mutate()` applies the path ops
-  // and answers the fresh ROW, exactly like `SettingsNamespaceView`.
+  // The settings transport: the core contribution's `remote.settings` namespace,
+  // NOT the ≤0.1.6 `settingsScope` wrapper service — 0.1.7 removed that one. One
+  // in-memory namespace row stands in for the Host: `describe()` answers the
+  // directory, `mutate()` applies the path ops and answers the fresh ROW.
   const settingsRow = {
     ns: 'llm-commandcode',
     value: { apiKeyEnv: 'COMMANDCODE_API_KEY', apiBase: 'https://from-host.example' } as Record<string, unknown>,
@@ -273,11 +248,10 @@ async function boot(
     })
   }
 
-  // Keyed by slot id/key, but ACCUMULATING: the panel registers one `main`
-  // cell and one `sidebar.footer.action` row under the same id, so a
-  // last-write-wins map would hide the other registration. Each entry keeps the
-  // registration's `inject` factory so a test can build the face the component
-  // receives — which is how the card's click path is driven below.
+  // Keyed by slot id/key, but ACCUMULATING: the panel registers one `main` cell
+  // and one `sidebar.footer.action` row under the same id, so a last-write-wins
+  // map would hide one of them. Each entry keeps the registration's `inject`
+  // factory, which is how the card's click path is driven below.
   const registered = new Map<string, Array<{ name: string; id?: string; key?: string; locale?: string; inject?: () => object }>>()
   const record = (options: { name: string; id?: string; key?: string; locale?: string; inject?: () => object }): void => {
     const key = options.id ?? options.key ?? options.name
@@ -288,8 +262,7 @@ async function boot(
   // The real `slots.inject` runs its callback ONLY while the named declaration
   // is live, so a slot the engine does not declare never registers. A stub that
   // fires for every name would hide exactly the cross-version behavior these
-  // tests exist to pin — and would let a registration through for `main` on an
-  // engine whose layout has no such slot.
+  // tests exist to pin.
   ctx.provide('slots', {
     inject(name: string, fn: () => void) {
       if (declaredSlots.has(name)) fn()
@@ -309,21 +282,19 @@ async function boot(
   })
   // The `inject(['remote.credentials'])` gate, the plugin's own async remote
   // mount, and the controller's fire-and-forget describe all settle on the
-  // macrotask queue (cordis wakes a parked inject fiber on a timer tick, not on
-  // a `setImmediate`), so flush a few timer rounds before asserting.
+  // macrotask queue, so flush a few timer rounds before asserting (cordis wakes
+  // a parked inject fiber on a TIMER TICK, not on `setImmediate`, so the rounds
+  // are timer rounds).
   for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
 
   return { registered, selectedPanels, localeNamespaces, settingsCalls, settingsRow, fireRemoteEvent, commandCodeCalls }
 }
 
-// ---------------------------------------------------------------------------
 // Client boot
-// ---------------------------------------------------------------------------
 
 test('app registers the settings page and Models provider card when remote.credentials is mounted', async () => {
   const { registered } = await boot()
 
-  // The "Command Code" settings page: a `settings.section` entry id `commandcode`.
   assert.equal(registered.has('commandcode'), true, 'settings.section id commandcode should register')
   assert.equal(
     registered.get('commandcode')![0]!.name,
@@ -331,7 +302,6 @@ test('app registers the settings page and Models provider card when remote.crede
     'the registered surface should be the settings section',
   )
 
-  // The Models-page provider card for the `commandcode` adapter family.
   assert.equal(registered.has('llm-commandcode'), true, 'settings.models.provider-card key llm-commandcode should register')
   assert.equal(
     registered.get('llm-commandcode')![0]!.name,
@@ -369,24 +339,18 @@ test('the same apply() also seats the sidebar panel and the composer cost readou
 })
 
 test('app registers no surface when remote.credentials is absent (the gate holds)', async () => {
-  // Without the credentials namespace the plugin parks on
-  // `inject(['remote.credentials'])` and must not register either surface.
   const { registered } = await boot({ mountCredentials: false })
 
   assert.deepEqual([...registered.keys()], [], 'no surface should register without remote.credentials')
 })
 
 test('the sidebar card is withheld when the layout cannot open the panel', async () => {
-  // The regression this pins, measured against 0.1.1-rc.2 … 0.1.5-rc.2:
-  // `sidebar.footer.action` exists and RENDERS in every one of those releases,
-  // so `slots.inject` fires and an ungated card would register — and then do
-  // nothing at all when clicked, because `layout.selectPanel` only arrives in
-  // 0.1.5-rc.1. A visible button that silently ignores a click is worse than no
-  // button, so the registration is gated on that seam.
-  // `mountLayout: false` still seats the `main` cell, because that registration
-  // is independent of the layout service (the slot declaration is what gates
-  // it). What must NOT happen is the sidebar card: without a layout there is no
-  // way to open the panel it points at.
+  // The regression this pins: `sidebar.footer.action` RENDERS on every release
+  // that declares it, so `slots.inject` fires and an ungated card would register
+  // — and then do nothing when clicked, because `layout.selectPanel` may never
+  // arrive. A visible button that silently ignores a click is worse than none.
+  // `mountLayout: false` still seats the `main` cell (that registration is
+  // gated by the slot declaration, not by the service).
   const { registered } = await boot({ mountLayout: false })
   assert.deepEqual(
     (registered.get('commandcode-panel') ?? []).map((entry) => entry.name),
@@ -395,10 +359,9 @@ test('the sidebar card is withheld when the layout cannot open the panel', async
   )
 
   // A layout that mounts the service but declares no keyed `main` seat still
-  // gets the CARD: the seat for it exists and the layout can select panels, but
-  // the cell it points at never registers. The composer readout is independent
-  // of that seam — it needs the dock slot — and the shipped surfaces are
-  // untouched either way.
+  // gets the CARD: the seat exists and the layout can select panels, but the
+  // cell it points at never registers. The composer readout needs only the dock
+  // slot and is independent of that seam.
   const noMain = await boot({
     declaredSlots: new Set(['settings.section', 'settings.models.provider-card', 'sidebar.footer.action', 'conversation.composer.dock']),
   })
@@ -415,7 +378,6 @@ test('the sidebar card is withheld when the layout cannot open the panel', async
 test('the footer card reads the sidebar-quota toggle through its inject face', async () => {
   // The card gates its own render on `showSidebarQuota`, so the settings
   // snapshot must reach it through the same inject face that carries `open()`.
-  // Without this seat the component could not tell hidden from shown.
   const { registered } = await boot()
   const footer = registered.get('commandcode-panel')?.find((entry) => entry.name === 'sidebar.footer.action')
   assert.ok(footer?.inject, 'the footer row carries its inject face')
@@ -434,7 +396,7 @@ test('the footer card opens the panel cell it shares an id with', async () => {
   assert.ok(footer?.inject, 'the footer row carries its inject face')
   const face = footer.inject() as { open: () => void }
   face.open()
-  // The id the card selects must be the id the `main` cell registered under,
+  // The id the card selects must be the one the `main` cell registered under,
   // or `selectPanel` would throw and the click would be a dead end.
   assert.deepEqual(selectedPanels, ['commandcode-panel'])
 })
@@ -442,8 +404,7 @@ test('the footer card opens the panel cell it shares an id with', async () => {
 test('the dashboard has an exit: close returns to the conversation', async () => {
   // Issue #41: the dashboard replaces the Conversation in the center column and
   // the sidebar card only re-selects it, so without this action the panel is a
-  // one-way door. `null` is layout's "show the Conversation" selection — the
-  // current Session is untouched.
+  // one-way door. `null` is layout's "show the Conversation" selection.
   const { registered, selectedPanels } = await boot()
   const cell = registered.get('commandcode-panel')?.find((entry) => entry.name === 'main')
   assert.ok(cell?.inject, 'the main cell carries its inject face')
@@ -454,9 +415,7 @@ test('the dashboard has an exit: close returns to the conversation', async () =>
 
 test('close() with no layout mounted is a no-op, never a throw', async () => {
   // The footer card is gated on the layout service, but `close()` is reachable
-  // from the dashboard cell whether or not that service is still live — a
-  // layout that unmounted after the cell registered must not make the exit
-  // button throw.
+  // from the dashboard cell whether or not that service is still live.
   const { registered, selectedPanels } = await boot({ mountLayout: false })
   const cell = registered.get('commandcode-panel')?.find((entry) => entry.name === 'main')
   assert.ok(cell?.inject, 'the main cell carries its inject face')
@@ -467,10 +426,8 @@ test('close() with no layout mounted is a no-op, never a throw', async () => {
 
 test('both panel seats bind the panel locale namespace, which is registered', async () => {
   // The panel follows the harness language through a `t` seat, and a seat only
-  // exists when the registration declares the namespace — a missing
-  // declaration silently leaves the surfaces English, which is exactly the bug
-  // this pins. The namespace itself must be registered or the renderer throws
-  // when it tries to build the seat.
+  // exists when the registration declares the namespace — a missing declaration
+  // silently leaves the surfaces English.
   const { registered, localeNamespaces } = await boot()
   assert.deepEqual(localeNamespaces, ['settings.commandcode', 'panel.commandcode'])
   const panel = registered.get('commandcode-panel') ?? []
@@ -498,8 +455,7 @@ test('the settings page converges on the Host row and saves through the settings
   }
 
   // 1. The boot scope read the directory over `remote.settings` (never the
-  // removed `settingsScope` service) and derived the namespace row into the
-  // controller both surfaces share.
+  // removed `settingsScope` service) and derived the row for both surfaces.
   assert.ok(settingsCalls.describe >= 1, 'the client scope read the settings directory at boot')
   assert.equal(face.hooks.commandCodeSettings.getSnapshot().apiBase.text, 'https://from-host.example')
 
@@ -512,8 +468,7 @@ test('the settings page converges on the Host row and saves through the settings
   assert.equal(face.hooks.commandCodeSettings.getSnapshot().apiBase.text, 'https://changed-elsewhere.example')
 
   // 3. A save rides the revision-fenced path-op wire and folds the answered ROW
-  //    back in — which is exactly what the controller reads as "the write
-  //    landed" (`userLayer()[field] === value`), so `failed` must stay false.
+  //    back in — what the controller reads as "the write landed".
   face.edit('apiBase', 'https://saved.example')
   face.save()
   await settle()
@@ -530,12 +485,11 @@ test('the settings page converges on the Host row and saves through the settings
 
 test('a namespace that mounts late still gets the usage report re-read', async () => {
   // The race this pins: a surface can ask for the report BEFORE the plugin's
-  // `remote.commandcode` namespace lands (the quota card's first paint does,
-  // deterministically, because `$mount` is a wire round-trip). That answer is
-  // the synthetic "remote is not mounted" failure, and the usage controller
-  // stores it as `status: 'error'` — its `shouldRefresh` only fires from
-  // `idle`, so without a refresh from the mount callback the stale error would
-  // sit on the page until the panel's two-minute tick.
+  // `remote.commandcode` namespace lands (`$mount` is a wire round-trip, and
+  // the quota card's first paint always does). That answer is the synthetic
+  // "remote is not mounted" failure, stored as `status: 'error'` — and
+  // `shouldRefresh` only fires from `idle`, so without a refresh from the mount
+  // callback the stale error would sit until the panel's two-minute tick.
   const { commandCodeCalls } = await boot({ immediateUsageMount: false })
   // The deferred namespace lands on a macrotask; the plugin's inject callback
   // fires then and issues exactly that refresh.
@@ -546,7 +500,7 @@ test('a namespace that mounts late still gets the usage report re-read', async (
 test('a profile without the settings transport still registers every surface', async () => {
   // `remote.settings` is mounted by the core contribution on every real
   // profile, but the plugin must degrade rather than gate: the scope stays
-  // unavailable and the page/panel/card registrations are unaffected.
+  // unavailable and every registration is unaffected.
   const { registered, settingsCalls } = await boot({ mountSettings: false })
   assert.equal(registered.has('commandcode'), true, 'the settings page registers without the transport')
   assert.equal(registered.has('llm-commandcode'), true, 'the provider card registers too')
@@ -555,13 +509,10 @@ test('a profile without the settings transport still registers every surface', a
 })
 
 test('the client apply gates only on the services every surface needs', () => {
-  // `settingsScope` must NOT return to this list: the 0.1.7 settings rewrite
-  // removed that wrapper service entirely, so gating on it would silently
-  // disable every client surface (settings page, provider card, usage card,
-  // panel, session cost). The settings scope speaks `remote.settings` directly
-  // and degrades on its own instead of gating the plugin. `connection` is gone
-  // too: nothing reads that service any more (the pre-0.1.2 ApiProxy credential
-  // face it carried is out of support), and a gate on it would park the whole
-  // bundle on a service some profiles never mount.
+  // `settingsScope` must NOT return to this list: 0.1.7's settings rewrite
+  // removed that wrapper service, so gating on it would silently disable every
+  // client surface. The scope speaks `remote.settings` directly and degrades on
+  // its own. `connection` is gone too — nothing reads that service any more,
+  // and a gate on it would park the whole bundle.
   assert.deepEqual(inject, ['slots', 'locale', 'remote'])
 })

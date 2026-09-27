@@ -10,7 +10,7 @@
  * (dev-mode deep freeze, forced replacement) these callers do not want.
  */
 
-/** Mutable observable snapshot consumed by slot hooks. */
+/** Observable snapshot consumed by slot hooks. */
 export interface SnapshotStore<T> {
   getSnapshot(): T
   subscribe(listener: () => void): () => void

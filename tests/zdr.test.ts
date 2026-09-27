@@ -1,13 +1,12 @@
 /**
  * Zero-data-retention capability snapshot tests (node:test, zero deps).
  *
- * The plugin keeps an informational per-model snapshot of ZDR coverage. It
- * never uses the table to omit `x-cmd-zdr: 1` when ZDR is enabled: the provider
- * REFUSES an unsupported request (422 `cmd_zdr_no_providers`) rather than
- * serving it from a retaining provider. The table is the CLI's exclusion set (`modelSupportsZdr` in
- * command-code@1.65.2's dist/cli.mjs), so this file pins both the list — a sync
- * that moves membership must be a deliberate diff — and the helper's two
- * directions. Run with `npm test`.
+ * The snapshot is informational: `x-cmd-zdr: 1` is sent on EVERY request when
+ * ZDR is enabled, never omitted based on this table — the provider REFUSES an
+ * unsupported request (422 `cmd_zdr_no_providers`) rather than serving it from a
+ * retaining provider. The table mirrors the CLI's own exclusion set, so this
+ * file pins the list: a sync that moves membership must be a deliberate diff.
+ * Run with `npm test`.
  */
 
 import { test } from 'node:test'
@@ -18,16 +17,10 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.65.2)', () => {
-  // Verbatim from `dist/cli.mjs`: `modelSupportsZdr(id) = !iD.has(canonicalId)`
-  // (21 entries) unioned with the sibling route table's `br` set (the same 20
-  // less `meituan/LongCat-2.0`, which stays in the union), cross-checked against
-  // the public catalog — every entry but the CLI-hidden
-  // `minimax/minimax-m3-free` is served by `/provider/v1/models` today. The
-  // 1.65.0 diff against 1.64.0 is exactly one addition:
-  // `stealth/space-bunny-alpha` (the stealth-preview free model the pricing
-  // page's own tip calls "Not routed under ZDR"). The 1.65.2 bundle preserves
-  // that exact 21-model union.
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.66.0)', () => {
+  // Verbatim from `dist/cli.mjs` 1.66.0: `modelSupportsZdr(id) = !iD.has(id)`
+  // unioned with the sibling route table's `br` set, cross-checked against the
+  // public catalog. A sync that moves membership must be a deliberate diff.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
@@ -40,6 +33,7 @@ test('the ZDR exception list is the CLI registry exclusion set (command-code@1.6
     'minimax/minimax-m3-free',
     'poolside/laguna-s-2.1-free',
     'sakana/fugu-ultra',
+    'stealth/pixel-canary',
     'stealth/space-bunny-alpha',
     'stepfun/Step-3.7-Flash',
     'stepfun/Step-5-Preview',
@@ -57,10 +51,8 @@ test('supportsZeroDataRetention answers false for every listed model and true ot
   for (const id of KNOWN_NON_ZDR_MODELS) {
     assert.equal(supportsZeroDataRetention(id), false, `${id} has no ZDR upstream`)
   }
-  // One per family the plugin serves through the Provider API, plus the current
-  // catalog's newest arrivals (the table only shrinks the answer for listed
-  // ids — an id it has never seen follows the CLI and is treated as covered.
-  // The adapter still sends the header regardless of this informational set.
+  // One per family served through the Provider API, plus unseen ids: the table
+  // only shrinks the answer for listed ids, and the header rides either way.
   for (const id of [
     'deepseek/deepseek-v4.1-flash',
     'deepseek/deepseek-v4-flash',

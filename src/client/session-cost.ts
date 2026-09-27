@@ -1,31 +1,27 @@
 /**
  * Session-cost view model for the composer readout.
  *
- * Deliberately JSX-free and React-free, mirroring `./panel.ts`: it turns the
- * session's token accounting plus the Host's price table into one presentation
- * value AND the exact text the two surfaces of the harness's token-usage UI
- * receive — the amount appended to the shipped pill, and the rows appended to
- * the shipped usage dialog. Node tests therefore drive the whole calculation,
- * and every user-visible string, without a DOM.
+ * JSX-free and React-free, mirroring `./panel.ts`: it turns the session's token
+ * accounting plus the Host's price table into one presentation value AND the
+ * exact text the two surfaces of the harness's token-usage UI receive — the
+ * amount appended to the shipped pill, and the rows appended to the shipped
+ * usage dialog. Node tests therefore drive the whole calculation, and every
+ * user-visible string, without a DOM.
  *
- * The figures it prices are the session's DURABLE cumulative buckets, which is
- * what the composer's own "N tokens" pill reads too (`tokenUsage`), so the two
- * surfaces can never disagree about how much was used. Dollars are computed
- * here because Command Code publishes per-token rates and bills against
- * dollar-denominated windows; the account's own reported `totalCost` is a
- * billing PERIOD figure, not this session's.
+ * It prices the session's DURABLE cumulative buckets, which is what the
+ * composer's own "N tokens" pill reads too (`tokenUsage`), so the two surfaces
+ * can never disagree about how much was used. Dollars are computed here because
+ * Command Code publishes per-token rates and bills against dollar-denominated
+ * windows; the account's own reported `totalCost` is a billing PERIOD figure,
+ * not this session's.
  *
- * Three rules are load-bearing:
- *
- * 1. **Only Command Code usage is priced.** A session served by another
- *    provider must render nothing, never a Command Code estimate.
- * 2. **A missing rate is never invented.** The pricing page publishes
- *    input/output/cache-read rates for every model but a cache-WRITE rate for
- *    only some, so unpriced cache-write tokens are surfaced as such rather than
- *    charged at a guessed multiple of the input rate.
- * 3. **Unpriceable means invisible.** No usage, no model, no table, an unknown
- *    model, or all-zero buckets renders nothing at all — a confident `$0.00`
- *    would be a lie, and this module never returns one.
+ * Three rules are load-bearing: only Command Code usage is priced (a session
+ * served by another provider must render nothing, never a Command Code
+ * estimate); a missing rate is never invented (the pricing page publishes a
+ * cache-WRITE rate for only some models, so unpriced cache-write tokens are
+ * surfaced as such rather than charged at a guessed multiple of the input rate);
+ * and unpriceable means invisible — a confident `$0.00` would be a lie, and
+ * this module never returns one.
  *
  * @module dsh-commandcode-provider/client/session-cost
  */
@@ -57,15 +53,12 @@ export const SESSION_COST_COPY = {
    * between its own items.
    */
   separator: '·',
-  /** The heading the tooltip leads with. */
   panelTitle: 'Session cost',
   /** Marks an estimate from published rates rather than an invoice. */
   approximate: '≈',
-  /** Tooltip line for the unpriced cache-write tokens. */
   unpricedCacheWrite: 'cache write tokens have no published rate',
   /** Tooltip line naming the rate half in force. */
   peakRates: 'peak rates',
-  /** Tooltip line naming the rate half in force. */
   offPeakRates: 'off-peak rates',
   /** Tooltip line explaining the approximate marker. */
   approximateNote: 'estimate from published rates, not the provider invoice',
@@ -81,9 +74,9 @@ export const SESSION_COST_COPY = {
 
 /**
  * The session's cumulative token buckets, as the `tokenUsage` projection
- * carries them. Declared structurally and defensively: this bundle does not
- * depend on the session-controller package, and a bucket the provider never
- * reported is absent rather than zero.
+ * carries them. Declared structurally: this bundle does not depend on the
+ * session-controller package, and a bucket the provider never reported is
+ * absent rather than zero.
  */
 export interface SessionUsageBuckets {
   readonly uncachedInputTokens?: number
@@ -165,8 +158,7 @@ function count(value: number | undefined): number {
 /**
  * Whether `now` falls inside a peak-pricing window, per the windows that travel
  * with the price table. Monday–Friday (UTC) only, and each window is
- * end-exclusive — the same rule the Host snapshot applies when it labels the
- * model picker. The schedule is read from the wire rather than restated so
+ * end-exclusive. The schedule is read from the wire rather than restated, so
  * there is one definition of the windows, on the Host.
  */
 export function isPeakHour(now: number, peakHours: ReadonlyArray<readonly [number, number]>): boolean {
@@ -200,8 +192,8 @@ function indexTable(table: CommandCodePriceTable): Map<string, CommandCodeModelP
  *
  * Every bucket is charged at its own published rate; the cache-write bucket
  * contributes only when the model publishes a rate for it, otherwise its tokens
- * are returned as {@link SessionCostView.unpricedCacheWriteTokens} and its own
- * cost stays undefined so the panel can say so instead of printing a zero.
+ * come back as {@link SessionCostView.unpricedCacheWriteTokens} and its own cost
+ * stays undefined so the panel can say so instead of printing a zero.
  */
 interface SessionCostBreakdown {
   uncachedInput: number
@@ -243,8 +235,8 @@ function costOf(
  *
  * The panel's `money()` convention (2 decimals, 4 below a cent) is right for
  * billing windows, but a live session total starts far below a cent, where
- * `toFixed(4)` would print a flat `$0.0000` — which reads as broken rather than
- * as small. So a total under $0.0001 is stated as a bound instead.
+ * `toFixed(4)` would print a flat `$0.0000` — broken rather than small. So a
+ * total under $0.0001 is stated as a bound instead.
  */
 export function sessionCostAmount(total: number): string {
   if (!Number.isFinite(total) || total <= 0) return formatMoney(0)
@@ -314,8 +306,9 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
   // information, and on a free model it would be redundant.
   if (uncachedInput === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return undefined
 
-  // Free priced groups do not establish zero spending for unpriced groups.
-  // Keep the pure-Free label and real sub-cent amounts, but never a zero subtotal.
+  // Free priced groups do not establish zero spending for unpriced groups:
+  // keep the pure-Free label and real sub-cent amounts, but never a zero
+  // subtotal.
   if (!free && total <= 0) return undefined
 
   const value = free
@@ -332,9 +325,9 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
     { key: 'output', label: SESSION_COST_COPY.output, tokens: output, costText: money(breakdown.output) },
   ]
   if (unpricedCacheWriteTokens > 0) notes.push(SESSION_COST_COPY.unpricedCacheWrite)
-  // Empty clauses are dropped BEFORE joining: `clause()` returns undefined for a
-  // bucket with no tokens, and joining the raw list would leave a `·  ·` gap for
-  // every absent bucket — a tooltip that reads as a rendering bug.
+  // Empty clauses are dropped BEFORE joining: `clause()` returns undefined for
+  // a bucket with no tokens, and joining the raw list would leave a `·  ·` gap
+  // per absent bucket — a tooltip that reads as a rendering bug.
   const title = ([
     `${SESSION_COST_COPY.panelTitle} ${free ? SESSION_COST_COPY.free : sessionCostAmount(total)}`,
     clause(SESSION_COST_COPY.uncachedInput, uncachedInput),
@@ -363,8 +356,7 @@ export function buildSessionCostView(input: SessionCostInput): SessionCostView |
  * The separator is a node of its own because it carries the shipped pill's
  * SEPARATOR colour rather than its label colour; the pill is a flex row whose
  * `gap` already spaces the appended item, so the separator is what makes the
- * result read as one continuous run (`1.2M tokens · Cache hit 87% · $0.0123`)
- * rather than as a value parked at the end of it.
+ * result read as one continuous run (`1.2M tokens · Cache hit 87% · $0.0123`).
  */
 export interface SessionCostPillRun {
   /** The shipped pill's own separator glyph. */
@@ -387,10 +379,10 @@ export function sessionCostPillRun(view: SessionCostView): SessionCostPillRun {
  * harness's layout and gains nothing to read past.
  *
  * Two rows are special. `cacheHit` carries a percentage, not a count, so it is
- * never priced. `cacheWrite` is HIDDEN and never priced: the pricing page
+ * never priced. `cacheWrite` may be HIDDEN, and only then: the pricing page
  * publishes a cache-write rate for a minority of models, so its cell read
- * `unpriced` far more often than a number; its tokens still count toward the
- * total the pill shows.
+ * `unpriced` far more often than a number — but its tokens still count toward
+ * the total the pill shows.
  */
 export type SessionCostShippedRow = 'cacheHit' | 'uncachedInput' | 'cacheRead' | 'cacheWrite' | 'output'
 
@@ -445,8 +437,8 @@ export function sessionCostRowDecorations(view: SessionCostView): SessionCostRow
     // Hidden only when the page publishes NO cache-write rate: those tokens are
     // genuinely unpriced, the note says so, and the row would otherwise show a
     // blank cell. When the rate IS known its price is part of the total, so the
-    // row must stay — hiding a row whose cost the pill already counts leaves the
-    // visible rows unable to explain the figure above them.
+    // row must stay — hiding it leaves the visible rows unable to explain the
+    // figure above them.
     const amount = price('cacheWrite')
     plan.push({ row: 'cacheWrite', tokens: cacheWrite, amount, hidden: amount === undefined })
   }

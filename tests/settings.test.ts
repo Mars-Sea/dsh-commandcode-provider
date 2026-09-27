@@ -1,13 +1,11 @@
 /**
  * Settings-page controller tests (node:test, zero deps). Run with `npm test`.
  *
- * These pin the "Command Code" settings page's write path: the API key is
- * written through the credentials domain under the reference the plugin
- * resolves (never through the settings namespace, so the literal cannot leak
- * into a settings document), while connection facts (`apiBase`, timeouts)
- * are written through the `llm-commandcode` namespace scope. The
- * Host stays the single fact source — every write is read back from the
- * scope before the state is republished.
+ * The write path is the contract: the API key goes through the credentials
+ * domain under the plugin's own reference (never the settings namespace, so
+ * the literal cannot leak into a settings document), connection facts go
+ * through the `llm-commandcode` scope, and the Host stays the single fact
+ * source — every write is read back before the state is republished.
  */
 
 import { test } from 'node:test'
@@ -15,20 +13,12 @@ import assert from 'node:assert/strict'
 
 import {
   accountModelMap,
-  COMMAND_GUARD_DEFAULT_LEVEL_CHOICE,
-  COMMAND_GUARD_LEVEL_CHOICES,
   CommandCodeSettingsController,
   DEFAULT_API_KEY_REF,
   type SettingsPageApi,
 } from '../src/client/settings.ts'
-import {
-  COMMAND_GUARD_DEFAULT_LEVEL,
-  COMMAND_GUARD_LEVELS,
-} from '../src/command-guard.ts'
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /** A scope whose value/user layers we control directly (mirrors the wire shape). */
 function makeScope(init: {
@@ -74,11 +64,7 @@ function makeScope(init: {
   }
 }
 
-/**
- * The catalog Remote call as a fixture may state it. The Host's payload comes
- * from outside the type system and `refreshCatalog()` parses it defensively, so
- * a case may deliberately carry malformed entries.
- */
+/** The catalog Remote as a fixture may state it: untyped, so a case may carry malformed entries. */
 type ModelsStub = () => Promise<{
   ok: boolean
   value?: { models: readonly unknown[] }
@@ -114,7 +100,9 @@ function makeApi(init: { configured?: boolean; writable?: boolean; store?: Map<s
     },
   }
   return { credential, credentials, store, models: init.models }
-}/** Build a controller wired to a fresh scope + api. */
+}
+
+/** Build a controller wired to a fresh scope + api. */
 function makeController(opts?: {
   scope?: ReturnType<typeof makeScope>
   api?: ReturnType<typeof makeApi>
@@ -133,9 +121,7 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve))
 }
 
-// ---------------------------------------------------------------------------
 // State projection
-// ---------------------------------------------------------------------------
 
 test('reports the API key as unconfigured when no credential is stored', () => {
   const { controller } = makeController()
@@ -161,7 +147,6 @@ test('addresses the renamed apiKeyEnv reference from the settings section', asyn
   const { controller } = makeController({ scope, api })
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(controller.state().apiKeyConfigured, true)
-  // A staged key must land under the section's ref, not the default.
   controller.edit('apiKey', 'sk-new')
   await controller.save()
   assert.equal(store.get('MY_CUSTOM_REF'), 'sk-new')
@@ -181,9 +166,7 @@ test('mirrors section values into the field drafts', () => {
   assert.equal(state.requestTimeoutMs.overridden, false)
 })
 
-// ---------------------------------------------------------------------------
 // Staging
-// ---------------------------------------------------------------------------
 
 test('edit() stages a draft and marks the page dirty', () => {
   const { controller } = makeController()
@@ -221,7 +204,6 @@ test('an out-of-range numeric draft names the violated bound', () => {
   state = controller.state()
   assert.equal(state.requestTimeoutMs.invalid, true)
   assert.equal(state.requestTimeoutMs.invalidReason, 'tooLarge')
-  // The inclusive upper bound itself stays valid.
   controller.edit('requestTimeoutMs', '2147483647')
   state = controller.state()
   assert.equal(state.requestTimeoutMs.invalid, false)
@@ -257,9 +239,7 @@ test('discard() drops every staged edit', () => {
   assert.equal(state.dirty, false)
 })
 
-// ---------------------------------------------------------------------------
 // Save: API key via credentials domain
-// ---------------------------------------------------------------------------
 
 test('save() writes a staged API key through credentials.set, never the settings scope', async () => {
   const store = new Map<string, string>()
@@ -270,7 +250,6 @@ test('save() writes a staged API key through credentials.set, never the settings
   assert.equal(store.has(DEFAULT_API_KEY_REF), false)
   await controller.save()
   assert.equal(store.get(DEFAULT_API_KEY_REF), 'sk-abc123')
-  // The key must not land in the settings document.
   assert.equal(scope.state.value.apiKey, undefined)
   // The save re-reads the credential so the badge flips.
   const state = controller.state()
@@ -287,9 +266,7 @@ test('save() with a blank API key draft keeps the stored key', async () => {
   assert.equal(store.get(DEFAULT_API_KEY_REF), 'sk-keep')
 })
 
-// ---------------------------------------------------------------------------
 // Save: connection facts through the settings namespace
-// ---------------------------------------------------------------------------
 
 test('save() writes connection fields through the settings scope', async () => {
   const scope = makeScope({})
@@ -330,9 +307,7 @@ test('resetField() stages a clear back to the inherited value', async () => {
   assert.equal(scope.state.user?.apiBase, undefined)
 })
 
-// ---------------------------------------------------------------------------
 // Boolean field (filterModelsByPlan toggle)
-// ---------------------------------------------------------------------------
 
 test('save() writes a boolean toggle as a real boolean', async () => {
   const scope = makeScope({})
@@ -395,8 +370,7 @@ test('save() writes the zdr toggle as a real boolean, off when unset', async () 
   const scope = makeScope({})
   const { controller } = makeController({ scope })
   // Unset is the fresh-install shape, and unset means off: ZDR changes which
-  // upstream serves a request and usually what it costs, so nobody gets it by
-  // accident (the Host schema defaults it to false).
+  // upstream serves a request and what it costs, so nobody gets it by accident.
   assert.equal(controller.state().zdr.text, '')
   controller.edit('zdr', 'true')
   assert.equal(controller.state().dirty, true)
@@ -422,8 +396,8 @@ test('resetField() on zdr clears it back to the inherited default', async () => 
 test('save() writes the sidebar quota toggle as a real boolean, off when unset', async () => {
   const scope = makeScope({})
   const { controller } = makeController({ scope })
-  // Unset is the fresh-install shape, and unset means hidden (the sidebar
-  // quota card is opt-in; the Host schema defaults it to false).
+  // Unset means hidden: the sidebar quota card is opt-in (the Host schema
+  // defaults `showSidebarQuota` to false).
   assert.equal(controller.state().showSidebarQuota.text, '')
   controller.edit('showSidebarQuota', 'true')
   assert.equal(controller.state().dirty, true)
@@ -436,8 +410,7 @@ test('the sidebar card follows the SAVED toggle, never the staged draft', async 
   const scope = makeScope({})
   const { controller } = makeController({ scope })
   // The panel surface reads `sidebarQuota` (the stored fact), so an unsaved
-  // edit cannot show or hide the card: the staging outlives a discarded edit,
-  // and a card driven by it would survive until the client reloaded.
+  // edit can neither show nor hide the card.
   assert.equal(controller.state().sidebarQuota, false)
   controller.edit('showSidebarQuota', 'true')
   assert.equal(controller.state().showSidebarQuota.text, 'true')
@@ -465,9 +438,7 @@ test('resetField() on showSidebarQuota clears it back to the inherited default',
   assert.equal(controller.state().sidebarQuota, false)
 })
 
-// ---------------------------------------------------------------------------
 // Failure handling
-// ---------------------------------------------------------------------------
 
 test('save() reports failure when a credentials write rejects and keeps drafts', async () => {
   const api = makeApi({})
@@ -501,24 +472,19 @@ test('save() refuses when a numeric draft is invalid', async () => {
   assert.equal(controller.state().failed, false)
 })
 
-// ---------------------------------------------------------------------------
 // Lifecycle
-// ---------------------------------------------------------------------------
 
 test('dispose() releases external subscriptions and stops publishing', async () => {
   const { controller, scope } = makeController()
   let published = 0
   controller.subscribe(() => { published += 1 })
   controller.dispose()
-  // A scope update after disposal must not reach subscribers: every external
-  // subscription was released with the controller.
+  // A scope update after disposal must not reach subscribers.
   await scope.set('apiBase', 'https://elsewhere.example')
   assert.equal(published, 0)
 })
 
-// ---------------------------------------------------------------------------
 // Immediate account management
-// ---------------------------------------------------------------------------
 
 const TWO_ACCOUNTS = [{ label: 'second', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }]
 
@@ -538,7 +504,6 @@ test('createAccount with a key stores the key, then the row, without a page save
   const ref = await controller.createAccount({ label: 'Go #3', key: ' sk-third ' })
 
   assert.equal(ref, 'COMMANDCODE_API_KEY_3')
-  // The key literal went to the credentials domain, never the settings doc.
   assert.equal(api.store.get('COMMANDCODE_API_KEY_3'), 'sk-third')
   assert.deepEqual(scope.state.value.accounts, [...TWO_ACCOUNTS, { label: 'Go #3', apiKeyEnv: 'COMMANDCODE_API_KEY_3' }])
   await flush()
@@ -595,7 +560,6 @@ test('renameAccount rewrites only that entry', async () => {
   const { controller } = makeController({ scope })
   assert.equal(await controller.renameAccount('COMMANDCODE_API_KEY_3', '  Go #3 '), true)
   assert.deepEqual(scope.state.value.accounts, [...TWO_ACCOUNTS, { label: 'Go #3', apiKeyEnv: 'COMMANDCODE_API_KEY_3' }])
-  // A blank name is refused rather than stored.
   assert.equal(await controller.renameAccount('COMMANDCODE_API_KEY_3', '   '), false)
   assert.equal(controller.state().accountFailed, 'rename')
 })
@@ -657,7 +621,6 @@ test('an extra account key is replaced and cleared through its own reference', a
   assert.equal(await controller.clearAccountKey('COMMANDCODE_API_KEY_2'), true)
   await flush()
   assert.equal(controller.state().accounts[0]?.configured, false)
-  // A blank key is refused, not written as an empty credential.
   assert.equal(await controller.setAccountKey('COMMANDCODE_API_KEY_2', '  '), false)
   assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), false)
 })
@@ -697,7 +660,6 @@ test('account operations run one at a time, in call order', async () => {
   assert.equal(controller.state().accountBusy, true)
   const second = controller.createAccount({ label: 'two' })
   assert.deepEqual(await Promise.all([first, second]), ['COMMANDCODE_API_KEY_2', 'COMMANDCODE_API_KEY_3'])
-  // The second op saw the first's row, so neither overwrote the other.
   assert.deepEqual((scope.state.value.accounts as Array<{ label: string }>).map((entry) => entry.label), ['one', 'two'])
   assert.deepEqual(order, ['accounts', 'accounts'])
   assert.equal(controller.state().accountBusy, false)
@@ -714,8 +676,7 @@ test('account operations refuse a read-only scope', async () => {
 test('a landed accounts write preserves entries the page cannot name', async () => {
   // A composition-config entry may carry a literal `apiKey` (or a shape this
   // page has no row for). The settings layer replaces the whole `accounts`
-  // array, so rebuilding the list from the page's rows would silently delete
-  // every such entry — and strip the literal key from the entries it keeps.
+  // array, so rebuilding it from the page's rows would drop every such entry.
   const scope = makeScope({
     value: {
       accounts: [
@@ -725,9 +686,9 @@ test('a landed accounts write preserves entries the page cannot name', async () 
     },
   })
   const { controller } = makeController({ scope })
-  // The literal entry has no row (nothing to address it by)…
+  // The literal entry has no row, but an unrelated write that rewrites the
+  // accounts list must not drop it.
   assert.deepEqual(controller.state().accounts.map((account) => account.label), ['env-account'])
-  // …but an unrelated write that rewrites the accounts list must not drop it.
   const added = await controller.createAccount({ label: 'third', key: 'sk-third' })
   const stored = scope.state.value.accounts as Array<Record<string, unknown>>
   assert.deepEqual(stored.map((entry) => entry.label), ['env-account', 'literal-account', 'third'])
@@ -746,9 +707,7 @@ test('the stored working directory is no longer a page field, and survives saves
   assert.equal(scope.state.value.workingDir, '/tmp/x')
 })
 
-// ---------------------------------------------------------------------------
 // Dedicated models (stored as modelAccountRules)
-// ---------------------------------------------------------------------------
 
 test('accountModelMap folds rules first-match-wins, so a model sits under the account that serves it', () => {
   const map = accountModelMap([
@@ -800,9 +759,7 @@ test('setAccountModels moves a model out of the account that held it', async () 
   ])
 })
 
-// ---------------------------------------------------------------------------
 // Model catalog
-// ---------------------------------------------------------------------------
 
 test('loads the model catalog through the api models seam', async () => {
   const api = makeApi({
@@ -851,10 +808,8 @@ test('a failed catalog fetch marks catalogFailed without breaking the page', asy
 })
 
 test('refreshCatalog recovers after the Remote mount lands', async () => {
-  // The controller is constructed before the Remote mount; the first fetch
-  // fails (not mounted). Once the mount lands, refreshCatalog() re-fetches
-  // and clears the failure flag — the rule editor must recover without a
-  // page reload.
+  // The controller is constructed before the Remote mount, so the first fetch
+  // fails; once the mount lands `refreshCatalog()` must recover without a reload.
   let mounted = false
   const api = makeApi({
     models: async () => mounted
@@ -873,9 +828,7 @@ test('refreshCatalog recovers after the Remote mount lands', async () => {
   assert.deepEqual(controller.state().catalogModels, [{ id: 'tencent/hy4-preview', name: 'Tencent Hy4 Preview' }])
 })
 
-// ---------------------------------------------------------------------------
 // Visible-model allowlist
-// ---------------------------------------------------------------------------
 
 test('starts with the stored visible models and stays clean', () => {
   const scope = makeScope({
@@ -938,43 +891,4 @@ test('discard clears a staged visible-model selection', () => {
   controller.discard()
   assert.deepEqual(controller.state().visibleModels, [])
   assert.equal(controller.state().dirty, false)
-})
-
-test('the command-guard fields stage like their neighbours and mirror the Host levels', () => {
-  const { controller } = makeController()
-  const state = controller.state()
-
-  // A toggle with no stored value reads as unset, not as "off": the page shows
-  // the default (off) and only a save writes the field.
-  assert.equal(state.commandGuard.text, '')
-  assert.equal(state.commandGuard.overridden, false)
-  controller.edit('commandGuard', 'true')
-  assert.equal(controller.state().commandGuard.text, 'true')
-
-  // The level choices are mirrored into the client bundle from
-  // `src/command-guard.ts` (which this bundle cannot import at runtime), so a
-  // draft can never be saved in a shape the Host schema rejects.
-  assert.deepEqual([...COMMAND_GUARD_LEVEL_CHOICES], [...COMMAND_GUARD_LEVELS])
-  assert.equal(COMMAND_GUARD_DEFAULT_LEVEL_CHOICE, COMMAND_GUARD_DEFAULT_LEVEL)
-  assert.equal(state.commandGuardLevel.text, '')
-  for (const level of COMMAND_GUARD_LEVELS) {
-    controller.edit('commandGuardLevel', level)
-    assert.equal(controller.state().commandGuardLevel.invalid, false)
-  }
-  controller.edit('commandGuardLevel', '0.9')
-  assert.equal(controller.state().commandGuardLevel.invalid, true)
-  // The decision budget is fixed on the Host, so it is not a page field.
-  assert.equal('commandGuardTimeoutMs' in controller.state(), false)
-  assert.equal('commandGuardThreshold' in controller.state(), false)
-})
-
-test('saving a guard level writes the level string', async () => {
-  const scope = makeScope({})
-  const { controller } = makeController({ scope })
-  controller.edit('commandGuardLevel', 'high')
-  await controller.save()
-  assert.equal(scope.state.value.commandGuardLevel, 'high')
-  controller.resetField('commandGuardLevel')
-  await controller.save()
-  assert.equal('commandGuardLevel' in scope.state.value, false)
 })

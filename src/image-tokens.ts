@@ -9,16 +9,13 @@
  * that the heuristic prices at ~0 tokens each, so context pressure is
  * under-reported and the session walks into its own context window.
  *
- * This route is a gateway in front of many upstreams — one catalog id per model,
- * but the visual-token rule belongs to whoever serves it. So the estimate is per
- * FAMILY, using each vendor's published rule, and the families are recognised by
- * the catalog id (which names the vendor). Every formula is stated here rather
- * than imported: the only in-tree implementations live inside the official
- * adapters, and this plugin deliberately does not depend on those protocols.
- *
- * These are ESTIMATES for context accounting, not invoices — the provider's own
- * usage remains authoritative for a completed request, exactly as the published
- * per-token rates the session-cost readout uses are.
+ * This route is a gateway in front of many upstreams, so the estimate is per
+ * FAMILY, using each vendor's published rule, and the families are recognised
+ * by the catalog id (which names the vendor). Every formula is stated here
+ * rather than imported: the only in-tree implementations live inside the
+ * official adapters, and this plugin deliberately does not depend on those
+ * protocols. These are ESTIMATES for context accounting, not invoices — the
+ * provider's own usage remains authoritative for a completed request.
  *
  * @module dsh-commandcode-provider/image-tokens
  */

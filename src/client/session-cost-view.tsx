@@ -1,39 +1,32 @@
 /**
  * The composer's live session-cost figure (browser half).
  *
- * This component renders NO surface of its own. The cost lives inside the
- * harness's own token-usage UI: the amount becomes the last item of the shipped
- * pill's text run (`1.2M tokens · Cache hit 87% · $0.0123`) and the per-bucket
- * breakdown becomes extra rows in the usage dialog that pill opens.
- * `./session-cost-display.ts` owns that injection and `./session-cost.ts` owns
- * every number and every string; this file owns nothing but the two seats the
- * figures come from and the lifetime of the injection.
+ * This component renders NO surface of its own: the cost lives inside the
+ * harness's own token-usage UI, the amount as the last item of the shipped
+ * pill's text run (`1.2M tokens · Cache hit 87% · $0.0123`) and the breakdown as
+ * extra rows in the usage dialog that pill opens. `./session-cost-display.ts`
+ * owns that injection and `./session-cost.ts` every number and string; this file
+ * owns the two seats the figures come from and the injection's lifetime.
  *
- * It is still registered as an entry in `conversation.composer.dock`, because
- * that registration is what delivers the seats: `useProjection` is a standard
- * prop the composer hands every dock occupant, so there is no other way to read
- * the session's token accounting. Registering under the shipped `stats` cell's
- * id instead would REPLACE the harness's readout rather than extend it;
- * `./session-cost-display.ts` records why that trade is refused.
+ * It is registered in `conversation.composer.dock` because that registration is
+ * what delivers the seats: `useProjection` is a standard prop the composer hands
+ * every dock occupant, and registering under the shipped `stats` cell's id would
+ * REPLACE the harness's readout instead of extending it.
  *
- * The rendered node is a hidden marker — `display:none`, so it can add neither a
- * box nor a flex gap to the composer card. It exists to locate THIS composer
- * from the entry (`closest()` on the dock's outlet anchor), so a session-scoped
- * composer reads its own card rather than whichever row comes first in the
- * document. It is rendered only while there is something to show, so a session
- * with nothing priceable contributes no markup at all.
+ * The rendered node is a hidden marker — `display:none`, so it adds neither a box
+ * nor a flex gap. It locates THIS composer from the entry (`closest()` on the
+ * dock's outlet anchor), so a session-scoped composer reads its own card rather
+ * than whichever row comes first, and it renders only while there is something
+ * to show.
  *
  * Two seats are read, from two different owners: `useProjection` comes from the
- * composer (a standard prop of the dock, not part of this registration), and
- * `useCommandCodePrices` comes from our own registration's `inject` face, which
- * `bindInjectSources` re-exposes from the `hooks` compartment. Reading
- * `props.hooks.*` instead finds `undefined` at runtime and crashes the render,
- * which the slot renderer contains by ABDICATING the entry — a surface that
- * vanishes with no visible error.
- *
- * Both effects are `useEffect`, never `useLayoutEffect`: there is nothing on
- * screen to align with (the injection is a text run and a hidden marker), and a
- * layout effect would log a warning from the server render the tests use.
+ * composer (a standard prop, not part of this registration) and
+ * `useCommandCodePrices` from our own `inject` face. Reading `props.hooks.*`
+ * instead finds `undefined` at runtime and crashes the render, which the slot
+ * renderer contains by ABDICATING the entry — a surface that vanishes with no
+ * visible error. Both effects are `useEffect`, never `useLayoutEffect`: there is
+ * nothing on screen to align with, and a layout effect would warn from the
+ * server render the tests use.
  *
  * @module dsh-commandcode-provider/client/session-cost-view
  */
@@ -52,13 +45,13 @@ import {
 /**
  * The dock outlet this entry renders inside, i.e. what it scopes itself from.
  *
- * The OUTLET itself, not its parent. The outlet is one `display:contents` div
- * holding exactly this slot's entries (the shipped `stats` cell and ours), so it
- * is the narrowest container that is still per-composer. Its parent is NOT:
- * from 0.1.6-alpha.2 the composer stacks the dock inside a footer that also
- * holds the `ContextMeter`, whose trigger is another
- * `button[aria-haspopup="dialog"]` rendered after the dock — scoping to the
- * parent would let the cost land on the context ring.
+ * The OUTLET, not its parent. The outlet is one `display:contents` div holding
+ * exactly this slot's entries (the shipped `stats` cell and ours), so it is the
+ * narrowest container that is still per-composer. Its parent is NOT: from
+ * 0.1.6-alpha.2 the composer stacks the dock inside a footer that also holds the
+ * `ContextMeter`, whose trigger is another `button[aria-haspopup="dialog"]`
+ * rendered after the dock — scoping to the parent would let the cost land on the
+ * context ring.
  */
 const DOCK_ANCHOR = '[data-slot="conversation.composer.dock"]'
 

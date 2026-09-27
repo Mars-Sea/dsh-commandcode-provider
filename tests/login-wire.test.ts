@@ -1,9 +1,8 @@
 /**
  * Login wire contract tests (node:test, zero deps). Run with `npm test`.
  *
- * These pin the three login Remote descriptors (endpoint names, service,
- * namespace, strict result schema) and the boundary validator both halves
- * share, so a shape drift fails here instead of rendering garbage.
+ * Pins the three login Remote descriptors (endpoint names, service, namespace,
+ * strict result schema) and the boundary validator both halves share.
  */
 
 import { test } from 'node:test'

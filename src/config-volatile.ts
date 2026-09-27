@@ -1,33 +1,22 @@
 /**
  * Volatile-config helpers for dsh 0.1.7's schema-derived profile Config.
  *
- * 0.1.7 rewrote settings around profile Config: `settings.describe()` projects
- * each active entry's schema through `volatileForm()`, so a form contains ONLY
- * fields whose schema nodes carry `meta.volatile`, and a form edit is refused
- * unless its path lies beneath a marked node. On that generation the loader
- * resolves each marked top-level field into a readonly `Volatile<T>` reference
- * (`{ get() }`, frozen, written in place by the owning runtime) instead of a
- * plain value, commits later changes WITHOUT remounting the fiber, and
- * dispatches `loader/volatile-update` to the owning fiber.
+ * 0.1.7's `settings.describe()` projects each entry's schema through
+ * `volatileForm()`, so a form contains ONLY nodes carrying `meta.volatile`
+ * and a form edit is refused unless its path lies beneath a marked node. The
+ * loader then resolves each marked field into a frozen `{ get() }` reference
+ * that is written IN PLACE (no remount) and announced with
+ * `loader/volatile-update`. Two helpers keep the rest of the plugin reading a
+ * PLAIN `Config`: `markVolatile()` applies the mark, and
+ * `unwrapVolatileConfig()` reads every top-level field through its reference
+ * when one is present — FRESH per call, because a reference's identity is
+ * stable while its value changes.
  *
- * Two helpers keep the rest of the plugin reading a PLAIN `Config`:
- *
- * - `markVolatile(schema)` applies `.volatile()`, so 0.1.7's forms see every
- *   field we mark. The declared type is preserved through the mark on purpose:
- *   it changes what the schema PARSES to (a live reference), not the
- *   plugin-facing `Config` shape every consumer reads.
- * - `unwrapVolatileConfig(config)` reads every top-level field through its
- *   reference when one is present — returning a FRESH object per call, since
- *   a reference's identity is stable while its value changes — and returns the
- *   config untouched when none is.
- *
- * Only TOP-LEVEL fields are marked (form writes name top-level paths such as
- * `accounts` or `modelVisibility.<id>`, whose first segment is the marked
- * node), so one unwrap level is complete. The literal `apiKey` secret stays
- * unmarked on purpose: no settings surface writes it — the settings page and
- * the dsh-TUI section both write keys through the credentials seam — so it
- * keeps composition-only semantics, and a config-file edit to it reloading the
- * fiber is the correct behavior for a secret literal.
+ * Only TOP-LEVEL fields are marked (a form write names a top-level path such
+ * as `accounts` or `modelVisibility.<id>`), so one unwrap level is complete.
+ * The literal `apiKey` secret stays unmarked on purpose: no settings surface
+ * writes it — page and TUI both write keys through the credentials seam — so a
+ * config-file edit to it reloading the fiber is correct for a secret literal.
  *
  * @module dsh-commandcode-provider/config-volatile
  */
@@ -35,15 +24,11 @@
 /**
  * Mark one schema field volatile.
  *
- * `.volatile()` is unconditional: the mark is a schemastery 3.18.3 feature and
- * the only engine this bundle supports (`dsh 0.1.7-rc.2`) pins `~3.18.4`, so
- * the method is always present. It is reached through a structural member
- * rather than schemastery's own typing so the function can keep the caller's
- * declared field type, which is what lets `Config` stay the plain shape every
- * consumer reads while the schema parses to live references.
- *
- * @param schema - The field schema.
- * @returns The schema carrying `meta.volatile`.
+ * `.volatile()` is unconditional: it is a schemastery 3.18.3 feature and the
+ * only supported engine (`dsh 0.1.7-rc.2`) pins `~3.18.4`, so the method is
+ * always present. It is reached through a structural member so the caller's
+ * declared field type survives — the mark changes what the schema PARSES to (a
+ * live reference), not the plugin-facing `Config` shape.
  */
 export function markVolatile<S>(schema: S): S {
   return (schema as S & { volatile(): S }).volatile()
@@ -52,10 +37,6 @@ export function markVolatile<S>(schema: S): S {
 /**
  * Mark every field of a Config field dict volatile, except the named
  * composition-only secrets (`apiKey` here, which no settings surface writes).
- *
- * @param fields - Freshly built field schemas.
- * @param skip - Field names that must stay unmarked.
- * @returns The field dict with every non-skipped field marked.
  */
 export function markVolatileFields<D extends Record<string, unknown>>(
   fields: D,
@@ -93,8 +74,8 @@ export function isVolatileRef(value: unknown): value is VolatileRef {
  *
  * Every top-level field found to be a volatile reference is read through
  * `.get()` — freshly on every call, so a live update lands on the very next
- * read. The loader resolves EVERY marked node into a reference, unset fields
- * included, so a loader-parsed config always yields a fresh object here; the
+ * read (the loader resolves EVERY marked node into a reference, unset fields
+ * included, so a loader-parsed config always yields a fresh object here). The
  * pass-through for a field that is not a reference is what keeps the unmarked
  * `apiKey` literal readable.
  */

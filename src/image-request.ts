@@ -1,6 +1,7 @@
 /**
  * Request-image targets: the shape one provider request asks the attachment
- * service to produce.
+ * service to produce (`{ width, height, maxBytes }`, passed straight to its
+ * encoder).
  *
  * An attachment is stored NORMALIZED, not request-ready — `readImage()` answers
  * the full normalized original, which is what admission accepted. Every request
@@ -9,9 +10,6 @@
  * three times over, because both transports inline every historical image as
  * base64: bytes become context, latency, and progress against the gateway's
  * undocumented ~50 MB body cap (see the request image budget in `./adapter.ts`).
- *
- * The target IS the projected geometry — `{ width, height, maxBytes }` — which
- * the attachment service passes straight to its encoder.
  *
  * @module dsh-commandcode-provider/image-request
  */
@@ -40,14 +38,14 @@ export const REQUEST_IMAGE_MAX_ENCODED_BYTES = 1024 * 1024
 
 /**
  * Aspect-preserving projection onto a long-edge budget; never enlarges, and
- * never returns a zero dimension (a 1-px degenerate side is what the round of
- * an extreme aspect ratio can produce, and a 0 would make the encoder refuse).
+ * never returns a zero dimension.
  *
  * `dsh-attachment` exports an equivalent `longEdgeDimensions`, but it does not
  * guard its inputs: a reference whose declared size is 0 or NaN — a malformed
  * or fabricated attachment record — would project to a zero-sized target and
- * make the encoder refuse the whole request. The guard is the reason this stays
- * local; `tests/image-tokens.test.ts` pins the degenerate cases.
+ * make the encoder refuse the whole request. This local guard is the ONLY
+ * reason the function is not imported; do not replace it with the upstream one.
+ * `tests/image-tokens.test.ts` pins the degenerate cases.
  */
 export function longEdgeDimensions(
   width: number,
@@ -55,7 +53,6 @@ export function longEdgeDimensions(
   longEdge: number,
 ): { width: number; height: number } {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    // Defensive: a malformed reference must not become a zero-sized target.
     return { width: Math.max(1, Math.round(width) || 1), height: Math.max(1, Math.round(height) || 1) }
   }
   if (longEdge >= Math.max(width, height)) return { width, height }

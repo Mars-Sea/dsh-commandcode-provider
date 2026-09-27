@@ -2,27 +2,23 @@
  * React component for the "Command Code" settings page (browser half).
  *
  * Renders as a `settings.section` entry — a page at the same settings-nav
- * level as General / Models / Plugins. The shell supplies the nav row and
- * renders this body inside the content column. All copy comes from the
+ * level as General / Models / Plugins. All copy comes from the
  * `settings.commandcode` locale namespace; all state comes from the
  * `CommandCodeSettingsController` injected by the slot registration.
  *
- * Layout, top to bottom:
- *   1. Accounts — one card per account with its status, quota, actions and
- *      dedicated models. Every account operation commits immediately.
- *   2. Models — the plan filter and the visible-model allowlist.
- *   3. Privacy & security — zero data retention and the command guard.
- *   4. Integrations & display — web search and the sidebar quota card.
- *   5. Advanced (collapsed) — API base and the network limits.
- * Sections 2–5 are flat groups of rows (title and description left, control
- * right, as on the harness's own settings pages), a staged form written by
- * the floating save bar.
+ * Layout, top to bottom: Accounts (one card per account, status, quota,
+ * actions and dedicated models — every operation commits immediately), Models
+ * (plan filter + visible-model allowlist), Privacy & security (ZDR),
+ * Integrations & display (web search, sidebar quota card), and a collapsed
+ * Advanced card (API base + network limits). Everything below Accounts is a
+ * flat group of rows (title/description left, control right) inside the staged
+ * form the floating save bar writes.
  *
  * Styles are injected once by the client entry (see src/client/index.ts) and
  * class-prefixed `cc-` to stay local.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
@@ -30,7 +26,6 @@ import type { CommandCodeCredits } from '../adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
 import type { SettingsCommandCodeKey } from './locales.ts'
 import type { CatalogModelOption, SettingsPageState, StagedField } from './settings.ts'
-import { COMMAND_GUARD_DEFAULT_LEVEL_CHOICE } from './settings.ts'
 import type { LoginPageState } from './login.ts'
 import { loginHint, loginStateForTarget } from './login.ts'
 import { buildModelSelectOptions, catalogIsReady, groupModelSelectOptions, staleModelIds, tierHeadingFor, toggleModelSelection } from './model-select.ts'
@@ -147,7 +142,6 @@ function Field({
   state: StagedField
   disabled: boolean
   numeric?: boolean
-  /** A wider input for URLs. */
   wide?: boolean
   placeholder?: string | undefined
   onEdit(text: string): void
@@ -239,77 +233,6 @@ function ToggleField({
   )
 }
 
-/**
- * One fixed-choice field rendered as a segmented control. The staged text is
- * one of `options`' values or `''` (unset → `defaultValue`); picking the
- * default while unset stages nothing new.
- */
-function SegmentedField({
-  label,
-  hint,
-  state,
-  disabled,
-  options,
-  defaultValue,
-  className,
-  onEdit,
-  onReset,
-  t,
-}: {
-  label: string
-  hint: string
-  state: StagedField
-  disabled: boolean
-  options: ReadonlyArray<{ value: string; label: string }>
-  defaultValue: string
-  className?: string
-  onEdit(text: string): void
-  onReset(): void
-  t: Translate<SettingsCommandCodeKey>
-}) {
-  const current = state.text === '' ? defaultValue : state.text
-  const index = Math.max(0, options.findIndex((option) => option.value === current))
-  return (
-    <SettingRow
-      title={label}
-      tag={<OverrideTag state={state} t={t} />}
-      description={hint}
-      {...(className === undefined ? {} : { className })}
-      control={
-        <>
-          <FieldOverride label={label} state={state} disabled={disabled} t={t} onReset={onReset} />
-          {/* The indicator is placed arithmetically from the count and the
-              picked index (the platform SegmentedControl's technique), so it
-              can slide without measuring the DOM. */}
-          <div
-            className="cc-segmented"
-            role="radiogroup"
-            aria-label={label}
-            style={{ '--cc-segment-count': options.length, '--cc-segment-index': index } as CSSProperties}
-          >
-            <span className="cc-segmentIndicator" aria-hidden="true" />
-            {options.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={current === option.value}
-                className="cc-segment"
-                disabled={disabled}
-                onClick={() => {
-                  if (current !== option.value) onEdit(option.value)
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </>
-      }
-    />
-  )
-}
-
 /** One stat tile in the account card's summary grid. */
 function UsageStat({ label, value, sub }: { label: string; value: string; sub?: string | undefined }) {
   return (
@@ -349,10 +272,7 @@ function UsageWindow({
   )
 }
 
-/**
- * One pool account's facts (identity, totals, credits, window limits)
- * rendered inside an account row's details.
- */
+/** One pool account's facts (identity, totals, credits, window limits). */
 function AccountReport({ entry, fetchedAt, t, summaryOnly = false, headless = false }: {
   entry: CommandCodeAccountUsage
   /**
@@ -479,16 +399,12 @@ function blockedHint(reason: CommandCodeUsageReport['blocked'], t: Translate<Set
 }
 
 /**
- * A checkbox multi-select dropdown for picking catalog models (the
- * routing-rule rows and the visible-models filter share it). The trigger
- * shows the selection count; the Menu lists every catalog model with a
- * checkbox, toggled by clicking the row. A search box under the trigger
- * (inside the Menu anchor, so focusing it never trips the outside-click
- * close) filters the list by id/display-name substring, and items group
- * under plan-tier headings in picker order. Selected ids the catalog no
- * longer carries still render — flagged stale — so a saved selection never
- * silently loses an entry, and the VisibleModelsCard offers a one-click
- * cleanup.
+ * A checkbox multi-select dropdown for picking catalog models (the routing-rule
+ * rows and the visible-models filter share it). The trigger shows the selection
+ * count; the Menu lists every catalog model, grouping under plan-tier headings
+ * and flagging selected ids the catalog no longer carries as stale, so a saved
+ * selection never silently loses an entry (the VisibleModelsCard offers a
+ * one-click cleanup).
  *
  * With `deferCommit` the toggles collect in a local draft that is handed to
  * `onSelect` once, when the menu closes: the per-account picker writes
@@ -530,8 +446,6 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
     ),
     [catalog],
   )
-  // The catalog is sorted for picking; append any selected ids the catalog no
-  // longer carries (removed upstream) so the current selection stays visible.
   const options = buildModelSelectOptions(catalog, selected, query)
   const groups = groupModelSelectOptions(options, (modelId) => tierHeadingFor(modelId, tiers))
   const items: MenuEntry[] = groups.flatMap((group) => [
@@ -625,16 +539,11 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
     if (key === 'modelCount') return t('visibleModelsCount', params)
     return t(key, params)
   }
-  // Selected ids the live catalog no longer carries (retired upstream):
-  // kept, flagged stale in the dropdown, removable in one click. Never
-  // auto-dropped — an empty catalog (fetch failure) must not wipe the list.
-  // "Stale" is only meaningful against a catalog we actually hold, so both the
-  // cleanup button and its hint are gated on catalogIsReady: before the first
-  // fetch lands (and after a failure) the empty catalog makes every selection
-  // look retired, turning the one-click cleanup into a button that silently
-  // empties the allowlist. The explicit "show all" entry stays available
-  // either way — clearing the list is then the user's stated intent rather
-  // than an inference from missing data.
+  // Selected ids the live catalog no longer carries (retired upstream): kept,
+  // flagged stale in the dropdown, removable in one click — never auto-dropped,
+  // since an empty catalog (fetch failure) must not wipe the list. Both the
+  // cleanup button and its hint are gated on catalogIsReady, whose doc states
+  // why an empty catalog makes every selection look retired.
   const readiness = { catalogIds: state.catalogModels.map((model) => model.id), catalogFailed: state.catalogFailed }
   const staleIds = staleModelIds(state.visibleModels, readiness)
   const catalogReady = catalogIsReady(readiness)
@@ -732,18 +641,10 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear }: 
 }
 
 /**
- * Privacy & security: the two opt-ins that change where data goes. ZDR
- * restricts which upstream serves a request; the command guard sends command
- * text to a decision model with no ZDR upstream and can skip an approval the
- * user would otherwise have seen, so both start off.
+ * Privacy & security: the opt-in that changes where data goes. ZDR restricts
+ * which upstream serves a request, so it starts off.
  */
 function PrivacyCard({ state, disabled, t, onEdit, onReset }: FormCardProps) {
-  // Keep a customized level visible even after the staged guard switch is
-  // turned off, otherwise a pending edit would disappear from the page while
-  // still participating in Save.
-  const showGuardLevel = state.commandGuard.text === 'true'
-    || state.commandGuardLevel.overridden
-    || state.commandGuardLevel.clear
   return (
     <SettingsGroup title={t('privacyTitle')}>
       <ToggleField
@@ -757,35 +658,6 @@ function PrivacyCard({ state, disabled, t, onEdit, onReset }: FormCardProps) {
         onReset={() => onReset('zdr')}
         t={t}
       />
-      <ToggleField
-        id="cc-command-guard"
-        label={t('commandGuard')}
-        hint={t('commandGuardHint')}
-        state={state.commandGuard}
-        disabled={disabled}
-        defaultChecked={false}
-        onEdit={(text) => onEdit('commandGuard', text)}
-        onReset={() => onReset('commandGuard')}
-        t={t}
-      />
-      {showGuardLevel ? (
-          <SegmentedField
-            className="cc-rowNested"
-            label={t('commandGuardLevel')}
-            hint={t('commandGuardLevelHint')}
-            state={state.commandGuardLevel}
-            disabled={disabled}
-            options={[
-              { value: 'high', label: t('commandGuardLevelHigh') },
-              { value: 'medium', label: t('commandGuardLevelMedium') },
-              { value: 'low', label: t('commandGuardLevelLow') },
-            ]}
-            defaultValue={COMMAND_GUARD_DEFAULT_LEVEL_CHOICE}
-            onEdit={(text) => onEdit('commandGuardLevel', text)}
-            onReset={() => onReset('commandGuardLevel')}
-            t={t}
-          />
-      ) : null}
     </SettingsGroup>
   )
 }
@@ -1473,9 +1345,8 @@ function AddAccountPanel({ state, login, disabled, t, actions, pendingRef, setPe
 
 /**
  * The unified account card: every account the pool rotates through, one row
- * each, with its status and quota inline. Replaces the former split between
- * a credentials card, a usage card and a routing-rules card, so one account's
- * facts no longer have to be cross-read across three surfaces.
+ * each, with its status and quota inline — so one account's facts no longer
+ * have to be cross-read across separate surfaces.
  */
 function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: {
   t: Translate<SettingsCommandCodeKey>

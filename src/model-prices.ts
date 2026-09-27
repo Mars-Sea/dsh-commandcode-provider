@@ -1,7 +1,7 @@
 /**
- * Vendored Command Code model prices: the per-token rates the official
- * pricing page publishes, which is what lets the composer price a session in
- * dollars.
+ * Vendored Command Code model prices: the per-token rates the official pricing
+ * page publishes, which is what lets the composer price a session in dollars.
+ * Every figure is USD per 1,000,000 tokens.
  *
  * Source: the model array embedded in
  * https://commandcode.ai/docs/resources/pricing-limits, read out of its
@@ -12,11 +12,7 @@
  * consistent and still be the wrong row (this table once carried
  * `0.22 → 0.44` for a model the page prices `0.15 → 0.30` — exactly the 2× the
  * peak/off-peak rule promises), so the cross-check exists to catch that class
- * of error rather than to restate the invariant. Every figure is USD per
- * 1,000,000 tokens, which the page confirms itself: its Go-plan estimate for
- * DeepSeek V4 Flash (800 in / 200 out on a $10 budget) resolves to the ~42K
- * requests the page states, and ~26K once its typical 50K cache reads are
- * priced at the cacheRead rate.
+ * of error rather than to restate the invariant.
  *
  * Three buckets are always published (inputCost, outputCost, cacheReadCost);
  * cacheWriteCost is published for a minority of models. A model without the
@@ -37,11 +33,11 @@
  *
  * Do not hand-edit the table below: run `node scripts/sync-model-prices.mjs`,
  * which re-reads the page, asserts the structure and the off-peak equality,
- * prints cross-check warnings for a human, and rewrites
- * only the rows. `--check` reports drift without writing (exit 1 on drift,
- * exit 2 when the page could not be read, so a network failure never reads as
- * "up to date"). Everything else in this file — this doc, the types, the slug
- * rules, the table builder — is written by hand and survives that rewrite.
+ * prints cross-check warnings for a human, and rewrites only the rows.
+ * `--check` reports drift without writing (exit 1 on drift, exit 2 when the
+ * page could not be read, so a network failure never reads as "up to date").
+ * Everything else in this file — this doc, the types, the slug rules, the
+ * table builder — is written by hand and survives that rewrite.
  *
  * @module dsh-commandcode-provider/model-prices
  */
@@ -148,11 +144,12 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'qwen-3.8-max', rates: [2, 6, 0.25, 2.5] },
   { id: 'qwen-3.8-max-0902', rates: [2, 6, 0.25] },
   { id: 'qwen-3.8-omni-flash', rates: [0.15, 0.47, 0.016] },
-  { id: 'step-3.5-flash', rates: [0.1, 0.3, 0.02] },
+  { id: 'step-3.5-flash', rates: [0.09, 0.3, 0.02] },
   { id: 'step-3.7-flash', rates: [0.2, 1.15, 0.04] },
   { id: 'step-5-preview', rates: [1, 2.7, 0.05] },
   { id: 'tencent/hy3-paid', rates: [0.14, 0.58, 0.035] },
   { id: 'tencent/hy4-preview', rates: [0.834, 2.501, 0.042] },
+  { id: 'typesafe/jev', rates: [0.042, 0, 0] },
 ]
 
 /**
@@ -173,8 +170,8 @@ const PRICE_SLUG_OVERRIDES: Readonly<Record<string, string>> = {
  * not consistently: `tencent/hy4-preview` keeps its prefix while
  * `Qwen/Qwen3.8-Max-0902` becomes `qwen-3.8-max-0902`, with a hyphen the
  * catalog id does not have. Generating candidates and taking the first that
- * exists in the vendored table absorbs that drift without a hand-maintained
- * map of seventy ids.
+ * exists in the vendored table absorbs that drift without a hand-maintained map
+ * of eighty ids.
  */
 function priceSlugCandidates(modelId: string): string[] {
   const lower = modelId.toLowerCase()
@@ -203,9 +200,9 @@ function priceSlugFor(modelId: string, known: ReadonlySet<string>): string | und
 
 /** Split a stored triplet/quadruplet into the wire rate shape. */
 function ratesOf(values: readonly number[]): CommandCodeModelRates {
-  // Indexed access is asserted rather than defaulted: the generator above only
-  // ever emits rows with the three published rates, so a short row is a broken
-  // table and must not silently become a free model.
+  // Indexed access is asserted rather than defaulted: the generator only ever
+  // emits rows with the three published rates, so a short row is a broken table
+  // and must not silently become a free model.
   const rates: CommandCodeModelRates = {
     inputCost: values[0]!,
     outputCost: values[1]!,
@@ -231,13 +228,10 @@ function wireRow(id: string, slug: string, row: ModelPriceRow): CommandCodeModel
  * Rows are keyed by CATALOG id wherever the two namespaces reconcile, because
  * that is what a session reports, and every row also carries its page slug as a
  * second lookup key. Price rows no catalog model claims are served under the
- * slug alone, so drift in either direction still prices: a page rename the
- * catalog has not followed, or a model the catalog snapshot has not learned
- * yet. Free models are served explicitly at zero so the composer can say so
- * instead of showing nothing.
- *
- * The peak windows travel with the table, so the browser applies the very
- * schedule this snapshot knows instead of restating it.
+ * slug alone, so drift in either direction still prices. Free models are served
+ * explicitly at zero so the composer can say so instead of showing nothing; the
+ * peak windows travel with the table so the browser applies the very schedule
+ * this snapshot knows instead of restating it.
  */
 export function modelPriceTable(): CommandCodePriceTable {
   const bySlug = new Map(MODEL_PRICE_ROWS.map((row) => [row.id, row]))

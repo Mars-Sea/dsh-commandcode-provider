@@ -2,9 +2,8 @@
  * Plans & quota panel projection tests (node:test, zero deps). Run with `npm test`.
  *
  * The panel is the sidebar footer card + the center dashboard, and its whole
- * user-visible truth is one projection (`buildPanelView`). This file drives
- * that projection — plus the shared auto-refresh loop — from hand-built usage
- * snapshots, so what is pinned here is what the two surfaces render.
+ * user-visible truth is one projection (`buildPanelView`), driven here from
+ * hand-built usage snapshots plus the shared auto-refresh loop.
  */
 
 import { test } from 'node:test'
@@ -75,8 +74,8 @@ test('the panel follows the injected translator, so it reads in the harness lang
     usage: usage({ report: { accounts: [entry({ report: { credits: CREDITS } })] } }),
     apiKeyConfigured: true,
   }
-  // No translator: the English fallback (what an engine without a locale face
-  // would render). Every label is resolved through it, not looked up here.
+  // No translator: the English fallback an engine without a locale face would
+  // render. Every label is resolved through it, not looked up here.
   const english = buildPanelView(input)
   assert.equal(english.text.monthly, 'Monthly')
   assert.ok(english.footTitle.includes('5-hour'), english.footTitle)
@@ -87,11 +86,10 @@ test('the panel follows the injected translator, so it reads in the harness lang
   // reached `text` would leave it English.
   assert.ok(chinese.footTitle.includes('5 小时'), chinese.footTitle)
   assert.ok(!chinese.footTitle.includes('5-hour'), chinese.footTitle)
-  // Figures are locale-independent.
   assert.deepEqual(chinese.footerBars.map((bar) => bar.detail), english.footerBars.map((bar) => bar.detail))
 
-  // `status` is a rotation-state word, and it is composed in the projection
-  // too: only a non-active mark reaches it (an active account shows its plan).
+  // `status` is composed in the projection too: only a non-active mark reaches
+  // it (an active account shows its plan).
   const cooling = {
     usage: usage({ report: { accounts: [entry({ active: false, mark: 'rate-limit' })] } }),
     apiKeyConfigured: true,
@@ -216,10 +214,9 @@ test('the accessible footer title carries the visible figures', () => {
 })
 
 test('monthly consumption is the CLI\'s limit-minus-remaining derivation', () => {
-  // The fixture deliberately makes the two halves DIFFERENT: the plan publishes
-  // a 30-credit limit while the billing endpoint reports 8.68 left, which is the
-  // shape the live API returns. A fixture where `remaining === limit` would let a
-  // hardcoded `$0.00` (and a swapped pair of fields) pass unchanged.
+  // The fixture makes the two halves DIFFERENT on purpose: the plan publishes a
+  // 30-credit limit while the billing endpoint reports 8.68 left. A fixture
+  // where `remaining === limit` would let a hardcoded `$0.00` pass unchanged.
   const view = buildPanelView({
     usage: usage({
       report: {
@@ -248,10 +245,9 @@ test('monthly consumption is the CLI\'s limit-minus-remaining derivation', () =>
 
 test('a billing endpoint that reported nothing never reads as a consumed quota', () => {
   // The regression this pins: `/alpha/billing/credits` is one of four endpoints
-  // the report fetches in parallel, so it fails ON ITS OWN while the plan still
-  // arrives. Reading the absent balance as 0 turned that partial failure into
-  // `limit - 0 = limit`, i.e. a confident "100% used, quota exhausted" — with
-  // the purchased/free tiles asserting balances that were never fetched.
+  // fetched in parallel, so it fails ON ITS OWN while the plan still arrives.
+  // Reading the absent balance as 0 turned that partial failure into a confident
+  // "100% used, quota exhausted".
   const view = buildPanelView({
     usage: usage({
       report: {
@@ -431,9 +427,8 @@ test('a received but unreadable response does not claim the network is down', ()
 
 test('a blocked verdict carries the endpoint messages as its detail', () => {
   // ONE verdict ('network') covers a real outage, a per-request timeout, a key
-  // no HTTP header can carry and an unparseable API base. The hint alone told
-  // users to check a connection that was fine, so the per-endpoint messages —
-  // the only place the cause is named — ride along as the detail line.
+  // no HTTP header can carry and an unparseable API base, so the per-endpoint
+  // messages — the only place the cause is named — ride along as the detail.
   const view = buildPanelView({
     usage: usage({
       status: 'ready',
@@ -492,9 +487,7 @@ test('every string the view references exists in the copy table', () => {
   }
 })
 
-// ---------------------------------------------------------------------------
 // startPanelAutoRefresh
-// ---------------------------------------------------------------------------
 
 /** A timer seam that records schedules and lets a test fire them by hand. */
 function fakeTimer(): AutoRefreshTimer & { fire(): void; pending(): number } {

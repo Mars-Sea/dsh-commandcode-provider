@@ -1,9 +1,9 @@
 /**
  * Multi-account pool tests (node:test, zero deps). Run with `npm test`.
  *
- * These pin the rotation state machine: which account serves, how 429/401
- * marks behave, the window-probe revival path, and the exact errors thrown
- * when no account can serve.
+ * Pins the rotation state machine: which account serves, how 429/401 marks
+ * behave, the window-probe revival path, and the exact errors thrown when no
+ * account can serve.
  */
 
 import { test } from 'node:test'
@@ -92,7 +92,6 @@ test('the auth file backs the default slot only', async () => {
     keys: {},
     authFile: 'file-key',
   })
-  // The default slot falls back to the auth file; the extra resolves nothing.
   assert.equal((await pool.resolveKey())?.key, 'file-key')
   const accounts = await pool.resolvedAccounts()
   assert.equal(accounts.length, 1)
@@ -133,8 +132,8 @@ test('deduplicates slots resolving to the same key', async () => {
     () => assert.fail('expected resolveKey to throw'),
     (caught: unknown) => caught as Error,
   )
-  // Bilingual: English first, then the Chinese reading (the harness UI
-  // renders the message verbatim in its retry chrome).
+  // Bilingual: English first, then the Chinese reading the harness UI renders
+  // verbatim in its retry chrome.
   assert.match(error.message, /exhausted/)
   assert.match(error.message, /已用尽全部/)
 })
@@ -175,7 +174,6 @@ test('throws RATE_LIMIT naming the earliest reset when every window is exceeded'
   )
   assert.equal(error.code, 'RATE_LIMIT')
   assert.match(error.message, /all 2 Command Code account/)
-  // The earliest reset (key-2's) is the one named.
   assert.ok(error.message.includes(new Date(reset2).toLocaleString()))
 })
 
@@ -187,7 +185,6 @@ test('a cooldown account becomes usable again once its reset time passes', async
     probes: { 'key-1': { exceeded: true, resetAt: past } },
   })
   pool.markRejected('key-1', 'rate-limit')
-  // The probe stamps a cooldown whose reset already passed: usable again.
   assert.equal((await pool.resolveKey())?.key, 'key-1')
 })
 
@@ -204,21 +201,18 @@ test('a failed probe keeps the mark and reports no reset time', async () => {
   )
   assert.equal(error.code, 'RATE_LIMIT')
   assert.doesNotMatch(error.message, /resets at/)
-  // The window verdict stays a window verdict: the mark came from a provider
-  // that named one, so the message may still say the window is spent — it just
-  // has to admit the reset time is unknown.
+  // The mark came from a provider that named a window, so the message may still
+  // claim one is spent — it just has to admit the reset time is unknown.
   assert.match(error.message, /exhausted their usage window/)
   assert.match(error.message, /published no reset time/)
   assert.match(error.message, /服务商未公布重置时间/)
 })
 
 test('a bare 429 is reported as a throttle, never as an exhausted usage window', async () => {
-  // Issue #54. The report's account panel showed the five-hour window at 2% and
-  // the weekly one at 10% while the turn failed with "all 1 Command Code
-  // account(s) have exhausted their usage window": a plain 429 marked the key,
-  // the billing probe never confirmed a spent window, and the pool's diagnosis
-  // claimed one anyway. The mark still rotates and stays probe-eligible — only
-  // the claim changes.
+  // Issue #54: a bare 429 marks the key and stays probe-eligible, but must never
+  // be reported as a spent usage window the billing probe never confirmed — the
+  // report's account panel showed the five-hour window at 2% and the weekly one
+  // at 10% while the turn failed claiming an exhausted usage window.
   const { pool, probeCalls } = makePool({
     slots: [defaultSlot()],
     keys: { COMMANDCODE_API_KEY: 'key-1' },
@@ -229,7 +223,7 @@ test('a bare 429 is reported as a throttle, never as an exhausted usage window',
   assert.equal((await pool.resolveKey())?.key, 'key-1')
   assert.deepEqual(probeCalls, ['key-1'])
 
-  // And when the probe cannot answer, the pool says "rate limited" instead of
+  // And when the probe cannot answer, the pool says "rate limited" rather than
   // inventing a spent window.
   const stubborn = makePool({
     slots: [defaultSlot()],
@@ -250,10 +244,9 @@ test('a bare 429 is reported as a throttle, never as an exhausted usage window',
 })
 
 test('a probe that confirms an exceeded window turns a throttle mark into a window verdict', async () => {
-  // The other half of issue #54's fix: a bare 429 keeps the key probe-eligible
-  // precisely so a REAL window limit behind it is still discovered — the probe
-  // is what upgrades the mark's cause, and the diagnosis then reports the
-  // window with the provider's own reset.
+  // The other half of #54: a throttle mark stays probe-eligible precisely so a
+  // REAL window behind it is discovered — the probe upgrades the mark's cause,
+  // and the diagnosis then reports the window with the provider's own reset.
   const reset = Date.now() + 3 * 3_600_000
   const { pool } = makePool({
     slots: [defaultSlot()],
@@ -283,9 +276,8 @@ test('a probe that confirms an exceeded window turns a throttle mark into a wind
 })
 
 test('a probe that publishes no reset never throws away a known cooldown', async () => {
-  // The provider's own reset (from the rejection body) is strictly more useful
-  // than "unknown": the mark keeps its cooldown end, so the diagnosis still
-  // names it and the account returns by the clock.
+  // The provider's own reset beats "unknown": the cooldown end survives, so the
+  // diagnosis still names it and the account returns by the clock.
   const known = Date.now() + 3_600_000
   const { pool } = makePool({
     slots: [defaultSlot()],
@@ -349,9 +341,7 @@ test('accountUsable maps every rotation state', () => {
   assert.equal(accountUsable({ kind: 'cooldown', cause: 'window', reason: 'x', until: 0 }), false)
 })
 
-// ---------------------------------------------------------------------------
 // Manual (preferred) account selection
-// ---------------------------------------------------------------------------
 
 const TWO_ACCOUNTS = {
   slots: [defaultSlot(), extraSlot(2)],
@@ -392,9 +382,8 @@ test('an unknown preferred id falls back to rotation order', async () => {
 })
 
 test('the all-exhausted RATE_LIMIT carries the wait until the earliest reset', async () => {
-  // dsh-llm-retry reads providerRetryAfterMs and waits exactly that long (at
-  // or below the policy's maxDelayMs), so the retry policy sleeps through the
-  // window instead of polling at its backoff cadence.
+  // dsh-llm-retry waits exactly providerRetryAfterMs, so the policy sleeps
+  // through the window instead of polling at its backoff cadence.
   const resetAt = Date.now() + 60_000
   const { pool } = makePool({
     ...TWO_ACCOUNTS,
@@ -415,10 +404,9 @@ test('the all-exhausted RATE_LIMIT carries the wait until the earliest reset', a
 })
 
 test('a reset further out than the retry cap is not attached', async () => {
-  // In normal mode the executor ABANDONs a retry whose attached wait exceeds
-  // backoff.maxDelayMs instead of falling back to local backoff — a 2-hour
-  // reset must ride the capped local cadence (and the probe revival), not
-  // kill the retry.
+  // The executor ABANDONs a retry whose attached wait exceeds
+  // backoff.maxDelayMs, so a 2-hour reset must ride the capped local cadence
+  // (and the probe revival) instead of killing the retry.
   const { pool } = makePool({
     ...TWO_ACCOUNTS,
     probes: {
@@ -437,10 +425,9 @@ test('a reset further out than the retry cap is not attached', async () => {
 })
 
 test('the probe pass never re-offers a tried (just-rejected) key', async () => {
-  // Single account, 429 arrives exactly as its window resets: the probe would
-  // revive the same key, but the rotation path marks it tried so the adapter is
-  // not offered an already-used key. The NEXT plain resolution picks the
-  // revived key up.
+  // Single account whose 429 arrives exactly as its window resets: the probe
+  // would revive the key, but the rotation path marks it tried so the adapter
+  // is never offered an already-used key. The NEXT resolution picks it up.
   const { pool, probeCalls } = makePool({
     keys: { COMMANDCODE_API_KEY: 'key-1' },
     probes: { 'key-1': { exceeded: false, resetAt: 0 } },
@@ -470,9 +457,7 @@ test('describeAccounts reports slots sharing one credential individually', async
   assert.ok(described.every((account) => account.key === 'key-1'))
 })
 
-// ---------------------------------------------------------------------------
 // Model → account routing rules
-// ---------------------------------------------------------------------------
 
 test('matchModelRule matches a listed model id', () => {
   const rule = matchModelRule('deepseek/deepseek-v4-pro', [
@@ -488,7 +473,6 @@ test('matchModelRule matches any listed model, first rule wins', () => {
   ]
   assert.equal(matchModelRule('deepseek/deepseek-v4-pro', rules)?.account, 'COMMANDCODE_API_KEY_2')
   assert.equal(matchModelRule('deepseek/deepseek-v4-flash-vision-exp', rules)?.account, 'COMMANDCODE_API_KEY_2')
-  // A non-listed model gets no rule.
   assert.equal(matchModelRule('tencent/hy4-preview', rules), undefined)
 })
 
@@ -540,7 +524,6 @@ test('resolveKey falls back to rotation when the routed account is exhausted', a
     rules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'account-2' }],
   })
   pool.markRejected('key-2', 'rate-limit')
-  // The routed account is marked; the fallback serves the first usable account.
   const routed = await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro' })
   assert.equal(routed?.slot.id, 'default')
   assert.equal(routed?.key, 'key-1')
@@ -551,24 +534,21 @@ test('resolveKey routes through the rotation hook after a rejection', async () =
     ...TWO_ACCOUNTS,
     rules: [{ models: ['deepseek/deepseek-v4-pro'], account: 'default' }],
   })
-  // First request for the model uses the routed default account.
+  // First request for the model uses the routed default account; once it is
+  // rejected the next resolution for the same model serves the fallback.
   assert.equal((await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro' }))?.key, 'key-1')
-  // It is rejected; the next resolution for the same model excludes it and
-  // serves the fallback account.
   pool.markRejected('key-1', 'rate-limit')
   const next = await pool.resolveKey({ model: 'deepseek/deepseek-v4-pro', tried: ['key-1'] })
   assert.equal(next?.key, 'key-2')
 })
 
-// ---------------------------------------------------------------------------
 // Walking the pool within one request (issue #51's follow-up)
-// ---------------------------------------------------------------------------
 
 test('a request can walk the whole pool through the tried set', async () => {
-  // An account-scoped rejection that marks nothing (no credits, a model
-  // outside the account's plan) must still let the request reach the accounts
-  // behind it: without the tried set the pool re-offers the same key on every
-  // attempt and a four-account pool behaves like a one-account pool.
+  // A rejection that marks nothing (no credits, a model outside the account's
+  // plan) must still let the request reach the accounts behind it: without the
+  // tried set the pool re-offers the same key and a four-account pool behaves
+  // like a one-account pool.
   const { pool } = makePool({
     slots: [defaultSlot(), extraSlot(2), extraSlot(3)],
     keys: { COMMANDCODE_API_KEY: 'key-1', COMMANDCODE_API_KEY_2: 'key-2', COMMANDCODE_API_KEY_3: 'key-3' },
@@ -590,8 +570,8 @@ test('an all-tried, all-marked pool still names the earliest reset', async () =>
       'key-2': { exceeded: true, resetAt: resetAt + 30_000 },
     },
   })
-  // The provider's own reset time rides the rejection body, so the mark is a
-  // cooldown that expires by itself instead of an open-ended "unknown".
+  // The provider's own reset makes the mark a self-expiring cooldown instead of
+  // an open-ended "unknown".
   pool.markRejected('key-1', 'rate-limit', resetAt)
   pool.markRejected('key-2', 'rate-limit', resetAt + 30_000)
   const error = await pool.resolveKey({ tried: ['key-1', 'key-2'] }).then(
@@ -607,10 +587,9 @@ test('an all-tried, all-marked pool still names the earliest reset', async () =>
 test('a tried account that is merely unmarked keeps the caller’s own rejection', async () => {
   // The pool's diagnosis must not speak for a rejection it did not make. An
   // `unavailable` rejection (no credits, a model outside this account's plan)
-  // marks nothing, so the account it came from is still USABLE — and when that
-  // was the only account the request could reach, "every configured account was
-  // rejected with 401" is a lie that sends the user hunting for a key that
-  // already works. Same rule as the no-account-left branch: return undefined.
+  // marks nothing, so its account is still USABLE — and when that was the only
+  // account the request could reach, "every configured account was rejected with
+  // 401" is a lie. Same rule as the no-account-left branch: return undefined.
   const { pool } = makePool({ ...TWO_ACCOUNTS })
   pool.markRejected('key-2', 'invalid-credential')
   assert.equal(await pool.resolveKey({ tried: ['key-1'] }), undefined)
@@ -619,7 +598,7 @@ test('a tried account that is merely unmarked keeps the caller’s own rejection
 test('an exhausted remainder does not turn a tried-unmarked account into a rate limit', async () => {
   // The same rule with the other mark: key-2 sits in a cooldown while key-1 —
   // the account the request already used and got a plan rejection from — is
-  // fine. Synthesizing RATE_LIMIT here would hand dsh-llm-retry the reset of an
+  // fine. Synthesizing RATE_LIMIT would hand dsh-llm-retry the reset of an
   // account the request will not use, turning a PERMANENT failure into a wait
   // of up to the policy's 15-minute ceiling.
   const { pool } = makePool({
@@ -632,10 +611,8 @@ test('an exhausted remainder does not turn a tried-unmarked account into a rate 
 
 test('a diagnosis that loses its second resolution still describes the pool', async () => {
   // resolvedAccounts() runs the host's async seams twice per resolution, so the
-  // second pass can come back empty (a transient credential-store miss, not a
-  // configuration change). The diagnosis must still name the accounts the pool
-  // HAS: "every configured account (0) was rejected with 401" names neither an
-  // account nor a real cause.
+  // second pass can come back empty (a transient credential-store miss). The
+  // diagnosis must still name the accounts the pool HAS.
   let resolutions = 0
   const pool = new CommandCodeAccountPool({
     slots: () => [defaultSlot()],
@@ -654,9 +631,8 @@ test('a diagnosis that loses its second resolution still describes the pool', as
 })
 
 test('a rate-limit mark carrying an already-passed reset stays probe-eligible', async () => {
-  // A stale `reset` (or none at all) must not become a cooldown that never
-  // expires: it stays an `unknown` mark, which is exactly what the pinned
-  // account's revival probe exists to re-check.
+  // A stale `reset` (or none) must not become a never-expiring cooldown: it
+  // stays an `unknown` mark, which is what the revival probe exists to re-check.
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
     preferredId: 'account-2',
@@ -668,9 +644,8 @@ test('a rate-limit mark carrying an already-passed reset stays probe-eligible', 
 })
 
 test('a probe that publishes no reset time leaves the mark probe-eligible', async () => {
-  // `cooldown` with `until: 0` reads as "never usable again" to
-  // `accountUsable`, which would take the account out of service for the whole
-  // process. An unknown reset keeps the `unknown` mark instead.
+  // `cooldown` with `until: 0` reads as "never usable again" to `accountUsable`,
+  // which would take the account out of service for the whole process.
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
     preferredId: 'account-2',
@@ -684,18 +659,13 @@ test('a probe that publishes no reset time leaves the mark probe-eligible', asyn
   assert.equal(marked?.state?.kind, 'unknown', 'no never-expiring cooldown is stamped')
 })
 
-// ---------------------------------------------------------------------------
 // Explicit-selection revival (issue #51)
-// ---------------------------------------------------------------------------
 
 test('a pinned account whose window cleared serves again right after the 429', async () => {
-  // Issue #51: the pin was demoted until dsh restarted. A 429 marks the key
-  // `unknown` — usable again only through a window probe — and the only probe
-  // pass was the all-marked one, which never runs while another account can
-  // serve. So one 429 moved every later request to `default`, and re-selecting
-  // the account in settings could not help: the mark lives on the key, not on
-  // the selection. Now the pinned account is probed before the fallback takes
-  // over, and a cleared window puts the user's own choice back immediately.
+  // Issue #51: a 429 marks the key `unknown` and the only probe pass was the
+  // all-marked one, which never runs while another account can serve — so one
+  // 429 demoted the pin until a restart. Now the pinned account is probed before
+  // the fallback takes over.
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
     preferredId: 'account-2',
@@ -705,8 +675,8 @@ test('a pinned account whose window cleared serves again right after the 429', a
   const resolved = await pool.resolveKey()
   assert.equal(resolved?.key, 'key-2')
   assert.equal(resolved?.slot.id, 'account-2')
-  // The probe answered the question for good: the mark is gone, so the next
-  // resolution costs no API call.
+  // The probe answered for good: the mark is gone, so the next resolution costs
+  // no API call.
   assert.deepEqual(probeCalls, ['key-2'])
   assert.equal((await pool.resolveKey())?.key, 'key-2')
   assert.deepEqual(probeCalls, ['key-2'])
@@ -720,8 +690,8 @@ test('a probe that confirms exhaustion stamps the reset, and the pin returns by 
     probes: { 'key-2': { exceeded: true, resetAt } },
   })
   pool.markRejected('key-2', 'rate-limit')
-  // Genuinely exhausted: the fallback serves, and the mark now carries the
-  // provider's own reset time instead of staying unknown forever.
+  // Genuinely exhausted: the fallback serves and the mark carries the provider's
+  // own reset instead of staying unknown forever.
   assert.equal((await pool.resolveKey())?.key, 'key-1')
   await new Promise((resolve) => setTimeout(resolve, 120))
   // Past the reset the cooldown expires on its own — no second probe.
@@ -744,14 +714,11 @@ test('a failed probe keeps the pin marked and is retried at most once per interv
 })
 
 test('a revived pin does not buy an immediate second probe when it is rejected again', async () => {
-  // The probe and the chat endpoint do not answer the same question: the probe
-  // reads `windowLimits`, while a spend cap or a model-level limit arrives as a
-  // `RATE_LIMITED` rejection the probe cannot see. So "probe says open → revive
-  // → 429 again" is a real loop, and dropping the throttle stamp on the revival
-  // made it cost one billing GET plus one doomed upstream attempt per request,
-  // forever. The stamp now survives the revival: the interval still bounds the
-  // retries, and a revival that was right costs nothing (a serving account is
-  // never probed at all).
+  // The probe reads `windowLimits` while a spend cap or a model-level limit
+  // arrives as a `RATE_LIMITED` rejection it cannot see, so "probe says open →
+  // revive → 429 again" is a real loop. The throttle stamp therefore SURVIVES
+  // the revival; a revival that was right costs nothing anyway (a serving
+  // account is never probed at all).
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
     preferredId: 'account-2',
@@ -767,9 +734,8 @@ test('a revived pin does not buy an immediate second probe when it is rejected a
 })
 
 test('the probe interval lets the pin be re-probed once it has elapsed', async () => {
-  // The other half of the throttle, and the reason the pool takes a clock: if
-  // the comparison never came true, a pinned account could never come back and
-  // every test above would still be green.
+  // The other half of the throttle: without a real clock comparison a pinned
+  // account could never come back and every test above would still be green.
   let clock = 1_000_000
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
@@ -788,8 +754,8 @@ test('the probe interval lets the pin be re-probed once it has elapsed', async (
 
 test('the just-rejected key is not re-probed within the same request rotation', async () => {
   // The rotation hook resolves with `tried` — every key this request already
-  // burned, the just-rejected one included. Probing a key it just heard a 429
-  // from answers nothing new and would cost a request on every rotation.
+  // burned, the just-rejected one included; probing one costs a request for
+  // nothing new.
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
     preferredId: 'account-2',
@@ -801,7 +767,7 @@ test('the just-rejected key is not re-probed within the same request rotation', 
 })
 
 test('a 401-marked pin is never probed: an invalid key stays invalid', async () => {
-  // Only a rate-limit mark is re-checked. A 401 clears when the stored
+  // Only a rate-limit mark is re-checked; a 401 clears when the stored
   // credential changes, never by a window probe.
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
@@ -825,8 +791,7 @@ test('a usable explicit account costs no probe at all', async () => {
 
 test('an ordinary rotation mark is not probed while another account can serve', async () => {
   // Nothing was explicitly asked for: an un-pinned marked account still waits
-  // for the all-marked pass, exactly as before, so the steady state keeps
-  // costing zero extra API calls.
+  // for the all-marked pass, so the steady state costs zero extra API calls.
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
     probes: { 'key-1': { exceeded: false, resetAt: 0 } },
@@ -837,9 +802,8 @@ test('an ordinary rotation mark is not probed while another account can serve', 
 })
 
 test('a model-routed account is revived the same way, ahead of the pin', async () => {
-  // Routing outranks the manual pin for the selection; it is also the explicit
-  // target for the revival, so a rule's account comes back when its window
-  // clears even though another pin is set.
+  // Routing outranks the manual pin and is also the explicit revival target, so
+  // a rule's account comes back when its window clears even with a pin set.
   const model = 'deepseek/deepseek-v4-pro'
   const { pool, probeCalls } = makePool({
     ...TWO_ACCOUNTS,
@@ -854,16 +818,13 @@ test('a model-routed account is revived the same way, ahead of the pin', async (
   assert.deepEqual(probeCalls, ['key-2'])
 })
 
-// ---------------------------------------------------------------------------
 // Credential normalization (marks must land on the key the adapter reports)
-// ---------------------------------------------------------------------------
 
 test('a key with surrounding whitespace is normalized before it is handed out', async () => {
   // The adapter sends every key through the harness's `assertUsableApiKey()`,
-  // which trims it, and reports that trimmed form back as the rejected key.
-  // Handing out the raw value would file every 429/401 mark under a string no
-  // later lookup can find: rotation would re-offer the same account and the
-  // marks would never show.
+  // which trims it, and reports that trimmed form back as the rejected key —
+  // handing out the raw value would file every mark under a string no later
+  // lookup can find.
   const { pool } = makePool({
     slots: [defaultSlot(), extraSlot(2)],
     keys: { COMMANDCODE_API_KEY: '  key-1\n', COMMANDCODE_API_KEY_2: 'key-2' },
@@ -877,8 +838,8 @@ test('a key with surrounding whitespace is normalized before it is handed out', 
 })
 
 test('a whitespace-padded credential still shares one mark across slots', async () => {
-  // Two slots resolving to the same credential (modulo whitespace) must share
-  // one rotation state, exactly as two identical strings do.
+  // Two slots resolving to the same credential (modulo whitespace) share one
+  // rotation state, exactly as two identical strings do.
   const { pool, probeCalls } = makePool({
     slots: [defaultSlot(), extraSlot(2)],
     keys: { COMMANDCODE_API_KEY: 'key-1', COMMANDCODE_API_KEY_2: 'key-1 ' },

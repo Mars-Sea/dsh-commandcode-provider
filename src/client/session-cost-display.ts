@@ -3,51 +3,44 @@
  *
  * The cost is not a surface of its own any more: it is injected INTO the two
  * surfaces the harness already draws under the composer — the token-usage pill
- * (`1.2M tokens · Cache hit 87%`) and the usage dialog that pill opens. This
- * module owns that injection; `./session-cost.ts` owns every number and every
- * string, and `./session-cost-view.tsx` owns the two seats the figures come
- * from.
+ * and the usage dialog that pill opens. This module owns that injection;
+ * `./session-cost.ts` owns every number and string, and `./session-cost-view.tsx`
+ * the two seats the figures come from.
  *
  * Why inject rather than take the pill's cell over (registering a `stats` entry
- * REPLACES the shipped readout, it does not extend it): the shipped row is one
- * component owning its tokens / cache-hit / duration figures through the `chat`
- * locale namespace, and its cache-hit percentage obeys an exact-integer rule
- * this plugin must not re-derive. Owning that cell would mean reproducing all of
- * it in English, and every upstream change to it would stop reaching users. So
- * the shipped markup stays the harness's, and this module adds exactly two
- * things to it.
+ * REPLACES the shipped readout, it does not extend it): that row is one component
+ * owning its tokens / cache-hit / duration figures through the `chat` locale
+ * namespace, and its cache-hit percentage obeys an exact-integer rule this plugin
+ * must not re-derive. Owning it would mean reproducing all of it in English, and
+ * every upstream change would stop reaching users.
  *
- * Four properties make that safe, all verified against the shipped build:
+ * Four properties make the injection safe:
  *
  * 1. **The dialog's rows are styled by ELEMENT.** `dsh-client-ui-chat`'s
  *    `stat-dialog` module styles its `dl` as a two-column grid and then
- *    `.details dt` / `.details dd` — not by class. A price node appended INSIDE a
- *    shipped value cell therefore inherits that cell's tabular numerals and right
- *    alignment for free, and this plugin ships no CSS at all.
+ *    `.details dt` / `.details dd` — not by class, so a price node appended
+ *    INSIDE a shipped value cell inherits that cell's tabular numerals and right
+ *    alignment, and this plugin ships no CSS at all.
  * 2. **The dialog's rows are matched by POSITION and confirmed by value.** Their
- *    labels are the `chat` locale's own strings (`Uncached input` in English,
- *    `未缓存输入` in Chinese), so no label is ever read. Instead the shape is
- *    predicted from the session's buckets — the cache-hit row exists while there
- *    is billed prompt input, the cache-write row while those tokens are non-zero
- *    — and each value cell must then carry exactly the token count predicted for
- *    it. A dialog that does not confirm is left alone.
+ *    labels are the `chat` locale's own strings, so no label is ever read: the
+ *    shape is predicted from the session's buckets and each value cell must then
+ *    carry exactly the token count predicted for it. A dialog that does not
+ *    confirm is left alone.
  * 3. **The pill keeps the cost visible when space runs out.** The button is an
- *    inline flex row with `gap`, and its label carries `min-width:0` plus
- *    ellipsis; our appended span keeps the default `min-width:auto`, so the
- *    LABEL is what truncates. The cost also inherits the button's `font:inherit`
- *    and `tabular-nums` typography and its hover/expanded tint.
+ *    inline flex row with `gap` and its label carries `min-width:0` plus ellipsis;
+ *    our appended span keeps the default `min-width:auto`, so the LABEL is what
+ *    truncates, and the cost inherits the button's typography and tint.
  * 4. **React owns those value cells' text, so a price is re-attached, never
  *    assumed.** The shipped component renders each count as a single string, and
  *    React rewrites such a cell through `textContent` when the count changes —
- *    which drops every child with it, our price included. Every sync therefore
+ *    dropping every child with it, our price included. Every sync therefore
  *    re-checks that the node is still where it was put; the cost of that is a
  *    read, and the alternative is a price that silently disappears mid-session.
  *
  * A `MutationObserver` on `document.body` with `childList` (deliberately NOT
  * `subtree`, so streaming text never wakes it) is the only way to learn that the
- * dialog — which is portaled straight onto `body`, with no slot of ours inside
- * it — has opened or closed. That observer is also what decorates a newly opened
- * dialog from the last view this module was handed.
+ * portaled dialog has opened or closed. That observer is also what decorates a
+ * newly opened dialog from the last view this module was handed.
  *
  * @module dsh-commandcode-provider/client/session-cost-display
  */
@@ -69,16 +62,15 @@ import {
  * and never the outlet's parent, because the parent is the composer footer,
  * which holds the `ContextMeter` as well, and that meter's trigger is itself a
  * `button[aria-haspopup="dialog"]` rendered AFTER the dock. A parent-scoped
- * "last trigger wins" would therefore append the cost to the context ring
- * instead of the token pill.
+ * "last trigger wins" would append the cost to the context ring instead.
  */
 const STATS_ROOT = '[data-composer-stats]'
 
 /**
  * The shipped token-usage dialog's `<dl>`. Unique WITHIN one `StatsPills`
- * render: the per-message turn-usage panel has its own dialog with different
- * markup, so a single composer's usage dialog is unambiguous. It is not unique
- * across the document once two composers are live — see {@link resolveDialog}.
+ * render (the per-message turn-usage panel has its own dialog with different
+ * markup), but not across the document once two composers are live — see
+ * {@link resolveDialog}.
  */
 const USAGE_DIALOG = '[data-session-stats-usage]'
 
@@ -90,8 +82,8 @@ const USAGE_DIALOG = '[data-session-stats-usage]'
 const DIALOG_TRIGGER = 'button[aria-haspopup="dialog"]'
 
 /**
- * Stable id for the hidden node the appended cost is described by. The pill's
- * own `aria-label` is computed by the harness on every render and cannot be
+ * Stable id for the hidden node the appended cost is described by. The pill's own
+ * `aria-label` is recomputed by the harness on every render and cannot be
  * extended, so a description is how the cost reaches assistive technology.
  */
 const A11Y_ID = 'dsh-commandcode-session-cost'
@@ -125,9 +117,9 @@ export interface SessionCostDisplayOptions {
   /** The document to inject into (injected so node tests can drive a double). */
   doc: Document
   /**
-   * The composer that owns this entry — our own outlet wrapper's parent, so a
-   * session-scoped composer looks in its OWN card rather than at whichever
-   * `[data-composer-stats]` happens to come first in the document.
+   * The composer that owns this entry — our own dock OUTLET, so a session-scoped
+   * composer looks in its OWN card rather than at whichever `[data-composer-stats]`
+   * happens to come first in the document.
    */
   scope: () => ParentNode | null
   /** Observer seam; defaults to a `childList` `MutationObserver` on `body`. */
@@ -203,9 +195,7 @@ export class SessionCostDisplay {
     this.applyDialog()
   }
 
-  // -------------------------------------------------------------------------
-  // The pill: the cost as the last item of the shipped token pill's text run
-  // -------------------------------------------------------------------------
+  // --- The pill: the cost as the last item of the shipped token pill's run
 
   private applyPill(): void {
     const view = this.view
@@ -254,11 +244,9 @@ export class SessionCostDisplay {
    * registration order. {@link STATS_ROOT} narrows that to the stats row where
    * the markup marks it; where it does not, the outlet is already the narrowest
    * correct container, because the composer footer's `ContextMeter` sits BESIDE
-   * the outlet rather than inside it.
-   *
-   * A missing scope is "no pill", never a document-wide search: the outlet is
-   * what makes this lookup per-composer, and a second composer can be live at
-   * once (the sidebar can mount an embedded Conversation).
+   * the outlet rather than inside it. A missing scope is "no pill", never a
+   * document-wide search: the outlet is what makes this lookup per-composer, and
+   * two composers can be live at once.
    */
   private resolvePillButton(): Element | null {
     const scope = this.scope()
@@ -279,7 +267,7 @@ export class SessionCostDisplay {
     // The separator is its own node so it can carry the shipped pill's separator
     // colour. Its LEFT spacing comes from the button's flex gap; the right margin
     // reproduces the shipped separator's `margin:0 6px` rhythm, so the run reads
-    // `tokens · Cache hit 87% · $0.0123` at one consistent rhythm.
+    // at one consistent rhythm.
     const separator = doc.createElement('span')
     separator.textContent = run.separator
     separator.setAttribute('aria-hidden', 'true')
@@ -324,9 +312,7 @@ export class SessionCostDisplay {
     this.pillA11y = undefined
   }
 
-  // -------------------------------------------------------------------------
-  // The dialog: a price on the right of each token row the harness already draws
-  // -------------------------------------------------------------------------
+  // --- The dialog: a price on the right of each row the harness already draws
 
   private applyDialog(): void {
     const view = this.view
@@ -339,9 +325,9 @@ export class SessionCostDisplay {
     const plan = sessionCostRowDecorations(view)
     const pairs = dialogPairs(host)
     if (!dialogShapeMatches(pairs, plan, this.dialogPrices)) {
-      // The dialog is not the shape this session's buckets predict — a different
-      // build, or a projection carrying values the counts cannot explain. Leave
-      // it exactly as the harness drew it rather than pricing the wrong row.
+      // Not the shape this session's buckets predict — a different build, or a
+      // projection carrying values the counts cannot explain. Leave it as the
+      // harness drew it rather than pricing the wrong row.
       this.clearDialog()
       return
     }
@@ -351,9 +337,9 @@ export class SessionCostDisplay {
       if (pair === undefined) continue
       const span = this.dialogPrices.get(pair.dd)
       if (row.hidden) {
-        // The row is dropped: both cells, or the grid leaves an empty label
-        // behind. An inline `display` survives the harness's own re-renders
-        // (React pins no style on these nodes) and is given back on disposal.
+        // Both cells go, or the grid leaves an empty label behind. An inline
+        // `display` survives the harness's own re-renders (React pins no style
+        // on these nodes) and is given back on disposal.
         if (pair.dt.style.display !== 'none') pair.dt.style.display = 'none'
         if (pair.dd.style.display !== 'none') pair.dd.style.display = 'none'
         hidden.add(pair.dt)
@@ -369,7 +355,7 @@ export class SessionCostDisplay {
       }
       const price = span ?? this.createDialogPrice(pair.dd, row.row)
       // React owns this cell's text and rewrites it through `textContent` when
-      // the count changes, which drops every child with it — so the price is
+      // the count changes, dropping every child with it — so the price is
       // re-attached on a miss rather than assumed to still be there.
       if (price.parentNode !== pair.dd) pair.dd.appendChild(price)
       if (price.textContent !== row.amount) price.textContent = row.amount
@@ -398,8 +384,7 @@ export class SessionCostDisplay {
       // the style back BEFORE dropping the reference: a detached node can be
       // recycled by the next render (React reuses DOM nodes across a remount of
       // the same shape), and a surviving `display: none` would hide a row of a
-      // dialog we are no longer decorating — with nothing left tracking it to
-      // restore it later.
+      // dialog we are no longer decorating, with nothing left tracking it.
       if (cell.style.display === 'none') cell.style.display = ''
       this.dialogHidden.delete(cell)
     }
@@ -410,8 +395,7 @@ export class SessionCostDisplay {
     const price = this.doc.createElement('span')
     price.setAttribute('data-session-cost-price', row)
     // The cell is right-aligned over tabular numerals, so a fixed-width
-    // inline-block lines the prices up as a column of their own to the right of
-    // the counts instead of trailing each count raggedly.
+    // inline-block lines the prices up as a column of their own.
     price.style.marginLeft = '6px'
     price.style.display = 'inline-block'
     price.style.minWidth = '56px'
@@ -433,20 +417,18 @@ export class SessionCostDisplay {
    *
    * The dialog is portaled onto `body`, so unlike the pill it cannot be scoped
    * from this entry, and the attribute is unique per DIALOG rather than per
-   * document. While one composer was guaranteed, a document-level lookup was
-   * exact. 0.1.6-alpha.2 ends that guarantee: it mounts an embedded Conversation
-   * in the sidebar, so a second composer — with its own session, its own dock
-   * and its own dialog — can be live and open at the same time.
+   * document. While one composer was guaranteed a document-level lookup was
+   * exact; 0.1.6-alpha.2 ended that guarantee by mounting an embedded
+   * Conversation in the sidebar, so a second composer — its own session, dock and
+   * dialog — can be live and open at the same time.
    *
    * There is no DOM link from a dialog back to its trigger (the portaled panel
-   * carries no id and no `aria-controls`), so with two dialogs open document
-   * order says nothing about ownership. The shape confirmation in
-   * {@link dialogShapeMatches} would usually reject the stranger, but it compares
-   * against THIS entry's counts, so a coincidentally matching dialog would be
-   * priced with another session's figures. Ambiguity is therefore answered by
-   * declining to decorate at all — the same rule the shape check already
-   * follows, applied one level up: a dialog we cannot prove is ours is left
-   * alone.
+   * carries no id and no `aria-controls`), so document order says nothing about
+   * ownership. The shape confirmation in {@link dialogShapeMatches} would usually
+   * reject the stranger, but it compares against THIS entry's counts, so a
+   * coincidentally matching dialog would be priced with another session's
+   * figures. Ambiguity is therefore answered by declining to decorate at all:
+   * a dialog we cannot prove is ours is left alone.
    */
   private resolveDialog(): Element | null {
     if (this.dialogHost?.isConnected === true) return this.dialogHost
@@ -495,12 +477,11 @@ function tagNameOf(node: Node): string {
 /**
  * Whether the dialog really holds the rows this session's buckets predict.
  *
- * The shipped labels belong to the `chat` locale — they are `Uncached input` in
- * English and something else entirely in Chinese — so rows are matched by
- * POSITION, and this is what makes that safe: the row count must agree, the
- * cache-hit row must be the percentage it is, and every other value must carry
- * exactly the token count of the bucket predicted for it. A mismatch means the
- * dialog is not what this view describes, and nothing is decorated.
+ * The shipped labels belong to the `chat` locale and differ per language, so rows
+ * are matched by POSITION, and this is what makes that safe: the row count must
+ * agree, the cache-hit row must be the percentage it is, and every other value
+ * must carry exactly the token count of the bucket predicted for it. A mismatch
+ * means the dialog is not what this view describes, and nothing is decorated.
  */
 function dialogShapeMatches(
   pairs: ReadonlyArray<{ dt: HTMLElement; dd: HTMLElement }>,

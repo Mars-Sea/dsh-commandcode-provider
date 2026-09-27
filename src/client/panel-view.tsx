@@ -1,24 +1,18 @@
 /**
- * React components for the Command Code plans & quota panel (browser half):
- * the sidebar footer card and the dashboard it opens in the center column.
+ * React components for the Command Code plans & quota panel: the sidebar footer
+ * card and the dashboard it opens in the center column.
  *
  * Both render one {@link PanelView} projected by `./panel.ts` — no fact is
  * derived here. Strings arrive already localized in `view.text`: the slots
  * declare the `panel.commandcode` locale namespace, so the renderer hands this
- * component a `t` seat that is passed into `buildPanelView` — the panel follows
- * the harness's active language (a language switch mints a new `t`, so the
- * surfaces re-render without an extra channel).
+ * component a `t` seat that is passed into `buildPanelView`, and a language
+ * switch mints a new `t` identity, which re-renders both surfaces.
  *
- * The footer card is the panel's home: the sidebar shell renders it in the foot
- * area directly above the Settings seat, so each quota window's own spend and
- * limit — the 5-hour and the weekly one — are on screen without opening
- * anything. Clicking it selects the `main` panel this file also renders — and
- * unlike a `sidebar.panellist` row, whose button chrome and label the SHELL
- * owns, this entry owns its whole surface and therefore calls `open()` itself.
- *
- * Styles ride the stylesheet `./panel-styles.ts` returns, injected once by
- * the client entry; classes are `ccp-` prefixed to stay clear of the settings
- * page's `cc-` set.
+ * The footer card is the panel's home — the shell renders it in the foot area
+ * directly above the Settings seat, and unlike a `sidebar.panellist` row (whose
+ * chrome and label the SHELL owns) this entry owns its whole surface and
+ * therefore calls `open()` itself. Styles ride the stylesheet
+ * `./panel-styles.ts` returns; classes are `ccp-` prefixed.
  *
  * @module dsh-commandcode-provider/client/panel-view
  */
@@ -49,17 +43,17 @@ export interface SidebarFooterActionOwnerProps {
 
 /**
  * The injected face both panel slots carry. Bound by the client entry so the
- * components stay unaware of the settings controller, the login controller,
- * the layout service and the module-level auto-refresh loop.
+ * components stay unaware of the settings controller, the login controller, the
+ * layout service and the module-level auto-refresh loop.
  *
- * NOTE the split from {@link PanelComponentProps}: this is the face the
+ * NOTE the split from {@link PanelComponentProps}: this is what the
  * registration's `inject` factory RETURNS, and the renderer does not hand it to
- * the component verbatim. `bindInjectSources` destructures the `hooks`
- * compartment OUT of the face and re-exposes each member as a `use<Name>` prop
+ * the component verbatim — `bindInjectSources` destructures the `hooks`
+ * compartment OUT and re-exposes each member as a `use<Name>` prop
  * (`commandCodeUsage` → `useCommandCodeUsage`). A component that reads
- * `props.hooks.*` therefore finds `undefined` at runtime and crashes on render
- * — which the slot renderer contains by ABDICATING the entry, so the surface
- * vanishes with no visible error. Read the `useX` seats instead.
+ * `props.hooks.*` finds `undefined` at runtime and crashes on render, which the
+ * slot renderer contains by ABDICATING the entry, so the surface vanishes with
+ * no visible error.
  */
 export interface PanelInjected {
   hooks: {
@@ -250,17 +244,16 @@ function AccountCard({ account, view }: { account: PanelAccountView; view: Panel
         />
       ) : (
         <div className="ccp-planRow">
-          {/* The plan is a fact the card already shows in its header badge; what
-              is missing here is the RATIO, so the row names the plan whenever
-              the report carries one and falls back to a placeholder only when
-              the report itself is silent. */}
+          {/* The plan is already in the card's header badge; what is missing
+              here is the RATIO, so the row names the plan the report carries
+              and falls back to a placeholder only when the report is silent. */}
           <span className="ccp-fieldLabel">{text('plan')}</span>
           <span className="ccp-planName">{account.planName !== '' ? account.planName : text('unavailable')}</span>
         </div>
       )}
 
       {/* A balance the billing endpoint DID report, so a card without a ratio
-          still states something true instead of nothing. */}
+          still states something true. */}
       {monthly !== undefined && monthly.remaining !== '—' ? (
         <div className="ccp-planRow">
           <span className="ccp-fieldLabel">{text('remaining')}</span>
@@ -349,12 +342,11 @@ export function CommandCodePanel(props: PanelComponentProps) {
           >
             {view.loading ? text('refreshing') : text('refresh')}
           </Button>
-          {/* The dashboard REPLACES the conversation in the center column, and
-              this panel is the only surface that selects it — without an exit
-              the user cannot get back to the session at all (issue #41), since
-              clicking the sidebar card only re-selects this same panel. The
-              glyph is the button's whole content, so its accessible name and
-              tooltip carry the meaning. */}
+          {/* The dashboard REPLACES the conversation in the center column and
+              this panel is the only surface that selects it, so without an exit
+              the user cannot get back to the session at all (issue #41): the
+              sidebar card only re-selects this same panel. The glyph is the
+              button's whole content, so the name and tooltip carry the words. */}
           <Button
             variant="ghost"
             size="sm"
@@ -417,35 +409,30 @@ export function CommandCodePanel(props: PanelComponentProps) {
 
 /**
  * The sidebar footer card, registered into `sidebar.footer.action` — the list
- * the shell renders in the sidebar's foot area directly ABOVE the Settings
- * seat, so the panel reads as a bottom-pinned sibling of Settings rather than
- * a global panel icon at the top of the column.
+ * the shell renders in the foot area directly ABOVE the Settings seat, so the
+ * panel reads as a bottom-pinned sibling of Settings rather than a global panel
+ * icon at the top of the column.
  *
- * The shell wraps nothing here, so this component owns the surface: the
- * button, its chrome and its accessible name. In the expanded column it draws
- * the title row, then one block per quota window (5-hour, then weekly) — the
- * window's own spend and limit (`$1.32 / $6.00`), its percentage and its bar —
- * and nothing else: the card's figures are the two windows the account runs
- * into, so the period total stays in the tooltip rather than taking a third
- * line. In the 56px rail it collapses to a 36px icon button carrying the ring,
- * matching the shell's own rail geometry. `wide` comes from the shell as an
- * owner prop — unlike the old `sidebar.panellist` row, this slot really does
- * supply it.
+ * The shell wraps nothing here, so this component owns the surface: the button,
+ * its chrome and its accessible name. Expanded, it draws the title row and one
+ * block per quota window (5-hour, then weekly) — the window's own spend and
+ * limit, its percentage and its bar — and nothing else, because those two
+ * windows are the figures an account runs into, so the period total stays in the
+ * tooltip. In the 56px rail it collapses to a 36px icon button carrying the ring,
+ * matching the shell's own rail geometry; `wide` comes from the shell.
  *
  * Rendering is gated on the settings page's `showSidebarQuota` toggle, which
  * defaults OFF: a fresh install shows no quota surface in the sidebar and runs
  * no background poll. The gate reads the STORED document (the settings
- * controller's `sidebarQuota` fact), so an unsaved draft cannot show the card,
- * while a landed save flips it live. The entry is still REGISTERED — this is a
- * render decision, not a slot registration, so nothing churns the slot ledger.
+ * controller's `sidebarQuota` fact), so an unsaved draft cannot show the card
+ * while a landed save flips it live. The entry stays REGISTERED — this is a
+ * render decision, so nothing churns the slot ledger.
  */
 export function CommandCodeFooterEntry(props: CommandCodeFooterEntryProps) {
-  // The card is opt-in (`showSidebarQuota`, default off) and follows the
-  // STORED document, never the settings page's staged draft — see
-  // `SettingsPageState.sidebarQuota`. While it is hidden this component renders
-  // NOTHING — no expanded card, no rail icon — and starts no background usage
-  // poll; the dashboard cell stays registered but has no trigger, which is
-  // exactly what "hide the quota display" means.
+  // While hidden this component renders NOTHING — no expanded card, no rail
+  // icon — and starts no background usage poll; the dashboard cell stays
+  // registered but has no trigger, which is exactly what "hide the quota
+  // display" means.
   const visible = props.useCommandCodeSettings((snapshot) => snapshot.sidebarQuota)
   const view = usePanelView(props)
 
@@ -459,8 +446,8 @@ export function CommandCodeFooterEntry(props: CommandCodeFooterEntryProps) {
 
   const text = (key: PanelKey): string => view.text[key] ?? key
   // The ring tracks the tightest window — the 5-hour one whenever it is capped,
-  // which is the limit an account actually runs into first. `footerBars` is
-  // ordered that way, so the leading bar is the headline.
+  // which is the limit an account runs into first, and `footerBars` is ordered
+  // that way, so the leading bar is the headline.
   const headline = view.footerBars[0]
   // The tooltip doubles as the accessible name; it always begins with the
   // visible title, so the label the user reads is contained in the name.

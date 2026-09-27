@@ -2,14 +2,11 @@
  * Opt-in raw-stream trace for the Command Code transports.
  *
  * Why this exists: this route's failure mode of record is a response that ENDS
- * EARLY. The gateway, an intermediary proxy, or the network closes the socket
- * mid-generation, so the adapter's read loop sees `done` without ever seeing
- * the transport's terminal event. From inside the adapter those two endings are
- * indistinguishable — the provider cut the stream, a proxy timed out, or the
- * socket was dropped — and the only artifact that separates them is the raw
- * wire: which events actually arrived, when the last one landed, how long the
- * socket then sat silent, and how it ended. Without that, a truncated answer is
- * a report with no evidence attached.
+ * EARLY — the gateway, a proxy or the network closes the socket mid-generation,
+ * so the adapter's read loop sees `done` without the transport's terminal event.
+ * A provider cut, a proxy timeout and a dropped socket are indistinguishable
+ * from inside the adapter; only the raw wire separates them — which events
+ * arrived, when the last one landed, how long the socket then sat silent.
  *
  * Enable it per process:
  *
@@ -19,29 +16,31 @@
  * ```
  *
  * Any value that is not a flag is a path, and the explicit off-spellings
- * (`0`, `false`, `no`, `off`) are recognized as "off" rather than being taken
- * for a file name.
+ * (`0`, `false`, `no`, `off`) are read as "off" rather than as a file name.
  *
  * Every model request appends one JSONL record per raw chunk plus lifecycle
- * records (`response`, `eof`, `idle-timeout`, `read-error`, `end`,
- * `stream-close`), each stamped with `at` — milliseconds since that request's
- * first byte. The chunk records carry the provider's own payload verbatim
- * (bounded per chunk), because a truncated answer is exactly what is being
- * diagnosed: treat the file as conversation content, not as a log safe to
- * share. It never carries the request body, an API key, or any request header.
+ * records (`request`, `response`, `eof`, `idle-timeout`, `read-error`, `end`,
+ * `stream-close`), each stamped with `streamId` and `at` — milliseconds since
+ * the trace opened, before connecting. `stream-open.startedAt` is Unix time in
+ * milliseconds, so interleaved calls and session logs can be correlated.
  *
- * Deliberate trade-offs:
- *  - OFF costs one `process.env` read per request.
- *  - ON appends synchronously, one file open per chunk. The trace must survive
- *    a host killed mid-diagnosis, and the microseconds it costs are irrelevant
- *    beside the seconds-scale silences it is there to measure.
- *  - A trace that cannot be written turns itself off instead of failing the
- *    request it is observing: a diagnostic must never become the outage.
+ * PRIVACY: the chunk records carry the provider's own payload verbatim, because
+ * a truncated answer is exactly what is being diagnosed — treat the file as
+ * conversation content, not as a log safe to share. The request-side record
+ * records structural counts and SHA-256 fingerprints only; it never carries the
+ * raw request body, an API key, or any request header. Keep it that way.
+ *
+ * Trade-offs: OFF costs one `process.env` read per request; ON appends
+ * synchronously, one file open per chunk, because the trace must survive a host
+ * killed mid-diagnosis. A trace that cannot be written turns itself off rather
+ * than failing the request it observes — a diagnostic must never become the
+ * outage.
  *
  * @module
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -54,11 +53,11 @@ export const STREAM_TRACE_DEFAULT_FILE = 'dsh-commandcode-stream.jsonl'
 /**
  * Ceiling for ONE request's trace, in bytes.
  *
- * A long generation is megabytes of SSE; the interesting part is always the
+ * A long generation is megabytes of SSE and the interesting part is always the
  * tail, but records are appended in arrival order, so the cap is what keeps a
- * forgotten trace from filling a disk. Hitting it stops payload records;
- * one bounded `end` and `stream-close` record can still follow so a long
- * reasoning phase cannot hide the very terminal outcome being diagnosed.
+ * forgotten trace from filling a disk. Hitting it stops payload records only: one
+ * bounded `end` and `stream-close` can still follow, so a long reasoning phase
+ * cannot hide the very terminal outcome being diagnosed.
  */
 export const STREAM_TRACE_MAX_BYTES = 4 * 1024 * 1024
 
@@ -74,7 +73,7 @@ const FLAG_VALUES = new Set(['1', 'true', 'yes', 'on'])
  * A user turning the trace off writes `false` as readily as they write `1` to
  * turn it on, and without this set every one of these spellings fell through to
  * "…so it must be a path" — the trace switched ON and wrote the conversation to
- * a file NAMED `false` (or `0`, or `off`) in the process's working directory.
+ * a file NAMED `false` in the process's working directory.
  */
 const OFF_VALUES = new Set(['0', 'false', 'no', 'off'])
 
@@ -141,6 +140,7 @@ export function openStreamTrace(
   if (path === undefined) return OFF
   const now = options.now ?? Date.now
   const startedAt = now()
+  const streamId = randomUUID()
   let written = 0
   let stopped = false
   let capped = false
@@ -160,7 +160,7 @@ export function openStreamTrace(
     if (terminal && terminals.has(String(record.event))) return
     let line: string
     try {
-      line = `${JSON.stringify({ at: now() - startedAt, scope, ...record })}\n`
+      line = `${JSON.stringify({ at: now() - startedAt, scope, streamId, ...record })}\n`
     } catch {
       // A payload that cannot be serialized (a cycle, a BigInt) drops that
       // record only; the trace stays on for the records that do serialize.
@@ -173,7 +173,7 @@ export function openStreamTrace(
       terminals.add(String(record.event))
     } else if (written + Buffer.byteLength(line) > STREAM_TRACE_MAX_BYTES) {
       capped = true
-      line = `${JSON.stringify({ at: now() - startedAt, scope, event: 'trace-capped', bytes: written })}\n`
+      line = `${JSON.stringify({ at: now() - startedAt, scope, streamId, event: 'trace-capped', bytes: written })}\n`
     }
     try {
       appendFileSync(path, line)
@@ -182,9 +182,9 @@ export function openStreamTrace(
       stopped = true
     }
   }
-  write({ event: 'stream-open' })
+  write({ event: 'stream-open', startedAt })
   return {
-    enabled: true,
+    get enabled() { return !stopped && !capped },
     record(event, fields) {
       write(fields === undefined ? { event } : { event, ...fields })
     },

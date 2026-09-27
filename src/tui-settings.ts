@@ -1,44 +1,29 @@
 /**
  * dsh-TUI settings section (`tuiSettingsSections`).
  *
- * The terminal front door (dsh-TUI) owns its settings screen and asks plugins
- * only to DECLARE what is editable: a section over the plugin's own settings
- * namespace, which the screen renders and writes through the dsh settings
- * service. Without such a declaration a TUI-only user cannot enter the Command
+ * dsh-TUI owns its settings screen and asks plugins only to DECLARE what is
+ * editable. Without a declaration a TUI-only user cannot enter the Command
  * Code API key at all — the web Models page is the only surface that writes
- * it, and dsh-TUI's own `/provider` wizard manages its `llm-pi-ai` routes
- * exclusively (issue #28).
+ * it, and dsh-TUI's `/provider` wizard manages its `llm-pi-ai` routes
+ * exclusively (issue #28). The seam is third-party, so this module carries
+ * LOCAL structural types and reads the service defensively; registration rides
+ * the plugin entry's `ctx.inject(['tuiSettingsSections'], …)`, so a profile
+ * without dsh-TUI never activates the fiber.
  *
- * The seam is third-party, so this module carries LOCAL structural types
- * instead of importing `@deepseek-harness-tui/dsh-tui`: the plugin keeps zero
- * dependency on a terminal front door it may never meet, and an unmeet seam
- * degrades to "no section" rather than to a failed import. Registration rides
- * `ctx.inject(['tuiSettingsSections'], …)` in the plugin entry, so a profile
- * without dsh-TUI never activates the fiber — the same optional-service shape
- * `commands`, `web` and `typert` already use.
- *
- * The API-key field is a **secret** field: dsh-TUI keeps the literal out of
- * the settings document and writes the draft through the credentials seam
- * under the declared reference — the same guarantee the web card provides.
- * The reference must not collide with a host-owned one; dsh-TUI rejects
- * `DEEPSEEK_*`/`DSH_*` refs from plugin sections, and this plugin's default
- * (`COMMANDCODE_API_KEY`) is its own namespace.
+ * The API-key field is a **secret** field: the literal goes to the credentials
+ * seam, never into a settings document. Its reference must stay out of the
+ * host-reserved namespace (`DEEPSEEK_*`/`DSH_*`) — dsh-TUI silently DROPS a
+ * field with a reserved ref, which would leave a page with no key input.
  *
  * The model allowlist is a **checkbox per catalog model**, grouped by plan
- * tier — the terminal counterpart of the web page's searchable dropdown, and
- * the reason this page does not ask anyone to type 60+ model ids from memory.
- * dsh-TUI's seam has no multi-select kind (only `text | number | boolean |
- * select`) and no array element path a checkbox could own, so each model is
- * its own `boolean` field that WRITES THE WHOLE ARRAY through its `parse`:
- * the seam lets a field's write carry any value, which is what makes a
- * per-model checkbox express set membership. Two rules keep that honest.
- * (1) `parse` reads the allowlist LIVE through its thunk instead of the value
- * the field was built with, and rebuilds the array from THAT: the screen
- * stages several toggles into one save, so a captured base would let two
- * quick toggles resurrect each other's stale list. (2) An empty allowlist
- * means "show every model" to the adapter, so the checkboxes render the
- * EFFECTIVE set — unset shows everything checked, and checking a box only
- * records an explicit list once something is excluded.
+ * tier — the terminal counterpart of the web page's searchable dropdown. The
+ * seam has no multi-select kind (`text | number | boolean | select`) and no
+ * array element path a checkbox could own, so each model is its own `boolean`
+ * field at `modelVisibility.<id>` whose `parse` writes the whole array. The
+ * `parse` reads the allowlist LIVE (the screen stages several toggles into one
+ * save, so a captured base would let two quick toggles resurrect each other's
+ * stale list), and an empty allowlist means "show every model" to the adapter,
+ * so the checkboxes render the EFFECTIVE set.
  *
  * @module dsh-commandcode-provider/tui-settings
  */
@@ -62,11 +47,9 @@ export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
 
 /** One choice of an options-bearing field. */
 export interface TuiSettingsFieldOption {
-  /** Stored value. */
   readonly value: string
   /** Display label (English; also the fallback). */
   readonly label: string
-  /** Provider-owned translations for the label. */
   readonly descriptions?: TuiLocalizedText
 }
 
@@ -81,11 +64,9 @@ export interface TuiSettingsField {
   readonly path: readonly string[]
   /** Short field label (English; also the fallback). */
   readonly label: string
-  /** Provider-owned translations for the label. */
   readonly descriptions?: TuiLocalizedText
   /** Optional one-line help rendered under the field. */
   readonly hint?: string
-  /** Provider-owned translations for the hint. */
   readonly hintDescriptions?: TuiLocalizedText
   /** Optional group id; grouped fields render on that group's subpage. */
   readonly group?: string
@@ -116,7 +97,6 @@ export interface TuiSettingsGroup {
   readonly id: string
   /** Group title (English; also the fallback). */
   readonly title: string
-  /** Provider-owned translations for the title. */
   readonly descriptions?: TuiLocalizedText
 }
 
@@ -126,7 +106,6 @@ export interface TuiSettingsSection {
   readonly ns: string
   /** Section title (English; also the fallback). */
   readonly title: string
-  /** Provider-owned translations for the title. */
   readonly descriptions?: TuiLocalizedText
   /** Optional navigation groups, in display order. */
   readonly groups?: readonly TuiSettingsGroup[]
@@ -178,11 +157,10 @@ export interface TuiModelChoice {
  * free before paid inside a tier, then by id.
  *
  * The list is the static capability snapshot rather than a live catalog read
- * on purpose — a settings page must draw synchronously, and the snapshot is
- * synced from the same upstream table the picker's tier headings come from.
- * A model added upstream after this build still reaches the user: an empty
- * allowlist shows everything, and a model named in the allowlist but absent
- * here is rendered by the "Other" group instead of disappearing.
+ * on purpose — a settings page must draw synchronously. A model added
+ * upstream after this build still reaches the user: an empty allowlist shows
+ * everything, and a model named in the allowlist but absent here is rendered
+ * by the "Other" group instead of disappearing.
  */
 export function commandCodeTuiModelChoices(): readonly TuiModelChoice[] {
   return Object.keys(KNOWN_PLANS)
@@ -252,14 +230,13 @@ export interface CommandCodeTuiSettingsDeps {
  * Build the section descriptor. Pure, so tests can pin the exact fields
  * without a dsh-TUI host.
  *
- * Field choices worth keeping: the two option-bearing fields (`activeAccount`,
- * `lang`) are `text` + `options` rather than `select`, because a `select`
- * cannot express "unset" — cycling only ever lands on a declared option, so a
- * `select` would strand the user on a pinned value with no way back to
- * automatic. The `auto` sentinel plus a `parse` that clears the path keeps the
- * unset state reachable. `filterModelsByPlan` formats its EFFECTIVE default
- * (unset means true at the adapter), so a fresh install reads true instead of
- * the screen's "(empty)".
+ * The two option-bearing fields (`activeAccount`, `lang`) are `text` +
+ * `options` rather than `select`, because a `select` cannot express "unset" —
+ * cycling only ever lands on a declared option, so it would strand the user on
+ * a pinned value with no way back to automatic. The `auto` sentinel plus a
+ * `parse` that clears the path keeps unset reachable. `filterModelsByPlan`
+ * formats its EFFECTIVE default (unset means true at the adapter) so a fresh
+ * install reads true instead of the screen's "(empty)".
  */
 export function buildCommandCodeTuiSection(
   deps: CommandCodeTuiSettingsDeps,
@@ -269,12 +246,9 @@ export function buildCommandCodeTuiSection(
   const choices = (deps.modelChoices ?? commandCodeTuiModelChoices)()
   const catalogIds = choices.map((choice) => choice.id)
   const known = new Set(catalogIds)
-  // An empty allowlist means "show every model" at the adapter, so an
-  // unchecked-for-no-reason model reads as visible. The stored facts are read
-  // live by each field, never captured here.
   const stored = storedIds(deps.visibleModels())
   const overrides = deps.modelVisibility?.() ?? {}
-  // Models this build's catalog cannot place (retired or renamed upstream, or
+  // Models this build's catalog cannot place (retired, renamed upstream, or
   // added after this snapshot) plus stored-but-unknown ids. They get their own
   // group so they stay visible and switchable instead of silently sticking.
   const extras = [...new Set([...stored, ...Object.keys(overrides)])].filter((id) => !known.has(id))
@@ -286,8 +260,7 @@ export function buildCommandCodeTuiSection(
       title: `${TIER_TITLES[tier] ?? tier} models`,
       descriptions: { zh: `${TIER_TITLES[tier] ?? tier} 模型` },
     }))
-  // Models this snapshot cannot place (a tier added upstream) share the group
-  // with the stored-but-unknown allowlist entries.
+  // A tier this snapshot cannot place shares the "Other" group above.
   const unranked = choices.filter((choice) => tierRank(choice.tier) === TIER_ORDER.length)
   const otherGroup = unranked.length > 0 || extras.length > 0
     ? [{ id: OTHER_GROUP_ID, title: 'Other models', descriptions: { zh: '其他模型' } }]
@@ -301,12 +274,9 @@ export function buildCommandCodeTuiSection(
    * ONE draft: every one of them then parses that same draft on save, all N
    * write ops address the same path, and only the LAST field's op survives —
    * which silently rewrote the allowlist from the last catalog model instead
-   * of the one that was toggled. A per-model key is what makes a checkbox
-   * express one model's state.
-   *
-   * An override equal to what the array already says is written as a CLEAR, so
-   * toggling a model back to its inherited state leaves no residue and the
-   * document stays minimal.
+   * of the one that was toggled. An override equal to what the array already
+   * says is written as a CLEAR, so toggling a model back to its inherited
+   * state leaves no residue.
    */
   const modelField = (id: string, hint: string, group: string): TuiSettingsField => ({
     path: ['modelVisibility', id],
@@ -323,9 +293,8 @@ export function buildCommandCodeTuiSection(
     },
     parse: (text) => {
       const on = text.trim() === 'true'
-      // Read the array LIVE, not at registration time: the screen stages a
-      // toggle and saves it later, and the inherited state must be judged
-      // against what the document holds when the write runs.
+      // Live, not captured at registration: the host stages a toggle and
+      // saves it later.
       const listed = storedIds(deps.visibleModels())
       const inherited = listed.length === 0 || listed.includes(id)
       return on === inherited ? { kind: 'clear' } : { kind: 'set', value: on }
@@ -366,42 +335,6 @@ export function buildCommandCodeTuiSection(
         parse: (text) => {
           const trimmed = text.trim()
           return trimmed === '' ? { kind: 'clear' } : { kind: 'set', value: trimmed }
-        },
-      },
-      {
-        path: ['commandGuard'],
-        group: 'advanced',
-        kind: 'boolean',
-        label: 'AI command guard',
-        descriptions: { zh: 'AI 命令安全预判' },
-        hint: 'typesafe/jev judges whether a shell command is safe; sandbox escalations'
-          + ' also need separate scope and necessity verdicts. All must be confident'
-          + ' enough; everything else asks as usual. Off by default.',
-        hintDescriptions: { zh: '由 typesafe/jev 判断 shell 命令是否安全；沙箱提权还要分别判断范围与必要性，三项都足够确定才自动放行，其余照常弹窗。默认关闭。' },
-        // Off is the shipped default and the safe reading of an unset document.
-        format: (value) => (value === true ? 'true' : 'false'),
-        parse: (text) => ({ kind: 'set', value: text.trim() === 'true' }),
-      },
-      {
-        path: ['commandGuardLevel'],
-        group: 'advanced',
-        kind: 'select',
-        label: 'Auto-approve threshold',
-        descriptions: { zh: '自动放行阈值' },
-        hint: 'How confident typesafe/jev must be before a command runs without asking. Default: medium.',
-        hintDescriptions: { zh: 'typesafe/jev 需要多确定才免弹窗放行；默认「中」。' },
-        // Mirrors COMMAND_GUARD_LEVELS / COMMAND_GUARD_LEVEL_THRESHOLDS in ./command-guard.ts.
-        options: [
-          { value: 'high', label: 'High (0.95, approves least)', descriptions: { zh: '高（0.95，放行最少）' } },
-          { value: 'medium', label: 'Medium (0.9)', descriptions: { zh: '中（0.9）' } },
-          { value: 'low', label: 'Low (0.8, approves most)', descriptions: { zh: '低（0.8，放行最多）' } },
-        ],
-        format: (value) => (value === 'high' || value === 'low' ? value : 'medium'),
-        parse: (text) => {
-          const trimmed = text.trim()
-          return trimmed === 'high' || trimmed === 'medium' || trimmed === 'low'
-            ? { kind: 'set', value: trimmed }
-            : undefined
         },
       },
       {
@@ -534,9 +467,7 @@ function sectionSignature(section: TuiSettingsSection): string {
   return JSON.stringify({
     secret: section.fields.find((field) => field.secret !== undefined)?.secret?.ref ?? '',
     options: active?.options?.map((option) => option.value) ?? [],
-    // Only this group's membership can change the field LIST: every catalog
-    // checkbox reads its own state live, so an ordinary toggle needs no
-    // re-declaration.
+    // Only this group's membership can change the field LIST.
     other: section.fields
       .filter((field) => field.group === OTHER_GROUP_ID)
       .map((field) => field.label),
@@ -546,12 +477,10 @@ function sectionSignature(section: TuiSettingsSection): string {
 /**
  * Register the Command Code section on a dsh-TUI host.
  *
- * @param ctx - the context of an activated `tuiSettingsSections` injection.
- * @param deps - plugin-owned facts the section reads.
  * @returns a refresh function that re-registers the section when a fact it
- *   renders changed (the plugin entry calls it from its settings `onChange`
- *   hook), or `undefined` when the seam is unusable. The returned function is
- *   inert after the fiber is torn down.
+ *   renders changed — the plugin entry calls it from its
+ *   `loader/volatile-update` listener — or `undefined` when the seam is
+ *   unusable. The returned function is inert after the fiber is torn down.
  */
 export function applyCommandCodeTuiSettings(
   ctx: Context,
@@ -574,10 +503,9 @@ export function applyCommandCodeTuiSettings(
     try {
       current = { signature, dispose: service.register(section) }
     } catch (error: unknown) {
-      // A host that rejects the declaration (a shadow-mode capability policy,
-      // a future contract change) must not take the plugin down with it: the
-      // terminal simply keeps no Command Code page, and the web settings
-      // page stays the fallback.
+      // A rejecting host (a shadow-mode capability policy, a future contract
+      // change) must not take the plugin down: the terminal simply keeps no
+      // Command Code page, and the web settings page stays the fallback.
       ctx.logger?.warn(
         `llm-commandcode: could not register the dsh-TUI settings section: ${
           error instanceof Error ? error.message : String(error)

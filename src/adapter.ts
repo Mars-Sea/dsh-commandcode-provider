@@ -5,14 +5,11 @@
  * community-maintained integration; you need your own Command Code account
  * and API key or subscription, and Command Code's terms apply.
  *
- * Wire protocol (reverse-engineered by the pi plugin, command-code@1.28.4;
- * re-verified through command-code@1.65.2):
- *   POST {apiBase}/alpha/generate
- *   body: { config, memory, taste, skills, params: { model, messages, tools,
- *          system, max_tokens, temperature, stream, reasoning_effort? }, threadId }
- *   SSE-ish JSONL events: text-delta | reasoning-start/delta/end | tool-call
- *                         | tool-result | cache-write-tokens | finish | error
- *   Model catalog: GET {apiBase}/provider/v1/models -> { object: 'list', data: [...] }
+ * Owns the two chat transports (`/alpha/generate`, `/provider/v1/chat/completions`),
+ * message conversion, SSE/JSONL parsing, the catalog + its on-disk cache, and
+ * the pre-stream account rotation loop. The wire protocol is
+ * reverse-engineered (command-code@1.28.4, re-verified through 1.66.0);
+ * AGENTS.md holds the full protocol record.
  *
  * The adapter is deliberately free of cordis/schemastery: it receives a
  * per-request options thunk and an API-key resolver from the plugin entry
@@ -23,7 +20,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
 
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -35,6 +32,7 @@ import {
   isContextWindowExceededError,
   LlmAdapter,
   LlmError,
+  ProviderRequestId,
   ReasoningEffortId,
   ToolCallId,
   errorChain,
@@ -80,7 +78,7 @@ import {
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.65.2'
+export const COMMAND_CODE_CLI_VERSION = '1.66.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 export const DEFAULT_GENERATE_MAX_TOKENS = 64_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65_536
@@ -114,7 +112,7 @@ export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 const MODEL_CACHE_VERSION = 1
 
 // ---------------------------------------------------------------------------
-// Small helpers (ported from converters.ts / models.ts)
+// Small helpers
 // ---------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -129,6 +127,116 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+/** A size-and-hash summary safe to put in an opt-in diagnostic trace. */
+interface ValueFingerprint {
+  bytes: number
+  sha256: string
+}
+
+/** Hash one request value without retaining or logging its contents. */
+function fingerprintValue(value: unknown): ValueFingerprint {
+  let serialized: string
+  try {
+    serialized = JSON.stringify(value) ?? String(value)
+  } catch {
+    serialized = String(value)
+  }
+  return {
+    bytes: Buffer.byteLength(serialized),
+    sha256: createHash('sha256').update(serialized).digest('hex'),
+  }
+}
+
+/**
+ * Structural request facts for issue #64's cache diagnosis.
+ *
+ * This deliberately records hashes and counts, never the prompt, tool
+ * descriptions, image bytes, headers, or credentials. `body` catches changes
+ * in any wire field; the named sections make a changed system/tools/messages
+ * prefix visible without making the trace a copy of the conversation.
+ */
+function requestFingerprint(protocol: CommandCodeProtocol, body: Record<string, unknown>): Record<string, unknown> {
+  const params = protocol === 'cli' ? recordOrEmpty(body.params) : body
+  const messages = Array.isArray(params.messages) ? params.messages : []
+  const tools = Array.isArray(params.tools) ? params.tools : []
+  return {
+    protocol,
+    model: typeof params.model === 'string' ? params.model : undefined,
+    threadId: typeof body.threadId === 'string' ? body.threadId : undefined,
+    body: fingerprintValue(body),
+    config: fingerprintValue(body.config),
+    system: fingerprintValue(protocol === 'cli' ? params.system : messages.filter((m) => isRecord(m) && m.role === 'system')),
+    tools: {
+      count: tools.length,
+      ...fingerprintValue(tools),
+    },
+    messages: {
+      count: messages.length,
+      roles: messages.map((message) => isRecord(message) && typeof message.role === 'string' ? message.role : 'unknown'),
+      ...fingerprintValue(messages),
+      // Whole-history hashes change on every append. Per-message hashes let
+      // adjacent requests identify the first changed byte-bearing message.
+      items: messages.map((message) => fingerprintValue(message)),
+    },
+  }
+}
+
+/** Only provider correlation headers, never a wholesale response-header dump. */
+const RESPONSE_ID_HEADERS = ['x-request-id', 'request-id', 'x-trace-id', 'x-generation-id', 'traceparent'] as const
+
+function responseIdentifiers(headers: Headers): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const name of RESPONSE_ID_HEADERS) {
+    const value = diagnosticId(headers.get(name))
+    if (value !== undefined) result[name] = value
+  }
+  return result
+}
+
+function diagnosticId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 512 ? value : undefined
+}
+
+/** Small, JSON-only response facts that DSH can retain on the assistant source. */
+interface ResponseMetadata {
+  protocol: CommandCodeProtocol
+  headers: Record<string, string>
+  responseId?: string
+  generationId?: string
+  providerRequestId?: string
+  traceId?: string
+}
+
+function captureResponseIdentifiers(metadata: ResponseMetadata, event: unknown): void {
+  if (!isRecord(event)) return
+  // An OpenAI completion id or an AI SDK response-metadata id names the
+  // response. A tool-call id does not, so never collect generic CLI event ids.
+  if ((metadata.protocol === 'openai' && Array.isArray(event.choices)) || event.type === 'response-metadata') {
+    const id = diagnosticId(event.id)
+    if (id !== undefined) metadata.responseId = id
+  }
+  for (const name of ['generationId', 'providerRequestId', 'traceId'] as const) {
+    const id = diagnosticId(event[name])
+    if (id !== undefined) metadata[name] = id
+  }
+}
+
+function hasResponseIdentifiers(metadata: ResponseMetadata): boolean {
+  return Object.keys(metadata.headers).length > 0 || metadata.responseId !== undefined
+    || metadata.generationId !== undefined || metadata.providerRequestId !== undefined || metadata.traceId !== undefined
+}
+
+/** Keep the provider's request id on DSH's durable failure, when it supplied one. */
+function failureWithRequestId(error: unknown, metadata: ResponseMetadata): unknown {
+  const id = metadata.providerRequestId ?? metadata.headers['x-request-id'] ?? metadata.headers['request-id']
+  if (!(error instanceof LlmError) || error.failure.requestId !== undefined || id === undefined) return error
+  return new LlmError(error.message, error.code, {
+    ...error.failure,
+    requestId: ProviderRequestId(id),
+    ...(error.cause === undefined ? {} : { cause: error.cause }),
+  })
+}
+
 function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
@@ -139,16 +247,13 @@ function booleanValue(value: unknown): boolean | undefined {
  *
  * Entries are read by their own text members rather than filtered on `type`:
  * DeepSeek sends `{ type: 'reasoning.text', text }` while the OpenAI family
- * sends `{ type: 'reasoning.summary', summary, format: 'openai-responses-v1' }`
- * — the same summary text the scalar `delta.reasoning` carries, in the
- * Responses protocol's vocabulary. A `type` filter would drop one family or the
- * other, and losing thinking is the failure this exists to prevent.
- *
- * `text` wins per entry, but an EMPTY `text` must not shadow a populated
- * `summary` (the Responses wire emits `text: ''` placeholders), so the fallback
- * tests for non-empty rather than merely present. Entries carrying neither
- * member — the encrypted blobs — contribute nothing, and no entry contributes
- * both, so a summary is never counted twice.
+ * sends `{ type: 'reasoning.summary', summary }` — the same summary text the
+ * scalar `delta.reasoning` carries. A `type` filter would drop one family, and
+ * losing thinking is the failure this exists to prevent. `text` wins per entry,
+ * but an EMPTY `text` must not shadow a populated `summary` (the Responses wire
+ * emits `text: ''` placeholders), so the fallback tests for non-empty rather
+ * than merely present. Encrypted-blob entries carry neither member and
+ * contribute nothing; no entry carries both, so nothing is counted twice.
  *
  * Returns undefined when the array yields nothing, so the caller's `??` chain
  * keeps falling through instead of treating "no text" as a reasoning delta.
@@ -170,9 +275,7 @@ function reasoningDetailsText(value: unknown): string | undefined {
  * none" — the same rule {@link reasoningDetailsText} applies inside the array.
  * The scalar and the array describe the same thinking, so an empty spelling of
  * one must not shadow populated text in the other (the Responses wire pads with
- * `text: ''`). `??` alone cannot express this: an empty string is not nullish,
- * so `reasoning: ''` beside a populated `reasoning_details` used to drop the
- * whole chunk's thinking.
+ * `text: ''`), and `??` alone cannot express that.
  */
 function nonEmptyText(value: string | undefined): string | undefined {
   return value === undefined || value === '' ? undefined : value
@@ -246,30 +349,21 @@ function isZdrNoProviders(providerCode: string | undefined, providerDetail: stri
 /**
  * Classify one in-band stream `error` payload into the failure the caller
  * throws. Shared by both transports — the CLI transport delivers it as an
- * `error` event (`{ type: 'error', error }`), the Provider API transport as a
- * top-level `error` member of an SSE chunk — so the two cannot drift apart.
+ * `error` event, the Provider API transport as a top-level `error` member of
+ * an SSE chunk — so the two cannot drift apart.
  *
  * The wording decides before the status does, mirroring the official CLI's
- * `classifyKind` (which reads the message first) and the harness helpers
- * (which exist so thrown and in-band delivery share one classifier). Order is
- * load-bearing:
+ * `classifyKind` (which reads the message first). Order is load-bearing:
  *
  * - A context-window rejection is terminal for THIS request but recoverable by
  *   the harness: `dsh-compaction-basic` listens on `agent/request-error` for
  *   `CONTEXT_WINDOW_EXCEEDED` and answers it with a compaction + retry of the
- *   reduced surface. That is what lets a long session survive a request that
- *   outgrew the model's window, and it is what the official CLI does (its
- *   non-retryable `truncated` kind). Reported as retryable `SERVER` — where
- *   this wording landed before — the adapter resent the byte-identical
- *   oversized request up to `maxRetries` times and the session could never
- *   recover, which is exactly the endless-retry-at-long-context report
- *   (issue #39).
+ *   reduced surface. Reported as retryable `SERVER` instead, the adapter resent
+ *   the byte-identical oversized request up to `maxRetries` times and the
+ *   session could never recover (issue #39).
  * - Credits/plan wording is terminal, so an exhausted balance or a model
  *   outside the plan is not retried as if it were a transient rate limit.
- * - Only then does the status/`isRetryable` pair decide — and an explicit
- *   refusal (`isRetryable: false`) or a terminal marker OUTRANKS a status, so a
- *   5xx carrying "insufficient credits" stays terminal instead of entering the
- *   retry cadence as `SERVER`.
+ * - Only then does the status/`isRetryable` pair decide.
  */
 function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmError {
   const record = isRecord(value) ? value : undefined
@@ -302,10 +396,8 @@ function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmErr
   const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
   // An explicit refusal and a terminal marker both outrank the STATUS, so a 5xx
   // that carries "insufficient credits" (or `isRetryable: false`) cannot be
-  // answered with `SERVER` — that put a permanent refusal back on
-  // dsh-llm-retry's 1000-attempt cadence. Only a status with no such evidence
-  // keeps the transient mapping, and an explicit `isRetryable: true` still
-  // wins over everything.
+  // answered with `SERVER` and handed to dsh-llm-retry's 1000-attempt cadence.
+  // An explicit `isRetryable: true` still wins over everything.
   const retryable = isRetryable === true
     || (isRetryable === false || terminal
       ? false
@@ -338,17 +430,13 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Tool-schema normalization (issue #35)
-// The gateway validates every function schema's ROOT as an object schema and
-// rejects the whole request otherwise (`schema must be a JSON Schema of
-// type: "object", got type: null`). Tool schemas do not always come from
-// the harness's own typed builder, which always declares `type: 'object'`: a
+// Tool-schema normalization (issue #35). The gateway validates every function
+// schema's ROOT as an object schema and rejects the whole request otherwise.
+// Tool schemas do not always come from the harness's own typed builder: a
 // third-party plugin or an MCP bridge can register a hand-written schema, and
 // a generator can emit a root `$ref`. Neither is this plugin's to correct, but
 // the request is the plugin's to send, so every schema leaving here is
-// normalized to the object root the provider requires. Only the root is
-// touched, and every path returns a copy: the harness may deep-freeze the
-// caller's schema.
+// normalized to the object root the provider requires.
 // ---------------------------------------------------------------------------
 
 /** How deep a root `$ref` / combinator chain is followed while normalizing. */
@@ -451,6 +539,8 @@ function mergeCombinatorBranches(
  * resolved/merged; anything else (an array/scalar root, or no schema at all)
  * degrades to a permissive free-form object, because a request the provider
  * refuses helps no one and the tool's own description is still in the prompt.
+ * Only the root is touched and every path returns a copy: the harness may
+ * deep-freeze the caller's schema.
  */
 function toolParametersSchema(parameters: unknown, depth = 0): Record<string, unknown> {
   if (!isRecord(parameters)) return { type: 'object', properties: {}, additionalProperties: true }
@@ -509,10 +599,9 @@ function parseStreamEventLine(line: string): unknown | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Credential fallback from the official Command Code CLI auth file. Used as
-// the last fallback by the plugin entry, so a user who already logged in with
-// `command-code login` can reuse that credential. Only the official CLI's own
-// file is read — pi/OMP auth files are intentionally not scanned, so their
+// Credential fallback from the official Command Code CLI auth file, the last
+// fallback in the plugin entry's resolution order. Only the official CLI's own
+// file is read — pi/OMP auth files are intentionally NOT scanned, so their
 // credentials and formats cannot surprise this adapter.
 // ---------------------------------------------------------------------------
 
@@ -545,7 +634,7 @@ export function resolveAuthFileApiKey(): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Model catalog discovery with on-disk cache fallback (ported from models.ts)
+// Model catalog discovery with on-disk cache fallback
 // ---------------------------------------------------------------------------
 
 interface CommandCodeModel {
@@ -603,13 +692,12 @@ async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): 
 
 // ---------------------------------------------------------------------------
 // Message conversion: harness RequestMessage[] -> Command Code wire messages.
-// Both transports replay historical reasoning. The CLI transport carries it as
-// a `reasoning` block inside the assistant message (the shape the official
-// CLI's `toWireMessages` emits), the Provider API transport as the
-// `reasoning_content` field, because DeepSeek's thinking-mode contract
-// requires the previous chain of thought to be passed back whenever tool calls
-// are in play (issue #34). Only tool calls with a paired tool result are
-// replayed on both transports.
+// Both transports replay historical reasoning — as a `reasoning` block on
+// `/alpha/generate` (the official CLI's `toWireMessages` shape) and as
+// `reasoning_content` on `/provider/v1/chat/completions` — because DeepSeek's
+// thinking-mode contract requires the previous chain of thought to be passed
+// back whenever tool calls are in play (issue #34). Only tool calls with a
+// paired tool result are replayed on both transports.
 // ---------------------------------------------------------------------------
 
 /** The tool result one `role: 'tool'` message answers. */
@@ -623,11 +711,10 @@ interface ToolResultView {
  * The tool result one message answers, or undefined when it answers none.
  *
  * The harness models a tool result as its own `role: 'tool'` message carrying
- * `toolCallId`/`isError` beside raw content blocks (a closed role map:
- * `MessageRoleMap.tool` is the only role a tool result can arrive on). Pairing
- * and emission MUST agree on this same view: otherwise a dropped result either
- * drops its call too (making the model forget completed work), or leaves an
- * unanswered call on the wire.
+ * `toolCallId`/`isError` beside raw content blocks (`MessageRoleMap.tool` is
+ * the only role a tool result can arrive on). Pairing and emission MUST agree
+ * on this same view, or a dropped result either drops its call too (making the
+ * model forget completed work) or leaves an unanswered call on the wire.
  */
 function toolResultOf(message: RequestMessage): ToolResultView | undefined {
   if (message.role !== 'tool') return undefined
@@ -670,8 +757,8 @@ function pairedToolCalls(messages: readonly RequestMessage[]): {
  * another provider issued the call — so overlong paired ids are remapped to
  * short per-request aliases. Correlation only needs to hold within one
  * request (each call travels with its result in the same body), so a
- * sequential alias is enough: no durable state, no cross-request stability,
- * and the harness log keeps the original ids.
+ * sequential alias is enough: no durable state, and the harness log keeps the
+ * original ids.
  */
 const MAX_WIRE_TOOL_CALL_ID_LENGTH = 64
 
@@ -723,7 +810,7 @@ interface ToolResultMedia {
 /**
  * Collect text and nested images of one tool result. The harness `read_image`
  * tool returns both, so dropping the image half is what made a tool-read image
- * invisible to a Vision model (issue #30). Deduplication keeps a result that
+ * invisible to a Vision model (issue #30); deduplication keeps a result that
  * repeats one attachment from paying for the same pixels twice.
  */
 function toolResultMedia(block: ToolResultView): ToolResultMedia {
@@ -763,17 +850,14 @@ const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result'
  * tool it just ran rather than to the user; it also leads the part list,
  * because an image-first content array is what some gateways reject.
  *
- * The note names the tool call the image came out of, because a turn's
- * carriers are emitted as a group after the whole tool group (issue #33):
- * position alone would have to carry the association, and every `read_image`
- * result renders the same envelope text, so two parallel calls would produce
- * two identical notes. The id is the WIRE id — the one the model saw on the
- * `tool-call` it issued and on the tool message just above — so an overlong
- * cross-provider id is named by the alias that replaced it, not by the
- * harness-side id the model never saw.
- *
- * Count and pixel dimensions are appended when the tool's own text does not
- * already state them (a result that returns the image and nothing else).
+ * The note names the tool call the image came out of: a turn's carriers are
+ * emitted as a group after the whole tool group (issue #33), so position
+ * cannot carry the association — and every `read_image` result renders the
+ * same envelope text, so two parallel calls would produce two identical
+ * notes. The id is the WIRE id, the one the model saw on the `tool-call` and
+ * on the tool message just above, so an overlong cross-provider id is named
+ * by the alias that replaced it. Count and pixel dimensions are appended
+ * when the tool's own text does not already state them.
  */
 function toolResultImageNote(media: ToolResultMedia, toolCallId: string): string {
   const lead = `${TOOL_RESULT_IMAGE_TEXT} (${toolCallId}):`
@@ -801,16 +885,15 @@ function hasImageContent(message: RequestMessage): boolean {
 // fails with HTTP 413 for the rest of the session, because history is never
 // reclaimed, even though the same conversation works on another provider.
 //
-// The budget, the two rungs, and the byte accounting below are unchanged. The
-// offload set is a DURABLE surface fact: the adapter renders the surface's
-// `offloaded` marks with `projectOffloadedImages`, and when the history still
-// exceeds the budget it does NOT evict — it fails with
+// The offload set is a DURABLE surface fact, not a local edit: the adapter
+// renders the surface's `offloaded` marks with `projectOffloadedImages`, and a
+// history that still exceeds the budget does NOT evict — it fails with
 // `IMAGE_OFFLOAD_REQUIRED` + `offloadImages`, which the default
 // `dsh-compaction-image-offload` plugin turns into one `image/offload` session
 // event and a retry. Every later request on the session then carries the same
-// placeholder text, across restore and fork, and the token meter stops counting
-// the evicted images as context. The budget is accounted in the encoded form,
-// because it is the base64 the wire actually carries that has to fit.
+// placeholder text, across restore and fork. The budget is accounted in the
+// encoded form, because it is the base64 the wire actually carries that has to
+// fit.
 // ---------------------------------------------------------------------------
 
 /**
@@ -885,10 +968,10 @@ export interface SurfaceImagePolicy {
 const ENGINE_IMAGE_POLICY: SurfaceImagePolicy = { projectOffloadedImages, requiredImageOffload }
 
 /**
- * The failure a route raises instead of evicting on its own. The
- * count is the ONE thing the harness needs: `dsh-compaction-image-offload`
- * records it as an `image/offload` event, marks that many oldest retained
- * occurrences, and retries the step.
+ * The failure a route raises instead of evicting on its own. The count is the
+ * ONE thing the harness needs: `dsh-compaction-image-offload` records it as an
+ * `image/offload` event, marks that many oldest retained occurrences, and
+ * retries the step.
  *
  * Deliberately outside `providerRetryPolicy()`'s whitelist: a byte-identical
  * resend cannot succeed, so the retry belongs to the surface mutation, not to
@@ -966,8 +1049,9 @@ async function readRequestImage(
  * Price one request occurrence.
  *
  * Two cases cost no vision tokens at all, and both are priced as their
- * model-visible TEXT so the caller's estimator can charge that instead: a model
- * that accepts text only (the harness projects those images to placeholder text
+ * model-visible TEXT so the caller's estimator can charge that instead (which
+ * is what stops the meter counting an evicted image as context): a model that
+ * accepts text only (the harness projects those images to placeholder text
  * before the request), and an occurrence the session surface has already
  * offloaded (the same placeholder text rides in every later request). A retained
  * occurrence on this route contributes no text at all — the pixels are inlined —
@@ -1022,6 +1106,7 @@ async function messagesToCC(
   // a user message interleaved between tool results breaks the pairing and
   // the request is rejected. So image carriers are buffered and flushed only
   // once the whole tool group (or the next non-tool message) has been emitted.
+  // (messagesToOpenAI buffers for the same reason.)
   const pendingImages: unknown[] = []
   const flushPendingImages = () => {
     for (const message of pendingImages) out.push(message)
@@ -1052,10 +1137,9 @@ async function messagesToCC(
       }
       // A user message that converted to nothing carries no information, and
       // an empty content array is a needless gateway-compat risk, so it is
-      // dropped — the same rule the Provider API converter applies below.
-      // (`dsh-llm-deepseek` instead pushes `content: ''`; skipping is the
-      // safer half of that divergence to keep.) The flush above has already
-      // run, so a pending image carrier is never dropped with it.
+      // dropped — the same rule the Provider API converter applies below. The
+      // flush above has already run, so a pending image carrier is never
+      // dropped with it.
       if (parts.length === 0) continue
       out.push({ role: 'user', content: parts })
       continue
@@ -1070,12 +1154,11 @@ async function messagesToCC(
         } else if (block.type === 'reasoning') {
           // Replay the thinking block, exactly as the official CLI's
           // `toWireMessages` does (command-code@1.54.0: a `thinking` block
-          // becomes `{ type: 'reasoning', text }`). This is not optional
-          // politeness: the gateway rebuilds the provider request from these
-          // blocks, and a DeepSeek thinking-mode assistant turn whose tool
-          // calls arrive without its reasoning is rejected with "The
-          // `reasoning_content` in the thinking mode must be passed back to
-          // the API" — which failed every tool-loop turn (issue #34).
+          // becomes `{ type: 'reasoning', text }`). Not optional politeness:
+          // a DeepSeek thinking-mode assistant turn whose tool calls arrive
+          // without its reasoning is rejected with "The `reasoning_content`
+          // in the thinking mode must be passed back to the API", which
+          // failed every tool-loop turn (issue #34).
           parts.push({ type: 'reasoning', text: block.text })
         } else if (block.type === 'tool-call' && paired.has(block.id)) {
           parts.push({
@@ -1090,7 +1173,6 @@ async function messagesToCC(
       continue
     }
 
-    // Both modern tool messages and legacy wrapped results use the same view.
     if (result) {
       if (!paired.has(result.toolCallId)) continue
       const media = toolResultMedia(result)
@@ -1169,16 +1251,14 @@ async function messagesToOpenAI(
   const out: unknown[] = []
   const { ids: paired } = pairedToolCalls(messages)
   // Same overlong-id remap as the CLI transport (issue #23): OpenAI
-  // `tool_call_id` fields accept longer values, but the remap keeps both
-  // transports consistent and correlation only needs to hold per request.
+  // `tool_call_id` accepts longer values, but the remap keeps both transports
+  // consistent and correlation only needs to hold per request.
   const wireIds = wireToolCallIds(paired)
 
-  // Tool-returned images ride as user messages after their tool result. The
-  // harness can emit several tool calls in one assistant turn, and the
-  // gateway expects an assistant's tool blocks to be answered consecutively:
-  // a user message interleaved between tool results breaks the pairing and
-  // the request is rejected. So image carriers are buffered and flushed only
-  // once the whole tool group (or the next non-tool message) has been emitted.
+  // Same pairing rule as `messagesToCC`: tool-result image carriers are
+  // buffered and flushed only once the whole tool group (or the next non-tool
+  // message) has been emitted, so a user message never interleaves between an
+  // assistant's tool blocks and their results.
   const pendingImages: unknown[] = []
   const flushPendingImages = () => {
     for (const message of pendingImages) out.push(message)
@@ -1207,8 +1287,8 @@ async function messagesToOpenAI(
         }
       }
       // Same rule as the CLI converter: a converted-to-nothing user message is
-      // dropped rather than sent as an empty content array. The flush above
-      // already ran, so a pending image carrier survives this skip.
+      // dropped rather than sent as an empty content array, and the flush
+      // above has already run, so a pending image carrier survives this skip.
       if (parts.length === 0) continue
       const hasImage = parts.some((part) => (part as { type?: string }).type === 'image_url')
       if (!hasImage && parts.length === 1) {
@@ -1255,12 +1335,11 @@ async function messagesToOpenAI(
       continue
     }
 
-    // Both modern tool messages and legacy wrapped results use the same view.
     if (result) {
       if (!paired.has(result.toolCallId)) continue
       const media = toolResultMedia(result)
-      // Resolved once: the tool message and the carrier note below must name
-      // the same call, or the model cannot tie an image back to its result.
+      // Same call id as in `messagesToCC`: the tool message and the carrier
+      // note below must name the same call.
       const wireToolCallId = wireIds.get(result.toolCallId) ?? result.toolCallId
       out.push({
         role: 'tool',
@@ -1288,9 +1367,6 @@ async function messagesToOpenAI(
   return out
 }
 
-// ---------------------------------------------------------------------------
-// Adapter
-// ---------------------------------------------------------------------------
 /** Connection facts resolved fresh per request by the plugin entry. */
 export interface CommandCodeConnectionOptions {
   /** API base; the Provider API lives under it (`/alpha/generate`, `/provider/v1/chat/completions`, `/provider/v1/models`). */
@@ -1347,8 +1423,6 @@ export interface CommandCodeConnectionOptions {
    * `CMD_ZDR=1`). Default false. Every chat request carries the header when
    * enabled. The provider refuses a model without a ZDR-capable upstream with
    * 422 `cmd_zdr_no_providers`; never retry that request without the header.
-   * The decision endpoint (`/provider/v1/systemone`) is deliberately never
-   * reached through this connection option — see `./systemone.ts`.
    */
   zdr?: boolean
 }
@@ -1366,12 +1440,11 @@ export type ResolveAttachments = () => AttachmentStore | undefined
  * `invalid-credential` are the three the pool records as marks; `unavailable`
  * is an account-scoped rejection that must NOT become a mark — the account's
  * key is valid and its windows may be open, the ACCOUNT just cannot serve THIS
- * request (no credits, a model outside its plan) — so the pool moves on
- * without remembering anything.
+ * request — so the pool moves on without remembering anything.
  *
  * The window/throttle split decides what the pool may CLAIM, never whether it
- * rotates: both leave rotation and mark the key, but only a named window lets
- * the pool report an exhausted usage window (issue #54).
+ * rotates (issue #54); the evidence that separates them is in
+ * {@link classifyAccountRejection}.
  */
 export type AccountRotationReason = 'rate-limit' | 'throttled' | 'invalid-credential' | 'unavailable'
 
@@ -1407,11 +1480,10 @@ export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions =
    * with several accounts a rejection that does not mark the key (a plan or
    * balance rejection is model-specific, not account-fatal) would otherwise
    * re-offer the same account on every attempt and the pool could never reach
-   * the accounts behind it.
-   *
-   * `rotation.resetAtMs` carries the provider's own reset time when the
-   * rejection body published one, so the host can hold the key out until then
-   * instead of waiting for a billing probe to learn the same fact.
+   * the accounts behind it. `rotation.resetAtMs` carries the provider's own
+   * reset time when the rejection body published one, so the host can hold the
+   * key out until then instead of waiting for a billing probe to learn the
+   * same fact.
    */
   rotateApiKey?: (
     rejectedKey: string,
@@ -1556,7 +1628,6 @@ function parseUsageTotals(usage: Record<string, unknown> | undefined): CommandCo
   }
 }
 
-/** Parse one window-limit block (`fiveHour` / `weekly`). */
 /**
  * Parse one window block into a window limit, or undefined when the endpoint
  * reported no such window.
@@ -1630,8 +1701,8 @@ function parseAccountIdentity(whoami: Record<string, unknown> | undefined): {
 
 /**
  * Classify a TOTAL failure: when every endpoint failed with one class of
- * error, the degraded per-endpoint view would hide the root cause behind
- * a generic "partial data" note — name it instead.
+ * error, name the root cause instead of letting the degraded per-endpoint
+ * view hide it behind a generic "partial data" note.
  */
 type UsageEndpointFailure =
   | { kind: 'http'; status: number }
@@ -1675,6 +1746,55 @@ interface GenerateCallFacts {
   readImage: ((ref: ImageAttachmentRef) => Promise<Uint8Array>) | undefined
 }
 
+/** UUID shape accepted by the official CLI's `toWireThreadId` helper. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+// UUIDv5's URL namespace. Keep this stable so a restored DSH session retains
+// the same provider thread ID across Host restarts.
+const THREAD_ID_NAMESPACE = Buffer.from('6ba7b8119dad11d180b400c04fd430c8', 'hex')
+
+/**
+ * Map the harness session identity to the CLI transport's UUID thread ID.
+ *
+ * The official CLI creates one thread ID per agent run and reuses it for the
+ * tool-loop requests that follow. DSH stamps its loop-owned session ID onto
+ * GenerateOptions, but ordinary IDs are `session-<UUID>`, not bare UUIDs.
+ * UUIDv5 gives every non-UUID session ID a stable, wire-compatible mapping.
+ * An already valid UUID remains unchanged; a one-shot call without a session
+ * ID still gets a fresh thread ID.
+ * This alone does not establish cache affinity (issue #64's A/B found none).
+ */
+function cliThreadId(sessionId: string | undefined): string {
+  if (!sessionId) return randomUUID()
+  if (UUID_PATTERN.test(sessionId)) return sessionId
+  const digest = createHash('sha1')
+    .update(THREAD_ID_NAMESPACE)
+    .update('dsh-commandcode-provider/session/')
+    .update(sessionId)
+    .digest()
+  digest[6] = (digest[6]! & 0x0f) | 0x50
+  digest[8] = (digest[8]! & 0x3f) | 0x80
+  const hex = digest.toString('hex', 0, 16)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/**
+ * The CLI wire's explicit system-section form.
+ *
+ * The official CLI's current transport sends system text as an array and marks
+ * stable sections with Anthropic-compatible ephemeral cache control. DSH's
+ * adapter has one already-folded system string rather than the CLI's internal
+ * section list, so preserve that text as one cacheable section. This does not
+ * recover the CLI's separate static/dynamic boundaries or guarantee a hit.
+ */
+function cliSystem(systemText: string): string | Record<string, unknown>[] {
+  if (!systemText) return ''
+  return [{
+    type: 'text',
+    text: systemText,
+    cache_control: { type: 'ephemeral' },
+  }]
+}
+
 /** Build the legacy CLI (`/alpha/generate`) request body for one call. */
 async function buildCliBody(
   options: GenerateOptions,
@@ -1705,13 +1825,13 @@ async function buildCliBody(
         description: tool.description,
         input_schema: toolParametersSchema(tool.parameters),
       })),
-      system: facts.systemText,
+      system: cliSystem(facts.systemText),
       max_tokens: facts.maxTokens,
       temperature: options.temperature ?? 0.3,
       stream: true,
       ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
     },
-    threadId: randomUUID(),
+    threadId: cliThreadId(options.sessionId),
   }
 }
 
@@ -1753,16 +1873,17 @@ interface GenerateConnectDeps {
   options: GenerateOptions
   connection: CommandCodeConnectionOptions
   fetchImpl: typeof fetch
+  /** Observe headers even on rejected attempts before rotation/fallback. */
+  onResponse: (response: Response) => void
 }
 
 /**
  * One pre-stream connect attempt: POST the body and wait for response
- * headers only (`requestTimeoutMs` must never bound the body stream — see
- * the caller). Returns the live response plus its cleanup, or the rejection
- * facts for the rotation loop to classify. Every failure path cleans up
- * before returning or throwing; on success the caller-abort listener
- * outlives the connect phase (it aborts a stalled body read), so the
- * streaming tail calls cleanup.
+ * headers only (`requestTimeoutMs` must never bound the body stream). Returns
+ * the live response plus its cleanup, or the rejection facts for the rotation
+ * loop to classify. Every failure path cleans up before returning or throwing;
+ * on success the caller-abort listener outlives the connect phase (it aborts a
+ * stalled body read), so the streaming tail calls cleanup.
  */
 async function connectGenerate(
   deps: GenerateConnectDeps,
@@ -1869,6 +1990,7 @@ async function connectGenerate(
     )
   }
 
+  deps.onResponse(response)
   if (!response.ok) {
     const errText = await response.text().catch(() => '')
     cleanup()
@@ -2009,13 +2131,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * unbounded loop): `RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`/
    * `EMPTY_RESPONSE` retry up to 1000 times with waits doubling from 500 ms
    * and capping at 15 minutes (±10% jitter), so an exhausted 5-hour window
-   * recovers in-session instead of failing after two tries. Permanent
-   * failures (an invalid key's `INVALID_CREDENTIAL`, `UNSUPPORTED_CONTENT`,
-   * plan rejections) are absent from the whitelist and surface immediately
-   * instead of looping. Waits the pool/adapter attach as
-   * `providerRetryAfterMs` are honored verbatim at or below the 15-minute
-   * cap and never attached above it (in normal mode a longer attached wait
-   * makes the executor abandon the retry outright — see RETRY_MAX_DELAY_MS).
+   * recovers in-session instead of failing after two tries. Permanent failures
+   * (an invalid key's `INVALID_CREDENTIAL`, `UNSUPPORTED_CONTENT`, plan
+   * rejections) are absent from the whitelist and surface immediately instead
+   * of looping. Waits the pool/adapter attach as `providerRetryAfterMs` are
+   * honored verbatim at or below the 15-minute cap and never attached above it
+   * (in normal mode a longer attached wait makes the executor abandon the
+   * retry outright — see RETRY_MAX_DELAY_MS).
    *
    * Captured once at route registration (dsh-llm snapshots this value), so a
    * future config knob for it would apply on profile restart, not per request.
@@ -2040,12 +2162,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * session reports far less context than it is actually carrying. The price is
    * computed at the dimensions this route would send (the same request target
    * `readImageRequest` encodes to), so the estimate tracks the wire rather than
-   * the stored original.
-   *
-   * Both payload generations are handled, because they disagree: ≤0.1.5 hands
-   * over bare `ImageAttachmentRef`s, ≥0.1.6 hands over `ImageBlock`s that also
-   * carry the surface's `offloaded` mark. Returning a price per occurrence, in
-   * order, is a hard requirement — the meter throws when the counts differ.
+   * the stored original. One price per occurrence, in order, is a hard
+   * requirement — the meter throws when the counts differ.
    */
   override imageRequestPricing(_provider: string, model: string): LlmImageRequestPricing | undefined {
     const imageCapable = KNOWN_IMAGE_MODELS.has(model)
@@ -2108,26 +2226,20 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // EVERY account's entitlement is consulted, not just the one that happens
     // to serve right now (issue #51's follow-up: 《卡片会切换》). Keying the
     // filter on the serving account made the picker's contents depend on which
-    // account rotation had reached — a Pro model vanished while a Go account
-    // served and came back later — and it hid models the user's OTHER accounts
-    // could run, which no request could ever fix. The union is the honest
-    // question for a pool, and it only works together with the entitlement
-    // rotation in the connect loop: a model offered here because SOME account
-    // includes it is served there by that account, after at most one rejected
-    // attempt.
+    // account rotation had reached, and it hid models the user's OTHER accounts
+    // could run. The union is the honest question for a pool, and it only works
+    // together with the entitlement rotation in the connect loop.
     const accesses = this.deps.options().filterModelsByPlan === false
       ? undefined
       : await this.loadPoolBillingAccess()
-    // Visible-model allowlist: empty/unset means "show everything".
+    // Visible-model allowlist, then the terminal settings page's per-model
+    // boolean overrides (its schema seam can only give each model its own
+    // flag, which cannot express "this id is in the list"). Both are defined
+    // on {@link CommandCodeConnectionOptions}.
     const visible = this.deps.options().visibleModels
     const allow = Array.isArray(visible) && visible.length > 0
       ? new Set(visible.filter((id) => typeof id === 'string' && id !== ''))
       : undefined
-    // Per-model overrides, written by the terminal settings page's checkboxes
-    // (its seam can only give each model its own boolean field, and a boolean
-    // cannot express "this id is in the list"). An explicit flag decides the
-    // model on its own; everything unflagged still follows the array above, so
-    // a composition-config allowlist and the web page keep working untouched.
     const overrides = this.deps.options().modelVisibility
     return catalog
       .filter((model) => modelVisibleForAnyAccount(model.id, accesses))
@@ -2194,9 +2306,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   private async accountHeaders(apiKey?: string): Promise<Record<string, string>> {
     const connection = this.deps.options()
     const raw = apiKey ?? (await this.deps.resolveApiKey(connection))
-    // The chat path validates the key through the harness's own helper (see
-    // `resolveApiKey` in the plugin entry); every account endpoint must run the
-    // same check, or a key carrying a character no HTTP header can hold throws
+    // Every account endpoint runs the chat path's own `assertUsableApiKey`
+    // check, or a key carrying a character no HTTP header can hold throws
     // inside `fetch` BEFORE any I/O — once per endpoint — and the report reads
     // as "the network is down". The credential reference is read structurally:
     // it belongs to the host's resolved options, not to this adapter's
@@ -2215,10 +2326,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
   /**
    * Fetch one account endpoint and parse its JSON body. Returns the HTTP
-   * status alongside the parsed record so each caller applies its own
-   * failure accounting: the billing probe fails open silently, the usage
-   * report books failures per endpoint. Non-2xx and invalid JSON bodies come
-   * back without a record; only a fetch failure propagates to the caller.
+   * status alongside the parsed record so each caller applies its own failure
+   * accounting: the billing probe fails open silently, the usage report books
+   * failures per endpoint. Non-2xx and invalid JSON bodies come back without a
+   * record; only a fetch failure propagates to the caller.
    *
    * `timeoutMs` is the caller's budget for this one request. The default is the
    * CATALOG probe's short cap, which fits the picker's fail-open reads; the
@@ -2254,9 +2365,6 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * per picker load). `undefined` means the filter cannot be evaluated at all
    * — no key resolved — which {@link modelVisibleForAnyAccount} reads as
    * "show everything".
-   *
-   * The serving account is only the first entry: with several accounts the
-   * model list must not depend on which of them rotation happens to be using.
    */
   private async loadPoolBillingAccess(): Promise<readonly (CommandCodeBillingAccess | undefined)[] | undefined> {
     const keys = await this.poolAccountKeys()
@@ -2384,10 +2492,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * but a hard refusal. `/alpha/generate` routes every one of them, so this
    * costs nothing.
    *
-   * That decision is deliberately NOT written to `protocolCache`. The cache is
-   * keyed by API key alone, so remembering it would pin the whole ACCOUNT to
-   * the CLI transport and drag every other model — DeepSeek, GLM, Qwen, all of
-   * which the Provider API serves correctly — off it until the entry expired.
+   * That decision is deliberately NOT written to `protocolCache`, which is
+   * keyed by API key alone: remembering it would pin the whole ACCOUNT to the
+   * CLI transport and drag every other model off it until the entry expired.
    */
   private resolveProtocol(apiKey: string, model: string): CommandCodeProtocol {
     const forced = this.deps.options().protocol
@@ -2415,18 +2522,14 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * the default resolves the currently active account.
    *
    * Two failure modes are NOT "the network is down", and the report must say
-   * so rather than let {@link classifyTotalFailure} blame the connection:
-   *
-   *  - A key that no HTTP header can carry (a stray newline from a paste, a
-   *    full-width character) makes `fetch` throw a `TypeError` **before any
-   *    I/O**, for every endpoint at once. The chat path refuses such a key
-   *    through `assertUsableApiKey`; this path must too, and it answers
-   *    `blocked: 'invalid-key'` instead of four phantom transport failures.
-   *  - The four endpoints get the SAME per-request budget as a chat call
-   *    (`connection.requestTimeoutMs`, default 60 s), not the catalog's 10 s
-   *    probe budget: on a slow link a 10 s cap made every account query time
-   *    out while chat kept working, which is exactly a "check your network"
-   *    banner that never clears.
+   * so rather than let {@link classifyTotalFailure} blame the connection: a
+   * key that no HTTP header can carry (a stray newline from a paste, a
+   * full-width character) makes `fetch` throw a `TypeError` before any I/O,
+   * for every endpoint at once, so this path runs `assertUsableApiKey` too and
+   * answers `blocked: 'invalid-key'`; and the four endpoints get the SAME
+   * per-request budget as a chat call (`connection.requestTimeoutMs`, default
+   * 60 s), not the catalog's 10 s probe budget, because on a slow link a 10 s
+   * cap made every account query time out while chat kept working.
    */
   async getUsage(apiKey?: string): Promise<CommandCodeUsageReport> {
     const connection = this.deps.options()
@@ -2527,17 +2630,16 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * the same time (the two are metered separately), and reading only the
    * shorter one revived such an account as "usable" — the pool then handed it
    * out, the provider rejected the request again, and the next all-marked pass
-   * revived it once more, so a used-up account kept coming back (issue #51's
-   * follow-up: "切到一个不可用账号"). `exceeded` is therefore true when ANY
-   * published window is exceeded, and `resetAt` is the LATEST reset among the
-   * exceeded ones — the binding constraint, because a clear five-hour window
-   * buys nothing while the weekly quota is spent.
+   * revived it once more (issue #51's follow-up: "切到一个不可用账号").
+   * `exceeded` is therefore true when ANY published window is exceeded, and
+   * `resetAt` is the LATEST reset among the exceeded ones — the binding
+   * constraint, because a clear five-hour window buys nothing while the weekly
+   * quota is spent.
    *
    * Returns `undefined` when the probe itself failed (transport, non-200, or a
    * payload with no window limits at all) — a failed probe never changes pool
-   * state. The monthly/purchased/free credit balances are deliberately NOT part
-   * of this answer: they are balances rather than windows, they carry no reset
-   * time, and the server remains the final gate on them.
+   * state. The credit balances are deliberately NOT part of this answer: they
+   * carry no reset time, and the server remains the final gate on them.
    */
   async probeWindowLimits(apiKey: string): Promise<{ exceeded: boolean; resetAt: number } | undefined> {
     try {
@@ -2644,18 +2746,14 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       .join('\n\n')
 
     // Endpoint protocol: billing/cache may know Go plan -> CLI; unknown
-    // accounts default to the documented Provider Chat Completions surface.
-    // A Messages-only model (Claude) forces the CLI transport regardless —
-    // see `resolveProtocol()`.
+    // accounts default to the documented Provider Chat Completions surface
+    // (`resolveProtocol()` also forces the CLI transport for Claude).
     let protocol: CommandCodeProtocol = this.resolveProtocol(apiKey, options.model)
     // Image budget (issue #37): the body is built from the PROJECTED history,
-    // never the raw one, so the oldest images past the cap travel as
-    // placeholder text instead of a body the gateway refuses outright. Rung 0
-    // is the standing budget; a 413 below steps down the ladder.
-    //
-    // The session surface owns the offload set, so this throws
-    // `IMAGE_OFFLOAD_REQUIRED` when more images must go; the retry then arrives
-    // with the surface already updated.
+    // never the raw one. Rung 0 is the standing budget; a 413 below steps down
+    // the ladder. The session surface owns the offload set, so this throws
+    // `IMAGE_OFFLOAD_REQUIRED` when more images must go; the retry then
+    // arrives with the surface already updated.
     let requestOptions = withSurfaceOffload(options, this.surfaceOffload, REQUEST_IMAGE_BUDGETS[0]!)
     const buildBody = async (target: CommandCodeProtocol): Promise<Record<string, unknown>> =>
       target === 'cli'
@@ -2663,6 +2761,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         : buildOpenAIBody(requestOptions, { maxTokens, reasoningEffort, systemText, readImage })
     let body: Record<string, unknown> = await buildBody(protocol)
 
+    // The opt-in trace now starts before the first connect attempt so a cache
+    // miss can be correlated with the exact request shape that produced it.
+    // The record contains hashes and counts only; see requestFingerprint().
+    const trace = openStreamTrace(`${options.provider}/${options.model}`)
 
     // Account rotation loop: the first attempt uses the pool's active key; a
     // pre-stream 429/401 rotates to the next account (at most one attempt per
@@ -2671,120 +2773,150 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // connectGenerate); the body is account-independent, nothing has
     // streamed yet, so the switch is invisible to the caller.
     const tried = new Set<string>()
-    const connectDeps: GenerateConnectDeps = { options, connection, fetchImpl: this.fetchImpl }
-    let connected: { response: Response; cleanup: () => void } | undefined
-    for (;;) {
-      tried.add(apiKey)
-      const attempt = await connectGenerate(connectDeps, apiKey, protocol, body)
-      if ('response' in attempt) {
-        connected = attempt
-        break
-      }
-      // Provider API is the preferred surface for non-Go accounts. If the
-      // gateway says the key is on the Go plan (the only plan without API
-      // access), remember that and retry the same key through /alpha/generate
-      // without burning the double TTFT on every later request.
-      if (
-        protocol === 'openai'
-        && isUpgradeRequiredError(attempt.status, attempt.errText)
-      ) {
-        protocol = 'cli'
-        this.rememberProtocol(apiKey, true)
-        body = await buildBody('cli')
-        continue
-      }
-      // Request too large (issue #37): the standing budget is only an
-      // estimate — the cap also covers text and tool bytes — so one 413 steps
-      // the image budget down and asks for another offload. Safe like the
-      // rotation below: nothing streamed and the same key stays in use. The
-      // stricter rung becomes another offload request rather than a local edit,
-      // so the extra omissions are recorded on the session and survive the
-      // retry. Zero here means the images are already gone and the body is
-      // simply too big — fall through to the 413 diagnosis instead of asking
-      // for an offload that cannot happen, which is also what keeps the branch
-      // from looping.
-      if (attempt.status === 413 && REQUEST_IMAGE_BUDGETS.length > 1) {
-        const missing = this.surfaceOffload.requiredImageOffload(
-          requestOptions.messages,
-          coreBudget(REQUEST_IMAGE_BUDGETS[1]!),
-          imageVersionBytes,
-        )
-        if (missing > 0) throw imageOffloadRequired(missing)
-      }
-      const rotate = this.deps.rotateApiKey
-      // Account-scoped rejection (429/RATE_LIMITED, 401, or "this account
-      // cannot serve"): retry the same body with another account when the host
-      // has one. The tried set travels along so a rejection that does not mark
-      // the key cannot make the pool re-offer it forever.
-      const rejection = classifyAccountRejection(attempt.status, attempt.errText)
-      if (
-        rejection !== undefined
-        && rotate !== undefined
-        && options.signal?.aborted !== true
-        && tried.size < MAX_ACCOUNT_ROTATIONS
-      ) {
-        const next = await rotate(apiKey, rejection.reason, connection, options.model, {
-          tried: [...tried],
-          ...(rejection.resetAtMs !== undefined && { resetAtMs: rejection.resetAtMs }),
+    let attemptNumber = 0
+    let responseMetadata: ResponseMetadata = { protocol, headers: {} }
+    const connectDeps: GenerateConnectDeps = {
+      options, connection, fetchImpl: this.fetchImpl,
+      onResponse: (response) => {
+        responseMetadata = { protocol, headers: responseIdentifiers(response.headers) }
+        trace.record('response', {
+          protocol,
+          endpoint: protocol === 'cli'
+            ? `${connection.apiBase}/alpha/generate`
+            : `${connection.apiBase}/provider/v1/chat/completions`,
+          status: response.status,
+          attempt: attemptNumber,
+          accountsTried: tried.size,
+          maxTokens,
+          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+          headers: responseMetadata.headers,
         })
-        if (next !== undefined && !tried.has(next)) {
-          apiKey = next
+      },
+    }
+    let connected: { response: Response; cleanup: () => void } | undefined
+    try {
+      for (;;) {
+        tried.add(apiKey)
+        attemptNumber++
+        responseMetadata = { protocol, headers: {} }
+        if (trace.enabled) trace.record('request', {
+          attempt: attemptNumber,
+          sessionId: options.sessionId,
+          ...requestFingerprint(protocol, body),
+        })
+        const attempt = await connectGenerate(connectDeps, apiKey, protocol, body)
+        if ('response' in attempt) {
+          connected = attempt
+          break
+        }
+        // Provider API is the preferred surface for non-Go accounts. If the
+        // gateway says the key is on the Go plan (the only plan without API
+        // access), remember that and retry the same key through /alpha/generate
+        // without burning the double TTFT on every later request.
+        if (
+          protocol === 'openai'
+          && isUpgradeRequiredError(attempt.status, attempt.errText)
+        ) {
+          protocol = 'cli'
+          this.rememberProtocol(apiKey, true)
+          body = await buildBody('cli')
           continue
         }
+        // Request too large (issue #37): the standing budget is only an
+        // estimate — the cap also covers text and tool bytes — so one 413 steps
+        // the image budget down and asks for another offload, as a durable
+        // surface mutation rather than a local edit, so the extra omissions
+        // survive the retry. Zero missing means the images are already gone and
+        // the body is simply too big: fall through to the 413 diagnosis instead
+        // of asking for an offload that cannot happen, which is also what keeps
+        // the branch from looping.
+        if (attempt.status === 413 && REQUEST_IMAGE_BUDGETS.length > 1) {
+          const missing = this.surfaceOffload.requiredImageOffload(
+            requestOptions.messages,
+            coreBudget(REQUEST_IMAGE_BUDGETS[1]!),
+            imageVersionBytes,
+          )
+          if (missing > 0) throw imageOffloadRequired(missing)
+        }
+        const rotate = this.deps.rotateApiKey
+        // Account-scoped rejection (429/RATE_LIMITED, 401, or "this account
+        // cannot serve"): retry the same body with another account when the host
+        // has one. The tried set travels along so a rejection that does not mark
+        // the key cannot make the pool re-offer it forever.
+        const rejection = classifyAccountRejection(attempt.status, attempt.errText)
+        if (
+          rejection !== undefined
+          && rotate !== undefined
+          && options.signal?.aborted !== true
+          && tried.size < MAX_ACCOUNT_ROTATIONS
+        ) {
+          const next = await rotate(apiKey, rejection.reason, connection, options.model, {
+            tried: [...tried],
+            ...(rejection.resetAtMs !== undefined && { resetAtMs: rejection.resetAtMs }),
+          })
+          if (next !== undefined && !tried.has(next)) {
+            apiKey = next
+            continue
+          }
+        }
+        // The provider named a window limit — or refused the request as a plain
+        // throttle — and no other account could serve. The turn must fail as a
+        // RATE_LIMIT carrying that reset rather than as the generic
+        // `PROVIDER_HTTP_ERROR` this status maps to: the CLI accepts the
+        // `RATE_LIMITED` code on ANY status, and `PROVIDER_HTTP_ERROR` sits
+        // outside dsh-llm-retry's whitelist — so without this the turn dies on
+        // the spot even though the provider said exactly when the same request
+        // would work again.
+        //
+        // The two reasons keep their own wording: only a NAMED window may be
+        // described as a spent window (issue #54), while a plain throttle says
+        // what it is and leaves the window verdict to the pool's own diagnosis.
+        // A status that already maps to RATE_LIMIT (a plain 429) keeps that
+        // mapping — `generateHttpError` owns the `Retry-After` header's cap and
+        // finiteness rules there — unless the body named its own reset.
+        if (
+          rejection !== undefined
+          && (rejection.reason === 'rate-limit' || rejection.reason === 'throttled')
+          && (rejection.resetAtMs !== undefined || attempt.status !== 429)
+        ) {
+          const reset = rejection.resetAtMs
+          const wait = reset === undefined
+            ? 0
+            : Math.min(Math.max(1000, reset - Date.now()), RETRY_MAX_DELAY_MS)
+          const when = reset === undefined ? undefined : new Date(reset).toISOString()
+          const window = rejection.reason === 'rate-limit'
+          throw new LlmError(
+            (window
+              ? 'llm-commandcode: the Command Code account is rate limited'
+              : 'llm-commandcode: the Command Code account is rate limited (429)'
+                + ' — the provider did not report an exhausted usage window')
+              + (when === undefined ? '' : ` — the provider reports it resets at ${when}`)
+              + (window
+                ? '；当前 Command Code 账户已被限流'
+                : '；当前 Command Code 账户被限流（429），服务商未报告用量窗口用尽')
+              + (when === undefined ? '' : `，服务商给出的重置时间为 ${when}`),
+            'RATE_LIMIT',
+            wait > 0 ? { providerRetryAfterMs: wait } : undefined,
+          )
+        }
+        throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs)
       }
-      // The provider named a window limit — or refused the request as a plain
-      // throttle — and no other account could serve. The turn must fail as a
-      // RATE_LIMIT carrying that reset rather than as the generic
-      // `PROVIDER_HTTP_ERROR` this status maps to: the CLI accepts the
-      // `RATE_LIMITED` code on ANY status (a 400 is pinned by a test above), and
-      // `PROVIDER_HTTP_ERROR` sits outside dsh-llm-retry's whitelist — so
-      // without this the turn dies on the spot even though the provider said
-      // exactly when the same request would work again.
-      //
-      // The two reasons keep their own wording: only a NAMED window may be
-      // described as a spent window (issue #54), while a plain throttle says
-      // what it is and leaves the window verdict to the pool's own diagnosis.
-      //
-      // A status that already maps to RATE_LIMIT (a plain 429) keeps the
-      // mapping it had — `generateHttpError` owns the `Retry-After` header's cap
-      // and finiteness rules there, and its tests pin them — unless the body
-      // named its own reset, which is more precise.
-      if (
-        rejection !== undefined
-        && (rejection.reason === 'rate-limit' || rejection.reason === 'throttled')
-        && (rejection.resetAtMs !== undefined || attempt.status !== 429)
-      ) {
-        const reset = rejection.resetAtMs
-        const wait = reset === undefined
-          ? 0
-          : Math.min(Math.max(1000, reset - Date.now()), RETRY_MAX_DELAY_MS)
-        const when = reset === undefined ? undefined : new Date(reset).toISOString()
-        const window = rejection.reason === 'rate-limit'
-        throw new LlmError(
-          (window
-            ? 'llm-commandcode: the Command Code account is rate limited'
-            : 'llm-commandcode: the Command Code account is rate limited (429)'
-              + ' — the provider did not report an exhausted usage window')
-            + (when === undefined ? '' : ` — the provider reports it resets at ${when}`)
-            + (window
-              ? '；当前 Command Code 账户已被限流'
-              : '；当前 Command Code 账户被限流（429），服务商未报告用量窗口用尽')
-            + (when === undefined ? '' : `，服务商给出的重置时间为 ${when}`),
-          'RATE_LIMIT',
-          wait > 0 ? { providerRetryAfterMs: wait } : undefined,
-        )
-      }
-      throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs)
+    } catch (error) {
+      trace.record('connect-error', { message: boundTraceText(errorChain(error)), responseMetadata })
+      trace.close()
+      throw options.signal?.aborted ? error : failureWithRequestId(error, responseMetadata)
     }
     if (connected === undefined) {
-      // Unreachable: the loop only exits via `break` (connected set) or
-      // `throw` above. The guard keeps the narrowing explicit.
+      // Unreachable: the loop only exits via `break` or `throw`. The guard
+      // keeps the narrowing explicit.
       throw new LlmError('Command Code API connection failed without a response', 'TRANSPORT')
     }
     const { response, cleanup } = connected
     if (!response.body) {
       cleanup()
-      throw new LlmError('Command Code API returned no response body', 'PROVIDER_PROTOCOL_ERROR')
+      trace.record('end', { outcome: 'empty', code: 'PROVIDER_PROTOCOL_ERROR' })
+      trace.close()
+      throw failureWithRequestId(new LlmError('Command Code API returned no response body', 'PROVIDER_PROTOCOL_ERROR'), responseMetadata)
     }
 
     // --- SSE/JSONL event stream -> harness StreamChunk protocol ---
@@ -2792,35 +2924,22 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const decoder = new TextDecoder()
     let buffer = ''
 
-    // Raw-stream trace (opt-in via `DSH_COMMANDCODE_TRACE`): the only artifact
-    // that can tell "the provider closed this stream" apart from "our parser
-    // missed the terminal event" — see ./stream-trace.ts for why that
-    // distinction is the whole diagnosis. Off, this is one environment read and
-    // every call below is inert.
-    const trace = openStreamTrace(`${options.provider}/${options.model}`)
+    // The request fingerprint was recorded before connect; this is the
+    // response half of the same opt-in trace. See ./stream-trace.ts for why
+    // the raw response stream remains the artifact that separates a provider
+    // cut from a parser miss.
     const streamStartedAt = Date.now()
     let chunkCount = 0
     let totalBytes = 0
     let lastChunkAt = streamStartedAt
-    trace.record('response', {
-      protocol,
-      endpoint: protocol === 'cli'
-        ? `${connection.apiBase}/alpha/generate`
-        : `${connection.apiBase}/provider/v1/chat/completions`,
-      status: response.status,
-      attempts: tried.size,
-      maxTokens,
-      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-    })
 
     // Stream idle watchdog: a generation that stalls this long has a dead
     // connection (the API keeps the socket open between reasoning/text
-    // bursts). The default (300s) is deliberately generous: frontier
-    // reasoning models (xhigh/max effort) can legitimately stay silent for
-    // minutes while thinking, and the official CLI sets no idle cap at all —
-    // an aggressive cap turns long thinking into spurious TIMEOUTs and
-    // retries. reader.cancel() unblocks a pending read(), which the loop then
-    // turns into a TIMEOUT failure instead of hanging forever.
+    // bursts). The default (300s) is deliberately generous — frontier
+    // reasoning models can legitimately stay silent for minutes while
+    // thinking, and the official CLI sets no idle cap at all. reader.cancel()
+    // unblocks a pending read(), which the loop then turns into a TIMEOUT
+    // failure instead of hanging forever.
     let idleTimer: ReturnType<typeof setTimeout> | undefined
     let idleFired = false
     const armIdle = () => {
@@ -2846,6 +2965,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // DSH converts an adapter throw into an error finish; throwing AFTER a
     // success finish would violate its single-terminal-event contract.
     function* handle(event: unknown): Generator<StreamChunk> {
+      captureResponseIdentifiers(responseMetadata, event)
       for (const chunk of handleEvent(asm, protocol, event)) {
         if (chunk.type === 'finish') finish = chunk
         else if (chunk.type === 'usage') usage = chunk.usage
@@ -2941,21 +3061,23 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           bytes: totalBytes,
           totalMs: Date.now() - streamStartedAt,
           sawContent: asm.sawContent,
+          responseMetadata,
         })
         endRecorded = true
         if (failure !== undefined) throw failure
-        yield finish
+        yield hasResponseIdentifiers(responseMetadata)
+          ? { ...finish, replayState: { response: responseMetadata } }
+          : finish
       } else {
         // The stream ended without its terminal event, and that is NOT a normal
         // ending — it must not be reported as one. Both transports terminate
         // explicitly (the CLI transport with a `finish` event, the Provider API
-        // with a final `finish_reason` chunk), so an EOF here means the
-        // response was closed mid-generation: the gateway, an intermediary
-        // proxy, or the network. Synthesizing a clean `stop` is what turned a
-        // truncated answer into a turn that just ended, with nothing in the UI
-        // or the session log saying why. `dsh-llm-deepseek`'s `translate()`
-        // raises this same code for this same condition ("… stream ended before
-        // message_stop").
+        // with a final `finish_reason` chunk), so an EOF here means the response
+        // was closed mid-generation: the gateway, an intermediary proxy, or the
+        // network. Synthesizing a clean `stop` is what turned a truncated answer
+        // into a turn that just ended, with nothing saying why
+        // (`dsh-llm-deepseek`'s `translate()` raises this same code for this
+        // same condition).
         const elapsed = Date.now() - streamStartedAt
         const detail = `${chunkCount} chunk(s), ${totalBytes} bytes, ${elapsed}ms`
         trace.record('end', {
@@ -2964,6 +3086,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           bytes: totalBytes,
           totalMs: elapsed,
           sawContent: asm.sawContent,
+          responseMetadata,
         })
         endRecorded = true
         if (!asm.sawContent) {
@@ -2995,9 +3118,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           chunks: chunkCount,
           bytes: totalBytes,
           totalMs: Date.now() - streamStartedAt,
+          responseMetadata,
         })
       }
-      throw error
+      throw options.signal?.aborted ? error : failureWithRequestId(error, responseMetadata)
     } finally {
       clearIdle()
       cleanup()
@@ -3015,16 +3139,16 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
  * status alone cannot distinguish them. The status also decides the failure
  * CODE via {@link httpErrorCode}, which is what the retry policy routes on —
  * a transient 5xx must not be reported as a permanent provider rejection. A
- * 429's `Retry-After` header rides along as
- * `providerRetryAfterMs` so dsh-llm-retry can wait exactly that long instead
- * of guessing at the backoff cadence — capped at RETRY_MAX_DELAY_MS, because
- * in normal mode a longer attached wait makes the executor abandon the retry
- * outright instead of falling back to local backoff.
+ * 429's `Retry-After` header rides along as `providerRetryAfterMs` so
+ * dsh-llm-retry can wait exactly that long instead of guessing at the backoff
+ * cadence — capped at RETRY_MAX_DELAY_MS, because in normal mode a longer
+ * attached wait makes the executor abandon the retry outright.
  *
  * One body is read, not just its status: a client-side rejection whose
  * `error.code`/`type`/`message` names the model context window is reported as
- * `CONTEXT_WINDOW_EXCEEDED` (see the branch below), because that failure has a
- * recovery the harness performs and a generic provider error does not.
+ * `CONTEXT_WINDOW_EXCEEDED`, because that failure has a recovery the harness
+ * performs and a generic provider error does not. Every message built here is
+ * bilingual — the harness renders it verbatim in its retry chrome.
  */
 function generateHttpError(status: number, errText: string, retryAfterMs?: number): LlmError {
   let providerCode: string | undefined
@@ -3038,7 +3162,7 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
         .join(' ')
     }
   } catch {
-    // Plain-text bodies: rely on the status mapping below.
+    // Plain-text bodies carry no machine-readable code; rely on the status.
   }
   const detail = providerCode ?? `HTTP ${status}`
   // A context-window rejection is not a generic provider failure: the request
@@ -3052,7 +3176,6 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
   // rather than the body-size advice. Only client-side rejections (`status <
   // 500`) are inspected, and the parsed provider fields are preferred over the
   // raw body, so an HTML error page cannot mention its way into a compaction.
-  // Bilingual — the harness renders this message verbatim.
   const overflowDetail = providerDetail !== '' ? providerDetail : errText.slice(0, 500)
   if (status < 500 && isContextOverflowDetail(overflowDetail)) {
     return new LlmError(
@@ -3066,11 +3189,10 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
   if (status === 422 && isZdrNoProviders(providerCode, providerDetail, errText)) {
     // Zero data retention refused (the `zdr` connection option is on): either
     // this model has no ZDR-capable upstream, or none had capacity at that
-    // moment. Bilingual — the harness UI renders this message verbatim. The
-    // code is matched shape-insensitively because the provider spells it both
-    // ways (`cmd_zdr_no_providers` in the JSON error body, `CMD_ZDR_NO_PROVIDERS`
-    // in plain-text ones, exactly as the official CLI's classifier reads it),
-    // and the CLI's own user guidance is to unset CMD_ZDR.
+    // moment. The code is matched shape-insensitively because the provider
+    // spells it both ways (`cmd_zdr_no_providers` in the JSON error body,
+    // `CMD_ZDR_NO_PROVIDERS` in plain-text ones, exactly as the official CLI's
+    // classifier reads it), and the CLI's own user guidance is to unset CMD_ZDR.
     return new LlmError(
       `Command Code API error 422 (${detail}): zero data retention is enforced but no ZDR-capable`
       + ' upstream is available for this model — turn the ZDR setting off (or use another model)'
@@ -3081,9 +3203,8 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
     )
   }
   if (status === 401) {
-    // An invalid or missing credential is a config problem, not a
-    // transport failure: retrying it identically cannot succeed. Bilingual —
-    // the harness UI renders this message verbatim in its retry chrome.
+    // An invalid or missing credential is a config problem, not a transport
+    // failure: retrying it identically cannot succeed.
     return new LlmError(
       `Command Code API error 401 (${detail}): the API key is missing or invalid — check the`
       + ' key stored for COMMANDCODE_API_KEY (Models page) or the auth file'
@@ -3098,8 +3219,7 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
     // it apart from a generic provider failure. Reaching here means the
     // adapter already dropped this request's oldest images as far as its
     // budget ladder allows, or the body is large without images at all, so
-    // the advice is the only remaining lever the user has. Bilingual — the
-    // harness UI renders this message verbatim in its retry chrome.
+    // the advice is the only remaining lever the user has.
     return new LlmError(
       'Command Code API error 413: the request body exceeds the provider\'s size limit'
       + ' (the cap is undocumented, measured at about 50 MB) — the session history is too large'
@@ -3129,16 +3249,11 @@ function generateHttpError(status: number, errText: string, retryAfterMs?: numbe
  * status, never the provider's `error.type` — so a status that arrives here as
  * a permanent code is never retried, whatever it says about itself.
  *
- * 5xx is the provider's own "we are temporarily unavailable" class (Cloudflare's
- * 520-527 included; a 520 body says exactly that in words) and the only sane
- * answer to it is the byte-identical resend the retry policy exists to make.
- * Keeping it on `PROVIDER_HTTP_ERROR` — absent from the whitelist by design, so
- * that a 403 plan rejection or a 400 shape error fails fast — made the one
- * failure that asks to be retried the only one that never was, while the same
- * status arriving as an in-band stream `error` event was classified retryable
- * `SERVER` (see the `error` case of {@link handleCliEvent}). 408 is the same
- * story for the request itself. Everything else stays permanent: a 400/403/404/
- * 409/422 rejection repeats identically on every attempt.
+ * 5xx is the provider's own "temporarily unavailable" class (Cloudflare's
+ * 520-527 included) and the only sane answer to it is the byte-identical
+ * resend the retry policy exists to make; 408 is the same story for the
+ * request itself. Everything else stays permanent: a 400/403/404/409/422
+ * rejection repeats identically on every attempt.
  */
 function httpErrorCode(status: number): string {
   if (status === 429) return 'RATE_LIMIT'
@@ -3260,12 +3375,11 @@ function handleCliEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
 function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   const chunks: StreamChunk[] = []
   if (!isRecord(event)) return chunks
-  // The Provider API transport reports a mid-stream failure as an `error`
-  // member of an SSE chunk rather than as an event type of its own. Ignoring
-  // it — as this handler used to — let the stream end with no finish event, so
-  // a context-window or quota rejection surfaced only as a generic
-  // EMPTY_RESPONSE (which the retry policy repeats) and the real cause was
-  // lost. Route it through the classifier the CLI transport uses.
+  // The Provider API transport reports a mid-stream failure as an `error` member
+  // of an SSE chunk rather than as an event type of its own; ignoring it let
+  // the stream end with no finish event, so a context-window or quota rejection
+  // surfaced only as a generic EMPTY_RESPONSE (which the retry policy repeats)
+  // and the real cause was lost.
   if (event.error !== undefined) throw streamErrorToLlmError(event.error, stringValue(event.message))
   const choices = event.choices
   if (!Array.isArray(choices) || choices.length === 0) {
@@ -3281,18 +3395,16 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
 
   // Thinking text arrives under a different field per model family, and the
   // gateway does not normalize the spelling: DeepSeek answers with the scalar
-  // `reasoning` PLUS an OpenRouter-shaped `reasoning_details` array, GLM/Qwen/
-  // Kimi answer with the DeepSeek-native `reasoning_content`, and the OpenAI
-  // family answers with the scalar `reasoning` PLUS a `reasoning_details` array
-  // whose entry is `{ type: 'reasoning.summary', summary }`. All three
-  // spellings are read here, in that order, so no family's thinking is dropped
-  // (measured live 2026-09-18, gpt-5.6-luna, 6/6 rounds: the scalar and the
-  // array's `summary` carried the identical text every time). The
-  // `reasoning_details` branch is a forward guard rather than the live path for
-  // any family — every family that sends the array also sends a scalar
-  // alongside it — so it only carries the text if that ever stops; it reads
-  // `summary` as well as `text` precisely so the guard covers the family whose
-  // array uses the other member.
+  // `reasoning` PLUS a `reasoning_details` array, GLM/Qwen/Kimi with the
+  // DeepSeek-native `reasoning_content`, and the OpenAI family with the scalar
+  // `reasoning` PLUS a `reasoning_details` array whose entry is
+  // `{ type: 'reasoning.summary', summary }` (measured live 2026-09-18 on
+  // gpt-5.6-luna, 6/6 rounds: the scalar and the array's `summary` carried the
+  // identical text every time). All three spellings are read here, in that
+  // order, so no family's thinking is dropped; the scalar wins over the array,
+  // which is a forward guard rather than the live path for any family (every
+  // family that sends the array also sends a scalar alongside it). See
+  // {@link reasoningDetailsText} for the array's two vocabularies.
   const reasoningDelta =
     nonEmptyText(stringValue(delta.reasoning))
     ?? nonEmptyText(stringValue(delta.reasoning_content))
@@ -3430,12 +3542,6 @@ function emptyCompletionError(reason: string | undefined, maxTokens: number, usa
 }
 
 /**
- * True when a Provider API pre-stream rejection is Command Code's Go-plan
- * gate (`upgrade_required`). Only this exact class of rejection should fall
- * back to the CLI /alpha/generate transport; other 4xx/5xx must surface as
- * ordinary errors so real account/model problems are not masked.
- */
-/**
  * Classify a pre-stream rejection that is about the ACCOUNT rather than about
  * the request, using the official CLI's own rules (command-code@1.56.0:
  * `parseWindowLimitError`, `isInsufficientCreditsRequestError`,
@@ -3445,47 +3551,32 @@ function emptyCompletionError(reason: string | undefined, maxTokens: number, usa
  * oversized body or a context overflow must fail fast instead of walking the
  * whole account pool.
  *
- * Issue #51's follow-up is why this exists. Only 429/401 used to rotate, so
- * every other account-scoped rejection was terminal AND invisible to the pool:
- * an account that could not pay, or could not run the model, stayed "usable",
- * was handed out again on the next request, and produced the same error again
- * ("切到一个不可用账号后就报 400，还挺频繁"). The three reasons differ in what
- * the host should do with them, which is the caller's decision, not this
- * function's:
+ * It must recognize the whole account-scoped class, not just 429/401: when it
+ * did not, an account that could not pay, or could not run the model, stayed
+ * "usable" in the pool and was handed out again on the next request (issue
+ * #51's follow-up). The four reasons are defined on
+ * {@link AccountRotationReason}; what this function owes them is the evidence
+ * split:
  *
- *   - `rate-limit`: a usage WINDOW is spent. The code `RATE_LIMITED` is the
- *     authoritative signal — the CLI accepts the code OR a 429 status — and the
- *     body's `error.rateLimit` names the window and its `reset` (in seconds),
- *     so the host can hold the account out until the provider's own reset time.
- *   - `throttled`: the provider refused the request (429 or a bare
- *     `RATE_LIMITED` code) without naming a usage window. It is account-scoped
- *     like the above, so it rotates and marks the key the same way, but it is
- *     NOT evidence that a metered window is spent: the CLI's own
- *     `parseWindowLimitError` returns a window limit only when
- *     `resolveWindowLabel` can name one, and a burst/model/spend limiter the
- *     billing endpoint cannot see is exactly this shape (issue #54's report: a
- *     429 whose probe read five-hour 2% and weekly 10% while the error claimed
- *     both were exhausted).
- *   - `invalid-credential`: 401; the key itself is bad.
- *   - `unavailable`: the key is fine but this account cannot serve: no credits
- *     (`400 Insufficient credits`, the codes `INSUFFICIENT_CREDITS`,
- *     `USAGE_EXCEEDED`, `PREMIUM_CREDITS_EXHAUSTED`, or a spend-cap wording)
- *     or a model outside its plan (`MODEL_NOT_IN_PLAN`). Rotating must NOT mark
- *     the account: the fact is about the model or the balance, it can change
- *     without the key changing, and a `:free` model can still be served by an
- *     account with an empty balance. These codes are recognized on EVERY
- *     status — a 5xx that proxies the provider's own credits/plan body is
- *     still an account fact, and only the prose scan is confined to 4xx.
+ *   - `rate-limit` / `throttled`: the code `RATE_LIMITED` is the authoritative
+ *     signal — the CLI accepts the code OR a 429 status — and only a body that
+ *     NAMES a window (`error.rateLimit.window`, see {@link readWindowLimitEvidence})
+ *     may be called a spent one. A bare 429 is a burst/model/spend limiter the
+ *     billing endpoint cannot see, so it stays `throttled` and the host claims
+ *     no window (issue #54).
+ *   - `unavailable`: no credits, or a model outside this account's plan, so it
+ *     rotates but must NOT mark the key — the fact is about the model or the
+ *     balance, and either can change without the key changing.
  */
 
 /**
  * The provider's structured "this account cannot serve this request" codes.
  *
  * Status-independent on purpose, mirroring the CLI's classifier, which reads
- * the code before any status guard. A 5xx that carries one of these must not
- * be retried as a transient provider failure: the same request against the
- * same account cannot succeed, so the caller rotates past it (without marking
- * the key) instead of replaying it on the harness's retry cadence.
+ * the code before any status guard: a 5xx carrying one of these must rotate
+ * past the account instead of being retried as a transient provider failure,
+ * because the same request against the same account cannot succeed. Only the
+ * prose scan below is confined to 4xx.
  */
 const ACCOUNT_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
   'USAGE_EXCEEDED',
@@ -3514,10 +3605,7 @@ function classifyAccountRejection(status: number, errText: string): { reason: Ac
   // permanent refusal into a retried one — `SERVER` reaches dsh-llm-retry's
   // 1000-attempt cadence while the sibling accounts that could serve are never
   // consulted. The guard below therefore covers only the rejections with NO
-  // such code, whose evidence is prose: a bare 5xx (or a status under 400) is
-  // the provider being unavailable and must keep its retry cadence for every
-  // account instead of being remembered against one. `tests/adapter.test.ts`
-  // pins both halves.
+  // such code, whose evidence is prose.
   const code = readProviderErrorCode(errText)?.toUpperCase()
   if (code !== undefined && ACCOUNT_UNAVAILABLE_CODES.has(code)) return { reason: 'unavailable' }
   if (status < 400 || status >= 500) return undefined
@@ -3525,8 +3613,7 @@ function classifyAccountRejection(status: number, errText: string): { reason: Ac
   // `insufficient_credits` / `model_not_in_plan`, while the CLI's own marker
   // list is written with spaces. Normalizing the separator keeps both wire
   // spellings classified, and the explicit code list above covers a body that
-  // carries a code and no message at all — which is exactly how the code-only
-  // `INSUFFICIENT_CREDITS` body slipped through before.
+  // carries a code and no message at all.
   const lower = errText.toLowerCase().replaceAll('_', ' ')
   if (
     lower.includes('insufficient credits')
@@ -3570,12 +3657,12 @@ const MAX_TRUSTED_RESET_MS = 30 * 24 * 60 * 60 * 1000
  * `parseWindowLimitError` → `resolveWindowLabel`/`extractResetAtMs` pair.
  *
  * `window` is present only when the body actually names one: a
- * `error.rateLimit.window` of `fiveHour`/`weekly`/`daily`, or the
- * "usage limit for your plan" wording (read as `weekly` when it says so, else
- * `fiveHour`). That is the CLI's own bar for calling a rejection a WINDOW
- * limit, and it is what keeps a bare 429 — a burst limiter, a model-level
- * limit, a spend cap `windowLimits` cannot show — from being reported as an
- * exhausted window (issue #54).
+ * `error.rateLimit.window` of `fiveHour`/`weekly`/`daily`, or the "usage limit
+ * for your plan" wording (read as `weekly` when it says so, else `fiveHour`).
+ * That is the CLI's own bar for calling a rejection a WINDOW limit, and it is
+ * what keeps a bare 429 — a burst limiter, a model-level limit, a spend cap
+ * `windowLimits` cannot show — from being reported as an exhausted window
+ * (issue #54).
  *
  * `resetAtMs` is the reset the body publishes: `error.rateLimit.reset` is
  * SECONDS (`1e3 * reset`, like the CLI), and a `resets at <ISO>` stamp in the
@@ -3629,6 +3716,13 @@ function readWindowLimitEvidence(errText: string): { window?: 'fiveHour' | 'week
   }
 }
 
+/**
+ * True when a pre-stream rejection is Command Code's Go-plan gate
+ * (`upgrade_required`) — the only plan without Provider API access. Only this
+ * class of rejection should fall back to the CLI `/alpha/generate` transport;
+ * other 4xx/5xx must surface as ordinary errors so real account/model
+ * problems are not masked.
+ */
 function isUpgradeRequiredError(status: number, errText: string): boolean {
   if (status !== 403) return false
   const lower = errText.toLowerCase()
@@ -3646,7 +3740,7 @@ function isUpgradeRequiredError(status: number, errText: string): boolean {
       if (message.toLowerCase().includes('go plan') && message.toLowerCase().includes('api access')) return true
     }
   } catch {
-    // Already handled via the plain-text substring checks above.
+    return false
   }
   return false
 }

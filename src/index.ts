@@ -1,14 +1,13 @@
 /**
  * dsh-commandcode-provider — DeepSeek Harness LLM provider plugin for Command
- * Code (unofficial; ported from pi-commandcode-provider@0.5.1).
+ * Code (unofficial; ported from pi-commandcode-provider@0.5.1, MIT).
  *
  * Registers the `commandcode` provider route on `ctx.llm` and declares it in
  * the configurable-provider directory, so the web Models page shows a
- * "Command Code" card with an API-key field and the model picker lists the
- * live Command Code model catalog. Connection facts resolve per request over
- * the plugin's live profile Config (volatile fields, unwrapped per read) and
- * the credential seam, so a changed key, endpoint, or cache path reaches the
- * next request without a restart.
+ * "Command Code" card and the model picker lists the live catalog. Connection
+ * facts are resolved per request from the live profile Config (volatile
+ * fields, unwrapped per read) and the credential seam, so a changed key,
+ * endpoint or cache path reaches the next request without a restart.
  *
  * ```yaml
  * - id: llm-commandcode
@@ -62,16 +61,6 @@ import {
   transportResetAction,
 } from './transport-retry.ts'
 import { KNOWN_PLANS } from './capabilities.ts'
-import {
-  COMMAND_GUARD_DEFAULT_LEVEL,
-  COMMAND_GUARD_LEVELS,
-  COMMAND_GUARD_TIMEOUT_MS,
-  applyCommandGuard,
-  commandGuardThreshold,
-  type CommandGuardLevel,
-  type CommandGuardSettings,
-} from './command-guard.ts'
-import { runSystemOne } from './systemone.ts'
 import { markVolatileFields, unwrapVolatileConfig } from './config-volatile.ts'
 
 export {
@@ -194,14 +183,11 @@ export interface Config {
   streamIdleTimeoutMs?: number
   /**
    * Transport failures one request absorbs before the failure is surfaced;
-   * defaults to 5. The route's retry policy is near-unbounded on purpose (1000
-   * attempts, waits doubling to 15 minutes) because that shape is for the
-   * failures a provider asks to have retried — an exhausted rate-limit window,
-   * a gateway 520. A transport failure is not one of those: the first attempts
-   * recover an ordinary blip (the default 5 retries are scheduled 0.5/1/2/4/8 s
-   * after the failures before them, so ~15.5 s of grace), and after that the
-   * wait is pure stall, so the retries are capped here. Raise it on a genuinely
-   * flaky link; 0 surfaces every transport failure immediately.
+   * defaults to 5. The route's retry policy is near-unbounded on purpose
+   * (1000 attempts, waits doubling to 15 minutes) because that shape is for
+   * the failures a provider asks to have retried; a transport failure is not
+   * one of those, and after ~15.5 s of grace the wait is pure stall, so it is
+   * capped here (issue #39). 0 surfaces every transport failure immediately.
    */
   transportMaxRetries?: number
   /**
@@ -213,8 +199,7 @@ export interface Config {
   filterModelsByPlan?: boolean
   /**
    * Visible-model allowlist: catalog model ids shown in pickers. Empty or
-   * unset means "show everything". Persisted by the settings page's model
-   * filter card; applies after the subscription-tier filter.
+   * unset means "show everything"; applied after the subscription-tier filter.
    */
   visibleModels?: string[]
   /**
@@ -222,118 +207,83 @@ export interface Config {
    * list, keyed by catalog id (`true` = listed, `false` = hidden). An id here
    * decides that model on its own; an id absent here follows `visibleModels`.
    * dsh-TUI keys a staged edit by the field's path, so the checkboxes need one
-   * path per model — a map — because a boolean field cannot express "this id
-   * is a member of the array".
+   * path per model — a map.
    */
   modelVisibility?: Record<string, boolean>
   /**
    * Extra accounts for multi-account rotation. The top-level
    * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first
-   * (`default`) account; each entry here adds one more. When a request is
-   * rejected pre-stream with 429 (usage window exhausted) or 401, the next
-   * account's key retried transparently; when every account is exhausted the
-   * request fails with a `RATE_LIMIT` error naming the earliest window
-   * reset. Entries without `apiKey` or `apiKeyEnv` are ignored.
+   * (`default`) account; each entry here adds one more, and an entry with
+   * neither `apiKey` nor `apiKeyEnv` is ignored. A pre-stream 429/401 marks
+   * the key and the next account's key is retried transparently.
    */
   accounts?: CommandCodeAccountConfig[]
   /**
    * Manually selected active account: a slot id — `default`, or an extra
-   * account's credential reference (e.g. `COMMANDCODE_API_KEY_2`). The
-   * selected account serves whenever it is usable; an unknown id or an
-   * exhausted selected account falls back to the first usable slot (automatic
-   * rotation still applies). Unset means "first usable account".
+   * account's credential reference (e.g. `COMMANDCODE_API_KEY_2`). It serves
+   * whenever usable; an unknown id or an exhausted one falls back to rotation
+   * order. Unset means "first usable account".
    */
   activeAccount?: string
   /**
-   * Model → account routing rules. Each rule lists catalog model ids to an
-   * account slot id (`default`, or an extra account's credential reference).
-   * When a request's model is in a rule's list and the routed account is
-   * usable, that account serves — before the manual {@link activeAccount} and
-   * the passive rotation order. A routed account that is exhausted or invalid
-   * falls back to the normal selection, so the router is a hint, never a hard
-   * gate. The first matching rule wins.
+   * Model → account routing rules, each listing catalog model ids for an
+   * account slot id. A matching rule's account serves before {@link
+   * activeAccount} and the passive rotation order; an unusable routed account
+   * falls back, so the router is a hint, never a hard gate. First match wins.
    */
   modelAccountRules?: CommandCodeModelAccountRule[]
   /**
    * Whether to use Command Code as the backend for dsh's model-facing
-   * `web_search` tool. When enabled, the plugin registers a `commandcode`
-   * search provider on `ctx.web` AND selects `commandcode` in the web seam
-   * (so it wins over the shipped `deepseek-official` or a sibling search
-   * plugin's pin), using the SAME Command Code API key/base as chat. When
-   * disabled, the selection is handed back to whichever backend was there
-   * before — turning it off never forces the factory default, so a sibling
-   * search plugin (e.g. modsearch) keeps working (issue #26). The rewrite
-   * rides dsh's internal `searchProviderId`, which is read per search call,
-   * so a setting change lands on the next search without a restart.
-   * Defaults to true.
+   * `web_search` tool. Enabled registers a `commandcode` search provider on
+   * `ctx.web` AND selects it over the shipped `deepseek-official` (or a
+   * sibling plugin's pin), reusing the SAME key and apiBase as chat. Disabling
+   * hands the selection back to whichever backend was there before, so a
+   * sibling search plugin (e.g. modsearch) keeps working (issue #26). The
+   * write rides dsh's internal `searchProviderId`, read per search call, so a
+   * setting change lands on the next search without a restart. Defaults true.
    */
   webSearch?: boolean
   /**
    * Whether the Web sidebar shows the plans & quota card
-   * (`sidebar.footer.action`). Defaults to false: the card is opt-in, so an
-   * unset document renders no quota surface in the sidebar and mounts no
-   * background usage poll for it. Only the sidebar entry is affected — the
-   * dashboard cell behind it stays registered, it simply has no trigger until
-   * the toggle is on. Read by the browser client; the adapter ignores it.
+   * (`sidebar.footer.action`). Defaults to false, so an unset document mounts
+   * no sidebar quota surface and no background usage poll for it; the
+   * dashboard cell behind it stays registered. Read by the browser client; the
+   * adapter ignores it.
    */
   showSidebarQuota?: boolean
-  /**
-   * Whether the Command Code decision model (`typesafe/jev`) may auto-approve
-   * shell commands that dsh was about to ask about. Defaults to FALSE: the
-   * guard turns a model's opinion into a one-shot approval grant, so it is
-   * opt-in, and the command text (plus the agent's own description of it) is
-   * sent to Command Code to judge. Only commands a policy already wanted a
-   * human to look at are ever judged, and only a confident "safe" verdict
-   * (`commandGuardLevel`) skips the prompt — every other outcome, including
-   * any failure of the decision call itself, delegates to the normal approval
-   * flow. See `./command-guard.ts`.
-   */
-  commandGuard?: boolean
-  /**
-   * How confident every verdict must be before the guard skips the approval
-   * prompt: `high` (0.95), `medium` (0.9, the default) or `low` (0.8). A lower
-   * level approves more, on less evidence. The decision budget is fixed
-   * (`COMMAND_GUARD_TIMEOUT_MS`), so this is the guard's only tuning knob.
-   */
-  commandGuardLevel?: CommandGuardLevel
   /**
    * Whether requests enforce zero data retention: the provider then routes
    * them only through upstreams that keep no prompts/completions and never
    * train on them (its own opt-in, `CMD_ZDR=1` in the CLI / `x-cmd-zdr: 1` on
    * the Provider API). Defaults to FALSE: `zdr` changes WHERE a request is
-   * served. Every chat request carries the header when enabled; a model with
-   * no ZDR-capable upstream fails with 422 `cmd_zdr_no_providers` instead of
-   * being routed through an upstream that retains data. ZDR capacity is
-   * priced pass-through and usually costs more, and the price readout keeps
-   * quoting the ordinary catalog rates (the real per-request price shows in
-   * Command Code's Studio). The decision endpoint behind the command guard is
-   * never ZDR-enforced — see `./systemone.ts`.
+   * served. Every chat request carries the header when enabled, and a model
+   * with no ZDR-capable upstream fails with 422 `cmd_zdr_no_providers` rather
+   * than losing the guarantee. ZDR capacity is priced pass-through and usually
+   * costs more; the price readout keeps quoting the ordinary catalog rates
+   * (the real per-request price shows in Command Code's Studio).
    */
   zdr?: boolean
   /**
    * Language override for the `/commandcode` Host-side command's user-facing
-   * copy. Host commands cannot read the client's `ctx.locale`, so this is
-   * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
-   * `LC_ALL`/`LANG` from the launching shell, falling back to `'zh'`. The
-   * web settings page is unaffected — it follows the browser's language
-   * preference on its own. Two surfaces, two independent locales. The
-   * declared type is `string` (the schemastery `pattern` cannot narrow
-   * literal types); an unknown value is treated as "unset" by
-   * `pickCommandLocale`.
+   * copy. Host commands cannot read the client's `ctx.locale`, so this is the
+   * explicit knob: `'zh'` or `'en'`, defaulting to `'zh'`. The web settings
+   * page is unaffected — it follows the browser's language preference on its
+   * own. The declared type is `string` (the schemastery `pattern` cannot
+   * narrow literal types); `pickCommandLocale` treats an unknown value as
+   * "unset" and then reads `LC_ALL`/`LANG`, which is only reachable when
+   * `lang` is absent from a programmatically built config.
    */
   lang?: string
 }
 
 /**
  * The Config schema: every field volatile except the composition-only `apiKey`
- * secret.
- *
- * dsh 0.1.7's settings forms are projected from the schema's `meta.volatile`
- * nodes, so an unmarked field would be invisible to AND unwritable from the
- * settings page and refused by form-edit path validation — and the loader
- * hands `apply()` a live reference per marked field, committing later writes
- * without remounting this fiber (the `loader/volatile-update` listener at the
- * bottom of `apply` covers the facts that are not re-derived per read).
+ * secret. 0.1.7's settings forms are projected from the schema's
+ * `meta.volatile` nodes, so an unmarked field would be invisible to AND
+ * unwritable from the settings page. The loader also hands `apply()` a live
+ * reference per marked field, so writes commit in place without remounting
+ * this fiber — the `loader/volatile-update` listener at the bottom of `apply`
+ * re-derives the two facts that are not re-read per request.
  */
 export const Config: z<Config> = z.object(markVolatileFields({
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
@@ -343,7 +293,7 @@ export const Config: z<Config> = z.object(markVolatileFields({
   // strip it from every descriptor read (`settings.describe()` runs with
   // `redactSecrets: true`). Without the role the literal rides back to the
   // browser verbatim — including on a remote-Host setup, where that is another
-  // machine. Same declaration as the official providers' `apiKey` field.
+  // machine.
   // DELIBERATELY not volatile: no settings surface writes it (both the web
   // page and the dsh-TUI section write keys through the credentials seam), so
   // it stays composition-only, and a config-file edit to it reloading this
@@ -357,14 +307,6 @@ export const Config: z<Config> = z.object(markVolatileFields({
   transportMaxRetries: z.number().min(0).max(MAX_TRANSPORT_MAX_RETRIES),
   filterModelsByPlan: z.boolean(),
   visibleModels: z.array(z.string()),
-  /**
-   * Per-model visibility overrides for the terminal settings page's checkbox
-   * list, keyed by catalog id. dsh-TUI addresses a staged edit by its field
-   * PATH, so two checkboxes sharing one path would overwrite each other's
-   * draft and the section's last model would decide every write; a map gives
-   * each checkbox a path of its own. An id listed here wins over
-   * {@link Config.visibleModels}; ids absent here keep following it.
-   */
   modelVisibility: z.dict(z.boolean()),
   webSearch: z.boolean().default(true),
   showSidebarQuota: z.boolean().default(false),
@@ -379,11 +321,6 @@ export const Config: z<Config> = z.object(markVolatileFields({
     models: z.array(z.string()),
     account: z.string(),
   })),
-  // The command guard. The level list mirrors COMMAND_GUARD_LEVELS in
-  // `./command-guard.ts`; the client's field spec mirrors it again (the browser
-  // bundle cannot import that node-side module).
-  commandGuard: z.boolean().default(false),
-  commandGuardLevel: z.union([...COMMAND_GUARD_LEVELS]).default(COMMAND_GUARD_DEFAULT_LEVEL),
   // Off by default: turning it on changes which upstream serves the request
   // (and usually what it costs), so nobody gets ZDR routing by accident.
   zdr: z.boolean().default(false),
@@ -399,7 +336,7 @@ export interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions
  * The one explicit resolve step from raw config to validated connection
  * facts. Programmatic construction may bypass Schemastery normalization, so
  * every default is re-judged here — for the composition entry at load and for
- * each settings snapshot at its first use.
+ * every settings-backed read.
  */
 export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions {
   return {
@@ -415,7 +352,7 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
       : undefined,
     // Only real booleans survive: a hand-edited document can carry anything,
     // and a malformed flag must fall back to the array rather than hide a
-    // model. An all-empty map is the same as no map.
+    // model.
     modelVisibility: readModelVisibility(config.modelVisibility),
     // The connection carries the switch; the adapter enforces it on every
     // chat request rather than depending on a client-side coverage snapshot.
@@ -424,11 +361,10 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
 }
 
 /**
- * Per-model visibility overrides, cleaned for the adapter. Programmatic
- * construction may bypass Schemastery normalization, so a non-object or a
- * non-boolean entry is dropped here instead of reaching the picker filter.
- * @param raw - The `modelVisibility` value from any config source.
- * @returns A frozen id → boolean map, or undefined when nothing is set.
+ * Per-model visibility overrides, cleaned for the adapter: a non-object or a
+ * non-boolean entry is dropped rather than reaching the picker filter, and an
+ * all-empty map reads as no map. Returns a fresh id → boolean map, or
+ * undefined when nothing is set.
  */
 function readModelVisibility(raw: unknown): Readonly<Record<string, boolean>> | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
@@ -447,10 +383,8 @@ export function apply(ctx: Context, config: Config): void {
   const current = (): Config => unwrapVolatileConfig(config)
   const options = (): ResolvedCommandCodeOptions => resolveAdapterOptions(current())
 
-  // The account slots, rebuilt from the live config on every resolution so
-  // a settings-page accounts change reaches the very next request. The
-  // top-level apiKey/apiKeyEnv (+ the CLI auth file) form the default
-  // account; each config.accounts entry adds one more.
+  // The account slots, rebuilt from the live config on every resolution so a
+  // settings-page accounts change reaches the very next request.
   const slots = (): CommandCodeAccountSlot[] => {
     const raw = current()
     const list: CommandCodeAccountSlot[] = [{
@@ -483,8 +417,8 @@ export function apply(ctx: Context, config: Config): void {
     return list
   }
 
-  // The manually selected account (settings page / config), re-read per
-  // resolution like every other settings-backed fact.
+  // The manually selected account, re-read per resolution like every other
+  // settings-backed fact.
   const preferredId = (): string | undefined => {
     const raw = current().activeAccount
     return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
@@ -504,9 +438,9 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   // The multi-account pool: passive rotation only — a key is marked when a
-  // request using it is actually rejected (429/401), and the marks are
-  // re-checked against the live window limits only once every account is
-  // marked, so the steady state costs zero extra API calls.
+  // request using it is actually rejected, and the marks are re-checked
+  // against the live window limits only once every account is marked, so the
+  // steady state costs zero extra API calls.
   // Explicit annotations break the pool↔adapter inference cycle (the pool's
   // probe calls the adapter; the adapter's rotation hook calls the pool).
   const pool: CommandCodeAccountPool = new CommandCodeAccountPool({
@@ -517,8 +451,6 @@ export function apply(ctx: Context, config: Config): void {
     // request time, never during plugin startup.
     probeWindow: (apiKey: string) => adapter.probeWindowLimits(apiKey),
     preferredId,
-    // Model → account routing rules, re-read per resolution like every
-    // settings-backed fact.
     modelAccountRules: (): readonly CommandCodeModelAccountRule[] => current().modelAccountRules ?? [],
   })
 
@@ -542,9 +474,8 @@ export function apply(ctx: Context, config: Config): void {
     resolveApiKey,
     // Pre-stream account-scoped rejection: mark the rejected key when the
     // reason warrants it and hand the adapter the next account's key. When
-    // every account is exhausted the pool throws the RATE_LIMIT /
-    // INVALID_CREDENTIAL error that names the earliest reset — that error, not
-    // the raw provider rejection, is what the caller sees.
+    // every account is unusable the pool's own RATE_LIMIT / INVALID_CREDENTIAL
+    // error is what the caller sees, not the raw provider rejection.
     rotateApiKey: async (
       rejectedKey: string,
       rejection: AccountRotationReason,
@@ -554,14 +485,10 @@ export function apply(ctx: Context, config: Config): void {
     ): Promise<string | undefined> => {
       // Only the two account-health reasons become marks: an `unavailable`
       // rejection (no credits, a model outside this account's plan) says
-      // nothing durable about the key, so the pool rotates past it without
-      // remembering — a `:free` model is still served by a credits-empty
-      // account. `rate-limit` (a window the provider named) and `throttled` (a
-      // 429 that named none) both mark, but with different causes, so the
-      // pool's own diagnosis never reports a plain throttle as an exhausted
-      // usage window (issue #54). The provider's own `resetAtMs`, when the body
-      // carried one, turns the rate-limit mark into a cooldown that expires by
-      // itself.
+      // nothing durable about the key — a `:free` model is still served by a
+      // credits-empty account. `rate-limit` and `throttled` both mark but with
+      // different causes, so the pool's own diagnosis never reports a plain
+      // throttle as an exhausted usage window (issue #54).
       if (rejection !== 'unavailable') pool.markRejected(rejectedKey, rejection, rotation?.resetAtMs)
       // The whole tried set, not just the rejected key, reaches the pool: a
       // rejection that does not mark the key would otherwise be re-offered on
@@ -569,7 +496,7 @@ export function apply(ctx: Context, config: Config): void {
       // behind it. The model rides along so model-routing rules pick the next
       // account for the same model. An EMPTY set must not be forwarded — the
       // pool reads it as "nothing was tried" and drops the filter this set
-      // exists for, so it falls back to the rejected key like a missing one.
+      // exists for.
       const tried = rotation?.tried?.length ? rotation.tried : [rejectedKey]
       const resolved = await pool.resolveKey(
         model === undefined ? { tried } : { tried, model },
@@ -590,37 +517,31 @@ export function apply(ctx: Context, config: Config): void {
     // The picker's plan filter asks about the whole pool, not just the account
     // that would serve right now: with several accounts on different plans,
     // keying the list on the serving one made models appear and vanish as
-    // rotation moved between them (and hid models the other accounts could
-    // run). Read live, so adding or removing an account applies to the next
-    // picker load.
+    // rotation moved between them.
     resolveAccountKeys: async (): Promise<readonly string[]> => {
       const accounts = await pool.resolvedAccounts()
       return accounts.map((account) => account.key)
     },
   })
-  // The Models page card: a configurable provider with a settings address.
-  // settingsPath [] means the whole `llm-commandcode` section configures it.
+  // The Models page card. An empty `settingsPath` means the whole
+  // `llm-commandcode` section configures this provider.
   ctx.llm.registerConfigurableProviders([
     { provider: PROVIDER, displayName: 'Command Code', settingsNs: NS, settingsPath: [] },
   ])
-  // The live route: this is what makes models requestable under `commandcode`.
   ctx.llm.registerAdapter([PROVIDER], adapter)
 
-  // Bounded retry for TRANSPORT failures (issue #39, second report). The route
-  // policy is near-unbounded on purpose (see `providerRetryPolicy`), because
-  // an exhausted rate-limit window or a gateway 520 is a failure that ASKS to
-  // be retried — but a connection that cannot be established is not, and at the
-  // long-context sizes this plugin serves the unbounded cadence turned a
-  // 10-second TCP connect timeout into an ~8-minute stall (the reporter's
-  // 11/1000 row, whose "482s" is the wait before the 11th attempt). So the
-  // first few transport failures are absorbed here and the rest surface with a
+  // Bounded retry for TRANSPORT failures (issue #39). The route policy is
+  // near-unbounded on purpose (see `providerRetryPolicy`) because an exhausted
+  // rate-limit window or a gateway 520 is a failure that ASKS to be retried —
+  // a connection that cannot be established is not, and the unbounded cadence
+  // turned a 10-second connect timeout into an ~8-minute stall, so the first
+  // few transport failures are absorbed here and the rest surface with a
   // diagnosis. `dsh-llm-retry` keeps its window for every other code.
   //
   // The failure is surfaced by THROWING out of the waterfall: the agent loop
   // wraps the rejection into the turn's error, so the retry chain stops here.
-  // The failure's own message is carried in the thrown message (the loop may
-  // re-wrap with the original), and the diagnostic also goes to the log, which
-  // nothing can rewrite.
+  // The failure's own message is carried in the thrown message, and the
+  // diagnostic also goes to the log, which nothing can rewrite.
   const transportMaxRetries = (): number => {
     const value = current().transportMaxRetries
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return DEFAULT_TRANSPORT_MAX_RETRIES
@@ -725,22 +646,20 @@ export function apply(ctx: Context, config: Config): void {
   // child fiber injects it, so it registers whenever the profile mounts
   // dsh-commands and the fiber simply never activates when it does not.
   // The command runs Host-side and has no access to the client's locale
-  // service, so its language is resolved here from `Config.lang` (explicit
-  // override) and the launching shell's `LC_ALL`/`LANG` (inferred default);
-  // resolved per invocation so a settings change reaches the next command
-  // run without a restart.
+  // service, so its language is resolved per invocation from `Config.lang`
+  // (explicit override) and the environment's `LC_ALL`/`LANG` (inferred
+  // default), so a settings change reaches the next run without a restart.
   const commandLocale = (): LocaleId => pickCommandLocale(current().lang)
   ctx.inject(['commands'], (commandCtx) => {
     applyCommands(commandCtx, { adapter, reports: usageReports, getLocale: commandLocale })
   })
 
   // The settings page's account card: getUsage exposed to the browser through
-  // the Typert Gateway (`commandcode/report`). Rides the optional `typert`
-  // registry service, so profiles without the web stack never activate it.
-  // The same service also exposes the browser-login flow: the Host binds a
-  // loopback callback server (the official `command-code login` dance) and
-  // stores the delivered key through the credentials seam under the same
-  // reference the default slot resolves — no restart, no settings document.
+  // the Typert Gateway (`commandcode/report`), plus the browser-login flow the
+  // same service carries (the Host binds a loopback callback server and stores
+  // the delivered key through the credentials seam). Rides the optional
+  // `typert` registry service, so profiles without the web stack never
+  // activate it.
   const loginFlow = new CommandCodeLoginFlow({
     apiBase: () => options().apiBase,
     validateTargetRef: (targetRef): void => {
@@ -756,13 +675,11 @@ export function apply(ctx: Context, config: Config): void {
     },
   })
   ctx.effect(() => () => loginFlow.dispose(), 'dsh-commandcode-provider: login flow')
-  // The full model catalog for the settings page's model editors (the
-  // routing-rule editor and the visible-models filter): served Host-side
-  // from the adapter's cached/fetched catalog (sorted for picking), so the
-  // browser never calls the Command Code API directly. Unfiltered, so an
-  // editor never loses its own options — e.g. a rule can route a GOAT-only
-  // model while the picker (plan-filtered + allowlisted) hides it. Each
-  // entry carries its plan-tier key so the editors can group under tier
+  // The full model catalog for the settings page's model editors: served
+  // Host-side from the adapter's cached/fetched catalog, so the browser never
+  // calls the Command Code API directly. Unfiltered, so an editor never loses
+  // its own options — a rule can route a GOAT-only model the picker hides.
+  // Each entry carries its plan-tier key so the editors can group under tier
   // headings without importing the Host's capability snapshot.
   const catalogForEditors = async (): Promise<CommandCodeCatalog> => {
     const models = await adapter.listModels(PROVIDER, { unfiltered: true })
@@ -782,26 +699,18 @@ export function apply(ctx: Context, config: Config): void {
   // Web search over the Command Code Provider API, exposed through the web
   // capability seam (`ctx.web`). Rides the optional `web` service: a child
   // fiber injects it, so the provider registers whenever the profile mounts
-  // the web stack and the fiber never activates when it does not (profiles
-  // without web remain an LLM-provider-only plugin). It reuses the SAME
-  // credential chain as the model adapter (pool.resolveKey → env → auth file)
-  // and the same apiBase, so DSH's model-facing web_search tool needs no
-  // separate key or endpoint config — a Command Code key works as-is.
+  // the web stack and the fiber never activates when it does not. It reuses
+  // the SAME credential chain and apiBase as the model adapter, so DSH's
+  // model-facing web_search tool needs no separate key or endpoint config.
   //
-  // Whether the `commandcode` provider WINS over the shipped `deepseek-official`
-  // (or a sibling search plugin's pin, e.g. modsearch) is controlled by
-  // `Config.webSearch` (default on). The web seam has no public runtime
-  // selector, so the plugin writes its private `searchProviderId` field (read
-  // per call) via `applyCommandCodeSearchSelection`. A settings change lands
-  // on the next search without a restart. See src/web-search.ts for why this
-  // runtime write is safe and what it depends on.
-  //
-  // The tracked selection remembers whichever backend was displaced, so
-  // turning the toggle off hands the selection back to it (issue #26) — the
-  // disable path never forces the factory default. Disposing the fiber (the
-  // plugin unloads) restores it the same way: without that, the stale
-  // `commandcode` pin would outlive its unregistered provider and every
-  // search would fail with WEB_PROVIDER_CONFIGURED_MISSING.
+  // Whether `commandcode` WINS over the shipped `deepseek-official` (or a
+  // sibling search plugin's pin, e.g. modsearch) is `Config.webSearch`. The
+  // seam has no public runtime selector, so the plugin writes its private
+  // `searchProviderId` field (read per call) via
+  // `applyCommandCodeSearchSelection`; see src/web-search.ts for why that
+  // write is safe. The tracked selection remembers whichever backend was
+  // displaced, so turning the toggle off — and disposing the fiber — hands the
+  // selection back to it (issue #26) instead of forcing the factory default.
   const searchSelection = commandCodeSearchSelection()
   const applySearchSelection = (enabled: boolean): void => {
     if (webRuntime !== undefined) {
@@ -834,57 +743,9 @@ export function apply(ctx: Context, config: Config): void {
     }, 'dsh-commandcode-provider: web search selection')
   })
 
-  // The command guard's live settings. Declared BEFORE the inject below
-  // because an inject callback can run synchronously (when the seam is already
-  // mounted) and a `const` declared after it would be a temporal-dead-zone
-  // throw. Every fact is re-read per ask, so a settings write lands on the very
-  // next approval.
-  const commandGuardSettings = (): CommandGuardSettings => {
-    const raw = current()
-    return {
-      enabled: raw.commandGuard === true,
-      threshold: commandGuardThreshold(raw.commandGuardLevel),
-      timeoutMs: COMMAND_GUARD_TIMEOUT_MS,
-    }
-  }
-
-  // The command guard: an AI second opinion in front of the human approval
-  // prompt. dsh's approval seam is an optional service, and the guard is only
-  // meaningful where it exists (no approval service means no asks to answer at
-  // all), so the listeners ride `ctx.inject(['approval'], …)` exactly like
-  // `web` and `tuiSettingsSections`: a profile without the seam never activates
-  // this fiber, and an engine that predates the service stays inert.
-  //
-  // The decision endpoint uses the plugin's ordinary credential chain and base
-  // URL — no separate key — and every failure inside it delegates to the human
-  // (`./command-guard.ts` documents the ladder).
-  ctx.inject(['approval'], (approvalCtx) => {
-    applyCommandGuard(approvalCtx, {
-      settings: commandGuardSettings,
-      decide: (request, decideOptions) => runSystemOne(
-        {
-          apiBase: () => options().apiBase,
-          resolveApiKey: () => resolveApiKey(options()),
-        },
-        request,
-        decideOptions,
-      ),
-      log: (message) => {
-        ctx.logger.info(`llm-commandcode: ${message}`)
-      },
-    })
-  })
-
-  // The terminal front door (dsh-TUI) settings page. dsh-TUI owns its own
-  // settings screen and only asks plugins to DECLARE what is editable, so
-  // without this a TUI-only user has no way to enter the API key — the web
-  // Models page is the only other surface that writes it, and dsh-TUI's
-  // `/provider` wizard manages its own `llm-pi-ai` routes exclusively
-  // (issue #28). The seam is an optional service, exactly like `commands`
-  // and `web`: on a profile without dsh-TUI the fiber never activates, and
-  // the plugin stays a plain LLM-provider bundle. The API-key field is a
-  // secret field, so the literal goes to the credentials seam and never into
-  // a settings document.
+  // The dsh-TUI settings page: without it a TUI-only user has no way to enter
+  // the API key (issue #28). The seam is optional, exactly like `commands` and
+  // `web`, so a profile without dsh-TUI never activates this fiber.
   let refreshTuiSettings: (() => void) | undefined
   ctx.inject(['tuiSettingsSections'], (tuiCtx) => {
     refreshTuiSettings = applyCommandCodeTuiSettings(tuiCtx, {
@@ -892,15 +753,12 @@ export function apply(ctx: Context, config: Config): void {
       // Read per registration, so a `Config.apiKeyEnv` change re-targets the
       // key field instead of leaving it writing to the previous reference.
       apiKeyRef: () => current().apiKeyEnv ?? DEFAULT_API_KEY_ENV,
-      // The account slots behind the active-account selector. The section is
-      // re-registered when this list changes (the refresh call below), since
-      // the host renders a fixed option list per declaration.
+      // The section is re-registered when this list changes (the refresh call
+      // below), since the host renders a fixed option list per declaration.
       accountSlots: () => slots().map((slot) => ({ id: slot.id, label: slot.label })),
-      // The model allowlist is read LIVE on every toggle: a checkbox judges
-      // its inherited state against the current document, not against
-      // whatever the declaration happened to be registered with. The override
-      // map is read here too, so an id this build's catalog does not place
-      // still gets a row of its own.
+      // Read live, so a checkbox judges its inherited state against the
+      // current document, and an id this build's catalog does not place still
+      // gets a row of its own.
       visibleModels: () => options().visibleModels ?? [],
       modelVisibility: () => options().modelVisibility,
     })
@@ -911,15 +769,13 @@ export function apply(ctx: Context, config: Config): void {
 
   // Settings is an optional service. `configure({ auto: false })` declares that
   // this plugin ships its own page, so SettingsForms publishes no auto-generated
-  // form for this entry; config IS the live source (volatile fields), and the
-  // `loader/volatile-update` listener below is what re-applies the two facts
-  // that are not re-derived per read. A profile without a settings service
-  // simply keeps using the composition config `apply()` was handed.
+  // form for this entry. A profile without a settings service simply keeps
+  // using the composition config `apply()` was handed.
   //
   // The one-time settings.yaml import needs no cooperation from here: the
   // section id and the profile entry id are the SAME string
-  // (`llm-commandcode`), which is exactly the identity the engine's
-  // `importLegacyDocument` looks the entry up by.
+  // (`llm-commandcode`) — never rename one without the other, or a mismatch
+  // strands existing users' non-secret settings in `settings.yaml.imported`.
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.effect(() => {
       const dispose = settingsCtx.settings.configure({ auto: false }, ctx.fiber)

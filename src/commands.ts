@@ -6,14 +6,10 @@
  *
  * Backed by the Command Code account endpoints the official CLI uses
  * (`/alpha/whoami`, `/alpha/usage/summary`, `/alpha/billing/credits`),
- * exposed through `CommandCodeAdapter.getUsage()`.
- *
- * The command is Host-side and has no access to the client's `ctx.locale`;
- * the active locale is resolved through `deps.getLocale()` (supplied by the
- * plugin entry from `Config.lang` and the shell's `LC_ALL`/`LANG`, defaulting
- * to `zh`). All user-facing copy lives in `./command-locales.ts`; a missing
- * key in one dictionary falls back to the `en` copy rather than dropping
- * text.
+ * exposed through `CommandCodeAdapter.getUsage()`. The command is Host-side
+ * and has no access to the client's `ctx.locale`, so the active locale
+ * arrives through `deps.getLocale()` and every string comes from
+ * `./command-locales.ts` (a missing key falls back to the `en` copy).
  *
  * @module dsh-commandcode-provider/commands
  */
@@ -37,11 +33,9 @@ export interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions =
    */
   reports?: () => Promise<CommandCodeAccountsReport>
   /**
-   * Resolve the active locale for one command run. The plugin entry wires
-   * this from `Config.lang` and the shell's `LC_ALL`/`LANG`. Absent in
-   * programmatic setups (notably the existing test), the command renders
-   * with the default locale (`'zh'`) — historically the only language the
-   * command ever shipped in.
+   * Resolve the active locale for one command run; the plugin entry wires it
+   * from `Config.lang` and the shell's `LC_ALL`/`LANG`. Absent (notably in
+   * tests), the command renders with the default locale `'zh'`.
    */
   getLocale?: () => LocaleId
 }
@@ -51,12 +45,11 @@ export interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions =
 // the surrounding labels)
 // ---------------------------------------------------------------------------
 
-/** Format a dollar amount. */
 function money(value: number): string {
   return `$${value.toFixed(4)}`
 }
 
-/** Format a dollar amount compactly (2 decimals). */
+/** Compact dollar amount (2 decimals), for the summary and window rows. */
 function moneyShort(value: number): string {
   return `$${value.toFixed(2)}`
 }
@@ -70,15 +63,15 @@ function tokensCompact(value: number): string {
 }
 
 /**
- * Format a success-rate percentage (already in percent units): at most two
- * decimals, trailing zeros trimmed — mirrors `formatSuccessRate` in
+ * Success-rate percentage (already in percent units): at most two decimals,
+ * trailing zeros trimmed — mirrors `formatSuccessRate` in
  * `./client/usage.ts`, which the settings card uses.
  */
 function successRateText(value: number): string {
   return String(Number(value.toFixed(2)))
 }
 
-/** Format a millis timestamp as a local date; `n/a` when unset. */
+/** A local date, or `n/a` when the provider published no reset time. */
 function resetLabel(ms: number): string {
   if (ms <= 0) return 'n/a'
   return new Date(ms).toLocaleString()
@@ -94,10 +87,6 @@ function bar(used: number, cap: number): string {
   const filled = Math.round(ratio * 10)
   return '█'.repeat(filled) + '░'.repeat(10 - filled)
 }
-
-// ---------------------------------------------------------------------------
-// Report rendering
-// ---------------------------------------------------------------------------
 
 /** Render one account's rotation mark / cooldown as a short badge. */
 function markLabel(entry: CommandCodeAccountUsage, locale: LocaleId): string {

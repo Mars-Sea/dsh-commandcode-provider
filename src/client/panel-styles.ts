@@ -2,72 +2,50 @@
  * Stylesheet for the Command Code plans & quota panel (the sidebar footer card
  * and the dashboard it opens).
  *
- * Returned as a string rather than injected here so the modules stay free of
- * DOM side effects at import time — the client entry installs it once, keyed
- * by the same `data-plugin-css` attribute the settings-page stylesheet
- * (`./page-styles.ts`) uses, and removes it again when the plugin's fiber
- * unwinds.
+ * Returned as a string, not injected here, so importing this module has no DOM
+ * side effect: `./index.ts` installs it once under {@link PANEL_CSS_ID} and
+ * removes it when the fiber unwinds.
  *
- * These rules are GLOBAL CSS: every selector in here can match markup this
- * plugin did not render. So each one is either qualified by a `ccp-` class of
- * our own, or anchored to the sidebar region it has to lay out — and the one
- * foreign anchor carries its justification in place (see the footer card
- * block; issue #48). `tests/styles.test.ts` audits that containment for both
- * stylesheets and simulates it against the real foreign class stems.
- *
- * Every colour comes from a harness theme alias with a neutral fallback, so
- * the panel follows the active theme (light/dark and any brand pack) without
- * hardcoded values. Classes are `ccp-` prefixed to stay clear of the settings
- * page's `cc-` set.
+ * These rules are GLOBAL CSS, so containment is a contract (issue #48): every
+ * selector is qualified by one of our own `ccp-` classes except the sidebar
+ * anchor below, which carries its justification in place. `tests/styles.test.ts`
+ * audits both stylesheets against the real foreign class stems. Colours are
+ * harness theme aliases with neutral fallbacks; the `ccp-` prefix keeps these
+ * clear of the settings page's `cc-` set.
  *
  * @module dsh-commandcode-provider/client/panel-styles
  */
 
 /**
- * Stylesheet id (the `data-plugin-css` value that makes injection idempotent).
+ * Stylesheet id — the `data-plugin-css` value that makes injection idempotent.
  *
- * The package prefix must match the one the settings-page stylesheet uses
- * (`PAGE_CSS_ID` in `./page-styles.ts`) and this package's real name: an id is
- * the injection's identity, so a stale fork prefix would let a second copy of
- * the plugin inject the same rules twice and would misreport the owner in the
- * DOM. The two ids must also stay distinct from each other — they key two
- * separate style tags, and a shared id would make the second injection a no-op
- * that silently drops one stylesheet.
+ * The prefix must match this package's real name and the settings-page sheet's
+ * (`PAGE_CSS_ID`); the two ids must also stay DISTINCT, since they key two
+ * separate style tags and a shared id would make the second injection a no-op.
  */
 export const PANEL_CSS_ID = '@mars-sea/dsh-commandcode-provider/CommandCodePanel.module.css'
 
 /** The panel stylesheet. */
 export const PANEL_CSS = `
 /* ------------------------------------------------- sidebar footer card */
-/* The shell's foot area renders this list ABOVE the Settings seat, so the card
-   is the sidebar's bottom-most content. The shell supplies no chrome: the entry
-   is the button. It is deliberately quiet — a surface that sits beside Settings
-   should read as part of the column, not as a call to action — with one hover
-   step and a hairline border.
+/* The shell renders this list ABOVE the Settings seat, so the card is the
+   sidebar's bottom-most content, and supplies no chrome: the entry IS the
+   button. Deliberately quiet — a surface beside Settings should read as part of
+   the column — with one hover step and a hairline border.
 
-   The shell's container is a flex ROW whose occupants (this card and ui-cordis's
-   footer chip) each declare a full-width line and shrink-proof flex, so as a row
-   it would overflow the column: this card's flex:0 0 auto cannot shrink, and the
-   chip's width:100% basis would absorb the whole overflow and collapse to
-   nothing. Both were written for a full-width line, which is exactly what a
-   column gives them. Matched by the CSS-module class STEM — never a hashed name
-   — so a dsh that renames it degrades to the shell's own row rather than
-   breaking.
-
-   THE ANCHOR IS LOAD-BEARING, and it is the whole reason this selector is not
-   just [class*="_footerActions"] (issue #48). "footerActions" is NOT a stem this
-   shell owns alone: @deepseek-ai/dsh-client-ui-user-questions renders the
-   ask-user-question dialog's button row as Mbwy4a_footerActions, so the
-   unanchored rule forced THAT row into a column too and stacked the dialog's
+   The shell's container is a flex ROW whose occupants each declare a full-width
+   line and shrink-proof flex, so as a row it would overflow the column: this
+   card cannot shrink and the neighbouring chip would absorb the overflow and
+   collapse to nothing. The first rule is that fix, and THE ANCHOR IS
+   LOAD-BEARING (issue #48): "footerActions" is not a stem this shell owns alone
+   — dsh-client-ui-user-questions renders the ask-user-question dialog's button
+   row as Mbwy4a_footerActions, and the unanchored rule stacked THAT row's
    side-by-side buttons on every page. "footArea" is declared by
-   dsh-client-ui-sidebar alone — verified against every client bundle of the
-   0.1.6-alpha.1 engine, and against our own cc-/ccp- class names, which collide
-   with no engine class — so anchoring under it keeps the sidebar layout fix and
-   cannot reach another component's markup. The descendant combinator (rather
-   than a child one) deliberately survives a wrapper element appearing between
-   the two: a renamed or restructured shell should degrade to its own row, not
-   lose the fix. tests/styles.test.ts pins both halves of this — the dialog row
-   is no longer matched, the sidebar row still is. */
+   dsh-client-ui-sidebar alone (audited across every client bundle of the
+   0.1.6-alpha.1 engine, and against our own cc-/ccp- names, which collide with
+   no engine class). The DESCENDANT combinator survives a wrapper element
+   appearing between the two, so a restructured shell degrades to its own row
+   rather than losing the fix. tests/styles.test.ts pins both halves. */
 [class*="_footArea"] [class*="_footerActions"]{flex-direction:column}
 .ccp-foot{box-sizing:border-box;flex:0 0 auto;width:100%;min-width:0;font:inherit;color:var(--dsw-alias-label-secondary);text-align:left;cursor:pointer;background:0 0;border:1px solid transparent;border-radius:10px;flex-direction:column;gap:6px;margin:0 0 4px;padding:8px;display:flex}
 .ccp-foot:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}
@@ -77,34 +55,31 @@ export const PANEL_CSS = `
 /* One block per quota window: a head line carrying the window's own spend and
    limit, then the FULL-WIDTH bar under it. Stacking the two lets the card show
    the dollar figures — the reason this surface exists — without squeezing the
-   bar into what is left beside them. Mirrors the dashboard's own window block. */
+   bar into what is left beside them. Mirrors the dashboard's window block. */
 .ccp-footRow{flex-direction:column;gap:4px;min-width:0;display:flex}
 .ccp-footHead{align-items:baseline;gap:8px;min-width:0;display:flex}
 .ccp-footLabel{flex:1;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .ccp-footAmount{flex:none;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* The card's markup must stay PHRASING content — it renders inside the shell's
-   own button — so these bars are spans, not divs. That makes display:block
-   load-bearing on BOTH: an inline box ignores width and height outright, so
-   without it the 5px track still painted (a flex item is blockified by its
-   container) while the fill collapsed to 0x0 and the bar showed no usage. */
+   own button — so these bars are spans, which makes display:block load-bearing:
+   an inline box ignores width outright, so the fill would collapse to 0x0 and
+   the bar would show no usage. */
 .ccp-footBar{display:block;background:var(--dsw-alias-bg-layer-2);border-radius:999px;height:5px;overflow:hidden}
 .ccp-footFill{display:block;background:var(--dsw-alias-brand-primary);border-radius:999px;height:100%;transition:width .3s ease}
 .ccp-footFillWarn{background:var(--dsw-alias-state-error-primary)}
 .ccp-footPct{flex:none;width:34px;color:var(--dsw-alias-label-secondary);text-align:right;font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
 
-/* The 56px rail: one icon button on the shell's own rail geometry (36px cell),
-   so the collapsed column keeps a single 18px glyph like its siblings. */
+/* The 56px rail: one icon button on the shell's own 36px rail cell, so the
+   collapsed column keeps a single 18px glyph like its siblings. */
 .ccp-railButton{box-sizing:border-box;width:36px;height:36px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:1px solid transparent;border-radius:8px;flex:none;justify-content:center;align-items:center;margin:0 0 4px;padding:0;display:inline-flex}
 .ccp-railButton:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .ccp-railButton:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 
-/* The ring glyph. Sized entirely by its own width/height attribute, so the
+/* The ring glyph, sized entirely by its own width/height attribute, so the
    footer row, the rail button and the dashboard can each ask for their own. */
 .ccp-glyph{flex:none;justify-content:center;align-items:center;display:inline-flex;color:var(--dsw-alias-brand-primary)}
 
 /* ------------------------------------------------------------ dashboard */
-/* The center column in the layout frame: fill it, scroll the content column,
-   and cap the reading width like the harness's own panels. */
 .ccp-main{background:var(--dsw-alias-bg-layer-1);width:100%;height:100%;overflow:auto;display:block}
 .ccp-mainInner{max-width:760px;margin:0 auto;padding:24px 20px 40px;flex-direction:column;gap:14px;display:flex;color:var(--dsw-alias-label-primary)}
 .ccp-header{align-items:center;gap:10px;display:flex;flex-wrap:wrap}
@@ -113,14 +88,12 @@ export const PANEL_CSS = `
 .ccp-subtitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .ccp-spacer{flex:1}
 .ccp-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5;font-variant-numeric:tabular-nums}
-/* The dashboard's exit: an icon-sized glyph button. The primitive's own
-   geometry is kept (size="sm"); only the glyph is enlarged and optically
-   centred, so it reads as a dismiss control rather than a text button. */
+/* The dashboard's exit: the primitive's own size="sm" geometry is kept; only the
+   glyph is enlarged and optically centred, so it reads as a dismiss control. */
 .ccp-close{min-width:28px;justify-content:center;padding-left:0;padding-right:0}
 .ccp-close span{font-size:16px;line-height:1}
 .ccp-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
 
-/* Notices: the no-key guidance, a blocked report, and a stale-data error. */
 .ccp-notice{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;padding:12px 14px;flex-direction:column;gap:4px;display:flex}
 .ccp-noticeError{border-color:var(--dsw-alias-state-error-primary)}
 .ccp-noticeTitle{margin:0;font-size:13px;font-weight:600;line-height:1.5}
@@ -140,15 +113,14 @@ export const PANEL_CSS = `
 .ccp-fieldLabel{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .ccp-planName{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:1.5}
 
-/* Stat tiles: the monthly credits and the usage totals share one grid. */
+/* The monthly credits and the usage totals share one grid. */
 .ccp-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
 .ccp-tile{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);border-radius:8px;padding:8px 10px;flex-direction:column;gap:2px;display:flex;min-width:0}
 .ccp-tileLabel{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5}
 .ccp-tileValue{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4;font-variant-numeric:tabular-nums}
 .ccp-tileSub{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* Quota bars: the monthly bar and the two windows stack in one column, each a
-   label row plus the track. */
+/* Quota bars: the monthly bar and the two windows. */
 .ccp-windows{flex-direction:column;gap:14px;display:flex}
 .ccp-window{flex-direction:column;gap:6px;display:flex}
 .ccp-windowHead{align-items:baseline;gap:8px;display:flex}
@@ -161,7 +133,6 @@ export const PANEL_CSS = `
 .ccp-barFillWarn{background:var(--dsw-alias-state-error-primary)}
 .ccp-windowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
 
-/* Badges. */
 .ccp-badge{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-brand-primary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600;line-height:17px}
 .ccp-badgeError{background:transparent;color:var(--dsw-alias-state-error-primary)}
 .ccp-badgeWarn{background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-module-platform));color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-secondary))}

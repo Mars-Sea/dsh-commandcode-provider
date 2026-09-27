@@ -1,12 +1,10 @@
 /**
  * Raw-stream trace tests (`src/stream-trace.ts` + its adapter wiring).
  *
- * The trace is the diagnostic this plugin gained for "the response stopped in
- * the middle and nothing said why": it is the only artifact that separates a
- * provider-side cut from a parser miss. These tests pin that it stays free when
- * off, that it never takes the request down with it, and that the records it
- * writes actually describe a cut — the adapter-side assertions drive a real
- * `stream()` through both endings.
+ * The trace is the diagnostic for "the response stopped in the middle and
+ * nothing said why": it is the only artifact that separates a provider-side cut
+ * from a parser miss. These pin that it stays free when off, that it never takes
+ * the request down with it, and that its records describe a cut.
  */
 
 import { test } from 'node:test'
@@ -25,9 +23,9 @@ import {
   STREAM_TRACE_MAX_TEXT,
 } from '../src/stream-trace.ts'
 import { CommandCodeAdapter, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from '../src/adapter.ts'
-import { MessageId } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, LlmError, MessageId } from '@deepseek-ai/dsh-llm'
 import type { CommandCodeConnectionOptions } from '../src/adapter.ts'
-import type { Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 
 /** A throwaway directory removed with the test that made it. */
 function scratch(t: { after: (fn: () => void) => void }): string {
@@ -57,9 +55,7 @@ async function withTraceEnv<T>(value: string | undefined, run: () => Promise<T> 
   }
 }
 
-// ---------------------------------------------------------------------------
 // Switch resolution
-// ---------------------------------------------------------------------------
 
 test('the trace is off unless the environment names it', () => {
   assert.equal(resolveStreamTracePath(undefined), undefined)
@@ -85,9 +81,7 @@ test('boundTraceText keeps short text and marks what it dropped', () => {
   assert.equal(boundTraceText('x'.repeat(STREAM_TRACE_MAX_TEXT + 4)).endsWith('…[+4 chars]'), true)
 })
 
-// ---------------------------------------------------------------------------
 // Writer
-// ---------------------------------------------------------------------------
 
 test('an unset switch yields an inert writer', () => {
   const trace = openStreamTrace('commandcode/m')
@@ -159,9 +153,7 @@ test('one request cannot write past the cap', (t) => {
   assert.equal(records(path).at(-2)?.finishReason, 'length')
 })
 
-// ---------------------------------------------------------------------------
 // Adapter wiring
-// ---------------------------------------------------------------------------
 
 /** A fetch stub answering with one canned SSE body. */
 function fetchStreaming(body: string): typeof fetch {
@@ -215,16 +207,146 @@ test('the environment switch records a completed stream end to end', async (t) =
   const written = records(path)
   assert.deepEqual(
     written.map((r) => r.event),
-    ['stream-open', 'response', 'chunk', 'end', 'stream-close'],
+    ['stream-open', 'request', 'response', 'chunk', 'end', 'stream-close'],
   )
-  const response = written[1]!
+  const request = written[1]!
+  assert.equal(request.protocol, 'cli')
+  assert.equal(request.model, 'm')
+  assert.equal(request.messages && (request.messages as { count: number }).count, 1)
+  assert.match(String((request.body as { sha256: string }).sha256), /^[0-9a-f]{64}$/)
+  assert.equal(JSON.stringify(request).includes('hi'), false)
+  const response = written[2]!
   assert.equal(response.protocol, 'cli')
   assert.equal(response.endpoint, 'https://api.commandcode.ai/alpha/generate')
   assert.equal(response.status, 200)
-  assert.equal(written[2]!.text, 'data: {"type":"text-delta","text":"hi"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n')
-  assert.equal(written[3]!.outcome, 'finished')
-  assert.equal(written[3]!.sawContent, true)
+  assert.equal(written[3]!.text, 'data: {"type":"text-delta","text":"hi"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n')
+  assert.equal(written[4]!.outcome, 'finished')
+  assert.equal(written[4]!.sawContent, true)
 })
+
+test('a pre-stream failure records the request fingerprint and closes the trace', async (t) => {
+  const path = join(scratch(t), 'trace.jsonl')
+  const fetchImpl = (async () => new Response('upstream unavailable', { status: 503 })) as unknown as typeof fetch
+  await withTraceEnv(path, async () => {
+    await assert.rejects(drain(makeAdapter(fetchImpl)))
+  })
+  const written = records(path)
+  assert.deepEqual(written.map((r) => r.event), ['stream-open', 'request', 'response', 'connect-error', 'stream-close'])
+  assert.equal(JSON.stringify(written[1]).includes('hi'), false)
+  assert.equal(written[2]!.status, 503)
+  assert.match(String(written[3]!.message), /upstream unavailable/)
+})
+
+test('disabled tracing does not serialize request values for fingerprints', async () => {
+  let serializations = 0
+  await withTraceEnv('off', async () => {
+    const adapter = makeAdapter(fetchStreaming('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'))
+    for await (const _ of adapter.stream({
+      provider: 'commandcode', model: 'm', messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+      tools: [{ name: 'read', description: 'read', parameters: {
+        type: 'object', toJSON() { serializations++; return { type: 'object' } },
+      } }],
+    })) { /* drain */ }
+  })
+  assert.equal(serializations, 1, 'only the HTTP body should be serialized')
+})
+
+test('protocol fallback records each attempt and retains only the successful response IDs', async (t) => {
+  const path = join(scratch(t), 'fallback.jsonl')
+  let calls = 0
+  const adapter = makeAdapter((async () => {
+    calls++
+    return calls === 1
+      ? new Response('{"error":{"code":"upgrade_required"}}', { status: 403, headers: { 'x-request-id': 'rejected-1' } })
+      : new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
+        headers: { 'x-request-id': 'accepted-2', 'set-cookie': 'PRIVATE COOKIE' },
+      })
+  }) as typeof fetch, 'openai')
+  let chunks: StreamChunk[] = []
+  await withTraceEnv(path, async () => { chunks = await drain(adapter) })
+  const written = records(path)
+  assert.deepEqual(written.filter((r) => r.event === 'request').map((r) => [r.attempt, r.protocol]), [[1, 'openai'], [2, 'cli']])
+  assert.deepEqual(written.filter((r) => r.event === 'response').map((r) => [r.attempt, r.status, r.headers]), [
+    [1, 403, { 'x-request-id': 'rejected-1' }], [2, 200, { 'x-request-id': 'accepted-2' }],
+  ])
+  assert.equal(new Set(written.map((r) => r.streamId)).size, 1)
+  const finish = chunks.find((c) => c.type === 'finish')!
+  assert.deepEqual(finish.replayState, { response: { protocol: 'cli', headers: { 'x-request-id': 'accepted-2' } } })
+  assert.equal(JSON.stringify(written).includes('PRIVATE COOKIE'), false)
+})
+
+test('request IDs survive HTTP rejection and a cut stream in the durable failure', async () => {
+  for (const cut of [false, true]) {
+    const adapter = makeAdapter((async () => new Response(cut
+      ? 'data: {"type":"text-delta","text":"half"}\n\n' : 'unavailable', {
+      status: cut ? 200 : 503, headers: { 'x-request-id': 'failed-request' },
+    })) as typeof fetch)
+    await withTraceEnv('off', async () => {
+      await assert.rejects(drain(adapter), (error: unknown) => {
+        assert.ok(error instanceof LlmError)
+        assert.equal(error.code, cut ? 'STREAM_CLOSED' : 'SERVER')
+        assert.equal(error.failure.requestId, 'failed-request')
+        if (!cut) assert.equal(error.failure.status, 503)
+        return true
+      })
+    })
+  }
+})
+
+for (const protocol of ['cli', 'openai'] as const) {
+  test(`${protocol}: request fingerprints locate the first changed historical message`, async (t) => {
+    const path = join(scratch(t), 'prefix.jsonl')
+    const response = protocol === 'cli'
+      ? 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+      : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'
+    const adapter = makeAdapter(fetchStreaming(response), protocol)
+    const options: GenerateOptions = {
+      provider: 'commandcode', model: 'm', system: 'PRIVATE SYSTEM',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'PRIVATE FIRST' }] }],
+      tools: [{ name: 'read', description: 'PRIVATE TOOL', parameters: { type: 'object' } }],
+    }
+    await withTraceEnv(path, async () => {
+      for await (const _ of adapter.stream(options)) { /* drain */ }
+      options.messages.push({ role: 'user', content: [{ type: 'text', text: 'PRIVATE SECOND' }] })
+      for await (const _ of adapter.stream(options)) { /* drain */ }
+      options.messages[0] = { role: 'user', content: [{ type: 'text', text: 'PRIVATE REPLACEMENT' }] }
+      for await (const _ of adapter.stream(options)) { /* drain */ }
+    })
+    const requests = records(path).filter((r) => r.event === 'request')
+    assert.equal(requests[0]!.model, 'm')
+    assert.equal((requests[0]!.tools as { count: number }).count, 1)
+    assert.deepEqual(requests[0]!.system, requests[1]!.system)
+    assert.deepEqual(requests[0]!.tools, requests[1]!.tools)
+    const messages = requests.map((r) => r.messages as { count: number; items: unknown[] })
+    const initial = protocol === 'cli' ? 1 : 2 // OpenAI carries its system as a message.
+    assert.equal(messages[0]!.count, initial)
+    assert.equal(messages[1]!.count, initial + 1)
+    assert.deepEqual(messages[1]!.items.slice(0, initial), messages[0]!.items)
+    assert.notDeepEqual(messages[2]!.items[initial - 1], messages[1]!.items[initial - 1])
+    assert.deepEqual(messages[2]!.items[initial], messages[1]!.items[initial])
+    assert.equal(JSON.stringify(requests).includes('PRIVATE'), false)
+    assert.equal(new Set(requests.map((r) => r.streamId)).size, 3)
+  })
+
+  test(`${protocol}: response identifiers survive DSH assembly with tracing off`, async () => {
+    const response = protocol === 'cli'
+      ? 'data: {"type":"response-metadata","id":"generation-1"}\n\ndata: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+      : 'data: {"id":"generation-1","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'
+    const adapter = makeAdapter((async () => new Response(response, { headers: {
+      'x-request-id': 'request-1', 'x-trace-id': 'trace-1', 'set-cookie': 'PRIVATE COOKIE',
+    } })) as typeof fetch, protocol)
+    const assembly = new BlockAssembler()
+    await withTraceEnv('off', async () => {
+      for (const chunk of await drain(adapter)) assembly.push(chunk)
+    })
+    // The real loop explicitly copies the assembler's envelope onto source.
+    const message = assembly.message({ provider: 'commandcode', model: 'm', replayState: assembly.replayState })
+    assert.deepEqual(message.source.replayState, { response: {
+      protocol, headers: { 'x-request-id': 'request-1', 'x-trace-id': 'trace-1' }, responseId: 'generation-1',
+    } })
+    assert.equal(JSON.stringify(message).includes('PRIVATE COOKIE'), false)
+  })
+}
 
 test('a cut stream records why it was classified as cut', async (t) => {
   const dir = scratch(t)

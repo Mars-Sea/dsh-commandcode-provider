@@ -2,35 +2,21 @@
  * Injected-stylesheet containment tests (node:test, zero deps). Run with
  * `npm test`.
  *
- * The plugin ships two stylesheets into the harness page — the settings page's
- * (`PAGE_CSS`) and the plans & quota panel's (`PANEL_CSS`) — and both are plain
- * GLOBAL CSS: every rule they carry is able to match markup this plugin did not
- * render. One did (issue #48). `[class*="_footerActions"]` was written for the
- * sidebar's footer-action container, but that is not a stem the sidebar owns
- * alone: `@deepseek-ai/dsh-client-ui-user-questions` renders the
- * ask-user-question dialog's button row as `Mbwy4a_footerActions`, so the rule's
- * `flex-direction:column` reached it too and stacked the dialog's side-by-side
- * buttons. Nothing in the plugin's own tests could see that: the stylesheets
- * were only ever asserted through their effects on our own markup.
+ * Both stylesheets are plain GLOBAL CSS, so every rule they carry can match
+ * markup this plugin did not render — and one did (issue #48): a
+ * `[class*="_footerActions"]` rule written for the sidebar's action row also
+ * matched the ask-user-question dialog's button row and stacked its buttons.
  *
- * So this file pins containment directly, in two layers:
+ * So containment is pinned in two layers: a STRUCTURAL audit (every compound of
+ * every selector must be qualified by our own `cc-`/`ccp-` class, or be one of
+ * the documented sidebar region anchors, and the shared `footerActions` stem
+ * may only appear alongside the `footArea` anchor that scopes it), and a
+ * SIMULATION — a miniature selector matcher against the real foreign class
+ * stems, proving the dialog's row is not matched and the sidebar's still is.
+ * The fixture is asserted to reproduce the old behaviour first, so the
+ * simulation can never pass vacuously.
  *
- *   1. a STRUCTURAL audit — every compound of every selector must be qualified
- *      by one of our own `cc-`/`ccp-` classes, or be one of the two documented
- *      sidebar region anchors, and the shared `footerActions` stem may only
- *      appear alongside the `footArea` anchor that scopes it;
- *   2. a SIMULATION — a miniature selector matcher run against the real foreign
- *      class stems, proving the dialog's button row is not matched and the
- *      sidebar's row still is.
- *
- * Layer 2 is what keeps layer 1 from being decoration: the fixture list includes
- * markup our matcher WOULD match with the old selector, and that is asserted
- * first. Without the audit, a future rule could reintroduce the leak through a
- * shape the fixtures do not enumerate; without the simulation, the audit's
- * allowlist could be widened to nothing without anyone noticing.
- *
- * Both stylesheets are imported from their modules — never re-typed here — so
- * these tests cannot drift from what is actually injected.
+ * Both sheets are imported from their modules, never re-typed here.
  */
 
 import { test } from 'node:test'
@@ -39,9 +25,7 @@ import assert from 'node:assert/strict'
 import { PAGE_CSS, PAGE_CSS_ID } from '../src/client/page-styles.ts'
 import { PANEL_CSS, PANEL_CSS_ID } from '../src/client/panel-styles.ts'
 
-// ---------------------------------------------------------------------------
 // Selector parsing (the constrained subset these stylesheets use)
-// ---------------------------------------------------------------------------
 
 /** One declaration block, with the at-rule prelude it sits under. */
 interface Rule {
@@ -156,23 +140,20 @@ function compoundParts(compound: string): { classes: string[]; type: string } {
   return { classes, type }
 }
 
-// ---------------------------------------------------------------------------
 // Containment policy
-// ---------------------------------------------------------------------------
 
 /** Our own class namespaces: `cc-` (settings page) and `ccp-` (panel). */
 const OWN_CLASS = /^(?:cc|ccp)-/
 
 /**
- * The two sidebar class stems the plugin's stylesheet is allowed to reach into,
- * measured against every client bundle of the 0.1.6-alpha.1 engine.
+ * The two sidebar class stems this plugin's stylesheet may reach, measured
+ * against every client bundle of the 0.1.6-alpha.1 engine.
  *
- * `_footArea` is the sidebar shell's own column, declared by
- * `dsh-client-ui-sidebar` ALONE — which is why it is the SCOPING anchor.
- * `_footerActions` is the action row inside that column, and it is NOT exclusive
- * to it: `dsh-client-ui-user-questions` renders the ask-user-question dialog's
- * button row with the same stem (`Mbwy4a_footerActions`, issue #48), so it may
- * only appear in a selector that also requires the region ancestor above it.
+ * `_footArea` is declared by `dsh-client-ui-sidebar` ALONE, which is why it is
+ * the SCOPING anchor. `_footerActions` is NOT exclusive to it: the
+ * ask-user-question dialog renders its button row with the same stem
+ * (`Mbwy4a_footerActions`, issue #48), so it may only appear in a selector that
+ * also requires that region ancestor.
  */
 const REGION_STEM = '_footArea'
 const SHARED_STEM = '_footerActions'
@@ -190,17 +171,15 @@ const SHEETS = [
   { name: 'PANEL_CSS', id: PANEL_CSS_ID, css: PANEL_CSS },
 ]
 
-// ---------------------------------------------------------------------------
 // Structural audit: every compound is ours, or a documented region anchor
-// ---------------------------------------------------------------------------
 
 for (const sheet of SHEETS) {
   test(`${sheet.name}: every selector compound is qualified by one of our own classes or a documented sidebar anchor`, () => {
     const offenders: string[] = []
     for (const { selector } of selectorsOf(sheet.css)) {
       // Once a compound is qualified by one of our own classes, every compound
-      // after it can only ever match inside our own markup (`… .ccp-close span`),
-      // so an element like `span` there is contained by the selector as a whole.
+      // after it can only match inside our own markup, so an element like
+      // `span` there is contained by the selector as a whole.
       let insideOwnSubtree = false
       for (const part of splitParts(selector)) {
         const { classes } = compoundParts(part.compound)
@@ -250,9 +229,7 @@ test('the two stylesheets carry distinct ids under the plugin package prefix', (
   }
 })
 
-// ---------------------------------------------------------------------------
 // Simulation: the real foreign class stems
-// ---------------------------------------------------------------------------
 
 /** A fixture element, with `ancestors[0]` as its parent. */
 interface Element {
@@ -266,13 +243,12 @@ function el(tag: string, classes: string[], ancestors: Element[] = []): Element 
 }
 
 /**
- * The ask-user-question dialog's card, as `dsh-client-ui-user-questions` renders
+ * The ask-user-question dialog's card as `dsh-client-ui-user-questions` renders
  * it (measured on 0.1.6-alpha.1): `div.frame > section.card > footer.footer`,
- * whose `div.footerActions` holds the next/submit buttons beside
- * `div.pager` — a `display:flex` row (`align-items:center;gap:12px`) that
- * declares NO `flex-direction`, i.e. side by side, which is what the plugin's
- * rule overrode. The hash prefixes are a measurement too; the STEMS are what the
- * rule keys on, so a re-hash does not invalidate the fixture.
+ * whose `div.footerActions` holds the next/submit buttons beside `div.pager` —
+ * a side-by-side `display:flex` row with NO `flex-direction`, which is what the
+ * plugin's rule overrode. The hash prefixes are a measurement too; the rule keys
+ * on the STEMS, so a re-hash does not invalidate the fixture.
  */
 const ASK_DIALOG_FRAME = el('div', ['Mbwy4a_frame'])
 const ASK_DIALOG_CARD = el('section', ['Mbwy4a_card'], [ASK_DIALOG_FRAME])

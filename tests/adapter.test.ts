@@ -39,11 +39,12 @@ import {
   peakPricingLabel,
   peakPricingState,
   compareByPlan,
+  isFreeModel,
   requiresMessagesEndpoint,
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, SurfaceImagePolicy } from '../src/adapter.ts'
-import type { ContentBlock, Message, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, Message, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {
   AttachmentStore,
@@ -56,11 +57,7 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * The harness mints a stable id for every message it appends; the adapter
- * never reads it, but the `Message` contract requires one, so the fixtures
- * below stamp a fresh id per message.
- */
+/** The harness mints a stable id per appended message; the adapter never reads it. */
 let messageSeq = 0
 function messageId(): MessageId {
   return MessageId(`msg-${++messageSeq}`)
@@ -72,10 +69,6 @@ function fetchReturning(
   body: string | (() => ReadableStream<Uint8Array>),
   headers: Record<string, string> = {},
 ): typeof fetch {
-  // A string body is encoded into a stream; a caller-supplied stream is used
-  // as-is. (The previous form encoded the stream itself, which would have
-  // stringified it — no caller passes a factory today, so the branch is
-  // typed and wired correctly rather than left as a trap.)
   const text = (): ReadableStream<Uint8Array> =>
     typeof body === 'string'
       ? new ReadableStream({
@@ -223,17 +216,16 @@ function toolMessage(callId: ToolCallId, content: readonly ContentBlock[], isErr
 /**
  * The gateway rule behind issue #33: an assistant message carrying tool calls
  * must be followed by tool messages answering ALL of them, consecutively, with
- * nothing else in between (it answers with
- * `An assistant message with 'tool_calls' must be followed by tool messages
- * responding to each 'tool_call_id'`, HTTP 400, on every replay of the
- * history — so a violation is not a bad turn, it is a dead conversation).
+ * nothing else in between (it answers with `An assistant message with
+ * 'tool_calls' must be followed by tool messages responding to each
+ * 'tool_call_id'`, HTTP 400, on every replay of the history — so a violation is
+ * not a bad turn, it is a dead conversation).
  *
- * Written against the wire body rather than the harness messages on purpose:
- * it re-derives the rule from whatever the transport actually emitted, so it
- * holds for both the nested CLI shape and the flat Provider API shape, and it
- * keeps holding if the converters are refactored. Returns one description per
- * violating assistant message, so a caller can assert on a single history or
- * just report.
+ * Written against the wire body rather than the harness messages on purpose: it
+ * re-derives the rule from whatever the transport actually emitted, so it holds
+ * for both the nested CLI shape and the flat Provider API shape, and keeps
+ * holding across a converter refactor. Returns one description per violating
+ * assistant message, so a caller can assert on a single history or just report.
  */
 function toolGroupViolations(messages: WireMessage[]): string[] {
   const violations: string[] = []
@@ -313,12 +305,7 @@ async function captureWire(
     : (capturedBody!.params as Record<string, unknown>).messages) as WireMessage[]
 }
 
-/**
- * One assistant turn issuing `ids` in parallel, followed by one tool result
- * per id — the shape issues #30 and #33 both live in. `assistantText` adds a
- * text block beside the calls, and each result may carry text, images, or be
- * an error.
- */
+/** One parallel assistant turn plus one tool result per id — the #30 / #33 shape. */
 function parallelTurn(
   ids: string[],
   results: { text?: string; images?: ImageAttachmentRef[]; isError?: boolean }[],
@@ -416,22 +403,120 @@ test('stream() sends the harness conversation in Command Code wire format', asyn
   assert.ok(capturedBody)
   const params = capturedBody.params as Record<string, unknown>
   assert.equal(params.model, 'deepseek/deepseek-v4-flash')
-  assert.equal(params.system, 'You are helpful.')
+  assert.deepEqual(params.system, [{
+    type: 'text',
+    text: 'You are helpful.',
+    cache_control: { type: 'ephemeral' },
+  }])
   assert.equal(params.max_tokens, 100)
   assert.equal(params.stream, true)
   assert.equal((params.tools as unknown[]).length, 1)
   const tool = (params.tools as Record<string, unknown>[])[0]!
   assert.equal(tool.name, 'bash')
   assert.equal(tool.type, 'function')
-  // Messages: system folded out, only user/assistant remain.
   assert.deepEqual(
     (params.messages as { role: string }[]).map((m) => m.role),
     ['user', 'assistant', 'user'],
   )
-  // Headers.
   const capturedInit = (fetchImpl as unknown as { lastInit?: RequestInit }).lastInit
   void capturedInit
 })
+
+test('stream() reuses the loop session ID as the CLI thread ID', async () => {
+  const bodies: Record<string, unknown>[] = []
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+  const sessionId = '123e4567-e89b-42d3-a456-426614174000' as NonNullable<GenerateOptions['sessionId']>
+  const adapter = makeAdapter({ fetchImpl })
+  const request = {
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    sessionId,
+    messages: [userMessage('first')],
+  } satisfies GenerateOptions
+
+  await collect(adapter.stream(request))
+  await collect(adapter.stream({
+    ...request,
+    messages: [userMessage('second')],
+  }))
+
+  assert.equal(bodies.length, 2)
+  assert.equal(bodies[0]!.threadId, sessionId)
+  assert.equal(bodies[1]!.threadId, sessionId)
+})
+
+test('stream() gives prefixed DSH session IDs stable, distinct CLI thread IDs', async () => {
+  const bodies: Record<string, unknown>[] = []
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+  const adapter = makeAdapter({ fetchImpl })
+
+  const request = {
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    sessionId: 'session-123e4567-e89b-42d3-a456-426614174000' as NonNullable<GenerateOptions['sessionId']>,
+    messages: [userMessage('hello')],
+  } satisfies GenerateOptions
+
+  await collect(adapter.stream(request))
+  await collect(adapter.stream({ ...request, messages: [userMessage('next turn')] }))
+  await collect(adapter.stream({
+    ...request,
+    sessionId: 'session-123e4567-e89b-42d3-a456-426614174001' as NonNullable<GenerateOptions['sessionId']>,
+  }))
+
+  assert.equal(bodies.length, 3)
+  assert.match(String(bodies[0]!.threadId), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  assert.equal(bodies[0]!.threadId, bodies[1]!.threadId)
+  assert.notEqual(bodies[0]!.threadId, bodies[2]!.threadId)
+})
+
+for (const protocol of ['cli', 'openai'] as const) {
+  test(`${protocol}: a growing tool loop preserves the serialized historical prefix`, async () => {
+    const bodies: Record<string, unknown>[] = []
+    const adapter = makeAdapter({ fetchImpl: (async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)))
+      return new Response(protocol === 'cli'
+        ? 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+        : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n')
+    }) as typeof fetch, options: () => ({ ...OPENAI_OPTIONS(), protocol }) })
+    const messages: Message[] = [userMessage('inspect the project')]
+    const request: GenerateOptions = {
+      provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash',
+      sessionId: '123e4567-e89b-42d3-a456-426614174000' as NonNullable<GenerateOptions['sessionId']>,
+      system: 'Keep the stable instructions.', messages,
+      tools: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
+    }
+    for (let step = 0; step < 4; step++) {
+      await collect(adapter.stream(request))
+      const id = ToolCallId(`call-${step}`)
+      messages.push({ id: messageId(), role: 'assistant', source: { kind: 'model', provider: 'commandcode', model: request.model }, content: [
+        { type: 'reasoning', text: `Inspect file ${step}.` },
+        { type: 'tool-call', id, name: 'read', arguments: JSON.stringify({ path: `file-${step}` }) },
+      ] }, toolMessage(id, [{ type: 'text', text: `contents ${step}` }]))
+    }
+    const params = bodies.map((body) => (protocol === 'cli' ? body.params : body) as { messages: unknown[]; tools: unknown; system?: unknown })
+    for (let step = 1; step < params.length; step++) {
+      const previous = params[step - 1]!
+      const current = params[step]!
+      assert.equal(JSON.stringify(current.messages.slice(0, previous.messages.length)), JSON.stringify(previous.messages))
+      assert.deepEqual(current.tools, previous.tools)
+      assert.deepEqual(current.system, previous.system)
+      if (protocol === 'cli') {
+        assert.deepEqual(bodies[step]!.config, bodies[step - 1]!.config)
+        assert.equal(bodies[step]!.threadId, bodies[step - 1]!.threadId)
+      }
+    }
+  })
+}
 
 test('stream() replays reasoning blocks on the CLI transport', async () => {
   let capturedBody: Record<string, unknown> | undefined
@@ -443,12 +528,10 @@ test('stream() replays reasoning blocks on the CLI transport', async () => {
     })
   }) as unknown as typeof fetch
 
-  // Issue #34: a DeepSeek thinking-mode assistant turn whose tool calls are
-  // replayed WITHOUT its thinking is rejected by the provider ("The
-  // `reasoning_content` in the thinking mode must be passed back to the
-  // API"), which killed every tool-loop turn on the CLI transport. The
-  // official CLI's `toWireMessages` replays each thinking block as a
-  // `{ type: 'reasoning', text }` assistant part, in content order.
+  // Issue #34: the provider refuses a DeepSeek thinking-mode assistant turn whose
+  // tool calls are replayed WITHOUT its thinking, which killed every tool-loop
+  // turn on the CLI transport. The official CLI's `toWireMessages` replays each
+  // thinking block as a `{ type: 'reasoning', text }` part, in content order.
   const callId = ToolCallId('call-think')
   const adapter = makeAdapter({ fetchImpl })
   await collect(adapter.stream({
@@ -618,7 +701,6 @@ test('stream() replays only paired tool calls', async () => {
   }))
 
   const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
-  // The paired call is replayed as a tool-call; the unanswered one is dropped.
   const assistant = messages.find((m) => m.role === 'assistant')!
   const parts = assistant.content as Record<string, unknown>[]
   assert.equal(parts.length, 1)
@@ -641,10 +723,10 @@ test('stream() remaps overlong cross-provider tool-call ids to the gateway limit
     return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
   }) as unknown as typeof fetch
 
-  // Issue #23: switching to Command Code mid-session can replay a tool id
-  // issued by another provider that exceeds the gateway's `call_id <= 64`
-  // limit. The adapter must remap it to a short per-request alias while
-  // keeping each call/result pair correlated.
+  // Issue #23: switching to Command Code mid-session can replay another
+  // provider's tool id, which may exceed the gateway's `call_id <= 64` limit.
+  // The adapter remaps it to a short per-request alias, correlated with its
+  // own result.
   const longId = ToolCallId(`opencode-${'x'.repeat(80)}`)
   assert.ok(longId.length > 64)
   const adapter = makeAdapter({ fetchImpl })
@@ -811,7 +893,6 @@ test('stream() carries a tool-result image exactly once and never without bytes'
   assert.equal(carried.role, 'user')
   const parts = carried.content as Record<string, unknown>[]
   assert.equal(parts.filter((p) => p.type === 'image').length, 1)
-  // The text-only tool message keeps the tool's own readable summary.
   const toolMsg = messages.find((m) => m.role === 'tool')!
   assert.equal(((toolMsg.content as Record<string, unknown>[])[0]!.output as { value: string }).value, 'image/png image, 1x1 px, 10 bytes')
 })
@@ -912,10 +993,9 @@ test('stream() keeps parallel tool results consecutive before their image carrie
     resolveAttachments: () =>
       fakeAttachments({ [refA.attachmentId]: pngBytes, [refB.attachmentId]: pngBytes }),
   })
-  // One assistant turn with two parallel read_image calls, each answered with
-  // an image-bearing tool result — the shape that used to interleave the
-  // image carrier between the tool results and break the gateway's
-  // consecutive-tool pairing check.
+  // Two parallel read_image calls each answered with an image-bearing result —
+  // the shape that used to interleave the carrier between the tool results and
+  // break the gateway's consecutive-tool pairing check.
   await collect(adapter.stream({
     provider: 'commandcode',
     model: 'deepseek/deepseek-v4.1-flash',
@@ -935,9 +1015,7 @@ test('stream() keeps parallel tool results consecutive before their image carrie
   }))
 
   const messages = (capturedBody!.params as Record<string, unknown>).messages as Record<string, unknown>[]
-  // user → assistant(2 calls) → tool(a) → tool(b) → user(imgA) → user(imgB):
-  // both tool results must come out consecutively, with the carried images
-  // only afterwards.
+  // Both tool results must come out consecutive; the carried images follow only afterwards.
   assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'user', 'user'])
   const tools = messages.filter((m) => m.role === 'tool')
   const callIds = tools.map((m) => (((m.content as Record<string, unknown>[])[0]! as { toolCallId: string }).toolCallId))
@@ -997,8 +1075,7 @@ test('openai protocol groups carried images after the whole parallel tool turn',
   }))
 
   const messages = capturedBody!.messages as Record<string, unknown>[]
-  // The OpenAI transport's flat message list must keep the two tool messages
-  // adjacent; both image carriers follow only after the last tool result.
+  // The flat list keeps the two tool messages adjacent; both carriers follow last.
   assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'user', 'user'])
   const tools = messages.filter((m) => m.role === 'tool')
   assert.deepEqual(tools.map((m) => m.tool_call_id), ['call-a', 'call-b'])
@@ -1020,9 +1097,8 @@ test('stream() names a remapped call id in the carrier note, not the harness id'
   }) as unknown as typeof fetch
 
   // The note must name the id the MODEL saw. An overlong cross-provider id is
-  // remapped to a short alias on the wire (issue #23), so naming the
-  // harness-side id would point the model at a call that is nowhere in the
-  // request it is reading.
+  // remapped to a short wire alias (issue #23), so naming the harness-side id
+  // would point at a call that is nowhere in the request being read.
   const longId = ToolCallId(`opencode-${'y'.repeat(80)}`)
   assert.ok(longId.length > 64)
   const ref = imageRef()
@@ -1054,12 +1130,10 @@ test('stream() names a remapped call id in the carrier note, not the harness id'
 })
 
 test('both transports drop a user message that converted to nothing', async () => {
-  // The two converters disagreed on this input: the CLI transport emitted
-  // `{ role: 'user', content: [] }` while the Provider API transport dropped
-  // the message. An empty content array is a needless gateway-compat risk and
-  // the message carries nothing, so both transports now drop it — including
-  // when the empty content comes only from blocks this adapter does not put
-  // on the wire (a user message whose sole block is a `reasoning` one).
+  // The two converters disagreed here: the CLI emitted `{ role: 'user', content:
+  // [] }` and the Provider API dropped the message. An empty content array is a
+  // needless gateway-compat risk, so both transports now drop it — including
+  // when the emptiness comes only from blocks this adapter never puts on the wire.
   const ref = imageRef()
   for (const protocol of ['cli', 'openai'] as const) {
     let capturedBody: Record<string, unknown> | undefined
@@ -1106,8 +1180,7 @@ test('both transports drop a user message that converted to nothing', async () =
     const messages = (protocol === 'openai'
       ? capturedBody!.messages
       : (capturedBody!.params as Record<string, unknown>).messages) as Record<string, unknown>[]
-    // Nothing on the wire converted to empty, and the image carrier that was
-    // pending before those two messages was still flushed rather than dropped.
+  // Nothing on the wire converted to empty, and the pending carrier was still flushed.
     assert.deepEqual(
       messages.map((m) => m.role),
       ['user', 'assistant', 'tool', 'user', 'user'],
@@ -1120,11 +1193,9 @@ test('both transports drop a user message that converted to nothing', async () =
 })
 
 test('the tool-group invariant detects the interleaving it exists for', () => {
-  // A validator that can never fail would pass every history below for the
-  // wrong reason, so feed it the two orderings that matter: the pre-fix #33
-  // shape (a carrier between the tool results) must be caught, and the fixed
-  // ordering must be clean. The first body is exactly what this adapter
-  // emitted before #33, so this test fails if the invariant goes blind.
+  // A validator that can never fail would pass every history below for the wrong
+  // reason, so feed it the two orderings that matter: the pre-fix #33 shape (a
+  // carrier between the tool results) is caught, the fixed ordering is clean.
   const interleaved = [
     { role: 'user' },
     { role: 'assistant', tool_calls: [{ id: 'call-a' }, { id: 'call-b' }] },
@@ -1159,11 +1230,9 @@ test('the tool-group invariant detects the interleaving it exists for', () => {
 })
 
 test('both transports answer every parallel tool group consecutively', async () => {
-  // The invariant is checked once over a table of histories rather than
-  // re-pinned shape by shape: what the gateway enforces is a property of the
-  // whole message list, and the interesting failures (a carrier landing inside
-  // a group, a group split across a user turn) only show up when the list is
-  // derived from a real history.
+  // Checked once over a table of real histories: the gateway rule is a property of
+  // the whole message list, so the interesting failures (a carrier landing inside
+  // a group, a group split across a user turn) only show up that way.
   const ids = ['sha256:order-a', 'sha256:order-b', 'sha256:order-c', 'sha256:order-d']
   const images = Object.fromEntries(ids.map((id) => [id, pngBytes]))
   const refs = ids.map((attachmentId) => ({ ...imageRef(), attachmentId }))
@@ -1330,7 +1399,6 @@ test('stream() sends images in the official Command Code wire format', async () 
   const parts = userMsg.content as Record<string, unknown>[]
   assert.equal(parts.length, 2)
   assert.deepEqual(parts[0], { type: 'text', text: 'what is in this image?' })
-  // Official CLI wire shape: { type:'image', source:{ type:'base64', media_type, data } }.
   assert.deepEqual(parts[1], {
     type: 'image',
     source: { type: 'base64', media_type: 'image/png', data: Buffer.from(pngBytes).toString('base64') },
@@ -1340,14 +1408,12 @@ test('stream() sends images in the official Command Code wire format', async () 
 // ---------------------------------------------------------------------------
 // Request image versions and visual-token pricing (C2, C3)
 //
-// An attachment is stored NORMALIZED, not request-ready: `readImage()` answers
-// the admitted original, while a provider request should carry a REQUEST VERSION
-// encoded to the route target (`readImageRequest()`). On this route that is not
-// cosmetic — both transports inline every historical image as base64, so the
-// version's bytes are what the body, the context window and the gateway's ~50 MB
-// cap actually pay for. The same target is what the visual-token price is
-// computed at, so the meter tracks the bytes that travel rather than the ones
-// that are stored.
+// An attachment is stored NORMALIZED, not request-ready: a provider request must
+// carry the REQUEST VERSION encoded to the route target (`readImageRequest()`).
+// On this route that is not cosmetic — both transports inline every historical
+// image as base64, so the version's bytes are what the body, the context window
+// and the gateway's ~50 MB cap pay for, and the same target is what the
+// visual-token price is computed at.
 // ---------------------------------------------------------------------------
 
 /** An AttachmentStore stub that answers a distinct request version and records every target. */
@@ -1421,11 +1487,8 @@ test('openai protocol sends the request version too (C2)', async () => {
   const adapter = makeAdapter({ fetchImpl, options: OPENAI_OPTIONS, resolveAttachments: () => store })
   await collect(adapter.stream({
     provider: 'commandcode',
-    // Not a Claude id: those are Messages-only, so they take the CLI transport
-    // even under a forced `'openai'` preference (see `resolveProtocol()`), and
-    // this test is about the OpenAI transport's request-version handling. Its
-    // CLI counterpart above keeps `claude-sonnet-5`, which is where Claude
-    // genuinely goes.
+    // Not a Claude id: those are Messages-only, so they take the CLI transport even
+    // under a forced `'openai'` preference (see `resolveProtocol()`).
     model: 'gpt-5.4',
     messages: [{
       id: messageId(),
@@ -1486,21 +1549,21 @@ test('imageRequestPricing() prices a text-only route as placeholder text (C3)', 
 // ---------------------------------------------------------------------------
 // Request image budget (issue #37)
 //
-// Both transports inline every historical image, and the gateway caps a whole
-// request body (measured ~50.17 MB, undocumented). Once a session crossed it,
-// every later request on this route failed with 413 forever. These tests pin
-// the budget that keeps the recent tail and turns the oldest images into
-// model-visible placeholders instead.
+// Both transports inline every historical image and the gateway caps a whole
+// request body (measured ~50.17 MB, undocumented), so a session that crossed it
+// failed EVERY later request on this route with 413. These tests pin the budget
+// that keeps the recent tail and turns the oldest images into model-visible
+// placeholders instead.
 // ---------------------------------------------------------------------------
 
 /** The core helper's eviction placeholder, as it opens in both transports. */
 const PLACEHOLDER_PREFIX = '[image omitted to fit request image limits'
 
 /**
- * An image reference DECLARING `bytes` normalized bytes. The budget accounts
- * declared sizes, so a test crosses the cap without allocating megabytes; the
- * stored payload stays one byte long and unique per index, which is what lets
- * a test name the occurrences that survived.
+ * An image reference DECLARING `bytes` normalized bytes: the budget accounts
+ * declared sizes, so a test crosses the cap without allocating megabytes. The
+ * stored payload's last byte is the index, which is how a test names the
+ * occurrences that survived.
  */
 function sizedImageRef(index: number, bytes: number): ImageAttachmentRef {
   return {
@@ -1545,11 +1608,11 @@ function okStream(protocol: 'cli' | 'openai'): Response {
 }
 
 /**
- * Drive one history through a transport against a fetch stub whose answer
- * depends on the attempt number, returning every request body the adapter
- * issued plus the error `stream()` ended with (undefined on success). What
- * each ATTEMPT carried is the observable the 413 ladder is about, so a
- * success-only capture helper cannot express these tests.
+ * Drive one history through a transport against a fetch stub whose answer depends
+ * on the attempt number, returning every request body the adapter issued plus the
+ * error `stream()` ended with (undefined on success). What each ATTEMPT carried
+ * is the observable the 413 ladder is about, so a success-only capture helper
+ * cannot express these tests.
  */
 async function runAttempts(
   protocol: 'cli' | 'openai',
@@ -1638,10 +1701,9 @@ test('stream() sends every image while the history is inside the image budget', 
 })
 
 test('stream() asks for an offload once the history exceeds the image-count budget (issue #37)', async () => {
-  // 61 images: one past the 60-image budget, and the 30-count quantum means the
-  // oldest 30 are named at once rather than one per request. The route does NOT
-  // evict on its own — it reports the shortfall so the session can record the
-  // omission durably across restore and fork.
+  // 61 images: one past the 60-image budget, and the 30-count quantum names the
+  // oldest 30 at once. The route reports the shortfall so the session can record
+  // the omission durably rather than evicting on its own.
   const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
   const { bodies, error } = await runAttempts('cli', messages, images)
 
@@ -1652,9 +1714,9 @@ test('stream() asks for an offload once the history exceeds the image-count budg
 })
 
 test('stream() counts the encoded bytes of the request rung (issue #37)', async () => {
-  // Ten images of 4 MiB each: ~53 MiB of base64, past the 32 MiB budget. The
-  // byte accounting is the base64 the wire actually carries, not the stored
-  // size, so the shortfall is real regardless of the count budget.
+  // Ten images of 4 MiB each: ~53 MiB of base64, past the 32 MiB budget. The byte
+  // accounting is the encoded size the wire carries, not the stored one, so the
+  // shortfall is real regardless of the count budget.
   const { messages, images } = imageHistory(Array.from({ length: 10 }, () => 4 * 1024 * 1024))
   const { bodies, error } = await runAttempts('cli', messages, images)
 
@@ -1665,9 +1727,9 @@ test('stream() counts the encoded bytes of the request rung (issue #37)', async 
 })
 
 test('stream() counts images nested in a tool result (issue #37)', async () => {
-  // A vision self-check loop's history in miniature: one huge `read_image`
-  // result past the budget. It counts like any other occurrence, so the route
-  // reports it rather than sending a body the gateway would refuse.
+  // A vision self-check loop's history in miniature: one huge `read_image` result.
+  // It counts like any other occurrence, so the route reports it rather than
+  // sending a body the gateway would refuse.
   const toolRef = sizedImageRef(0, 40 * 1024 * 1024)
   const { bodies, error } = await runAttempts(
     'cli',
@@ -1708,18 +1770,15 @@ test('stream() reports a 413 as a request-size failure and never resends an imag
 // Request image offload on the >=0.1.6 durable contract (issue #43)
 //
 // dsh 0.1.6 moved the offload set from the adapter to the session surface:
-// `projectOffloadedImages` renders the durable marks, and an over-budget
-// history FAILS with `IMAGE_OFFLOAD_REQUIRED` + the count to offload instead of
-// being edited inside the adapter. A default profile answers that failure with
-// `dsh-compaction-image-offload`, which records one `image/offload` event,
-// marks the oldest occurrences, and retries the step.
+// `projectOffloadedImages` renders the durable marks, and an over-budget history
+// FAILS with `IMAGE_OFFLOAD_REQUIRED` + the count to offload instead of being
+// edited inside the adapter. A default profile answers that failure with
+// `dsh-compaction-image-offload`, which records one `image/offload` event, marks
+// the oldest occurrences, and retries the step.
 //
-// These tests drive that branch by injecting the two helpers: this checkout
-// compiles against the 0.1.2 peers, which have neither (and the helper pair
-// must never be imported statically — see the adapter's import comment). They
-// pin the CONTRACT the adapter speaks — which rung it reports, in what
-// encoding, with which byte callback, and that it never evicts on its own
-// there — rather than re-deriving the core arithmetic, which is exactly what
+// These tests inject the two helpers, so they pin the CONTRACT the adapter
+// speaks — which rung it reports, in what encoding, with which byte callback, and
+// that it never evicts on its own there — rather than the core arithmetic, which
 // the injected fake deliberately does not implement.
 // ---------------------------------------------------------------------------
 
@@ -1732,10 +1791,9 @@ interface SurfacePolicyCalls {
 }
 
 /**
- * Stand-in for the >=0.1.6 core helpers. `count` is what
- * `requiredImageOffload` answers (a number, or a function of the rung's budget
- * so the 413 ladder can answer differently per rung); every call's arguments
- * are recorded.
+ * Stand-in for the >=0.1.6 core helpers. `count` is what `requiredImageOffload`
+ * answers (a number, or a function of the rung's budget so the 413 ladder can
+ * answer per rung); every call's arguments are recorded.
  */
 function makeSurfacePolicy(
   count: number | ((budget: Record<string, unknown>) => number) = 0,
@@ -1787,11 +1845,7 @@ test('stream() asks the surface to offload when a 0.1.6 engine reports an over-b
   const e = error as { code?: string; message?: string }
   assert.equal(e.code, 'IMAGE_OFFLOAD_REQUIRED')
   // The count travels twice: in `failure.offloadImages`, which is what
-  // `dsh-compaction-image-offload` reads, and in the message. Only the second
-  // is observable here — the 0.1.2 peers this checkout compiles against
-  // predate the field and drop it from `failure` (0.1.6 copies it at
-  // dsh-llm/lib/index.js:1609). The field itself is pinned against a real
-  // engine by scripts/verify-engine-load.mjs.
+  // `dsh-compaction-image-offload` reads, and in the message — the only one observable here; the field itself is pinned by scripts/verify-engine-load.mjs.
   assert.match(e.message ?? '', /30 more oldest occurrence/)
   // The adapter speaks the STANDING rung, in the encoded form the wire carries,
   // and hands the counter the declared normalized size it would inline.
@@ -1808,9 +1862,9 @@ test('stream() asks the surface to offload when a 0.1.6 engine reports an over-b
 })
 
 test("stream() renders the surface's durable offload marks as placeholders (issue #43)", async () => {
-  // One image the surface already offloaded, one still retained. The marked
-  // one must travel as placeholder text even though the history is far inside
-  // the budget — a mark the adapter ignored would re-send evicted pixels.
+  // One image the surface already offloaded, one still retained. The marked one must
+  // travel as placeholder text even though the history is far inside the budget —
+  // a mark the adapter ignored would re-send evicted pixels.
   const goneRef = sizedImageRef(0, pngBytes.length)
   const keptRef = sizedImageRef(1, pngBytes.length)
   const gone = { type: 'image', attachment: goneRef, offloaded: true } as unknown as ContentBlock
@@ -1839,26 +1893,24 @@ test("stream() renders the surface's durable offload marks as placeholders (issu
 
 test('stream() asks for the stricter rung when a 413 arrives on a 0.1.6 engine (issue #43)', async () => {
   const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
-  // Rung 0 fits (the fake answers 0); the gateway refuses the body anyway, so
-  // the retry rung's shortfall is what the surface is asked to offload. The
-  // omission is recorded on the session instead of being a local edit, which
-  // is why the request is NOT resent from here.
+  // Rung 0 fits (the fake answers 0); the gateway refuses the body anyway, so the
+  // RETRY rung's shortfall is what the surface is asked to offload. The omission is
+  // recorded on the session instead of being a local edit, which is why the
+  // request is NOT resent from here.
   const { policy, calls } = makeSurfacePolicy((budget) => (budget.maxImages === 12 ? 47 : 0))
   const { bodies, error } = await runAttempts('cli', messages, images, () => 413, policy)
 
   assert.equal(bodies.length, 1)
   const e = error as { code?: string; message?: string }
   assert.equal(e.code, 'IMAGE_OFFLOAD_REQUIRED')
-  // The stricter rung's count, not the standing one (see the note above on why
-  // the count is read from the message in this checkout).
   assert.match(e.message ?? '', /47 more oldest occurrence/)
   assert.deepEqual(calls.budgets.map((budget) => budget.maxImages), [60, 12])
 })
 
 test('stream() reports the 413 itself when a 0.1.6 surface has nothing left to offload (issue #43)', async () => {
-  // Once the surface reports no shortfall at the strictest rung, the body is
-  // simply too large (text and tool bytes share the gateway cap), and asking
-  // for another offload would loop. The existing bilingual diagnosis stands.
+  // Once the surface reports no shortfall at the strictest rung the body is simply
+  // too large (text and tool bytes share the gateway cap), and asking for another
+  // offload would loop.
   const { messages, images } = imageHistory(Array.from({ length: 61 }, () => pngBytes.length))
   const { policy } = makeSurfacePolicy(0)
   const { bodies, error } = await runAttempts('cli', messages, images, () => 413, policy)
@@ -1931,11 +1983,9 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   const byId = new Map(models.map((m) => [m.id, m]))
   assert.deepEqual(byId.get('claude-sonnet-5')!.inputModalities, ['text', 'image'])
   assert.equal(byId.get('claude-sonnet-5')!.description, 'Pro · Image · 1M')
-  // DeepSeek V4 Pro's 75% off deal was retired 2026-08-16 16:00 UTC and removed
-  // from KNOWN_DEALS once it lapsed, so the picker reflects the deal-free
-  // description. DeepSeek models carry time-of-day pricing, so the
-  // peak/off-peak marker (Peak/Half) depends on the current UTC hour; the
-  // fixed parts stay deterministic.
+  // DeepSeek V4 Pro's 75% off deal lapsed on 2026-08-16 and left KNOWN_DEALS, so
+  // the description is deal-free. DeepSeek models carry time-of-day pricing, so
+  // the Peak/Half marker depends on the current UTC hour; the rest is fixed.
   const v4Pro = byId.get('deepseek/deepseek-v4-pro')!
   assert.ok(v4Pro.description !== undefined)
   assert.match(v4Pro.description, /^Go · (?:Peak|Half) · 1M$/)
@@ -1944,9 +1994,8 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   assert.ok(v4Flash.description !== undefined)
   assert.match(v4Flash.description, /^Go · (?:Peak|Half) · 1M$/)
   assert.equal(byId.get('poolside/laguna-s-2.1-free')!.description, 'Go · FREE · 256K')
-  // The picker shows rows in returned order: the free model leads, then Go
-  // models, then Pro, alphabetically within a tier (input order was
-  // deliberately shuffled).
+  // Picker order: free models, then Go, then Pro, alphabetically within a tier
+  // (the fixture's input order is deliberately shuffled).
   assert.deepEqual(
     models.map((m) => m.id),
     [
@@ -2225,15 +2274,13 @@ test('listModels() caches the billing access across picker loads', async () => {
   assert.equal(calls.get('/alpha/whoami'), 1)
   assert.equal(calls.get('/alpha/billing/subscriptions'), 1)
   assert.equal(calls.get('/alpha/billing/credits'), 1)
-  // Pro account: Provider-tier model hidden, Go/Pro/unknown visible.
   assert.deepEqual(ids.sort(), ['claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model'])
 })
 
 test('listModels() lists a model only another account in the pool includes', async () => {
-  // Issue #51's follow-up (《卡片会切换》): keyed on the account that happened
-  // to serve, the picker's contents changed as rotation moved between accounts
-  // — a Pro model vanished while the Go account served — and a model only the
-  // other account could run was hidden outright, which no request could fix.
+  // Issue #51's follow-up: keyed on the account that happened to serve, the picker's
+  // contents changed as rotation moved between accounts, and a model only the
+  // other account could run was hidden outright — which no request could fix.
   const catalog = { '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG } }
   const { fetchImpl } = fetchRoutingByKey({
     'key-go': { ...catalog, ...subscriptionStubs('individual-go', 'active'), '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) } },
@@ -2446,17 +2493,11 @@ test('listModels() ignores a non-boolean override instead of hiding the model', 
 
 test('modelVisibleInPlan() fails open on every uncertainty', async () => {
   const { modelVisibleInPlan } = await import('../src/capabilities.ts')
-  // No billing data at all -> visible.
   assert.equal(modelVisibleInPlan('claude-opus-4-8', undefined), true)
-  // Positive on-demand balance -> visible regardless of tier.
   assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: 0, onDemandCredits: 1 }), true)
-  // Unknown account tier -> visible.
   assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: undefined, onDemandCredits: 0 }), true)
-  // Non-finite tier weight (corrupt billing fact) -> visible.
   assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: NaN, onDemandCredits: 0 }), true)
-  // Unknown model -> visible.
   assert.equal(modelVisibleInPlan('some-future-model', { tierWeight: 0, onDemandCredits: 0 }), true)
-  // Tier comparison itself.
   assert.equal(modelVisibleInPlan('deepseek/deepseek-v4-pro', { tierWeight: 0, onDemandCredits: 0 }), true)
   assert.equal(modelVisibleInPlan('claude-sonnet-5', { tierWeight: 0, onDemandCredits: 0 }), false)
   assert.equal(modelVisibleInPlan('claude-sonnet-5', { tierWeight: 2, onDemandCredits: 0 }), true)
@@ -2469,22 +2510,19 @@ test('compareByPlan() sorts free models first, then plan tier, then name', () =>
     { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
     { id: 'claude-opus-5', name: 'Claude Opus 5 (CC)' },
   ) < 0)
-  // A paid Go model still sorts before a higher-tier model...
+  // A paid Go model sorts before a higher tier, but after every free model.
   assert.ok(compareByPlan(
     { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
     { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
   ) < 0)
-  // ...but after every free model.
   assert.ok(compareByPlan(
     { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
     { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
   ) < 0)
-  // Free models order among themselves by name.
   assert.ok(compareByPlan(
     { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
     { id: 'inclusionai/ling-3.0-flash-sante:free', name: 'Ling 3.0 Flash Sante (CC)' },
   ) < 0)
-  // Within a tier, alphabetical by name.
   assert.ok(compareByPlan(
     { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro (CC)' },
     { id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3 (CC)' },
@@ -2494,7 +2532,6 @@ test('compareByPlan() sorts free models first, then plan tier, then name', () =>
     { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
     { id: 'some-future-model', name: 'Some Future (CC)' },
   ) < 0)
-  // Equal ids are stable.
   assert.equal(compareByPlan(
     { id: 'xai/grok-4.5', name: 'Grok 4.5 (CC)' },
     { id: 'xai/grok-4.5', name: 'Grok 4.5 (CC)' },
@@ -2786,9 +2823,8 @@ test('openai protocol reads thinking from reasoning_details when no scalar field
   // DeepSeek answers with the scalar `reasoning` AND an OpenRouter-shaped
   // `reasoning_details` array; GLM/Qwen/Kimi answer with `reasoning_content`.
   // This pins the third branch: an array-only delta (the shape the gateway
-  // would leave if it ever stopped sending the scalar) still yields a block,
-  // for BOTH array vocabularies — DeepSeek's `reasoning.text` entries and the
-  // OpenAI family's `reasoning.summary` ones.
+  // would leave if it stopped sending the scalar) still yields a block, for BOTH
+  // array vocabularies.
   const sse = [
     'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"think ","format":"unknown","index":0}]}}]}',
     'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"more","format":"unknown","index":0}]}}]}',
@@ -2825,13 +2861,11 @@ test('openai protocol reads thinking from reasoning_details when no scalar field
 })
 
 test('the OpenAI family reasoning.summary carrier is read, and an empty text never shadows it', async () => {
-  // Measured live 2026-09-18 against gpt-5.6-luna: the gateway puts the GPT
-  // family's thinking in `reasoning_details` as
+  // Measured live 2026-09-18 on gpt-5.6-luna: the GPT family's thinking arrives in
+  // `reasoning_details` as
   //   { type: 'reasoning.summary', summary: '…', format: 'openai-responses-v1' }
-  // and duplicates it in the scalar `delta.reasoning`. `text` is absent (or an
-  // empty placeholder) for this family, so a guard that read `text` alone would
-  // carry nothing the moment the scalar stopped — which is exactly the case
-  // this pins, one entry shape at a time.
+  // with `text` absent (or an empty placeholder), so a guard reading `text` alone
+  // would carry nothing the moment the scalar stopped.
   const sse = [
     // The captured gateway shape: summary only.
     'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"**Providing a number**","id":"rs_05d4","format":"openai-responses-v1","index":0}]}}]}',
@@ -2891,12 +2925,11 @@ test('a scalar reasoning field beside reasoning_details is not counted twice', a
 })
 
 test('an EMPTY scalar thinking field does not hide a populated reasoning_details array', async () => {
-  // The array layer already treats an empty `text` as "no text here" (pinned by
-  // the summary carrier above); the scalar layer has to agree, because both
-  // spellings describe the same thinking. `??` cannot express that on its own —
-  // an empty string is not nullish — so `reasoning: ''` beside a populated
-  // array used to drop that chunk's thinking, and with it the tool-loop
-  // continuity issue #34 depends on.
+  // The array layer already treats an empty `text` as "no text here" (pinned above);
+  // the scalar layer has to agree, because both spellings describe the same
+  // thinking. `??` cannot express that on its own — an empty string is not
+  // nullish — and `reasoning: ''` beside a populated array used to drop that
+  // chunk's thinking, and with it the tool-loop continuity issue #34 depends on.
   const sse = [
     'data: {"choices":[{"delta":{"reasoning":"","reasoning_details":[{"type":"reasoning.summary","summary":"real thinking","format":"openai-responses-v1","index":0}]}}]}',
     'data: {"choices":[{"delta":{"reasoning_content":"","reasoning_details":[{"type":"reasoning.text","text":" more","index":0}]}}]}',
@@ -2989,8 +3022,8 @@ test('auto protocol falls back to CLI on 403 upgrade_required and caches per acc
       const body = JSON.stringify({ error: { code: 'upgrade_required', message: 'Go plan has no API access' } })
       return new Response(identity ? body : new Uint8Array(brotliCompressSync(body)), {
         status: 403,
-        // The affected host loses Content-Encoding and would pass raw Brotli
-        // bytes to response.text() unless the request asks for identity.
+  // The affected host loses Content-Encoding and would pass raw Brotli bytes to
+  // response.text() unless the request asks for identity.
         headers: identity ? { 'content-type': 'application/json' } : {},
       })
     }
@@ -3029,12 +3062,10 @@ test('auto protocol falls back to CLI on 403 upgrade_required and caches per acc
 })
 
 test('Messages-only (Claude) models take the CLI transport without poisoning the account protocol cache', async () => {
-  // The Provider API answers every Claude model with HTTP 400 "must be called
-  // via /provider/v1/messages". `/alpha/generate` serves them, so they are
-  // routed there up front — and because `protocolCache` is keyed by API key
-  // alone, that must not be remembered, or the whole account would be pinned
-  // to the CLI transport and drag the models the Provider API DOES serve along
-  // with it.
+  // The Provider API answers every Claude model with HTTP 400 "must be called via
+  // /provider/v1/messages"; `/alpha/generate` serves them, so they are routed there
+  // up front — and because `protocolCache` is keyed by API key alone, that must
+  // not be remembered, or the whole account is pinned to the CLI transport.
   const calls: string[] = []
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = String(input)
@@ -3120,14 +3151,12 @@ test('stream() keeps PROVIDER_HTTP_ERROR for a permanent 4xx and includes provid
 })
 
 test('stream() classifies a pre-stream 5xx as retryable SERVER and a 408 as TIMEOUT', async () => {
-  // The gateway reports a temporarily unavailable upstream before the stream
-  // starts — 520 (Cloudflare's origin-error class) carrying only
-  // `error.type: "server_error"`, no `error.code`. dsh-llm-retry matches
-  // `failure.code` against the policy whitelist and nothing else, so as long
-  // as the status mapped to PROVIDER_HTTP_ERROR this class of failure was
-  // never retried, even though the identical status arriving as an in-band
-  // stream error event was. Pinned for a representative spread, with the
-  // provider's own message preserved in the error text.
+  // The gateway reports a temporarily unavailable upstream before the stream starts —
+  // 520 (Cloudflare's origin-error class) carrying only `error.type: "server_error"`,
+  // no `error.code`. dsh-llm-retry matches `failure.code` against the policy
+  // whitelist and nothing else, so while that status mapped to
+  // PROVIDER_HTTP_ERROR this class of failure was never retried, even though the
+  // identical status arriving as an in-band stream error event was.
   const body = JSON.stringify({
     error: { message: 'Upstream model provider is temporarily unavailable. Please try again in a moment.', type: 'server_error' },
   })
@@ -3151,8 +3180,8 @@ test('stream() classifies a pre-stream 5xx as retryable SERVER and a 408 as TIME
 
 test('stream() classifies a plain in-band error event as retryable SERVER', async () => {
   // No isRetryable, no statusCode, no terminal marker: the official CLI's
-  // isStreamErrorRetryable() treats this as transient — so must we (SERVER is
-  // in the harness default retryable set, PROVIDER_STREAM_ERROR is not).
+  // isStreamErrorRetryable() treats this as transient — so must we (SERVER is in the
+  // harness default retryable set, PROVIDER_STREAM_ERROR is not).
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"error","error":{"message":"boom"}}\n\n') })
   await assert.rejects(
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
@@ -3193,10 +3222,9 @@ test('stream() classifies a retryable HTTP status error event as SERVER', async 
 })
 
 test('stream() lets a terminal marker or an explicit refusal outrank a 5xx status', async () => {
-  // A permanent refusal that arrives with a retryable status must stay
-  // terminal: answering it with `SERVER` puts the identical request on
-  // dsh-llm-retry's 1000-attempt cadence (waits doubling to 15 minutes) even
-  // though no resend can succeed.
+  // A permanent refusal arriving with a retryable status must stay terminal: answering
+  // it with `SERVER` puts the identical request on dsh-llm-retry's 1000-attempt
+  // cadence (waits doubling to 15 minutes) even though no resend can succeed.
   const bodies = [
     { message: 'insufficient credits', statusCode: 500 },
     { message: 'model_not_in_plan', statusCode: 503 },
@@ -3224,10 +3252,10 @@ test('stream() lets a terminal marker or an explicit refusal outrank a 5xx statu
 })
 
 test('stream() does not let an absurd provider reset break the RATE_LIMIT classification', async () => {
-  // A published reset is untrusted input. `1e300` seconds is finite, so it used
-  // to reach `new Date(1e303).toISOString()` — a RangeError thrown out of
-  // stream() in place of the intended retryable RATE_LIMIT — and a mark pinned
-  // to it would have been a cooldown no probe ever revisits.
+  // A published reset is untrusted input. `1e300` seconds is finite, so it used to reach
+  // `new Date(1e303).toISOString()` — a RangeError thrown out of stream() in place of
+  // the intended retryable RATE_LIMIT — and a mark pinned to it would have been a
+  // cooldown no probe ever revisits.
   const adapter = makeAdapter({
     fetchImpl: fetchReturning(429, JSON.stringify({
       error: { code: 'RATE_LIMITED', message: 'Rate limited', rateLimit: { window: 'fiveHour', reset: 1e300 } },
@@ -3272,16 +3300,13 @@ test('stream() drops an implausible reset from a window-limit body but still rot
 })
 
 test('stream() reports a long-context rejection as CONTEXT_WINDOW_EXCEEDED, never as a repeatable SERVER (issue #39)', async () => {
-  // At ~500k tokens a session that outgrew the model's window was rejected
-  // with wording this adapter did not recognize, so the failure fell into the
-  // transient path: retryable SERVER, resent byte-for-byte up to maxRetries
-  // (1000) with waits doubling to 15 minutes. /compact only appeared to fix
-  // it because it shrank the request. CONTEXT_WINDOW_EXCEEDED is what
-  // dsh-compaction-basic's agent/request-error hook consumes to compact the
-  // session and retry the reduced surface — the harness's own version of the
-  // official CLI's `truncated` -> compact-and-retry kind — and it must stay
-  // outside the retry whitelist so dsh-llm-retry hands it to that hook instead
-  // of looping.
+  // At ~500k tokens a session that outgrew the model's window was rejected with
+  // wording this adapter did not recognize, so the failure fell into the transient
+  // path: retryable SERVER, resent byte-for-byte up to maxRetries (1000) with waits
+  // doubling to 15 minutes. /compact only appeared to fix it because it shrank the
+  // request. CONTEXT_WINDOW_EXCEEDED is what dsh-compaction-basic's
+  // agent/request-error hook consumes to compact and retry the reduced surface, and
+  // it must stay outside the retry whitelist.
   const policy = makeAdapter().providerRetryPolicy('commandcode')
   assert.ok(policy.mode === 'normal' && !policy.retryableCodes.includes('CONTEXT_WINDOW_EXCEEDED'))
 
@@ -3312,8 +3337,8 @@ test('stream() reports a long-context rejection as CONTEXT_WINDOW_EXCEEDED, neve
 
 test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_EXCEEDED', async () => {
   // The same rejection can arrive before the stream starts. As a plain
-  // PROVIDER_HTTP_ERROR it ended the turn with no recovery but a manual
-  // /compact; as CONTEXT_WINDOW_EXCEEDED the harness compacts and retries.
+  // PROVIDER_HTTP_ERROR it ended the turn with no recovery but a manual /compact;
+  // as CONTEXT_WINDOW_EXCEEDED the harness compacts and retries.
   const cases = [
     [400, JSON.stringify({ error: { message: 'prompt is too long: 512000 tokens > 500000 maximum' } })],
     [413, JSON.stringify({ error: { code: 'context_length_exceeded', message: 'too large' } })],
@@ -3329,8 +3354,7 @@ test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_E
       },
     )
   }
-  // A body-size 413 whose text does not name the context window keeps the
-  // issue #37 taxonomy and advice (pinned separately below).
+  // A body-size 413 whose text does not name the context window keeps the issue #37 taxonomy.
   const sizeOnly = makeAdapter({
     fetchImpl: fetchReturning(413, JSON.stringify({ error: { message: 'request entity too large' } })),
   })
@@ -3350,10 +3374,9 @@ test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_E
 })
 
 test('stream() classifies an in-band error on the Provider API transport like the CLI transport', async () => {
-  // The OpenAI-format SSE carries a failure as an `error` member of a chunk.
-  // Ignoring it let the stream end with no finish event, so the real cause was
-  // reported as a repeatable EMPTY_RESPONSE; both transports now share one
-  // classifier.
+  // The OpenAI-format SSE carries a failure as an `error` member of a chunk. Ignoring
+  // it let the stream end with no finish event, so the real cause was reported as a
+  // repeatable EMPTY_RESPONSE; both transports now share one classifier.
   const cases = [
     [{ error: { message: 'prompt is too long' } }, 'CONTEXT_WINDOW_EXCEEDED'],
     [{ error: { message: 'boom' } }, 'SERVER'],
@@ -3464,9 +3487,9 @@ test('stream() aborts the generate request when the connection phase exceeds req
 })
 
 test('stream() does not abort a healthy body when elapsed time exceeds requestTimeoutMs', async () => {
-  // Regression: AbortSignal.timeout(requestTimeoutMs) used to be passed into
-  // fetch(), so a generation longer than the connection budget was killed mid-
-  // stream as "failed while reading: aborted due to timeout".
+  // Regression: AbortSignal.timeout(requestTimeoutMs) used to be passed into fetch(),
+  // so a generation longer than the connection budget was killed mid-stream as
+  // "failed while reading: aborted due to timeout".
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"hi"}\n\n'))
@@ -3528,13 +3551,11 @@ test('stream() completes normally when the finish event arrives', async () => {
 })
 
 test('stream() raises STREAM_CLOSED when the response is cut before its finish event', async () => {
-  // The reported failure: the gateway (or an intermediary) closes the socket
-  // mid-generation, so the read loop meets EOF without ever seeing the
-  // transport's terminal event. Answering that with a synthesized `stop` is
-  // what made a truncated reply look like a turn that had simply finished —
-  // no error in the UI, nothing in the session log. `dsh-llm-deepseek` raises
-  // this same code for this same condition ("… stream ended before
-  // message_stop"), which is the behavior mirrored here.
+  // The gateway (or an intermediary) closes the socket mid-generation, so the read loop
+  // meets EOF without ever seeing the transport's terminal event. Answering that
+  // with a synthesized `stop` is what made a truncated reply look like a turn that
+  // had simply finished — no error in the UI, nothing in the session log.
+  // `dsh-llm-deepseek` raises this same code for this same condition.
   const cases = [
     [undefined, 'data: {"type":"text-delta","text":"half an ans"}\n\n'],
     [OPENAI_OPTIONS, 'data: {"choices":[{"delta":{"content":"half an ans"}}]}\n\n'],
@@ -3575,8 +3596,8 @@ test('stream() refuses a tool call the cut stream never finished', async () => {
 
 test('stream() keeps EMPTY_RESPONSE retryable when the cut produced no visible content', async () => {
   // Nothing usable came out, so repeating the request is safe and cheap and the
-  // policy's whitelist absorbs it. A cut during a long thinking phase lands
-  // here too — that path is unchanged and stays retryable.
+  // policy's whitelist absorbs it. A cut during a long thinking phase lands here
+  // too — that path is unchanged and stays retryable.
   for (const body of ['', 'data: {"type":"reasoning-delta","text":"thinking"}\n\n']) {
     const adapter = makeAdapter({ fetchImpl: fetchReturning(200, body) })
     await assert.rejects(
@@ -3674,11 +3695,10 @@ test('projectSlugFromPath trims surrounding separators from both ends', () => {
 })
 
 test('projectSlugFromPath is not vulnerable to ReDoS on long separator runs', () => {
-  // Regression for CodeQL js/polynomial-redos (alert #1): the old
-  // `/^-+|-+$/` alternation made the unanchored `-+$` retry every start
-  // position on `a<dashes>b`, i.e. O(n^2) — ~14.5s for 200k dashes. The
-  // lookbehind trim is linear; 100k dashes must finish in well under a
-  // second (a quadratic implementation takes ~3.5s here).
+  // Regression for CodeQL js/polynomial-redos (alert #1): the old `/^-+|-+$/`
+  // alternation made the unanchored `-+$` retry every start position on
+  // `a<dashes>b`, i.e. O(n^2) — ~14.5s for 200k dashes. The lookbehind trim is
+  // linear, so 100k dashes must finish in well under a second.
   const longDashPath = `a${'-'.repeat(100_000)}b`
   const start = Date.now()
   assert.equal(projectSlugFromPath(longDashPath), 'a-b')
@@ -3688,110 +3708,57 @@ test('projectSlugFromPath is not vulnerable to ReDoS on long separator runs', ()
 test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'])
   assert.ok(KNOWN_EFFORTS['claude-opus-5'])
-  // claude-fable-5-1 (Claude Fable 5.1, command-code@1.40.0) carries the same
-  // five-level effort set as claude-fable-5 in the Provider-API table.
   assert.deepEqual(KNOWN_EFFORTS['claude-fable-5-1'], ['low', 'medium', 'high', 'xhigh', 'max'])
-  // Added in command-code@1.28.0/1.28.1 ("Add Qwen 3.8 27B" + efforts fix):
-  // all three Qwen 3.8 models carry ['low','medium','xhigh'] in the provider table.
-  // Qwen 3.8 Flash joined in command-code@1.36.0.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-27B'], ['low', 'medium', 'xhigh'])
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Flash'], ['low', 'medium', 'xhigh'])
-  // Qwen 3.8 Max 0902 (command-code@1.41.0) carries the Qwen 3.8 family's
-  // ['low','medium','xhigh'] effort set.
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Max-0902'], ['low', 'medium', 'xhigh'])
-  // Gemini 3.8 Flash (command-code@1.43.0) carries the Gemini Flash family's
-  // three-level effort set.
   assert.deepEqual(KNOWN_EFFORTS['google/gemini-3.8-flash'], ['low', 'medium', 'high'])
-  // command-code@1.32.0 added DeepSeek V4 Flash Vision (exp) with
-  // ['high','max']; 1.35.0 added z-ai/glm-5.3-flash (the stealth/ox-alpha
-  // successor after the preview ended in 1.34.0) with the same effort set.
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-vision-exp'], ['high', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flash'], ['low', 'high', 'max'])
-  // command-code@1.57.0 added GLM-5.3 FlashX with the same three-level set as
-  // its flash sibling.
   assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flashx'], ['low', 'high', 'max'])
-  // stealth/ox-alpha left the catalog in 1.34.0 when its preview ended.
   assert.ok(!KNOWN_EFFORTS['stealth/ox-alpha'])
-  // command-code@1.39.0 added DeepSeek V4 Flash Fast; 1.39.1 dropped medium
-  // for it, so the 1.39.2 table ships ['low','high','max'].
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-fast'], ['low', 'high', 'max'])
-  // command-code@1.53.0 added DeepSeek V4.1 Flash ("Add new
-  // deepseek/deepseek-v4.1-flash model") with ['low','high','max'] — the same
-  // set as V4 Flash Fast, Kimi K3 and GLM-5.3.
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
-  // Synced from the official command-code@1.44.0 model table (re-verified
-  // against 1.28.4, 1.30.1, 1.31.0, 1.32.1, 1.32.2, 1.33.0, 1.36.0, 1.37.0,
-  // 1.39.2, 1.40.1, 1.44.0, 1.49.0, 1.49.1, 1.50.0, 1.51.2, 1.51.3, 1.52.0
-  // and 1.53.0 along the way):
-  // models that ship with effort levels must be present, and absent ones must
-  // stay out. The 0.2.0 snapshot wrongly added ten models (Kimi K2.5, MiMo
-  // V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2 Contributor, Tencent
-  // Hy3, ...) that carry NO reasoningEfforts in the CLI's provider table.
+  // Synced from the command-code provider table; `src/capabilities.ts` owns the
+  // table and is currently synced to command-code@1.66.0.
+  // Every model the CLI's provider table ships effort levels for must be present, and
+  // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
+  // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
+  // Contributor, Tencent Hy3, ...) that carry NO reasoningEfforts in that table.
   assert.ok(!KNOWN_EFFORTS['moonshotai/Kimi-K2.5'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.5-pro'])
   assert.ok(!KNOWN_EFFORTS['claude-haiku-4-5-20251001'])
   assert.ok(!KNOWN_EFFORTS['MiniMaxAI/MiniMax-M2.5'])
-  assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid']) // no official effort levels
-  // Muse Spark family (command-code@1.45.0) gained selectable efforts —
-  // they're now in KNOWN_EFFORTS and out of KNOWN_THINKING_MODELS.
+  assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid'])
   assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'], ['low', 'medium', 'high', 'xhigh'])
-  // tencent/hy4-preview gained selectable ['low','medium','high'] efforts in
-  // command-code@1.38.0 (it previously reasoned automatically with none).
   assert.deepEqual(KNOWN_EFFORTS['tencent/hy4-preview'], ['low', 'medium', 'high'])
-  // MiniMaxAI/MiniMax-M3 gained selectable ['low','medium','high'] efforts in
-  // command-code@1.51.3 (it previously reasoned automatically with none, and
-  // lived in KNOWN_THINKING_MODELS).
   assert.deepEqual(KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3'], ['low', 'medium', 'high'])
-  // Ling 3.0 Flash Sante (command-code@1.52.0) reasons automatically with no
-  // selectable efforts, so it must stay out of the effort map.
   assert.ok(!KNOWN_EFFORTS['inclusionai/ling-3.0-flash-sante:free'])
-  // moonshotai/Kimi-K3 gained selectable ['low','high','max'] efforts in
-  // command-code@1.39.3 (it previously reasoned automatically with none).
   assert.deepEqual(KNOWN_EFFORTS['moonshotai/Kimi-K3'], ['low', 'high', 'max'])
-  // command-code@1.60.0 added Step 5 Preview with the Step family's three-level
-  // set; command-code@1.59.0 added Grok 4.7 with Grok 4.6's four-level set.
-  // These two are the ONLY effort-map changes across 1.58.0 -> 1.62.0.
   assert.deepEqual(KNOWN_EFFORTS['stepfun/Step-5-Preview'], ['low', 'medium', 'high'])
   assert.deepEqual(KNOWN_EFFORTS['xai/grok-4.7'], ['low', 'medium', 'high', 'xhigh'])
-  // The MiMo V2.6 family (command-code@1.62.0) carries no reasoning flag and no
-  // reasoningEfforts in the bundled table (and caps.reasoning:false on the
-  // pricing page), so it belongs to neither effort set.
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-flash'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro-ultraspeed'])
-  // command-code@1.65.0 added Space Bunny Alpha with a three-level set — the
-  // only effort-map change in that release.
   assert.deepEqual(KNOWN_EFFORTS['stealth/space-bunny-alpha'], ['low', 'medium', 'high'])
+  // Pixel Canary's set offers `xhigh` INSTEAD of `high` — a distinct shape from its
+  // Space Bunny Alpha sibling's, not a copy of it.
+  assert.deepEqual(KNOWN_EFFORTS['stealth/pixel-canary'], ['low', 'medium', 'xhigh'])
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
-  // MiniMaxAI/MiniMax-M3 left this set in command-code@1.51.3 when it gained
-  // selectable ['low','medium','high'] efforts (it is in KNOWN_EFFORTS now).
   assert.ok(!KNOWN_THINKING_MODELS.has('MiniMaxAI/MiniMax-M3'))
   assert.ok(KNOWN_THINKING_MODELS.has('Qwen/Qwen3.7-Max'))
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
-  // MiniMax M3/M2.7 Free variants were retired in command-code@1.39.2;
-  // they are no longer in the catalog and thus not in any snapshot.
-  // stealth/ox-alpha reasoned automatically until command-code@1.32.1 gave it
-  // selectable ['low','high','max'] efforts; the model then left the catalog
-  // entirely in 1.34.0 when its preview ended. It belongs to neither set now.
+  // Retired models (the MiniMax free variants, stealth/ox-alpha) belong to neither set.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
-  // Re-verified against the command-code@1.28.4 provider table (2026-08-18),
-  // re-confirmed against 1.30.1 (2026-08-21), 1.37.0 (2026-08-28), 1.38.2,
-  // 1.40.1, 1.44.0 (2026-09-02), 1.45.0 (2026-09-03), 1.49.0, 1.49.1
-  // (2026-09-05), 1.50.0 (2026-09-06), 1.51.2, 1.51.3 (2026-09-09), 1.52.0
-  // and 1.53.0 (2026-09-10):
-  // these think automatically (reasoning:!0, no efforts) and belong in the set.
-  // tencent/hy4-preview joined in command-code@1.37.0 (OpenRouter-routed, 1M,
-  // no efforts) but gained selectable ['low','medium','high'] efforts in
-  // 1.38.0 and moved to KNOWN_EFFORTS. moonshotai/Kimi-K3 followed the same
-  // path in command-code@1.39.3 (['low','high','max']). Muse Spark family
-  // (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) followed in 1.45.0
-  // (['low','medium','high','xhigh']). LongCat 2.0 (1.42.0; paid and renamed
-  // from `meituan/LongCat-2.0:free` on 2026-09-19) thinks automatically with
-  // no selectable levels.
+  // Same provenance: `src/capabilities.ts`, synced to the command-code@1.66.0
+  // provider table.
+  // Every model that reasons automatically (reasoning:true, no selectable effort
+  // levels) belongs in this set, and every model that gained selectable efforts has
+  // moved out of it into KNOWN_EFFORTS.
   assert.ok(KNOWN_THINKING_MODELS.has('moonshotai/Kimi-K2.7-Code-Highspeed'))
   assert.ok(KNOWN_THINKING_MODELS.has('tencent/hy3-paid'))
   assert.ok(!KNOWN_THINKING_MODELS.has('tencent/hy4-preview'))
@@ -3799,15 +3766,9 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.2-contributor'))
   assert.ok(KNOWN_THINKING_MODELS.has('meituan/LongCat-2.0'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meituan/LongCat-2.0:free'))
-  // Ling 3.0 Flash Sante (command-code@1.52.0) thinks automatically
-  // (reasoning:!0, no efforts), like its retired ling-3.0-flash-free
-  // predecessor.
   assert.ok(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
-  // Muse Spark family (command-code@1.45.0) now has selectable efforts —
-  // they moved from KNOWN_THINKING_MODELS to KNOWN_EFFORTS.
-  // command-code@1.48.0 added `max` effort to Muse Spark 1.3.
   assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0'])
   assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.3'], ['low', 'medium', 'high', 'xhigh', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.3-contributor'], ['low', 'medium', 'high', 'xhigh'])
@@ -3824,9 +3785,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
 })
 
 test('Messages-only snapshot covers the Claude family and stays forward-compatible', () => {
-  // Every Claude model in the catalog as measured 2026-09-16 (all 69 models
-  // posted to /provider/v1/chat/completions; exactly these eight refused with
-  // "must be called via /provider/v1/messages").
+  // Ids measured 2026-09-16 by posting every catalog model to `/provider/v1/chat/completions` and recording which refused with "must be called via /provider/v1/messages".
   for (const id of [
     'claude-sonnet-5',
     'claude-sonnet-4-6',
@@ -3843,8 +3802,7 @@ test('Messages-only snapshot covers the Claude family and stays forward-compatib
   for (const id of MESSAGES_ONLY_MODELS) assert.ok(requiresMessagesEndpoint(id))
   // A Claude id that ships after this plugin was built is still routed right.
   assert.ok(requiresMessagesEndpoint('claude-opus-6'))
-  // Non-Claude models must stay on the Provider API: the predicate is what
-  // sends a request to /alpha/generate, and a false positive there silently
+  // Non-Claude models must stay on the Provider API: a false positive here silently
   // downgrades a working model to the legacy transport.
   assert.ok(!requiresMessagesEndpoint('deepseek/deepseek-v4.1-flash'))
   assert.ok(!requiresMessagesEndpoint('zai-org/GLM-5.3'))
@@ -3857,60 +3815,31 @@ test('known image models snapshot has stable anchor entries', () => {
   // model (the latter is deliberately absent).
   assert.ok(KNOWN_IMAGE_MODELS.has('claude-sonnet-5'))
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-5.4'))
-  // claude-fable-5-1 (command-code@1.40.0) is Vision per the official registry
-  // ("Text input, Vision, Reasoning"), like its claude-fable-5 predecessor.
   assert.ok(KNOWN_IMAGE_MODELS.has('claude-fable-5-1'))
-  // stealth/ox-alpha (command-code@1.31.0) was Vision; the model left the
-  // catalog in 1.34.0 when its preview ended, so it is no longer whitelisted.
   assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/ox-alpha'))
-  // DeepSeek V4 Flash Vision (exp) (command-code@1.32.0) is Vision per the
-  // official registry; its non-Vision siblings stay text-only.
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash-vision-exp'))
-  // Qwen 3.8 27B (command-code@1.28.0) and Qwen 3.8 Flash (1.36.0) are
-  // Vision per the official registry.
   assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-27B'))
   assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-Flash'))
-  // z-ai/glm-5.3-flash (command-code@1.35.0) replaced stealth/ox-alpha as
-  // the open-weight 1M-context Vision reasoning model and is Vision.
   assert.ok(KNOWN_IMAGE_MODELS.has('z-ai/glm-5.3-flash'))
-  // MiniMax M3/M2.7 Free variants were retired in command-code@1.39.2;
-  // they are no longer in the catalog and thus not in any snapshot.
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-flash'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4-pro'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('zai-org/GLM-5.3'))
-  // Qwen 3.8 Max 0902 (command-code@1.41.0), Gemini 3.8 Flash (1.43.0) and the
-  // Muse Spark 1.3 entries (1.44.0) are Vision per the official registry
-  // ("Text input, Vision, Reasoning"). LongCat 2.0 (1.42.0) is text-only.
   assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen3.8-Max-0902'))
   assert.ok(KNOWN_IMAGE_MODELS.has('google/gemini-3.8-flash'))
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-spark-1.3-contributor'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('meituan/LongCat-2.0'))
-  // Ling 3.0 Flash Sante (command-code@1.52.0) is text-only per the bundled
-  // inputModalities:["text"] and the pricing page's caps.vision:false.
   assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
-  // command-code@1.47.0 marked Grok 4.6 vision-capable; it is now in
-  // KNOWN_IMAGE_MODELS and shows the Image marker in the picker.
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
-  // command-code@1.53.0 added DeepSeek V4.1 Flash; Vision per the official
-  // registry ("Text input, Vision, Reasoning") and the CLI's
-  // inputModalities:["text","image"].
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash'))
-  // command-code@1.49.0 added GPT-6 Astra; Vision per the official registry
-  // and the CLI's inputModalities:["text","image"].
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6-astra'))
-  // command-code@1.59.0/1.60.0/1.62.0 added Grok 4.7, Step 5 Preview and the
-  // MiMo V2.6 family; all five are Vision per the official registry, the CLI's
-  // inputModalities:["text","image"] and the pricing page's caps.vision: true.
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.7'))
   assert.ok(KNOWN_IMAGE_MODELS.has('stepfun/Step-5-Preview'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-flash'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro-ultraspeed'))
-  // command-code@1.65.0 added Space Bunny Alpha; Vision per the official
-  // registry, the CLI's inputModalities:["text","image"] and the pricing page's
-  // caps.vision: true.
   assert.ok(KNOWN_IMAGE_MODELS.has('stealth/space-bunny-alpha'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/pixel-canary'))
   // The MiMo V2.6 family does not reason (docs: "Text input, Vision"); only its
   // Vision capability is snapshotted.
   assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.6-pro'))
@@ -3920,70 +3849,44 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // Go: the entry plan covers open models + a few premium ones.
   assert.equal(KNOWN_PLANS['MiniMaxAI/MiniMax-M3'], 'go')
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash'], 'go')
-  // DeepSeek V4 Flash Vision (exp) (command-code@1.32.0) joined the Go plan.
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash-vision-exp'], 'go')
-  // DeepSeek V4 Flash Fast (command-code@1.39.0) is a Go-tier open model.
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4-flash-fast'], 'go')
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.7-Max'], 'go')
   assert.equal(KNOWN_PLANS['gpt-5.6-luna'], 'go')
-  // Qwen 3.8 27B (command-code@1.28.0) and Qwen 3.8 Flash (1.36.0) are on
-  // the Go plan page.
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-27B'], 'go')
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-Flash'], 'go')
-  // z-ai/glm-5.3-flash (command-code@1.35.0) replaced stealth/ox-alpha on
-  // the Go plan when the stealth preview ended in 1.34.0.
   assert.equal(KNOWN_PLANS['z-ai/glm-5.3-flash'], 'go')
-  // GLM-5.3 FlashX (command-code@1.57.0) joins it on every plan, Go included.
   assert.equal(KNOWN_PLANS['z-ai/glm-5.3-flashx'], 'go')
-  // tencent/hy4-preview (command-code@1.37.0, OpenRouter-routed, 1M) joined Go.
   assert.equal(KNOWN_PLANS['tencent/hy4-preview'], 'go')
   assert.equal(KNOWN_PLANS['stealth/ox-alpha'], undefined)
-  // tencent/hy3-paid (the hidden free variant, formerly tencent/Hy3) is a
-  // Go-tier open model; the upstream catalog renamed it to tencent/hy3-paid.
+  // tencent/hy3-paid is the upstream rename of the old tencent/Hy3 id.
   assert.equal(KNOWN_PLANS['tencent/hy3-paid'], 'go')
   assert.equal(KNOWN_PLANS['tencent/Hy3'], undefined)
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.0-flash-free'], undefined)
   assert.equal(KNOWN_PLANS['minimax/minimax-m3-free'], undefined)
   assert.equal(KNOWN_PLANS['minimax/minimax-m2.7-free'], undefined)
-  // Qwen 3.8 Max 0902 (command-code@1.41.0), LongCat 2.0 (1.42.0 — a free promo
-  // until 2026-09-19, paid since) and Muse Spark 1.3 Contributor (1.44.0,
-  // "every plan including Go") are all Go-tier.
+  // Qwen 3.8 Max 0902, LongCat 2.0 (a free promo until 2026-09-19, paid since) and Muse Spark 1.3 Contributor are all Go-tier.
   assert.equal(KNOWN_PLANS['Qwen/Qwen3.8-Max-0902'], 'go')
   assert.equal(KNOWN_PLANS['meituan/LongCat-2.0'], 'go')
   // The retired free id is gone from the snapshot with the promo.
   assert.equal(KNOWN_PLANS['meituan/LongCat-2.0:free'], undefined)
-  // Ling 3.0 Flash Sante (command-code@1.52.0) is a free model on every plan
-  // ("Available on Go and above"), so its minimum tier is Go.
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.0-flash-sante:free'], 'go')
-  // DeepSeek V4.1 Flash (command-code@1.53.0) is available on every plan
-  // including Go — the pricing page's embedded availability grants it
-  // all tiers, and the Go/GOAT/Pro/Max plan pages all list it.
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash'], 'go')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3-contributor'], 'go')
-  // Step 5 Preview (command-code@1.60.0) and MiMo V2.6 Flash/Pro
-  // (command-code@1.62.0) are available on every plan including Go: the pricing
-  // page grants them individual-go, and the Go plan page's rendered table lists
-  // all three.
   assert.equal(KNOWN_PLANS['stepfun/Step-5-Preview'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro'], 'go')
-  // command-code@1.65.0 added Space Bunny Alpha on every tier: the pricing
-  // page's availability sets individual-go true ("all":true).
   assert.equal(KNOWN_PLANS['stealth/space-bunny-alpha'], 'go')
-  // GOAT adds a handful of closed/premium models (GPT-5.6 Sol joined in
-  // command-code@1.27.0, "50% off in GOAT and above" per the changelog).
+  assert.equal(KNOWN_PLANS['stealth/pixel-canary'], 'go')
+  // GOAT adds a handful of closed/premium models.
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
   assert.equal(KNOWN_PLANS['xai/grok-4.6'], 'goat')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.2'], 'goat')
   assert.equal(KNOWN_PLANS['gpt-5.6-sol'], 'goat')
-  // Grok 4.7 (command-code@1.59.0) and MiMo V2.6 Pro UltraSpeed
-  // (command-code@1.62.0) are "Available on GOAT and above": the pricing page
-  // sets individual-go false for both, and the Go plan page does not list them
-  // while the GOAT one does — which is what keeps the superset chain intact.
+  // Grok 4.7 and MiMo V2.6 Pro UltraSpeed are "available on GOAT and above", which is
+  // what keeps the GOAT -> Pro -> Provider tier chain a superset.
   assert.equal(KNOWN_PLANS['xai/grok-4.7'], 'goat')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro-ultraspeed'], 'goat')
-  // Gemini 3.8 Flash (1.43.0) and Muse Spark 1.3 (1.44.0) are "available on
-  // GOAT and above" per the pricing page.
   assert.equal(KNOWN_PLANS['google/gemini-3.8-flash'], 'goat')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3'], 'goat')
   // Pro adds Claude Sonnet/Haiku, GPT-5.x, Gemini 3.5/3.1.
@@ -3993,11 +3896,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // Provider/Max: Claude Opus/Fable and Fugu Ultra are not on lower plans.
   assert.equal(KNOWN_PLANS['claude-opus-5'], 'provider')
   assert.equal(KNOWN_PLANS['claude-fable-5'], 'provider')
-  // claude-fable-5-1 (Claude Fable 5.1, command-code@1.40.0) is Provider/Max
-  // exactly like claude-fable-5 — official plan pages grant it only
-  // individual-provider/max/ultra + teams-pro, and the CLI blocks it on
-  // Go/GOAT/Pro. It must be mapped so the picker's plan filter does not fail
-  // open and show a Provider/Max model to every subscription.
+  // claude-fable-5-1 is Provider/Max exactly like claude-fable-5: the plan filter must
+  // not fail open and show a Provider/Max model to every subscription.
   assert.equal(KNOWN_PLANS['claude-fable-5-1'], 'provider')
   assert.equal(KNOWN_PLANS['sakana/fugu-ultra'], 'provider')
   // Labels match the official tier names.
@@ -4008,76 +3908,65 @@ test('known plan snapshot tiers models by the official plan pages', () => {
 })
 
 test('known deals snapshot has anchors and expiry-aware labels', () => {
-  // DeepSeek V4 Pro's 75% off deal was retired on 2026-08-16 16:00 UTC when
-  // DeepSeek moved to peak/off-peak pricing, and was removed from the snapshot
-  // once it lapsed (see KNOWN_PEAK_PRICING).
+  // DeepSeek V4 Pro's 75% off deal lapsed on 2026-08-16 16:00 UTC when DeepSeek moved
+  // to peak/off-peak pricing, so it left the snapshot (see KNOWN_PEAK_PRICING).
   assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'], undefined)
-  // Free model is marked free.
   assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free']?.free, true)
-  // stealth/ox-alpha's free deal ended in command-code@1.34.0 when the model
-  // was retired; its successor z-ai/glm-5.3-flash has no deal (1.35.0).
+  // Neither the retired stealth/ox-alpha nor its z-ai/glm-5.3-flash successor has a deal.
   assert.equal(KNOWN_DEALS['stealth/ox-alpha'], undefined)
   assert.equal(KNOWN_DEALS['z-ai/glm-5.3-flash'], undefined)
-  // MiniMax M3/M2.7 Free (command-code@1.33.0) were retired in
-  // command-code@1.39.2 ("Retire MiniMax free models"): the CLI hides them and
-  // the pricing page no longer lists them as free, so the FREE entries are
-  // removed from the snapshot rather than left to lapse on their old
-  // 2026-09-05 expiry.
+  // The retired MiniMax free promos were removed from the snapshot entirely rather than
+  // left to lapse on their old 2026-09-05 expiry.
   assert.equal(KNOWN_DEALS['minimax/minimax-m3-free'], undefined)
   assert.equal(KNOWN_DEALS['minimax/minimax-m2.7-free'], undefined)
-  // Gemini 3.7 Flash's 50% off deal was retired from the pricing page in the
-  // command-code@1.38.2 sync; the model now shows at full price.
+  // Gemini 3.7 Flash's 50% off deal was retired; the model shows at full price.
   assert.equal(KNOWN_DEALS['google/gemini-3.7-flash'], undefined)
-  // LongCat 2.0's free promo ended 2026-09-19 (the page's deal count dropped
-  // 6 -> 5 and its free count 4 -> 3), so the FREE entry is removed rather than
-  // left to badge a model the catalog now serves paid as `meituan/LongCat-2.0`.
+  // LongCat 2.0's free promo ended 2026-09-19, so the FREE entry was removed rather
+  // than left to badge a model the catalog now serves paid.
   assert.equal(KNOWN_DEALS['meituan/LongCat-2.0:free'], undefined)
   assert.equal(KNOWN_DEALS['meituan/LongCat-2.0'], undefined)
   // Laguna S 2.1 is still the permanent-style free deal.
   assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free']?.free, true)
-  // Ling 3.0 Flash Sante (command-code@1.52.0) is free "up to 100 requests a
-  // day" while the promo lasts — also a permanent-style deal.
+  // Ling 3.0 Flash Sante is free "up to 100 requests a day" — also permanent-style.
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.0-flash-sante:free']?.free, true)
-  // Grok 4.7's 40% off launch deal (command-code@1.61.0) carries the page's own
-  // expiry stamp, so the badge lapses without another sync; its vendored rate
-  // row already holds the discounted figures.
+  // Grok 4.7's 40% off launch deal carries the page's own expiry stamp, so the badge
+  // lapses without another sync; its vendored rate row already holds the discount.
   assert.equal(KNOWN_DEALS['xai/grok-4.7']?.label, '40% off')
   assert.equal(KNOWN_DEALS['xai/grok-4.7']?.expiresAt, '2026-09-27T23:59:59.999Z')
   // The pricing page still embeds an already-expired (2026-06-22)
-  // `qwen-3.7-max-2x-usage` record its own Deals section does not list, so it
-  // stays out of the snapshot — the rate row already carries the discounted
-  // figures.
+  // `qwen-3.7-max-2x-usage` record its own Deals section does not list, so it stays
+  // out of the snapshot — the rate row already carries the discounted figures.
   assert.equal(KNOWN_DEALS['Qwen/Qwen3.7-Max'], undefined)
-  // Space Bunny Alpha (command-code@1.65.0) is free "while the stealth preview
-  // lasts" — a permanent-style free deal like Ling's, so no expiresAt.
+  // Space Bunny Alpha is free "while the stealth preview lasts" — permanent-style, so no expiresAt.
   assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.label, 'FREE')
   assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.free, true)
   assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.expiresAt, undefined)
+  // Pixel Canary carries the identical permanent-style terms, and `isFreeModel()` must
+  // see it: that is what sorts it first in the picker and prices it at zero.
+  assert.equal(KNOWN_DEALS['stealth/pixel-canary']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['stealth/pixel-canary']?.free, true)
+  assert.equal(KNOWN_DEALS['stealth/pixel-canary']?.expiresAt, undefined)
+  assert.equal(isFreeModel('stealth/pixel-canary'), true)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
-  // The MiniMax free promos were retired in command-code@1.39.2 — removed from
-  // the snapshot entirely — so they report no label at any time.
+  // The retired MiniMax free promos were removed from the snapshot, so they report no label at any time.
   assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-05T12:00:00Z')), undefined)
   assert.equal(dealLabel('minimax/minimax-m3-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
   assert.equal(dealLabel('minimax/minimax-m2.7-free', Date.parse('2026-09-06T00:00:00Z')), undefined)
   // Permanent deals are unaffected by any time.
   assert.equal(dealLabel('MiniMaxAI/MiniMax-M3', Date.parse('2030-01-01T00:00:00Z')), '50% off')
-  // DeepSeek V4 Pro's deal was removed from the snapshot after it lapsed; the
-  // model now carries peak/off-peak pricing instead (KNOWN_PEAK_PRICING).
+  // DeepSeek V4 Pro's deal was removed after it lapsed; the model is peak/off-peak priced now.
   assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
-  // Grok 4.7's 40% off launch deal (command-code@1.61.0) is stamped with the
-  // page's own expiry (2026-09-27T23:59:59.999Z), so it shows until that
-  // instant and hides itself afterwards — before the price row's reverted
-  // figures would ever be needed.
+  // Grok 4.7's 40% off launch deal carries the page's own expiry
+  // (2026-09-27T23:59:59.999Z), so it hides itself afterwards.
   assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-21T00:00:00Z')), '40% off')
   assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-27T12:00:00Z')), '40% off')
   assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-28T00:00:00Z')), undefined)
-  // No deal -> undefined.
   assert.equal(dealLabel('claude-sonnet-5'), undefined)
-  // Gemini 3.7 Flash's deal was retired in the 1.38.2 sync: no label at any time.
+  // Gemini 3.7 Flash's deal was retired: no label at any time.
   assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2026-12-31T12:00:00Z')), undefined)
 })
 
@@ -4087,7 +3976,7 @@ test('formatContext() renders compact human sizes', () => {
   // 1048576 (Gemini) rounds to a clean 1M, not 1.0M.
   assert.equal(formatContext(1_048_576), '1M')
   assert.equal(formatContext(256_000), '256K')
-  // Tencent Hy3's actual 262144 tokens display as 262K (matches the pricing page).
+  // 262144 (Tencent Hy3's real value) displays as 262K, matching the pricing page.
   assert.equal(formatContext(262_144), '262K')
   assert.equal(formatContext(200_000), '200K')
   assert.equal(formatContext(500), '500')
@@ -4098,9 +3987,7 @@ test('formatContext() renders compact human sizes', () => {
 test('capabilityDescription() composes plan, deal, Image, context', () => {
   // Free model without Vision: no Image marker.
   assert.equal(capabilityDescription('poolside/laguna-s-2.1-free', 256_000), 'Go · FREE · 256K')
-  // LongCat 2.0 (command-code@1.42.0): a free Go model until its promo ended
-  // 2026-09-19, now paid (`meituan/LongCat-2.0`) — text-only, 1M context, so no
-  // deal and no Image marker.
+  // LongCat 2.0 has been paid since its promo ended — text-only, 1M, so no deal and no Image marker.
   assert.equal(capabilityDescription('meituan/LongCat-2.0', 1_048_576), 'Go · 1M')
   // Discounted Image model with context.
   assert.equal(capabilityDescription('MiniMaxAI/MiniMax-M3', 1_000_000), 'Go · 50% off · Image · 1M')
@@ -4116,8 +4003,7 @@ test('capabilityDescription() composes plan, deal, Image, context', () => {
     capabilityDescription('deepseek/deepseek-v4-flash', 1_000_000, Date.parse('2026-08-17T02:30:00Z')),
     'Go · Peak · 1M',
   )
-  // DeepSeek V4.1 Flash (command-code@1.53.0): Go-tier Image model with the
-  // same hourly schedule — `Peak` at 02:30 UTC on a Monday, `Half` off-peak.
+  // DeepSeek V4.1 Flash: a Go-tier Image model on the same hourly schedule.
   assert.equal(
     capabilityDescription('deepseek/deepseek-v4.1-flash', 1_000_000, Date.parse('2026-08-17T02:30:00Z')),
     'Go · Peak · Image · 1M',
@@ -4145,18 +4031,14 @@ test('capabilityDescription() composes plan, deal, Image, context', () => {
 })
 
 test('peakPricingState/Label report the current UTC peak/off-peak window', () => {
-  // All DeepSeek hourly-priced models are in the time-of-day pricing snapshot
-  // (the V4 Flash Vision variant shares V4 Flash's windows per the pricing page;
-  // command-code@1.53.0 added V4.1 Flash with the same schedule at
-  // $0.15/$0.60 off-peak, $0.30/$1.20 peak).
+  // All DeepSeek hourly-priced models are in the time-of-day pricing snapshot; the V4
+  // Flash Vision variant and V4.1 Flash share V4 Flash's windows per the pricing page.
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-pro'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-vision-exp'))
   assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4.1-flash'))
-  // DeepSeek V4 Flash Fast (command-code@1.39.0) is NOT hourly-priced: the
-  // pricing page's embedded model JSON gives it a flat rate ($0.28/$0.56/$0.07)
-  // and no `timeOfDay` block, so it must carry no Peak/Half marker. (The old
-  // entry here misattributed V4 Flash Vision's neighboring row annotation.)
+  // DeepSeek V4 Flash Fast is NOT hourly-priced: the pricing page's embedded model JSON
+  // gives it a flat rate and no `timeOfDay` block, so it must carry no Peak/Half marker.
   assert.ok(!KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4-flash-fast'))
   assert.equal(
     peakPricingState('deepseek/deepseek-v4-flash-fast', Date.parse('2026-08-17T02:30:00Z')),
@@ -4166,11 +4048,9 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
     peakPricingLabel('deepseek/deepseek-v4-flash-fast', Date.parse('2026-08-17T02:30:00Z')),
     undefined,
   )
-  // Non-peak-priced models report no state. Qwen 3.8 Max looks annotated when
-  // the pricing page is flattened to text, but its hover annotation actually
-  // lives in the V4 Flash Vision row above it (each annotation states exactly
-  // 2x that row's own prices) — Qwen's own row carries none. Same for the
-  // new tencent/hy4-preview (1.37.0, text-only, priced per token, not per hour).
+  // Non-peak-priced models report no state. Qwen 3.8 Max only looks annotated: in the
+  // flattened pricing page its hover annotation actually belongs to the V4 Flash
+  // Vision row above it. Same for tencent/hy4-preview, priced per token.
   assert.ok(!KNOWN_PEAK_PRICING.has('Qwen/Qwen3.8-Max'))
   assert.ok(!KNOWN_PEAK_PRICING.has('tencent/hy4-preview'))
   assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
@@ -4232,10 +4112,9 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
 })
 
 test('isPeakPricingHour() answers the model-independent half of the same rule', () => {
-  // The composer's session-cost readout prices against the price table's own
-  // `peak` blocks, so it needs the hour test WITHOUT a model membership check.
-  // It must agree with `peakPricingState()` exactly on every hour the snapshot
-  // does place, or the picker's label and the composer's rate would disagree.
+  // The composer's session-cost readout prices against the price table's own `peak`
+  // blocks, so it needs the hour test WITHOUT a model membership check — and it must
+  // agree with `peakPricingState()` on every hour, or the label and the rate diverge.
   const peak = (h: number) => Date.parse(`2026-08-17T${String(h).padStart(2, '0')}:30:00Z`)
   for (let h = 0; h < 24; h++) {
     const expected = peakPricingState('deepseek/deepseek-v4-flash', peak(h)) === 'peak'
@@ -4261,149 +4140,17 @@ test('isPeakPricingHour() answers the model-independent half of the same rule', 
 })
 
 test('CLI version and API base constants are stable', () => {
-  // command-code@1.65.2 (2026-09-25 check of the npm `latest`; the official
-  // changelog still stops at 1.64.0) changes one existing registry row:
-  // `stepfun/Step-3.5-Flash` now declares a 262,144-token context instead of
-  // 1,000,000. The public catalog already served the corrected value. The CLI
-  // stream consumer also adds the standalone `cache-write-tokens` event and
-  // uses it when finish usage reports zero; the adapter mirrors that fallback
-  // above. Effort, modality, plan, subscription, deal, peak-pricing and ZDR
-  // snapshots are unchanged, as are the request converters, auth/login,
-  // billing, web-search and System One call sites.
-  // command-code@1.65.0 (2026-09-24 check of the npm `latest`; the official
-  // changelog page and RSS still stop at 1.64.0, so this was read from the
-  // bundle diff and the public sources): the model registry grows 86 -> 87
-  // with exactly one addition, `stealth/space-bunny-alpha` (chatComplete via
-  // openrouter, inputModalities ["text","image"], 1M context, efforts ['low',
-  // 'medium','high'], every plan from Go up, free while the stealth preview
-  // lasts, and NOT routed under ZDR). The 1.62.0 -> 1.65.0 window is otherwise
-  // the additive 1.64.0 train (Claude Opus 5.5 on Provider/Max, gpt-6-sol on
-  // Pro, gpt-6-luna on Go) plus no other change. The public catalog serves 81
-  // models now (80 + it) with its endpoint mix at 63 x chat/completions +
-  // responses, the same 9 Claude ids x messages-only, 9 x chat/completions.
-  // Static inspection finds no transport drift for this adapter: the /alpha/*
-  // endpoint set, the /alpha/generate converters and the stream event
-  // vocabulary differ from 1.64.0 only by minifier variable renames, the
-  // subscription plan maps and the peak/off-peak membership and schedule are
-  // byte-identical, and the documented Provider API endpoint set is unchanged
-  // (the CLI bundle does add a `/alpha/sandbox/*` route family for its own
-  // remote-sandbox feature, which this adapter never calls).
-  // command-code@1.62.0 (2026-09-22 check of the 2026-09-21 npm `latest`) is an
-  // ADDITIVE release train: 1.58.1 -> 1.62.0 ships five CLI versions whose only
-  // model-registry changes are five additions — `xai/grok-4.7` (1.59.0,
-  // chatComplete, text+image, 500K, ['low','medium','high','xhigh'], GOAT and
-  // above, 40% off from 2026-09-21 to 2026-09-27), `stepfun/Step-5-Preview`
-  // (1.60.0, text+image, 1M, ['low','medium','high'], Go),
-  // `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (1.62.0, text+image,
-  // 1,048,576 context, no reasoning flag, Go) and
-  // `xiaomi/mimo-v2.6-pro-ultraspeed` (1.62.0, same family, GOAT and above).
-  // Nothing was removed and no existing model changed efforts, modalities,
-  // context or tier: the registry diff across the two pinned bundles is
-  // 78 -> 83 entries with exactly those five additions, the effort map gains
-  // exactly two keys (46 -> 48), KNOWN_IMAGE_MODELS gains the five (52 -> 57),
-  // the plan map gains three Go and two GOAT entries without moving a tier
-  // (46/52/65/72 -> 49/57/70/77), the deal count goes 5 -> 6, and the vendored
-  // price table gains exactly the five matching rows (71 -> 76) with no rate
-  // change to any existing row. The public catalog serves 76 models now (71 +
-  // the five; `gpt-6-astra` is still a CLI/pricing/docs-only model, absent from
-  // the public Provider catalog as before) with its endpoint mix moving to
-  // 60 x chat/completions + responses, the same 8 Claude ids x messages-only,
-  // 8 x chat/completions. Static inspection finds no transport drift for this
-  // adapter: the /alpha/* endpoint set, the /alpha/generate converters and the
-  // stream event vocabulary differ from 1.58.0 only by minifier variable
-  // renames, the subscription plan maps and the peak/off-peak membership and
-  // schedule are byte-identical, and the documented Provider API endpoint set
-  // is unchanged. The two CLI-side items outside this adapter's surface are
-  // 1.58.1's "Auto-compact past images and keep their result" (a CLI client
-  // behavior, not a wire change) and 1.59.0's YOLO/accept-edits keybinding
-  // rework.
-  // command-code@1.58.0 (2026-09-20 check of the 2026-09-19 npm `latest`, whose
-  // changelog entry is "Retire the free LongCat 2.0 tier and sell LongCat 2.0 as
-  // a paid model"): the registry grows 77 -> 78 with exactly one addition,
-  // `meituan/LongCat-2.0`, and its retired `meituan/LongCat-2.0:free` sibling
-  // gains `hidden` plus the display name "LongCat 2.0 (Free)" — the CLI catching
-  // up with the backend rename the 1.57.0 sync already snapshotted, so nothing in
-  // src/capabilities.ts moves. The effort map, the subscription maps, the plan
-  // tiers, every deal, the peak/off-peak schedule, the public catalog (71 models,
-  // 55 x chat/completions + responses / 8 Claude ids x messages-only / 8 x
-  // chat/completions) and the vendored price rows (71) are all unchanged, and
-  // static inspection finds no transport drift: the /alpha/* endpoint set, the
-  // /alpha/generate converters and the stream event vocabulary are identical to
-  // 1.57.0. This is a version-pin sync only; no runtime behavior changes.
-  // command-code@1.57.0 (2026-09-19, npm `latest`; no changelog entry yet — the
-  // page stops at 1.56.1, and 1.56.2 shipped without one): the model registry
-  // grows 76 -> 77 with exactly one addition, `z-ai/glm-5.3-flashx` ("GLM-5.3
-  // FlashX", chatComplete, inputModalities ["text","image"], 1e6 context,
-  // efforts ['low','high','max']) — the whole registry difference across
-  // 1.56.0 -> 1.57.0, with no effort change to any existing model. The public
-  // catalog serves 71 models now (the new id is in it; `gpt-6-astra` is still a
-  // CLI/pricing/docs-only model, absent from the public Provider catalog, as
-  // before), and its endpoint mix moves to 55 x chat/completions + responses,
-  // the same 8 Claude ids x messages-only, 8 x chat/completions. Static
-  // inspection confirms no transport drift for this adapter: the /alpha/*
-  // endpoint set, the /alpha/generate converters (toWireMessages/toWireTools/
-  // toWireToolOutput) and the stream event vocabulary are byte-identical to
-  // 1.56.0. What 1.57.0 does add outside this adapter's surface is BYOK-only:
-  // the `x-opencode-session` header for hosts that require a session id
-  // (1.56.1's "Send session id to BYOK hosts that require it" — host-gated to
-  // opencode.ai) and a `command-code/<version>` BYOK user agent.
-  // command-code@1.56.0 (2026-09-18, npm `latest`; no changelog/RSS entry as of
-  // this check — the feed stops at 1.55.0): the model registry grows 75 -> 76
-  // with exactly one addition, `Qwen/Qwen3.8-Omni-Flash` (chatComplete,
-  // inputModalities ["text","image"], 1M context, efforts ['low','medium',
-  // 'xhigh']); the eight responses-spec models are unchanged, so the 1.55.0
-  // "OpenAI Responses endpoint on the provider API and BYOK CLI wire" item is
-  // a new API surface, not a routing change. Static inspection confirms no
-  // transport drift for this adapter: the /alpha/* endpoint set and the
-  // /alpha/generate + /alpha/web-search request shapes are byte-identical to
-  // 1.54.0. The docs meanwhile document `POST /provider/v1/responses` (OpenAI
-  // models and open models; Claude stays /messages-only) and a per-model
-  // `supported_endpoints` field on the catalog (54 x chat/completions +
-  // responses, the same 8 Claude ids x messages-only, 8 x chat/completions) —
-  // neither needs an adapter change, because both existing transports still
-  // serve every model. The live catalog serves 70 models now (Qwen 3.8 Omni
-  // Flash is in it; `gpt-6-astra` is still a CLI/pricing/docs-only model,
-  // absent from the public Provider catalog, as before).
-  // command-code@1.54.0 (2026-09-13): the CLI changelog lists exactly one
-  // CLI-local item — first-class herdr support (a `/herdr` command plus
-  // idle/working/blocked reporting to a herdr pane over its UNIX socket, live
-  // only when HERDR_ENV/HERDR_SOCKET_PATH/HERDR_PANE_ID are all set, with
-  // CMD_HERDR=0 to disable). The whole 1.53.1 -> 1.54.0 bundle difference is
-  // that feature plus the version constant: the model registry (75 entries),
-  // effort map, subscription plan maps, endpoints and request shapes are
-  // byte-identical, and the public catalog still serves the same 69 models.
-  // command-code@1.53.1 (2026-09-12): the CLI changelog lists four CLI-local
-  // items (default compaction model set to DeepSeek V4.1 Flash in /config, a
-  // BYOK reasoning-effort fix, and two /usage summary-line changes — Extra
-  // Credits shown separately, the "$X left" field removed). Static inspection
-  // of the 1.53.1 bundle confirms no transport drift: the /alpha/generate body,
-  // endpoints, effort map, subscription plan maps, every plan tier, every deal
-  // and the peak/off-peak membership and schedule are unchanged. The one model
-  // routing change is upstream-internal (`gpt-5.6-terra` / `gpt-5.6-luna` now
-  // served through vercel-ai-gateway instead of openrouter, same efforts,
-  // modalities and 1.05M context).
-  // command-code@1.53.0 (2026-09-10): "Add new deepseek/deepseek-v4.1-flash
-  // model" — Go-tier, Vision, ['low','high','max'] efforts, same hourly
-  // schedule as the other DeepSeek models ($0.15/$0.60 off-peak, $0.30/$1.20
-  // peak). Wire protocol, endpoints, effort map (beyond the addition),
-  // subscription plan maps, every other plan tier, and every deal are
-  // unchanged. (For history: 1.50.1 shipped CLI-local changes — stable
-  // process title, UNIX-socket status; 1.51.0 briefly added DeepSeek V4.1
-  // Flash Beta behind a 2026-09-10 expiry gate; 1.51.2 removed it from the
-  // bundle entirely; 1.51.3 gave MiniMax M3 selectable ['low','medium','high']
-  // efforts; 1.52.0 added the free Ling 3.0 Flash Sante model plus
-  // daily-window CLI guidance. There is no CLI changelog entry for
-  // 1.51.1–1.52.0; those snapshots were read from the bundled model table.)
-  // The version rides every request as x-command-code-version.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.65.2')
+  // The version rides every request as `x-command-code-version`. The per-release sync
+  // record — what each upstream version added and what was re-verified unchanged — lives
+  // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
+  // assertion pins the constant only.
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.66.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
 test('resolveAuthFileApiKey is safe without an auth file', async () => {
-  // Point the function at a nonexistent home by stubbing homedir is not
-  // injectable, so exercise the no-throw contract directly: on a machine
-  // WITH ~/.commandcode/auth.json it returns a string; without one it
-  // returns undefined. Either way it must not throw.
+  // `homedir` is not injectable, so exercise the no-throw contract directly: with or
+  // without a `~/.commandcode/auth.json` on this machine it must not throw.
   let threw = false
   try {
     const value = resolveAuthFileApiKey()
@@ -4455,10 +4202,10 @@ test('stream() rotates to the next account after a pre-stream 429', async () => 
   })
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
 
-  // Two connect attempts: key-1 refused, key-2 served; the rotation hook saw
-  // the rejection exactly once and the stream finished normally. The reason is
-  // `throttled`, not `rate-limit`: this body names no usage window, and only a
-  // named window may be reported as an exhausted one (issue #54).
+  // Two connect attempts: key-1 refused, key-2 served; the rotation hook saw the
+  // rejection exactly once and the stream finished normally. The reason is
+  // `throttled`, not `rate-limit`: this body names no usage window, and only a named
+  // window may be reported as an exhausted one (issue #54).
   assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
   assert.deepEqual(rotated, [['key-1', 'throttled']])
   assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
@@ -4496,11 +4243,10 @@ test('stream() classifies a 429 that NAMES a window as the window limit it is', 
 })
 
 test('stream() ends a bare RATE_LIMITED as a retryable RATE_LIMIT that claims no window', async () => {
-  // Issue #54's shape: a rejection whose body says nothing about a usage
-  // window. The CLI accepts the code on ANY status, so this is also the branch
-  // whose own wording the user reads — it must stay retryable and must not
-  // imply a spent window. (The pool's diagnosis is pinned in
-  // tests/accounts.test.ts; this pins the adapter's end-of-turn message.)
+  // Issue #54's shape: a rejection whose body says nothing about a usage window. The
+  // CLI accepts the code on ANY status, and this is the branch whose own wording the
+  // user reads — it must stay retryable and must not imply a spent window. (The
+  // pool's diagnosis is pinned in tests/accounts.test.ts.)
   const { fetchImpl } = fetchByKey({
     'key-1': { status: 503, body: JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Too many requests' } }) },
   })
@@ -4570,11 +4316,10 @@ test('stream() never retries with a key it already tried', async () => {
 })
 
 test('stream() rotates past an account-scoped 400 (insufficient credits)', async () => {
-  // Issue #51's follow-up: the pool kept handing out an account that could not
-  // pay, and the 400 was terminal as well as invisible — the turn failed on an
-  // account whose three siblings were fine. The official CLI reads this one as
-  // `isInsufficientCreditsRequestError` (status 400 + the wording), so the
-  // adapter rotates.
+  // Issue #51's follow-up: the pool kept handing out an account that could not pay,
+  // and the 400 was terminal as well as invisible — the turn failed on an account
+  // whose three siblings were fine. The official CLI reads this one as
+  // `isInsufficientCreditsRequestError` (status 400 + the wording), so we rotate.
   const { fetchImpl, calls } = fetchByKey({
     'key-1': {
       status: 400,
@@ -4602,12 +4347,11 @@ test('stream() rotates past an account-scoped 400 (insufficient credits)', async
 })
 
 test('stream() rotates on a code-only account-scoped body, with no wording to read', async () => {
-  // The test above passes with the message "Insufficient credits" present, so it
-  // would stay green with an empty code list — the fixture never proves the code
-  // branch. This is the body the official CLI's
-  // `isInsufficientCreditsRequestError` actually reads (the CODE, no message),
-  // and the shape #51's follow-up reports: the account that cannot pay must be
-  // rotated past, never handed out again.
+  // The test above passes with the message "Insufficient credits" present, so it would
+  // stay green with an empty code list — the fixture never proves the code branch.
+  // This is the body the official CLI's `isInsufficientCreditsRequestError` actually
+  // reads (the CODE, no message), and the shape #51's follow-up reports: the account
+  // that cannot pay must be rotated past, never handed out again.
   const { fetchImpl, calls } = fetchByKey({
     'key-1': { status: 400, body: JSON.stringify({ error: { code: 'INSUFFICIENT_CREDITS' } }) },
     'key-2': { status: 200, body: FINISH_STREAM },
@@ -4629,12 +4373,11 @@ test('stream() rotates on a code-only account-scoped body, with no wording to re
 })
 
 test('stream() rotates past a 5xx that carries a structured account code', async () => {
-  // The structured codes are account facts on ANY status (the CLI reads the
-  // code before its status guard). Without this, a gateway proxying the
-  // provider's own credits/plan rejection under a 5xx was classified as "the
-  // provider is unavailable": no rotation, and `SERVER` put the identical
-  // request back on dsh-llm-retry's 1000-attempt cadence while the accounts
-  // behind it were never tried. Only the PROSE scan stays confined to 4xx.
+  // The structured codes are account facts on ANY status (the CLI reads the code before
+  // its status guard). Without this, a gateway proxying the provider's own
+  // credits/plan rejection under a 5xx was classified as "the provider is
+  // unavailable": no rotation, and `SERVER` put the identical request back on
+  // dsh-llm-retry's 1000-attempt cadence. Only the PROSE scan stays in 4xx.
   for (const code of ['INSUFFICIENT_CREDITS', 'USAGE_EXCEEDED', 'PREMIUM_CREDITS_EXHAUSTED', 'MODEL_NOT_IN_PLAN'] as const) {
     const { fetchImpl, calls } = fetchByKey({
       'key-1': { status: 503, body: JSON.stringify({ error: { code } }) },
@@ -4709,11 +4452,10 @@ test('stream() treats a 5xx carrying the RATE_LIMITED code as the window limit i
 })
 
 test('stream() ends an unroutable window limit as a retryable RATE_LIMIT, not a dead 4xx', async () => {
-  // No hook to rotate with (a host that does not wire the pool), so the turn
-  // ends here — but it must end as a RETRYABLE RATE_LIMIT carrying the
-  // provider's reset. A 400 maps to `PROVIDER_HTTP_ERROR`, which sits outside
-  // dsh-llm-retry's whitelist, so the turn would die on the spot even though the
-  // provider said exactly when the same request works again.
+  // No hook to rotate with (a host that does not wire the pool), so the turn ends here —
+  // but it must end as a RETRYABLE RATE_LIMIT carrying the provider's reset. A 400
+  // maps to `PROVIDER_HTTP_ERROR`, which sits outside dsh-llm-retry's whitelist, so
+  // the turn would die even though the provider said when the request works again.
   const resetSeconds = Math.floor(Date.now() / 1000) + 1800
   const { fetchImpl } = fetchByKey({
     'key-1': {
@@ -4835,12 +4577,10 @@ test('stream() propagates the rotation hook’s all-exhausted error', async () =
 })
 
 /**
- * Plausible window resets for the probe fixtures, relative to now.
- *
- * The endpoint publishes `resetAt` as an epoch in millis, and the pool trusts
- * one only while it lies inside a real metering horizon (see
- * `MAX_TRUSTED_RESET_MS`): a fixture pinned to a fixed far-future instant would
- * be dropped as implausible, which is not what these tests are about.
+ * Plausible window resets for the probe fixtures, relative to now: the pool trusts a
+ * published `resetAt` only while it lies inside a real metering horizon
+ * (`MAX_TRUSTED_RESET_MS`), so a fixed far-future stamp would be dropped as
+ * implausible, which is not what these tests are about.
  */
 const FIVE_HOUR_RESET = Date.now() + 3 * 60 * 60 * 1000
 const WEEKLY_RESET = Date.now() + 4 * 24 * 60 * 60 * 1000
@@ -4862,10 +4602,10 @@ test('probeWindowLimits() reports the five-hour window when it is the only one e
 })
 
 test('probeWindowLimits() treats an exhausted weekly quota as limiting while the five-hour window is open', async () => {
-  // Issue #51's follow-up: the two windows are metered separately, and reading
-  // only `fiveHour` revived an account whose WEEKLY quota was spent — the pool
-  // handed it out, the provider rejected the request, and the next all-marked
-  // pass revived it again. "切到一个不可用账号" is exactly that loop.
+  // Issue #51's follow-up: the two windows are metered separately, and reading only
+  // `fiveHour` revived an account whose WEEKLY quota was spent — the pool handed it
+  // out, the provider rejected the request, and the next all-marked pass revived it
+  // again.
   const weeklyReset = WEEKLY_RESET
   const { fetchImpl } = fetchRouting({
     '/alpha/billing/credits': {
@@ -4941,13 +4681,11 @@ test('probeWindowLimits() degrades to undefined on endpoint or shape failure', a
 })
 
 test('providerRetryPolicy() pins the near-unbounded transient-only retry policy', () => {
-  // dsh-llm-retry executes this at the agent-step boundary: normal mode with
-  // an explicit 1000-attempt cap retries the five transient codes (an
-  // opencode-like persistence that still fails fast on permanent errors such
-  // as INVALID_CREDENTIAL), waits double from 500 ms capped at 15 minutes
-  // with ±10% jitter, and honors an attached providerRetryAfterMs at or
-  // below the cap. Pinned so a dsh default change cannot silently alter the
-  // visible retry cadence or whitelist.
+  // dsh-llm-retry executes this at the agent-step boundary: normal mode with an
+  // explicit 1000-attempt cap retries the five transient codes (failing fast on
+  // permanent errors such as INVALID_CREDENTIAL), waits double from 500 ms capped at
+  // 15 minutes with ±10% jitter, and honors an attached providerRetryAfterMs at or
+  // below the cap.
   const adapter = makeAdapter()
   const policy = adapter.providerRetryPolicy('commandcode')
   assert.equal(policy.mode, 'normal')
@@ -4964,10 +4702,8 @@ test('providerRetryPolicy() pins the near-unbounded transient-only retry policy'
 
 test('providerInfo() names the picker group "Command Code"', () => {
   // The model picker renders provider groups in registration order with the
-  // adapter-supplied name as the sticky group title; the base class would
-  // show the raw route id ("commandcode"). Pinned so the display name stays
-  // in step with the Models settings page card (displayName "Command Code"),
-  // and the id keeps equaling the route (dsh-llm validates that).
+  // adapter-supplied name as the sticky group title; the base class would show the
+  // raw route id. The id keeps equaling the route (dsh-llm validates that).
   const adapter = makeAdapter()
   assert.deepEqual(adapter.providerInfo('commandcode'), { id: 'commandcode', name: 'Command Code' })
 })
@@ -5082,13 +4818,12 @@ test('getUsage() classifies HTTP 200 with unreadable bodies as invalid-response'
 })
 
 test('getUsage() reports a key no HTTP header can carry as an invalid key, not as a network outage', async () => {
-  // A paste artifact (an embedded newline, a full-width character) makes
-  // `fetch` throw a TypeError BEFORE any I/O — for every endpoint at once — so
-  // the all-transport-failure classifier used to answer "无法连接 Command Code
-  // 服务 / 请检查网络连接或 API 地址设置" while the connection was fine and the
-  // real problem was the credential. The chat path already refuses such a key
-  // through `assertUsableApiKey`; the account path now does too, and the report
-  // carries the credential verdict.
+  // A paste artifact (an embedded newline, a full-width character) makes `fetch` throw
+  // a TypeError BEFORE any I/O — for every endpoint at once — so the
+  // all-transport-failure classifier used to report a connection problem while the
+  // connection was fine and the real problem was the credential. The chat path
+  // already refuses such a key through `assertUsableApiKey`; the account path now
+  // does too, and the report carries the credential verdict.
   let fetches = 0
   const adapter = makeAdapter({
     fetchImpl: (async () => {
@@ -5103,12 +4838,11 @@ test('getUsage() reports a key no HTTP header can carry as an invalid key, not a
 })
 
 test('getUsage() holds the account endpoints to the connection request budget, not the catalog probe cap', async () => {
-  // The four account endpoints used the catalog's 10 s cap while a chat call
-  // got 60 s, so on a slow link every account query timed out while chat kept
-  // working — a "check your network" banner that could never clear. The budget
-  // is the connection's own `requestTimeoutMs`, which this pins by lowering it
-  // to a value the catalog cap would never reach: with the old 10 s signal this
-  // call would take ten seconds and blow the assertion below.
+  // The four account endpoints used the catalog's 10 s cap while a chat call got 60 s,
+  // so on a slow link every account query timed out while chat kept working — a
+  // "check your network" banner that could never clear. Pinned by lowering
+  // requestTimeoutMs to a value the catalog cap would never reach: with the old 10 s
+  // signal this call would take ten seconds and blow the assertion below.
   const adapter = makeAdapter({
     options: () => ({ ...OPENAI_OPTIONS(), requestTimeoutMs: 40 }),
     // A stub that waits for the request's OWN abort signal. The keep-alive

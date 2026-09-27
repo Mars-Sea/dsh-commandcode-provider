@@ -8,8 +8,6 @@
  * stale-response dropping — and the display formatting, so the React
  * component stays a thin renderer and node tests can drive everything.
  *
- * Deliberately JSX-free, mirroring `./settings.ts`.
- *
  * @module dsh-commandcode-provider/client/usage
  */
 
@@ -19,13 +17,10 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
 /**
  * Merge the plugin's Remote endpoints into the harness's typed client Remote
- * surface (the same declaration pattern the harness's generated
- * typert.remote-client files use), so `ctx.remote.commandcode.*()` is typed
- * once each contribution is mounted. The `commandcode` namespace member is
- * declared exactly once (interface merging forbids duplicate members), so
- * this one declaration carries the usage report, the model catalog, the price
- * table, AND the login endpoints — the endpoint-level declarations live beside
- * their controllers.
+ * surface, so `ctx.remote.commandcode.*()` is typed once each contribution is
+ * mounted. The `commandcode` namespace member is declared exactly once here
+ * (interface merging forbids duplicate members) and therefore carries the usage
+ * report, the model catalog, the price table AND the login endpoints.
  */
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteMap {
@@ -63,9 +58,9 @@ export interface UsageRemote {
     | { ok: false; error: { message: string } }
   >
   /**
-   * Optional for the same cross-version reason as the namespace member above:
-   * an older Host serves no price table. `CommandCodePricesController` reads
-   * the absence as a permanent "no prices" state.
+   * Optional for the same cross-version reason as the namespace member above;
+   * `CommandCodePricesController` reads the absence as a permanent "no prices"
+   * state.
    */
   prices?(): Promise<
     | { ok: true; value: CommandCodePriceTable }
@@ -192,11 +187,9 @@ export function formatTokensCompact(value: number): string {
 }
 
 /**
- * Format a success-rate percentage (already in percent units, e.g. 99.96):
- * at most two decimals, trailing zeros trimmed — `100` stays `100`, not
- * `100.00`, and the raw upstream float `99.965552876334` becomes `99.97`.
- * The `%` suffix is appended by the caller (the card and the dashboard line
- * both compose it).
+ * Success-rate percentage (already in percent units, e.g. 99.96): at most two
+ * decimals, trailing zeros trimmed — `100` stays `100`, not `100.00`, and
+ * `99.965552876334` becomes `99.97`. The `%` suffix is the caller's job.
  */
 export function formatSuccessRate(value: number): string {
   return String(Number(value.toFixed(2)))

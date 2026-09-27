@@ -1,25 +1,22 @@
 /**
  * Models-page provider-card tests (node:test, zero deps). Run with `npm test`.
  *
- * These pin the "Command Code" panel rendered inside the harness Models page
- * through the `settings.models.provider-card` keyed slot (dsh 0.1.2, rc.1):
+ * These pin the Command Code card rendered through the
+ * `settings.models.provider-card` keyed slot:
  *
- *   - the panel's posture logic (`cardMode`): which body renders for the
- *     registration / not-ready / not-configured / configured states;
- *   - the sibling lookup (`adjacentEditorCard`) that finds the official
- *     editor next to the slot outlet while it is open — the trigger that
- *     swaps the settings.yaml shell for the real controls;
- *   - the credential fact: the panel reports the SHARED controller's
- *     `apiKeyConfigured` (same controller the dedicated settings page uses),
- *     with the owner's `keyConfigured` only as a fallback;
+ *   - the posture logic (`cardMode`) — registration / not-ready /
+ *     not-configured / configured;
+ *   - `adjacentEditorCard`, the sibling lookup that finds the official editor
+ *     beside the slot outlet while it is open;
+ *   - the credential fact: the card reports the SHARED controller's
+ *     `apiKeyConfigured` (the same controller the settings page drives), with
+ *     the owner's `keyConfigured` only as a fallback;
  *   - the save path: a pasted key lands under the plugin's credential
- *     reference through the same controller save the settings page uses
- *     (the key literal never rides a settings write);
- *   - the login affordance mirrors the settings page's phase copy.
+ *     reference, never as a settings literal;
+ *   - the login affordance mirroring the settings page's phase copy.
  *
- * The React component itself is exercised through the mode function plus the
- * controller wiring, mirroring how tests/client.test.ts drives React-free
- * controllers.
+ * The React component is exercised through the mode function plus the
+ * controller wiring, like the other React-free controller tests here.
  */
 
 import { test } from 'node:test'
@@ -40,9 +37,7 @@ import {
 import type { SettingsPageState } from '../src/client/settings.ts'
 import type { LoginPageState } from '../src/client/login.ts'
 
-// ---------------------------------------------------------------------------
 // Helpers (mirrors tests/settings.test.ts)
-// ---------------------------------------------------------------------------
 
 function makeScope(init: {
   status?: 'ready' | 'unavailable'
@@ -176,9 +171,7 @@ function makeCardProps(opts?: {
   return { props, controller, loginController, api, scope }
 }
 
-// ---------------------------------------------------------------------------
 // cardMode: the card's posture
-// ---------------------------------------------------------------------------
 
 test('cardMode falls back to the registration posture without a snapshot', () => {
   makeCardProps({ withController: false })
@@ -204,9 +197,7 @@ test('cardMode reports configured from the controller once a key is stored', asy
   assert.equal(mode.kind !== 'registration' ? mode.controllerConfigured : false, true)
 })
 
-// ---------------------------------------------------------------------------
 // Save path: a pasted key lands under the plugin's credential reference
-// ---------------------------------------------------------------------------
 
 test('saving a pasted key from the card writes the credential reference', async () => {
   const store = new Map<string, string>()
@@ -232,9 +223,7 @@ test('the card save never writes the key into the settings namespace', async () 
   assert.equal(section.apiKeyEnv, undefined)
 })
 
-// ---------------------------------------------------------------------------
 // Login affordance: mirrors the settings page's phases
-// ---------------------------------------------------------------------------
 
 test('the card login controller reports success phases like the settings page', async () => {
   const { loginController } = makeCardProps()
@@ -255,13 +244,12 @@ test('a begin rejection lands on unavailable, the paste fallback posture', async
   const loginController = new CommandCodeLoginController(() => remote)
   await loginController.begin()
   await flush()
-  // A begin call that fails at the transport reads as `unavailable` — the
-  // Host half cannot be reached — which the card renders with the
-  // manual-paste hint, exactly like the settings page's panel.
+  // A begin call that fails at the transport reads as `unavailable` — the Host
+  // half cannot be reached — which the card renders with the paste hint.
   assert.equal(loginController.state().phase, 'unavailable')
   assert.ok(loginController.state().message)
   loginController.dispose()
-  // Keep the settings controller referenced: the card always mounts both.
+  // The card always mounts both controllers; keep the settings one referenced.
   assert.ok(controller)
 })
 
@@ -285,9 +273,7 @@ test('a Host-reported failed status carries the same failure reasons', async () 
   loginController.dispose()
 })
 
-// ---------------------------------------------------------------------------
 // adjacentEditorCard: locating the official editor beside the slot outlet
-// ---------------------------------------------------------------------------
 
 test('adjacentEditorCard finds the editor after the outlet in an edited row', () => {
   // Row posture: [rowHead, outlet, editor?] — the 编辑 toggle's target.

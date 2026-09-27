@@ -1,18 +1,17 @@
 /**
- * View layer for the Command Code plans & quota panel (the sidebar footer card
- * and the dashboard it opens in the center column).
+ * View model for the Command Code plans & quota panel (the sidebar footer card
+ * and the dashboard it opens).
  *
- * Deliberately JSX-free and React-free, mirroring `./settings.ts` and
- * `./usage.ts`: it turns the shared usage snapshot into one presentation
- * tree that both React components render, and it owns the one shared side
- * effect (the throttled background refresh that keeps the sidebar card
- * current). Node tests drive everything here without a DOM.
+ * JSX-free and React-free, mirroring `./settings.ts` / `./usage.ts`: it turns
+ * the shared usage snapshot into one presentation tree both components render,
+ * and owns the one shared side effect (the throttled auto refresh below). Node
+ * tests drive everything here without a DOM.
  *
- * Every displayed string is decided here, as a `PanelKey` plus a `text`
- * record resolved through the injected translator — so the components carry no
- * formatting, pluralization, or copy of their own, and the panel follows the
- * harness's active language (`./panel-copy.ts` owns both dictionaries and the
- * `panel.commandcode` locale namespace; the slots hand the translator in).
+ * Every displayed string is decided here, as a `PanelKey` plus a `text` record
+ * resolved through the injected translator, so the components carry no copy of
+ * their own and the panel follows the harness's active language
+ * (`./panel-copy.ts` owns both dictionaries and the `panel.commandcode` locale
+ * namespace; the slots hand the translator in).
  *
  * @module dsh-commandcode-provider/client/panel
  */
@@ -48,22 +47,18 @@ export interface PanelWindowView {
 }
 
 /**
- * Monthly credit state, derived exactly the way the official CLI derives it
- * (`getCreditDepletionPct` in `command-code/dist/cli.mjs`): the plan's credit
- * total is the LIMIT, and the billing endpoint's `credits.monthlyCredits` is
- * the REMAINING balance, so consumption is `limit - remaining`. The CLI's own
- * wording for the same two numbers is `Plan: N% used, X credits left`.
- *
- * Purchased and free credits are separate balances that extend what an account
- * can spend, so they are reported as their own tiles rather than folded into
- * the limit.
+ * Monthly credit state. Consumption is derived the way the official CLI derives
+ * it (`getCreditDepletionPct`): the plan's credit total is the LIMIT and the
+ * billing endpoint's `credits.monthlyCredits` is the REMAINING balance, so
+ * consumption is `limit - remaining`. Purchased and free credits are separate
+ * balances that extend what an account can spend, so they are their own tiles.
  */
 export interface PanelMonthlyView {
   /**
    * A ratio is meaningful — the plan published a credit total AND the billing
-   * endpoint published the balance left of it. When false the view draws no
-   * bar: a percentage needs both halves, and inventing either one is how a
-   * failed billing call turns into a confident "100% used".
+   * endpoint published the balance left of it. When false the view draws no bar:
+   * a percentage needs both halves, and inventing either is how a failed billing
+   * call becomes a confident "100% used".
    */
   known: boolean
   /** Plan credit total for the period (the limit); a dash when unreported. */
@@ -99,8 +94,7 @@ export interface PanelFooterBar {
   /**
    * This window's own spend against its limit, e.g. `$1.32 / $6.00`. RENDERED,
    * not just a tooltip: the card exists to show these figures, and the
-   * magnitudes are small dollar amounts (the endpoint reports a Pro account's
-   * five-hour cap as `3` and its weekly cap as `6`).
+   * magnitudes are small dollar amounts.
    */
   detail: string
 }
@@ -158,18 +152,17 @@ export interface PanelView {
   status: string
   /**
    * The compact bars the sidebar footer card stacks: the two quota windows an
-   * account actually runs into, 5-hour first then weekly. The monthly
-   * limit/usage bar belongs to the DASHBOARD alone — it moves once a billing
-   * period, whereas these two are what stop a session — so it is deliberately
-   * absent here. A window with no cap is left out: there is no ratio to draw.
+   * account actually runs into, 5-hour first then weekly. The monthly bar
+   * belongs to the DASHBOARD alone — it moves once a billing period, whereas
+   * these two are what stop a session — and a window with no cap is left out
+   * (no ratio to draw).
    */
   footerBars: PanelFooterBar[]
   /**
-   * This period's spend in dollars, formatted; empty when the usage endpoint
-   * reported nothing. NOT drawn as its own row — the card's visible figures are
-   * the two windows' own spend (see {@link PanelFooterBar.detail}), and a
-   * separate period total would sit next to the weekly window's near-identical
-   * figure — so it rides the tooltip and the accessible name instead.
+   * This period's spend in dollars; empty when the usage endpoint reported
+   * nothing. NOT drawn as its own row — the card's visible figures are the two
+   * windows' own spend (see {@link PanelFooterBar.detail}) — so it rides the
+   * tooltip and the accessible name instead.
    */
   cost: string
   /**
@@ -206,10 +199,9 @@ export interface PanelViewInput {
   apiKeyConfigured: boolean
   /**
    * Locale translator for every label the view composes. The panel slots bind
-   * their `t` seat to the `panel.commandcode` namespace and pass it here, so
-   * the projection follows the harness language; omitting it falls back to
-   * English (the tests' default, and the defensive path when no locale face is
-   * installed).
+   * their `t` seat to the `panel.commandcode` namespace and pass it here; an
+   * omitted one falls back to English (the tests' default, and the defensive
+   * path when no locale face is installed).
    */
   t?: PanelTranslator
 }
@@ -229,9 +221,9 @@ function money(value: number): string {
 }
 
 /**
- * What a figure shows when the endpoint that carries it did not report one.
- * A dash, never a zero: the panel exists to state what the account has spent,
- * so "we were not told" has to look different from "nothing".
+ * What a figure shows when the endpoint that carries it did not report one. A
+ * dash, never a zero: the panel exists to state what the account has spent, so
+ * "we were not told" has to look different from "nothing".
  */
 const UNREPORTED = '—'
 
@@ -289,18 +281,17 @@ function windowView(label: PanelKey, limit: WindowInput): PanelWindowView {
  * Build the monthly credit view from the two endpoints that carry it.
  *
  * The limit is the PLAN's credit total, not the billing endpoint's
- * `monthlyCredits` — that field is a remaining balance (see
- * {@link PanelMonthlyView}). Unknown plans (no `monthlyCredits` on the plan
- * record) therefore still show their balances, just without a ratio.
+ * `monthlyCredits` (that field is a remaining balance — see
+ * {@link PanelMonthlyView}), so a plan that publishes no total still shows its
+ * balances, just without a ratio.
  *
  * The trap this guards: a MISSING balance is not a consumed one. The billing
  * endpoint is one of four the report fetches in parallel, so it fails on its
- * own while the plan still arrives — and reading the absent balance as 0 would
- * turn that partial failure into `limit - 0 = limit`, i.e. a confident "100%
- * used, quota exhausted" for an account that may have spent nothing. The
- * official CLI draws no meter unless the credits payload is present at all
- * (`hasCreditsInfo`), so "unreported" is the upstream-faithful reading here
- * too. Every derived figure stays a placeholder until the balance reported.
+ * own while the plan still arrives, and reading the absent balance as 0 turns
+ * that partial failure into `limit - 0 = limit` — a confident "100% used" for
+ * an account that may have spent nothing. The official CLI draws no meter unless
+ * the credits payload is present at all (`hasCreditsInfo`); every derived figure
+ * here stays a placeholder until the balance reported.
  */
 function monthlyView(report: CommandCodeUsageReport): PanelMonthlyView | undefined {
   const credits = report.credits
@@ -309,8 +300,7 @@ function monthlyView(report: CommandCodeUsageReport): PanelMonthlyView | undefin
 
   const limitValue = plan?.monthlyCredits ?? null
   // Only an EXPLICIT `false` means the balance was omitted. An unset flag comes
-  // from a Host half older than the field, which always sent a real number, so
-  // it must keep rendering instead of turning into a dash everywhere.
+  // from a Host half older than the field, which always sent a real number.
   const remainingReported = credits !== undefined && credits.monthlyReported !== false
   const remaining = remainingReported ? Math.max(0, credits.monthlyCredits) : 0
   // A ratio needs BOTH halves: the plan's total and the balance left of it.
@@ -361,10 +351,9 @@ function accountView(entry: CommandCodeAccountUsage, t: PanelTranslator): PanelA
   }
 
   const windows: PanelWindowView[] = []
-  // One row per window the endpoint actually REPORTED. An account on an
-  // unlimited plan reports none, and drawing two zero-cap rows for it would
-  // invent a limit the account does not have; a window that reported
-  // `cap === 0` is uncapped spend and does get a row, labelled as such.
+  // One row per window the endpoint actually REPORTED: an unlimited plan
+  // reports none, and drawing two zero-cap rows would invent a limit it does not
+  // have. A window reporting `cap === 0` is uncapped spend and does get a row.
   if (credits?.fiveHour !== undefined) windows.push(windowView('fiveHour', credits.fiveHour))
   if (credits?.weekly !== undefined) windows.push(windowView('weekly', credits.weekly))
 
@@ -419,10 +408,10 @@ function failureView(state: UsagePageState): PanelFailureView | undefined {
 }
 
 /**
- * Every panel string, resolved once per projection through the translator.
- * One object with all keys (rather than per-field lookups in the components)
- * keeps the copy table and the render sites in lockstep: a key cannot be read
- * from `text` unless {@link PANEL_KEYS} declares it.
+ * Every panel string, resolved once per projection through the translator. One
+ * object with all keys (rather than per-field lookups in the components) keeps
+ * the copy table and the render sites in lockstep: a key cannot be read from
+ * `text` unless {@link PANEL_KEYS} declares it.
  */
 function panelStrings(t: PanelTranslator): Record<PanelKey, string> {
   const out = {} as Record<PanelKey, string>
@@ -511,14 +500,12 @@ export function buildPanelView(input: PanelViewInput): PanelView {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Auto refresh (one shared loop, started by whichever surface mounts first)
-// ---------------------------------------------------------------------------
+// --- Auto refresh (one shared loop, started by whichever surface mounts first)
 
 /**
- * How often the panel re-reads the report while a surface is mounted. The
- * quota windows move slowly and one report costs four upstream calls, so this
- * is a background freshness tick, not a live meter.
+ * How often the panel re-reads the report while a surface is mounted. The quota
+ * windows move slowly and one report costs four upstream calls, so this is a
+ * background freshness tick, not a live meter.
  */
 export const PANEL_AUTO_REFRESH_MS = 120_000
 
@@ -550,21 +537,18 @@ let ticketSeq = 0
 let handle: unknown
 
 /**
- * Start the shared auto refresh. One fetch when the surface appears (the
- * sidebar row is the point of the panel — it must be current, not wait for a
- * click), then a tick every {@link PANEL_AUTO_REFRESH_MS} while a surface
- * stays mounted.
+ * Start the shared auto refresh. One fetch when the surface appears (the sidebar
+ * row is the point of the panel — it must be current, not wait for a click), then
+ * a tick every {@link PANEL_AUTO_REFRESH_MS} while a surface stays mounted.
  *
- * Reference-counted: the sidebar entry and the dashboard can be mounted at
- * once, so only the first start fetches and only the last stop halts the loop.
- * Every tick goes through `usage.refresh()`, which already collapses a
- * concurrent fetch onto the in-flight one — a tick never double-fetches
- * against the settings page's own refresh.
+ * Reference-counted: the sidebar entry and the dashboard can be mounted at once,
+ * so only the first start fetches and only the last stop halts the loop. Every
+ * tick goes through `usage.refresh()`, which collapses a concurrent fetch onto
+ * the in-flight one. Returns the disposer that drops this surface's reference.
  *
  * @param usage - the shared usage controller.
  * @param isConfigured - whether a credential exists right now (re-read per tick).
  * @param timer - timer seam for tests.
- * @returns the disposer that drops this surface's reference.
  */
 export function startPanelAutoRefresh(
   usage: RefreshSource,
@@ -591,10 +575,9 @@ export function startPanelAutoRefresh(
     if (stopped) return
     stopped = true
     references -= 1
-    // Still mounted elsewhere: drop this reference only. Note the check is the
+    // Still mounted elsewhere: drop this reference only. The check is the
     // REFCOUNT, not this surface's ticket — the surface that started the loop
-    // is not necessarily the last one to unmount, and a first-unmounted owner
-    // must not be the reason a tick keeps firing.
+    // is not necessarily the last to unmount.
     if (references > 0) return
     activeTicket = undefined
     if (handle !== undefined) {
@@ -608,9 +591,8 @@ export function startPanelAutoRefresh(
  * Drop every live reference and halt the loop without a timer.
  *
  * Exported for tests only: the loop's state is module-level on purpose (two
- * surfaces, one upstream poll), so a test that mounts a surface must be able
- * to start from a clean slate. Production code releases through the disposer
- * {@link startPanelAutoRefresh} returns — the plugin's fiber unwinds it.
+ * surfaces, one upstream poll). Production code releases through the disposer
+ * {@link startPanelAutoRefresh} returns.
  */
 export function resetPanelAutoRefresh(): void {
   references = 0

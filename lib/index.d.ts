@@ -7,7 +7,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.65.2";
+declare const COMMAND_CODE_CLI_VERSION = "1.66.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
@@ -93,8 +93,6 @@ interface CommandCodeConnectionOptions {
    * `CMD_ZDR=1`). Default false. Every chat request carries the header when
    * enabled. The provider refuses a model without a ZDR-capable upstream with
    * 422 `cmd_zdr_no_providers`; never retry that request without the header.
-   * The decision endpoint (`/provider/v1/systemone`) is deliberately never
-   * reached through this connection option — see `./systemone.ts`.
    */
   zdr?: boolean;
 }
@@ -110,12 +108,11 @@ type ResolveAttachments = () => AttachmentStore | undefined;
  * `invalid-credential` are the three the pool records as marks; `unavailable`
  * is an account-scoped rejection that must NOT become a mark — the account's
  * key is valid and its windows may be open, the ACCOUNT just cannot serve THIS
- * request (no credits, a model outside its plan) — so the pool moves on
- * without remembering anything.
+ * request — so the pool moves on without remembering anything.
  *
  * The window/throttle split decides what the pool may CLAIM, never whether it
- * rotates: both leave rotation and mark the key, but only a named window lets
- * the pool report an exhausted usage window (issue #54).
+ * rotates (issue #54); the evidence that separates them is in
+ * {@link classifyAccountRejection}.
  */
 type AccountRotationReason = 'rate-limit' | 'throttled' | 'invalid-credential' | 'unavailable';
 /** What the rotation hook knows about the request it is rotating within. */
@@ -149,11 +146,10 @@ interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = Comman
    * with several accounts a rejection that does not mark the key (a plan or
    * balance rejection is model-specific, not account-fatal) would otherwise
    * re-offer the same account on every attempt and the pool could never reach
-   * the accounts behind it.
-   *
-   * `rotation.resetAtMs` carries the provider's own reset time when the
-   * rejection body published one, so the host can hold the key out until then
-   * instead of waiting for a billing probe to learn the same fact.
+   * the accounts behind it. `rotation.resetAtMs` carries the provider's own
+   * reset time when the rejection body published one, so the host can hold the
+   * key out until then instead of waiting for a billing probe to learn the
+   * same fact.
    */
   rotateApiKey?: (rejectedKey: string, rejection: AccountRotationReason, connection: C, model?: string, rotation?: AccountRotationContext) => Promise<string | undefined>;
   /**
@@ -298,13 +294,13 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * unbounded loop): `RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`/
    * `EMPTY_RESPONSE` retry up to 1000 times with waits doubling from 500 ms
    * and capping at 15 minutes (±10% jitter), so an exhausted 5-hour window
-   * recovers in-session instead of failing after two tries. Permanent
-   * failures (an invalid key's `INVALID_CREDENTIAL`, `UNSUPPORTED_CONTENT`,
-   * plan rejections) are absent from the whitelist and surface immediately
-   * instead of looping. Waits the pool/adapter attach as
-   * `providerRetryAfterMs` are honored verbatim at or below the 15-minute
-   * cap and never attached above it (in normal mode a longer attached wait
-   * makes the executor abandon the retry outright — see RETRY_MAX_DELAY_MS).
+   * recovers in-session instead of failing after two tries. Permanent failures
+   * (an invalid key's `INVALID_CREDENTIAL`, `UNSUPPORTED_CONTENT`, plan
+   * rejections) are absent from the whitelist and surface immediately instead
+   * of looping. Waits the pool/adapter attach as `providerRetryAfterMs` are
+   * honored verbatim at or below the 15-minute cap and never attached above it
+   * (in normal mode a longer attached wait makes the executor abandon the
+   * retry outright — see RETRY_MAX_DELAY_MS).
    *
    * Captured once at route registration (dsh-llm snapshots this value), so a
    * future config knob for it would apply on profile restart, not per request.
@@ -318,12 +314,8 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * session reports far less context than it is actually carrying. The price is
    * computed at the dimensions this route would send (the same request target
    * `readImageRequest` encodes to), so the estimate tracks the wire rather than
-   * the stored original.
-   *
-   * Both payload generations are handled, because they disagree: ≤0.1.5 hands
-   * over bare `ImageAttachmentRef`s, ≥0.1.6 hands over `ImageBlock`s that also
-   * carry the surface's `offloaded` mark. Returning a price per occurrence, in
-   * order, is a hard requirement — the meter throws when the counts differ.
+   * the stored original. One price per occurrence, in order, is a hard
+   * requirement — the meter throws when the counts differ.
    */
   imageRequestPricing(_provider: string, model: string): LlmImageRequestPricing | undefined;
   /** Refresh the catalog (live fetch, cache fallback) and return it. */
@@ -336,10 +328,10 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   private accountHeaders;
   /**
    * Fetch one account endpoint and parse its JSON body. Returns the HTTP
-   * status alongside the parsed record so each caller applies its own
-   * failure accounting: the billing probe fails open silently, the usage
-   * report books failures per endpoint. Non-2xx and invalid JSON bodies come
-   * back without a record; only a fetch failure propagates to the caller.
+   * status alongside the parsed record so each caller applies its own failure
+   * accounting: the billing probe fails open silently, the usage report books
+   * failures per endpoint. Non-2xx and invalid JSON bodies come back without a
+   * record; only a fetch failure propagates to the caller.
    *
    * `timeoutMs` is the caller's budget for this one request. The default is the
    * CATALOG probe's short cap, which fits the picker's fail-open reads; the
@@ -354,9 +346,6 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * per picker load). `undefined` means the filter cannot be evaluated at all
    * — no key resolved — which {@link modelVisibleForAnyAccount} reads as
    * "show everything".
-   *
-   * The serving account is only the first entry: with several accounts the
-   * model list must not depend on which of them rotation happens to be using.
    */
   private loadPoolBillingAccess;
   /**
@@ -401,10 +390,9 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * but a hard refusal. `/alpha/generate` routes every one of them, so this
    * costs nothing.
    *
-   * That decision is deliberately NOT written to `protocolCache`. The cache is
-   * keyed by API key alone, so remembering it would pin the whole ACCOUNT to
-   * the CLI transport and drag every other model — DeepSeek, GLM, Qwen, all of
-   * which the Provider API serves correctly — off it until the entry expired.
+   * That decision is deliberately NOT written to `protocolCache`, which is
+   * keyed by API key alone: remembering it would pin the whole ACCOUNT to the
+   * CLI transport and drag every other model off it until the entry expired.
    */
   private resolveProtocol;
   /**
@@ -418,18 +406,14 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * the default resolves the currently active account.
    *
    * Two failure modes are NOT "the network is down", and the report must say
-   * so rather than let {@link classifyTotalFailure} blame the connection:
-   *
-   *  - A key that no HTTP header can carry (a stray newline from a paste, a
-   *    full-width character) makes `fetch` throw a `TypeError` **before any
-   *    I/O**, for every endpoint at once. The chat path refuses such a key
-   *    through `assertUsableApiKey`; this path must too, and it answers
-   *    `blocked: 'invalid-key'` instead of four phantom transport failures.
-   *  - The four endpoints get the SAME per-request budget as a chat call
-   *    (`connection.requestTimeoutMs`, default 60 s), not the catalog's 10 s
-   *    probe budget: on a slow link a 10 s cap made every account query time
-   *    out while chat kept working, which is exactly a "check your network"
-   *    banner that never clears.
+   * so rather than let {@link classifyTotalFailure} blame the connection: a
+   * key that no HTTP header can carry (a stray newline from a paste, a
+   * full-width character) makes `fetch` throw a `TypeError` before any I/O,
+   * for every endpoint at once, so this path runs `assertUsableApiKey` too and
+   * answers `blocked: 'invalid-key'`; and the four endpoints get the SAME
+   * per-request budget as a chat call (`connection.requestTimeoutMs`, default
+   * 60 s), not the catalog's 10 s probe budget, because on a slow link a 10 s
+   * cap made every account query time out while chat kept working.
    */
   getUsage(apiKey?: string): Promise<CommandCodeUsageReport>;
   /**
@@ -443,17 +427,16 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * the same time (the two are metered separately), and reading only the
    * shorter one revived such an account as "usable" — the pool then handed it
    * out, the provider rejected the request again, and the next all-marked pass
-   * revived it once more, so a used-up account kept coming back (issue #51's
-   * follow-up: "切到一个不可用账号"). `exceeded` is therefore true when ANY
-   * published window is exceeded, and `resetAt` is the LATEST reset among the
-   * exceeded ones — the binding constraint, because a clear five-hour window
-   * buys nothing while the weekly quota is spent.
+   * revived it once more (issue #51's follow-up: "切到一个不可用账号").
+   * `exceeded` is therefore true when ANY published window is exceeded, and
+   * `resetAt` is the LATEST reset among the exceeded ones — the binding
+   * constraint, because a clear five-hour window buys nothing while the weekly
+   * quota is spent.
    *
    * Returns `undefined` when the probe itself failed (transport, non-200, or a
    * payload with no window limits at all) — a failed probe never changes pool
-   * state. The monthly/purchased/free credit balances are deliberately NOT part
-   * of this answer: they are balances rather than windows, they carry no reset
-   * time, and the server remains the final gate on them.
+   * state. The credit balances are deliberately NOT part of this answer: they
+   * carry no reset time, and the server remains the final gate on them.
    */
   probeWindowLimits(apiKey: string): Promise<{
     exceeded: boolean;
@@ -486,18 +469,17 @@ interface CommandCodeAccountSlot {
   allowAuthFile: boolean;
 }
 /**
- * Why a key stopped serving requests.
+ * Why a key stopped serving requests, split by EVIDENCE — what the pool may
+ * claim about it — rather than by what it does.
  *
  * `rate-limit` is a USAGE-WINDOW rejection: the provider named one of its
  * metered windows (`error.rateLimit.window`, or a message saying the plan's
  * usage limit was reached — the only two shapes the official CLI's own
- * `parseWindowLimitError`/`resolveWindowLabel` accept). `throttled` is the
- * plain 429: the provider refused the request without saying anything about a
- * window, so the key leaves rotation for now but the pool must not describe it
- * as an exhausted window. Collapsing the two is issue #54: the reporter's
- * account panel showed the five-hour window at 2% and the weekly one at 10%
- * while the turn failed with "all 1 Command Code account(s) have exhausted
- * their usage window".
+ * `parseWindowLimitError`/`resolveWindowLabel` accept). `throttled` is the plain
+ * 429: the key leaves rotation for now, but the provider said nothing about a
+ * window, so the pool must not describe one as exhausted. Collapsing the two is
+ * issue #54: a bare 429 was reported as a spent window while the account card
+ * showed both windows barely used.
  */
 type AccountRejection = 'rate-limit' | 'throttled' | 'invalid-credential';
 /** One key's rotation state. */
@@ -510,11 +492,11 @@ interface CommandCodeAccountState {
   /** Marked by a 401: skipped until the stored credential changes. */
   'disabled';
   /**
-   * The evidence behind the mark — what the pool may CLAIM when it reports
-   * that no account can serve. `window`: the provider named a usage window, or
-   * a `/alpha/billing/credits` probe read one as exceeded. `throttle`: a 429
-   * that said nothing about a window (a burst limiter, or a model- or
-   * spend-level limit the billing endpoint cannot show). `auth`: a 401.
+   * The evidence behind the mark — what the pool may CLAIM when it reports that
+   * no account can serve. `window`: the provider named a usage window, or a
+   * `/alpha/billing/credits` probe read one as exceeded. `throttle`: a 429 that
+   * said nothing about a window (a burst limiter, or a model-/spend-level limit
+   * the billing endpoint cannot show). `auth`: a 401.
    */
   cause: 'window' | 'throttle' | 'auth';
   /** Human-readable reason for the mark (e.g. `rate limited (429)`). */
@@ -547,43 +529,34 @@ interface CommandCodeAccountPoolDeps {
   resolveRef(ref: CredentialRef): Promise<string | undefined>;
   /** The official CLI auth-file key (`~/.commandcode/auth.json`); default slot only. */
   authFileKey(): string | undefined;
-  /**
-   * Probe one key's usage windows — BOTH windows the endpoint publishes (the
-   * five-hour and the weekly one), not just the five-hour one; see
-   * {@link AccountWindowProbe}. Undefined when the probe itself failed.
-   */
+  /** Probe one key's usage windows (BOTH windows the endpoint publishes); undefined when it failed. */
   probeWindow(apiKey: string): Promise<AccountWindowProbe | undefined>;
   /**
-   * The manually selected account (a slot id, e.g. `default` or an extra's
-   * credential reference), re-read per resolution. The preferred account
-   * serves whenever it is usable; an unknown id or an exhausted preferred
-   * account falls back to the first usable slot — and an exhausted one is
-   * re-probed on the way (see {@link CommandCodeAccountPool.resolveKey}), so
-   * the fallback lasts only as long as the window really is exceeded.
+   * The manually selected account slot id, re-read per resolution. It serves
+   * whenever it is usable; an unknown id or an exhausted preferred account falls
+   * back to the first usable slot — and an exhausted one is re-probed on the way
+   * (see {@link CommandCodeAccountPool.resolveKey}), so the fallback lasts only
+   * as long as the window really is exceeded.
    */
   preferredId?(): string | undefined;
   /**
    * Model → account routing rules, re-read per resolution so settings changes
-   * apply live. Each rule lists catalog model ids (see
-   * {@link CommandCodeModelAccountRule}) to an account slot id. When the
-   * request's model matches a rule and that account is usable, it serves
-   * before the preferred/rotation selection; an unusable routed account falls
-   * back to the normal selection (the router is a hint, never a hard gate).
+   * apply live. A matching, usable routed account serves before the
+   * preferred/rotation selection; an unusable one falls back to the normal
+   * selection — the router is a hint, never a hard gate.
    */
   modelAccountRules?(): readonly CommandCodeModelAccountRule[];
   /**
-   * Clock seam for the explicit-account probe throttle. Tests drive it so the
-   * "the interval elapsed, probe again" half of
-   * {@link CommandCodeAccountPool.canProbeExplicit} is reachable without
-   * waiting a real minute; production reads `Date.now()`.
+   * Clock seam for the explicit-account probe throttle, so the "the interval
+   * elapsed" half of {@link CommandCodeAccountPool.canProbeExplicit} is testable
+   * without waiting a real minute. Production reads `Date.now()`.
    */
   now?(): number;
 }
 /**
  * One "route these models to that account" rule. `models` lists catalog ids
- * (`deepseek/deepseek-v4-pro`, …); `account` is a slot id (`default` or an
- * extra account's credential reference). A request whose model id is in the
- * list routes to that account. The first matching rule in list order wins.
+ * (`deepseek/deepseek-v4-pro`, …); `account` is a slot id (`default` or an extra
+ * account's credential reference). The first matching rule in list order wins.
  */
 interface CommandCodeModelAccountRule {
   /** Catalog model ids to match against the request's model. */
@@ -599,10 +572,10 @@ interface CommandCodeModelAccountRule {
  */
 declare function accountUsable(state: CommandCodeAccountState | undefined): boolean;
 /**
- * Pick the account that should serve now: the manually preferred slot when it
- * is usable, otherwise the first usable account in rotation order; undefined
- * when no account is usable. Shared by the pool (request path) and the plugin
- * entry (the usage view's active badge) so both always agree.
+ * Pick the account that should serve now: the manually preferred slot when it is
+ * usable, otherwise the first usable account in rotation order; undefined when
+ * no account is usable. Shared by the pool (request path) and the plugin entry
+ * (the usage view's active badge) so both always agree.
  */
 declare function selectActiveAccount(accounts: readonly ResolvedAccount[], preferredId: string | undefined): ResolvedAccount | undefined;
 /**
@@ -643,27 +616,26 @@ declare class CommandCodeAccountPool {
    */
   describeAccounts(): Promise<ResolvedAccount[]>;
   /**
-   * Hand out the key for a request: the model-routed account when the
-   * request's model matches a rule (and that account is usable), else the
-   * manually preferred account when usable, else the first usable account in
-   * rotation order. Returns `undefined` when no account resolves any key at
-   * all (the caller then reports the missing credential). Throws
-   * `RATE_LIMIT` — naming the earliest window reset — or
-   * `INVALID_CREDENTIAL` when accounts exist but none can serve.
+   * Hand out the key for a request: the model-routed account when the request's
+   * model matches a rule (and that account is usable), else the manually
+   * preferred account when usable, else the first usable account in rotation
+   * order. Returns `undefined` when no account resolves any key at all, or when
+   * an account this request already used is still UNMARKED — that rejection is
+   * the honest answer, so the caller's own rejection surfaces as itself. Throws
+   * `RATE_LIMIT` (naming the earliest window reset) or `INVALID_CREDENTIAL`
+   * when accounts exist but every one of them is marked.
    *
    * `options.model` is the request's model id; routing rules re-read per
-   * resolution, so a settings change applies live.
+   * resolution, so a settings change applies live. `options.tried` lists the
+   * keys this request has already used — the just-rejected one included — and
+   * they are removed from the resolution entirely, which is what lets one
+   * request walk a four-account pool: a rejection that does not mark the key
+   * (no credits, a model outside the account's plan) would otherwise be offered
+   * again on every attempt and the accounts behind it never reached.
    *
-   * `options.tried` lists the keys this request has already used — the
-   * just-rejected one included. They are removed from the resolution entirely,
-   * which is what lets one request walk a four-account pool: an account-scoped
-   * rejection that does not mark the key (no credits, a model outside the
-   * account's plan) would otherwise be offered again on every attempt, and the
-   * accounts behind it would never be reached.
-   *
-   * An explicit selection (the pin or a model rule) that a rate-limit mark
-   * would demote is probed before the fallback serves, so "falls back while
-   * exhausted" never becomes "stays demoted until the process restarts".
+   * An explicit selection (the pin or a model rule) that a rate-limit mark would
+   * demote is probed before the fallback serves, so "falls back while exhausted"
+   * never becomes "stays demoted until the process restarts" (issue #51).
    */
   resolveKey(options?: {
     tried?: readonly string[];
@@ -673,53 +645,46 @@ declare class CommandCodeAccountPool {
     slot: CommandCodeAccountSlot;
   } | undefined>;
   /**
-   * Record a rejection against one key. `rate-limit` marks the key's usage
-   * WINDOW exhausted — as a `cooldown` until `resetAtMs` when the rejection
-   * body named the provider's own reset time, otherwise as an `unknown` mark
-   * whose window is probed lazily. `throttled` (the plain 429 that named no
-   * window) marks the key with the `throttle` cause instead: it leaves rotation
-   * exactly like a window mark does, but the pool's own diagnosis keeps saying
-   * "rate limited" rather than inventing an exhausted window. A 401
-   * (`invalid-credential`) disables the key until the stored credential
+   * Record a rejection against one key. A `throttled` rejection (the plain 429
+   * that named no window) marks the key with the `throttle` cause, leaving
+   * rotation exactly like a window mark but keeping the pool's own diagnosis at
+   * "rate limited" rather than inventing an exhausted window. `rate-limit`
+   * marks a `cooldown` until `resetAtMs` when the body named the provider's own
+   * reset, otherwise an `unknown` mark whose window is probed lazily.
+   * `invalid-credential` (401) disables the key until the stored credential
    * changes.
    *
-   * `resetAtMs` is seconds-to-millis converted by the adapter from the
-   * provider's `error.rateLimit.reset`: knowing the real reset immediately is
-   * what keeps an exhausted account out of rotation for exactly as long as the
-   * provider said. It only applies to a window mark; a plain throttle keeps the
-   * window unknown on purpose, so a probe can still find out.
+   * `resetAtMs` is seconds-to-millis converted by the adapter from
+   * `error.rateLimit.reset`; it applies to a window mark only. A plain throttle
+   * keeps its window unknown on purpose, so a probe can still find out.
    */
   markRejected(apiKey: string, rejection: AccountRejection, resetAtMs?: number): void;
   /**
    * One account's key: literal → credential seam → auth file (default slot).
    *
    * Every source is normalized here, at the single point where a slot's key
-   * enters the pool. The adapter sends the key through the harness's
-   * `assertUsableApiKey()`, which trims it — a stored key from the credentials
-   * seam, a `.env` line, or a shell export all pick up surrounding whitespace
-   * — and reports that trimmed form back to `markRejected()`. Returning the
-   * raw value would file every 429/401 mark under a key no later lookup can
-   * find: rotation would re-offer the same account, the account card would show
-   * no mark, and the usage endpoints would 401 while chat kept working.
-   * Normalizing once makes resolution, probing, marking, and the request path
-   * agree on one string.
+   * enters the pool. The adapter sends the key through
+   * `assertUsableApiKey()`, which trims it, and reports that trimmed form back
+   * to {@link markRejected}: returning the raw value would file every 429/401
+   * mark under a key no later lookup can find — rotation would re-offer the same
+   * account, the account card would show no mark, and the usage endpoints would
+   * 401 while chat kept working.
    */
   private resolveSlotKey;
   /**
-   * The account the user explicitly asked for: the slot a model rule routes
-   * the request to when that id exists among the resolved slots, else the
-   * manually pinned slot. Consulted only on the fallback path — a usable
-   * routed account already returned above — so unlike
-   * {@link selectAccountForModel} it does NOT require the account to be
-   * usable, which is exactly what {@link resolveKey} re-probes.
+   * The account the user explicitly asked for: the slot a model rule routes the
+   * request to when that id exists among the resolved slots, else the manually
+   * pinned slot. Consulted only on the fallback path, so — unlike
+   * {@link selectAccountForModel} — it does NOT require the account to be usable,
+   * which is exactly what {@link resolveKey} re-probes.
    */
   private explicitAccount;
   /**
    * Whether an explicitly selected account's mark is due for a window probe.
    * Only an `unknown` mark (a 429 whose reset was never learned) is worth
-   * re-probing: a `cooldown` already carries its reset time and expires by
-   * itself, and a `disabled` (401) key stays out until the stored credential
-   * changes. The interval bounds a probe endpoint that keeps failing.
+   * re-probing: a `cooldown` carries its reset and expires by itself, and a
+   * `disabled` (401) key stays out until the stored credential changes. The
+   * interval bounds a probe endpoint that keeps failing.
    */
   private canProbeExplicit;
   /** The clock the probe throttle reads; injected so a test can travel in time. */
@@ -727,8 +692,8 @@ declare class CommandCodeAccountPool {
   /**
    * Probe one explicitly selected account's window and apply the answer. A
    * window that is no longer exceeded drops the mark, so the user's own
-   * selection serves again on this very request. An exceeded one is stamped
-   * as a cooldown carrying the provider's reset time, after which
+   * selection serves again on this very request; an exceeded one is stamped as
+   * a cooldown carrying the provider's reset time, after which
    * {@link accountUsable} lets the account back in with no further probe. A
    * probe that fails changes nothing: the mark stays `unknown` and the next
    * attempt waits out the interval.
@@ -738,34 +703,18 @@ declare class CommandCodeAccountPool {
   private pick;
 }
 //#endregion
-//#region src/command-guard.d.ts
-/**
- * The auto-approve strictness a user picks (`Config.commandGuardLevel`). Each
- * level is the probability every verdict must reach before the guard grants
- * `allowed-once`; a higher level approves less, on stronger evidence. Three
- * presets replace a free-form probability because the useful range is narrow
- * and a hand-typed 0.6 silently turns the guard into a rubber stamp.
- */
-type CommandGuardLevel = 'high' | 'medium' | 'low';
-//#endregion
 //#region src/capabilities.d.ts
 /**
  * Static capability snapshot for the Command Code provider: model →
  * reasoning-effort levels, vision/thinking flags, model → minimum plan tier,
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
- * Everything in this module is synced from official sources (the command-code
- * CLI bundle's model table and the official plan/pricing/model docs — see the
- * dsh-commandcode-upstream skill for the exact extraction procedures), and
- * changes whenever an upstream CLI release reshuffles models/plans/prices.
- * Keeping the snapshot in its own module confines those frequent sync diffs
- * here: src/adapter.ts holds only the stable wire/runtime logic and imports
- * these tables + read helpers.
- *
- * Snapshot read helpers (planLabel, dealLabel, formatContext,
- * capabilityDescription, peakPricing*, compareByPlan, modelVisibleInPlan,
- * subscriptionPlanInfo, isFreeModel) live here too — they exist only to read
- * the tables, so a sync never has to touch src/adapter.ts.
+ * Everything here is synced from official sources — the command-code CLI
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.66.0) and
+ * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
+ * for the extraction procedures. Keeping the snapshot in its own module
+ * confines those frequent sync diffs here: src/adapter.ts holds only the stable
+ * wire/runtime logic. The read helpers live here too, for the same reason.
  *
  * Ported from pi-commandcode-provider (MIT); originally part of src/adapter.ts
  * and split out so upstream syncs stay reviewable.
@@ -789,20 +738,22 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.65.2` `dist/cli.mjs`, unchanged from 1.65.0:
- * `modelSupportsZdr(id)` is exactly `!nonZdrSet.has(canonicalize(id))`, and
- * `knownModelSupportsZdr`
- * carries the same membership in the sibling route table — the union is this
- * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
- * — "99% of our models have ZDR-capable upstreams … only a small handful of
- * models are affected" — so the CLI's exclusion list is the only per-model
- * evidence there is; a ZDR request naming one of these fails with HTTP 422
- * `cmd_zdr_no_providers` instead of routing through a provider that retains.
+ * registry (`command-code@1.66.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
+ * carries the same membership in the sibling route table — the UNION of both
+ * is this set. Reading only the sibling route table would drop `meituan/
+ * LongCat-2.0` and `stealth/pixel-canary`, which each appear in
+ * `modelSupportsZdr` alone. The official docs (commandcode.ai/docs/resources/
+ * zdr) put it in prose — "99% of our models have ZDR-capable upstreams … only
+ * a small handful of models are affected" — so the CLI's exclusion list is
+ * the only per-model evidence there is; a ZDR request naming one of these
+ * fails with HTTP 422 `cmd_zdr_no_providers` instead of routing through a
+ * provider that retains.
  *
  * Why a NEGATIVE set, and why "not listed" answers TRUE: 99% of the catalog is
  * covered, so the maintained difference is the exception list. This helper is
  * informational; the adapter sends the ZDR header for EVERY request when the
- * switch is on. The provider remains the routing authority and refuses an
+ * switch is on — the provider remains the routing authority and refuses an
  * unsupported model rather than silently dropping the privacy guarantee.
  *
  * `minimax/minimax-m3-free` is the one entry the public catalog
@@ -813,16 +764,9 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * Keep in sync via the dsh-commandcode-upstream skill: the CLI's registry data
  * (its `zdr:{only:[…]}` provider routes and the per-provider `zdr`/`noTraining`
  * flags) is upstream-internal routing, not a per-model contract, so this table
- * is the snapshot of the exclusion set and nothing more. The 1.62.0 → 1.64.0
- * diff of that union is EMPTY: both anchors were extracted from both bundles
- * during the 2026-09-23 check and each carries the same 20 members — which is
- * how rare a change here is expected to be. The 1.64.0 → 1.65.0 diff (2026-09-24)
- * is the counterexample that proves the check still runs: exactly one member
- * joins (`stealth/space-bunny-alpha`), and it is in both anchors. `meituan/
- * LongCat-2.0` is the one member the two anchors disagree about (it is in
- * `modelSupportsZdr`'s set in both releases and in neither `knownModelSupportsZdr`
- * set), so the union is
- * what this table follows; reading only the sibling route table would drop it.
+ * is the snapshot of the exclusion set and nothing more. It is a rare change:
+ * 20 members held across 1.62.0 → 1.64.0, and 1.65.0 and 1.66.0 each added
+ * exactly one (the two stealth-preview models below).
  */
 declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
 /**
@@ -832,65 +776,30 @@ declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
  */
 declare function supportsZeroDataRetention(modelId: string): boolean;
 /**
- * Models the official CLI's model table (command-code@1.53.0) marks
- * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
- * think automatically, with Command Code driving the depth. This is the
- * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
- * mirrors the CLI's effort map exactly) stays the sole source for selectable
- * effort levels, and this snapshot is not surfaced in the picker's compact
- * description — it exists for programmatic consumers.
+ * Models the official CLI's model table marks `reasoning:!0` but defines no
+ * selectable `reasoning_effort` levels — they think automatically, with
+ * Command Code driving the depth. `KNOWN_EFFORTS` (which mirrors the CLI's
+ * effort map exactly) stays the sole source for selectable effort levels, and
+ * this snapshot is not surfaced in the picker's compact description — it exists
+ * for programmatic consumers.
  *
- * Source: the command-code@1.53.0 bundled model table (dist/cli.mjs),
- * cross-checked with https://commandcode.ai/docs/reference/cli/models.
- * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
- * selectable `['low', 'high', 'max']` efforts; the preview then ended in
- * 1.34.0, removing the model from the catalog entirely. `tencent/hy4-preview`
- * joined this set in command-code@1.37.0 — reasoning:!0, no efforts, 1M
- * context, routed through OpenRouter — then gained selectable
- * `['low', 'medium', 'high']` efforts in command-code@1.38.0 and moved to
- * `KNOWN_EFFORTS`. `moonshotai/Kimi-K3` followed the same path in
- * command-code@1.39.3 — it gained `['low', 'high', 'max']` efforts and moved
- * to `KNOWN_EFFORTS`. command-code@1.42.0 added LongCat 2.0 (then
- * `meituan/LongCat-2.0:free`, now the paid `meituan/LongCat-2.0`; reasoning:!0,
- * no efforts). command-code@1.45.0 gave the Muse Spark family
- * (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) selectable
- * `['low', 'medium', 'high', 'xhigh']` efforts — they moved to `KNOWN_EFFORTS`.
- * command-code@1.51.3 gave `MiniMaxAI/MiniMax-M3` selectable
- * `['low', 'medium', 'high']` efforts — it moved to `KNOWN_EFFORTS` too.
- * command-code@1.52.0 added `inclusionai/ling-3.0-flash-sante:free`
- * (reasoning:!0, no efforts).)
- * command-code@1.53.0 added `deepseek/deepseek-v4.1-flash` with selectable
- * ['low', 'high', 'max'] efforts, so it lives in `KNOWN_EFFORTS`, not here.)
- * Keep in sync via the dsh-commandcode-upstream skill.
+ * Source: the bundled model table (dist/cli.mjs), cross-checked with
+ * https://commandcode.ai/docs/reference/cli/models. Keep in sync via the
+ * dsh-commandcode-upstream skill; a model that GAINS selectable efforts leaves
+ * this set for `KNOWN_EFFORTS` (Tencent Hy4 Preview, Kimi K3, the Muse Spark
+ * family and MiniMax M3 all took that path).
  */
 declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
 /**
  * The minimum subscription plan a model is included in, per the official plan
- * pages (`/docs/plans/go`, `/docs/plans/goat`, `/docs/plans/pro`, `/docs/plans/max`
- * and `/docs/resources/pricing-limits`). Each plan's model list is a superset of
- * the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max. Models absent from every
- * plan list (Claude Opus/Fable, Fugu Ultra) are Provider-tier.
- * `claude-fable-5-1` (Claude Fable 5.1, added in command-code@1.40.0) is
- * Provider/Max-tier exactly like `claude-fable-5` — its availability matrix on
- * the official plan/pricing pages grants individual-provider/max/ultra and
- * teams-pro only, and the CLI's plan-access map blocks it on Go/GOAT/Pro.
- * command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` (Go) and 1.42.0 added
- * LongCat 2.0 (Go — a free promo until 2026-09-19, when the backend renamed
- * `meituan/LongCat-2.0:free` to the paid `meituan/LongCat-2.0`); 1.43.0 added
- * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
- * (GOAT) plus its Contributor sibling (Go); command-code@1.52.0 added the
- * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
- * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
- * `Qwen/Qwen3.8-Omni-Flash` (Go); command-code@1.57.0 added
- * `z-ai/glm-5.3-flashx` (Go); command-code@1.59.0 added `xai/grok-4.7` (GOAT)
- * and 1.60.0 added `stepfun/Step-5-Preview` (Go); command-code@1.62.0 added the
- * MiMo V2.6 family — `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (Go) and
- * `xiaomi/mimo-v2.6-pro-ultraspeed` (GOAT) — so the 1.58.0 -> 1.62.0 window's
- * only tier changes are additions and the superset chain still holds. The
- * 1.62.0 -> 1.65.0 window continues the pattern: 1.64.0 added
- * `claude-opus-5-5` (Provider/Max), `gpt-6-sol` (Pro) and `gpt-6-luna` (Go),
- * and 1.65.0 added `stealth/space-bunny-alpha` (Go, every tier) — additions
- * only, no tier moves.
+ * pages (`/docs/plans/go`, `/docs/plans/goat`, `/docs/plans/pro`,
+ * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
+ * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
+ * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
+ * Provider-tier. Re-verified at command-code@1.66.0 (2026-09-27): 82 catalog
+ * ids at 52/60/74/82 cumulative, a strict superset chain — every release since
+ * 1.49.0 has been additive with no tier move, and per-entry tags below name the
+ * release that added each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -922,11 +831,11 @@ declare function compareByPlan(a: {
 }): number;
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (located by the `"individual-go"` key in command-code@1.53.0 `dist/cli.mjs`,
- * re-verified unchanged through 1.53.0): subscription `planId`
- * prefix → display name and the plan's monthly credit total. This is the
- * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
- * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
+ * (located by the `"individual-go"` key in `dist/cli.mjs`, re-verified unchanged
+ * through command-code@1.66.0): subscription `planId` prefix → display name and
+ * the plan's monthly credit total. This is the account's own subscription
+ * (from `/alpha/billing/subscriptions`) — distinct from {@link KNOWN_PLANS},
+ * which maps catalog models to their minimum tier.
  *
  * `tierWeight` is plugin-added (not from the CLI maps): the plan's rank on
  * the {@link PLAN_ORDER} scale, used by the picker's plan filter
@@ -982,8 +891,13 @@ declare function modelVisibleInPlan(modelId: string, access: CommandCodeBillingA
  *   render time against `Date.now()`), the deal label is hidden until the
  *   snapshot is refreshed from the official page. `undefined` means
  *   "no expiry" (permanent).
- * - `free` marks models whose requests cost no credits (Laguna S 2.1), shown
- *   as a `FREE` badge; it degrades to a plain discount once the deal lapses.
+ * - `free` marks models whose requests cost no credits, shown as a `FREE`
+ *   badge; it degrades to a plain discount once the deal lapses.
+ *
+ * A deal whose promo ENDS is removed here rather than left to lapse on
+ * `expiresAt`: the pricing page drops the entry, so a lapsed row would badge a
+ * model the catalog now serves at full price (Grok 4.7 reverts to $2.00 in /
+ * $6.00 out after its 2026-09-27 window).
  *
  * Keep in sync with the official pricing page when deals change (see the
  * dsh-commandcode-upstream skill).
@@ -1003,24 +917,11 @@ declare const KNOWN_DEALS: Readonly<Record<string, KnownDeal>>;
  * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h per
  * weekday, full price) **Monday to Friday only**; the other 17 hours of a
  * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
- * The V4 Flash Vision (exp) variant (command-code@1.32.0) shares the V4 Flash
- * rates exactly — $0.15/$0.60 off-peak and $0.30/$1.20 peak, per the page's own
- * `timeOfDay` block, not merely 2× its own off-peak figures: a rate that is
- * internally consistent can still be the wrong row, which is why the vendored
- * price table (`./model-prices.ts`) is synced from the page and not hand-kept.
- * The picker shows the
- * *current* state as a compact
- * label (`Peak`/`Half`) matching the English noun style of the other markers
- * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
- * model right now is cheap or expensive.
- *
- * Authoritative extraction: the pricing page embeds a model JSON array whose
- * hourly-priced entries carry a `timeOfDay` block
- * (`{ windows: "01–04 & 06–10 UTC, Mon–Fri", peakHoursPerDay: 7,
- * offPeakHoursPerDay: 17, peak: {...}, offPeak: {...} }`). Exactly four models
- * carry it: V4 Pro, V4 Flash, V4 Flash Vision (exp), and V4.1 Flash (added in
- * command-code@1.53.0 at $0.15/$0.60 off-peak, $0.30/$1.20 peak — the same
- * schedule as the other three).
+ * Exactly four models carry the page's `timeOfDay` block (the four rows below).
+ * The picker shows the *current* state as a compact label (`Peak`/`Half`)
+ * matching the English noun style of the other markers (`Image`, `FREE`), so a
+ * developer can tell at a glance whether calling the model right now is cheap
+ * or expensive.
  *
  * Extraction caution: the rendered HTML rows are a trap. Each annotation div
  * sits inside its OWN row's container, immediately before the NEXT row starts,
@@ -1028,18 +929,19 @@ declare const KNOWN_DEALS: Readonly<Record<string, KnownDeal>>;
  * to the model printed after it — that is how `deepseek/deepseek-v4-flash-fast`
  * was wrongly added here (its row is flat-priced at $0.28/$0.56/$0.07 and has
  * no `timeOfDay` block). Trust the embedded JSON's `timeOfDay` membership and
- * the 2× price relation, never the flat-text neighbor.
+ * the 2× price relation, never the flat-text neighbor. A rate that is
+ * internally consistent can still be the wrong row (the V4 Flash Vision (exp)
+ * variant is priced from the page's own `timeOfDay` block, not from 2× its own
+ * off-peak figures), which is why the vendored price table
+ * (`./model-prices.ts`) is synced from the page and not hand-kept.
  *
  * Keep in sync with the official pricing page when the model set, the peak
  * windows, or the weekday rule change (see the dsh-commandcode-upstream skill).
  */
 declare const KNOWN_PEAK_PRICING: ReadonlySet<string>;
 /**
- * Whether `now` (defaults to `Date.now()`) falls in a peak-pricing window for
- * time-of-day-priced models. Peak rates apply Monday–Friday (UTC) only: the
- * official rule charges Saturday and Sunday completely off-peak for all 24
- * hours, so a weekend timestamp is off-peak even inside `PEAK_HOUR_RANGES`.
- * `undefined` for models outside the snapshot.
+ * As {@link isPeakPricingHour}, plus the {@link KNOWN_PEAK_PRICING} membership
+ * test; `undefined` for models outside the snapshot.
  */
 declare function peakPricingState(modelId: string, now?: number): 'peak' | 'off-peak' | undefined;
 /**
@@ -1193,19 +1095,16 @@ interface CommandCodePriceTable {
 //#endregion
 //#region src/command-locales.d.ts
 /**
- * Locale copy for the `/commandcode` usage command and the friendly
- * image-gate error rewrite. Distinct from `./client/locales.ts` (the
- * settings-page namespace `settings.commandcode`): the command runs on the
- * Host and has no access to the client's `ctx.locale`, so the dictionaries
- * are exposed as plain constants for direct lookup; the resolver lives in
- * `pickCommandLocale()`. The image-gate wrapper also lives on the client
- * but is reached from a non-React path that has no `t` in scope, so the
- * same dictionaries serve both surfaces.
+ * zh/en copy for the Host-side `/commandcode` usage command, as plain
+ * constants: the command runs on the Host and has no access to the client's
+ * `ctx.locale`, so the active locale is resolved by `pickCommandLocale()` and
+ * the dictionaries are read by direct lookup. Distinct from
+ * `./client/locales.ts` (the settings-page `settings.commandcode` namespace).
  *
- * zh is the source of truth for the key set; en must carry the exact same
- * keys — a mismatch is a compile error at the lookup site.
+ * zh is the source of truth for the key set; `en` must carry exactly the same
+ * keys, which the `Record` type makes a compile error.
  */
-/** Active locale id recognized by the command and the image-gate wrapper. */
+/** Active locale id for the `/commandcode` command. */
 type LocaleId = 'zh' | 'en';
 //#endregion
 //#region src/commands.d.ts
@@ -1220,11 +1119,9 @@ interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions = Comman
    */
   reports?: () => Promise<CommandCodeAccountsReport>;
   /**
-   * Resolve the active locale for one command run. The plugin entry wires
-   * this from `Config.lang` and the shell's `LC_ALL`/`LANG`. Absent in
-   * programmatic setups (notably the existing test), the command renders
-   * with the default locale (`'zh'`) — historically the only language the
-   * command ever shipped in.
+   * Resolve the active locale for one command run; the plugin entry wires it
+   * from `Config.lang` and the shell's `LC_ALL`/`LANG`. Absent (notably in
+   * tests), the command renders with the default locale `'zh'`.
    */
   getLocale?: () => LocaleId;
 }
@@ -1286,9 +1183,9 @@ declare const loginStatusSchema: TypertSchema<CommandCodeLoginStatus>;
 /**
  * The browser-login face the usage service exposes (`commandcode/login*`).
  * Backed by the Host-half {@link !CommandCodeLoginFlow} when the plugin entry
- * wired one; absent, `status`/`cancel` degrade to the idle status while
- * `begin` rejects with a plain message (so the page's manual paste path
- * stays the fallback instead of hanging).
+ * wired one; absent, `status`/`cancel` degrade to the idle status and `begin`
+ * rejects with a plain message, so the page's manual paste path stays the
+ * fallback instead of hanging.
  */
 interface LoginFlowFacade {
   /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
@@ -1309,10 +1206,9 @@ interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = CommandC
    */
   reports?: () => Promise<CommandCodeAccountsReport>;
   /**
-   * Model-catalog source for the settings page's model editors (the
-   * routing-rule editor and the visible-models filter; wired by the plugin
-   * entry). Absent, the `models` endpoint answers an empty list — the page's
-   * editors degrade to the empty state.
+   * Model-catalog source for the settings page's model editors. Absent, the
+   * `models` endpoint answers an empty list — the page's editors degrade to
+   * the empty state.
    */
   listModels?: () => Promise<CommandCodeCatalog>;
   /**
@@ -1322,11 +1218,7 @@ interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = CommandC
    * only to stub it in a test.
    */
   prices?: () => CommandCodePriceTable;
-  /**
-   * The browser-login flow (wired by the plugin entry). Absent means the
-   * login endpoints answer `idle` / reject with a plain message — the page's
-   * manual paste path stays the fallback.
-   */
+  /** The browser-login flow (wired by the plugin entry); see {@link LoginFlowFacade}. */
   login?: LoginFlowFacade;
 }
 /**
@@ -1340,34 +1232,30 @@ declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = C
   private readonly deps;
   constructor(ctx: Context, deps: CommandCodeUsageDeps<C>);
   /**
-   * Account, usage, and credit state for the settings page's account card —
-   * one entry per pool account when the plugin entry wired `reports`, a
-   * single default-account entry otherwise. Degrades per endpoint like the
-   * `/commandcode` command (failures land in `report.failures`); throws
-   * `MISSING_CREDENTIAL` when no key resolves, which the Gateway folds into
-   * the failure branch the page renders as a hint.
+   * Account, usage, and credit state for the settings page's account card.
+   * Degrades per endpoint like the `/commandcode` command (failures land in
+   * `report.failures`); throws `MISSING_CREDENTIAL` when no key resolves, which
+   * the Gateway folds into the failure branch the page renders as a hint.
    */
   report(): Promise<CommandCodeAccountsReport>;
   /**
-   * The full model catalog for the settings page's model editors (the
-   * routing-rule editor and the visible-models filter). The browser never
-   * calls the Command Code API directly — the Host serves the catalog
-   * (already fetched/cached by the adapter) so models can be picked from
-   * the live list instead of typed by hand.
+   * The full model catalog for the settings page's model editors. The browser
+   * never calls the Command Code API directly — the Host serves the catalog
+   * (already fetched/cached by the adapter) so models can be picked from the
+   * live list instead of typed by hand.
    */
   models(): Promise<CommandCodeCatalog>;
   /**
    * The model price table the composer prices an in-progress session with.
-   * Static vendored data (the official pricing page's rates), served Host-side
-   * so the browser bundle never carries a copy that could drift from the
-   * snapshot, and so a price update reaches an open page without a rebuild.
+   * Static vendored data, served Host-side so the browser bundle never carries
+   * a copy that could drift from the snapshot, and so a price update reaches an
+   * open page without a rebuild.
    */
   prices(): Promise<CommandCodePriceTable>;
   /**
    * Start (or rejoin) a browser-login attempt and return its fresh status —
    * `waiting` carrying the Studio URL. Rejects when the flow cannot start
-   * (no free loopback port, disposed plugin); the Gateway folds the throw
-   * into the failure branch the page renders.
+   * (no free loopback port, disposed plugin).
    */
   loginBegin(targetRef?: string): Promise<CommandCodeLoginStatus>;
   /** Poll a login attempt's status. */
@@ -1469,16 +1357,15 @@ declare class CommandCodeLoginFlow {
    * asynchronously (`complete()`), and that window is open to a cancel or a
    * fresh `begin()`; the generation lets a late completion recognize that it
    * no longer owns the status face and stop instead of storing a credential
-   * the user cancelled and flipping the page back to success.
+   * the user cancelled.
    */
   private attemptSeq;
   /**
-   * The start currently binding a port, if any. Every `begin()` that arrives
-   * before it settles joins it: two independent starts would each bind their
-   * own loopback server, and only the LAST one is reachable by
-   * {@link CommandCodeLoginFlow.teardown} — the orphan keeps listening and
-   * answering `/callback` for the process's lifetime, and ten of them exhaust
-   * the port window so browser login dies until the Host restarts.
+   * The start currently binding a port, if any. Every `begin()` arriving before
+   * it settles joins it: two independent starts would each bind a loopback
+   * server, and only the LAST one is reachable by `teardown()` — the orphan
+   * keeps answering `/callback` for the process's lifetime, and ten of them
+   * exhaust the port window so browser login dies until the Host restarts.
    */
   private starting;
   /** A live attempt's destination; different rows may not rejoin it. */
@@ -1551,32 +1438,25 @@ declare class CommandCodeLoginFlow {
 declare const COMMANDCODE_SEARCH_PROVIDER_ID = "commandcode";
 /**
  * The factory-declared search provider id dsh ships by default (from
- * `dsh-base`'s cordis patch `web.config.searchProvider`). Kept as a
- * documented reference only: disabling this plugin's `webSearch` toggle
- * restores the previously selected backend (see
- * {@link applyCommandCodeSearchSelection}) — it never forces this default,
- * because forcing it is what used to silence sibling search plugins such as
- * modsearch even with Command Code search turned off (issue #26).
+ * `dsh-base`'s cordis patch `web.config.searchProvider`). A documented
+ * reference only: disabling this plugin's `webSearch` toggle restores the
+ * PREVIOUSLY selected backend, never this default (issue #26).
  */
 declare const DEFAULT_WEB_SEARCH_PROVIDER_ID = "deepseek-official";
 /**
  * Tracked web-search selection state for one mounted `WebRuntime`.
  *
- * `owner` marks whether this plugin currently owns the selection (i.e. it
- * wrote `commandcode` and has not given it back yet). `displaced` is the
- * backend id the plugin displaced when it took over — restored when the
- * toggle turns off or the plugin unloads. `undefined` means "nothing was
- * configured, leave auto-select" and must round-trip untouched: writing the
- * factory default instead would still override a sibling plugin's own
- * constructor-time pin.
+ * `owner` marks whether this plugin currently owns the selection. `displaced`
+ * is the backend it took over — restored on disable or unload — and
+ * `undefined` means "nothing was configured, leave auto-select" and must
+ * round-trip untouched.
  *
  * `preexisting` is the one fact `displaced` cannot carry: an `undefined`
  * `displaced` means EITHER "the field was unset when we took over" (give
- * `undefined` back on disable) OR "the field already read `commandcode`"
- * (touch nothing on disable — see {@link applyCommandCodeSearchSelection}).
- * Collapsing the two is what turned a user's own `searchProvider: commandcode`
- * pin into an auto-select — and then into `WEB_PROVIDER_AMBIGUOUS` on every
- * search — the moment this plugin was disabled or unloaded.
+ * `undefined` back) OR "the field already read `commandcode`" (touch
+ * nothing). Collapsing the two is what turned a user's own
+ * `searchProvider: commandcode` pin into an auto-select, and then into
+ * `WEB_PROVIDER_AMBIGUOUS` on every search.
  */
 interface CommandCodeSearchSelection {
   owner: boolean;
@@ -1591,24 +1471,15 @@ declare function commandCodeSearchSelection(): CommandCodeSearchSelection;
  * providers (issue #26).
  *
  * - Enabling writes `commandcode` and remembers whatever it displaced. When
- *   the plugin already owns the selection (e.g. a settings save while still
- *   on), the original `displaced` value is kept — the field currently holds
- *   our own id, which must never be mistaken for the user's backend.
- * - Disabling hands the selection back to the remembered backend. When the
- *   state holds no memory (a fresh boot straight into `webSearch: false`),
- *   the field is left alone: the runtime's current value — a sibling's
- *   cordis pin such as `searchProvider: modsearch`, or unset for
- *   auto-select — already says what the user wants.
- * - When the field already reads `commandcode` at first touch (e.g. a
- *   surviving runtime the plugin did not set, or a manual
- *   `searchProvider: commandcode` pin), `displaced` stays undefined and
- *   `preexisting` is set, so the later disable is a no-op rather than a guess
- *   at the factory default. A "no-op" means the field is left ALONE: writing
- *   that `undefined` back would destroy the user's own pin, and dsh-web reads
- *   a cleared `searchProviderId` as auto-select — where a second usable
- *   provider (the shipped `deepseek-official` is usable whenever a DeepSeek
- *   key resolves) makes EVERY later search throw
- *   `WEB_PROVIDER_AMBIGUOUS`.
+ *   the plugin already owns the selection, the original `displaced` is kept —
+ *   the field currently holds our own id, which must never be mistaken for the
+ *   user's backend.
+ * - Disabling hands the selection back to the remembered backend only when
+ *   this plugin actually took it over. A fresh boot straight into
+ *   `webSearch: false`, or a `preexisting` field, leaves it ALONE: writing the
+ *   empty memory back would clear the user's own `searchProvider: commandcode`
+ *   pin and hand the selection to dsh-web's auto-select, where a second usable
+ *   provider makes every later search throw `WEB_PROVIDER_AMBIGUOUS`.
  *
  * Never throws: like the low-level rewrite, a hardened runtime shape degrades
  * to registered-but-unselected.
@@ -1624,11 +1495,11 @@ interface CommandCodeSearchProviderDeps {
   fetchImpl?: typeof fetch;
 }
 /**
- * A `ctx.web` search provider backed by the Command Code Provider API. Reuses
- * the plugin's credential chain and `apiBase`, so search "just works" with the
- * existing key — the model-facing `web_search` tool needs no separate
- * configuration. Selection between multiple search providers is the web seam's
- * job (pin `searchProvider: commandcode` if ambiguous).
+ * A `ctx.web` search provider backed by the Command Code Provider API, reusing
+ * the plugin's credential chain and `apiBase` so the model-facing `web_search`
+ * tool needs no separate configuration. Selection between multiple search
+ * providers is the web seam's job (pin `searchProvider: commandcode` if
+ * ambiguous).
  */
 declare class CommandCodeSearchProvider implements WebSearchProvider {
   private readonly deps;
@@ -1650,11 +1521,9 @@ interface TuiLocalizedText {
 type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select';
 /** One choice of an options-bearing field. */
 interface TuiSettingsFieldOption {
-  /** Stored value. */
   readonly value: string;
   /** Display label (English; also the fallback). */
   readonly label: string;
-  /** Provider-owned translations for the label. */
   readonly descriptions?: TuiLocalizedText;
 }
 /** The write one field's draft stages when the section is saved. */
@@ -1670,11 +1539,9 @@ interface TuiSettingsField {
   readonly path: readonly string[];
   /** Short field label (English; also the fallback). */
   readonly label: string;
-  /** Provider-owned translations for the label. */
   readonly descriptions?: TuiLocalizedText;
   /** Optional one-line help rendered under the field. */
   readonly hint?: string;
-  /** Provider-owned translations for the hint. */
   readonly hintDescriptions?: TuiLocalizedText;
   /** Optional group id; grouped fields render on that group's subpage. */
   readonly group?: string;
@@ -1706,7 +1573,6 @@ interface TuiSettingsGroup {
   readonly id: string;
   /** Group title (English; also the fallback). */
   readonly title: string;
-  /** Provider-owned translations for the title. */
   readonly descriptions?: TuiLocalizedText;
 }
 /** One plugin's section inside the dsh-TUI settings screen. */
@@ -1715,7 +1581,6 @@ interface TuiSettingsSection {
   readonly ns: string;
   /** Section title (English; also the fallback). */
   readonly title: string;
-  /** Provider-owned translations for the title. */
   readonly descriptions?: TuiLocalizedText;
   /** Optional navigation groups, in display order. */
   readonly groups?: readonly TuiSettingsGroup[];
@@ -1783,25 +1648,22 @@ interface CommandCodeTuiSettingsDeps {
  * Build the section descriptor. Pure, so tests can pin the exact fields
  * without a dsh-TUI host.
  *
- * Field choices worth keeping: the two option-bearing fields (`activeAccount`,
- * `lang`) are `text` + `options` rather than `select`, because a `select`
- * cannot express "unset" — cycling only ever lands on a declared option, so a
- * `select` would strand the user on a pinned value with no way back to
- * automatic. The `auto` sentinel plus a `parse` that clears the path keeps the
- * unset state reachable. `filterModelsByPlan` formats its EFFECTIVE default
- * (unset means true at the adapter), so a fresh install reads true instead of
- * the screen's "(empty)".
+ * The two option-bearing fields (`activeAccount`, `lang`) are `text` +
+ * `options` rather than `select`, because a `select` cannot express "unset" —
+ * cycling only ever lands on a declared option, so it would strand the user on
+ * a pinned value with no way back to automatic. The `auto` sentinel plus a
+ * `parse` that clears the path keeps unset reachable. `filterModelsByPlan`
+ * formats its EFFECTIVE default (unset means true at the adapter) so a fresh
+ * install reads true instead of the screen's "(empty)".
  */
 declare function buildCommandCodeTuiSection(deps: CommandCodeTuiSettingsDeps): TuiSettingsSection;
 /**
  * Register the Command Code section on a dsh-TUI host.
  *
- * @param ctx - the context of an activated `tuiSettingsSections` injection.
- * @param deps - plugin-owned facts the section reads.
  * @returns a refresh function that re-registers the section when a fact it
- *   renders changed (the plugin entry calls it from its settings `onChange`
- *   hook), or `undefined` when the seam is unusable. The returned function is
- *   inert after the fiber is torn down.
+ *   renders changed — the plugin entry calls it from its
+ *   `loader/volatile-update` listener — or `undefined` when the seam is
+ *   unusable. The returned function is inert after the fiber is torn down.
  */
 declare function applyCommandCodeTuiSettings(ctx: Context, deps: CommandCodeTuiSettingsDeps): (() => void) | undefined;
 //#endregion
@@ -1836,14 +1698,11 @@ interface Config {
   streamIdleTimeoutMs?: number;
   /**
    * Transport failures one request absorbs before the failure is surfaced;
-   * defaults to 5. The route's retry policy is near-unbounded on purpose (1000
-   * attempts, waits doubling to 15 minutes) because that shape is for the
-   * failures a provider asks to have retried — an exhausted rate-limit window,
-   * a gateway 520. A transport failure is not one of those: the first attempts
-   * recover an ordinary blip (the default 5 retries are scheduled 0.5/1/2/4/8 s
-   * after the failures before them, so ~15.5 s of grace), and after that the
-   * wait is pure stall, so the retries are capped here. Raise it on a genuinely
-   * flaky link; 0 surfaces every transport failure immediately.
+   * defaults to 5. The route's retry policy is near-unbounded on purpose
+   * (1000 attempts, waits doubling to 15 minutes) because that shape is for
+   * the failures a provider asks to have retried; a transport failure is not
+   * one of those, and after ~15.5 s of grace the wait is pure stall, so it is
+   * capped here (issue #39). 0 surfaces every transport failure immediately.
    */
   transportMaxRetries?: number;
   /**
@@ -1855,8 +1714,7 @@ interface Config {
   filterModelsByPlan?: boolean;
   /**
    * Visible-model allowlist: catalog model ids shown in pickers. Empty or
-   * unset means "show everything". Persisted by the settings page's model
-   * filter card; applies after the subscription-tier filter.
+   * unset means "show everything"; applied after the subscription-tier filter.
    */
   visibleModels?: string[];
   /**
@@ -1864,117 +1722,82 @@ interface Config {
    * list, keyed by catalog id (`true` = listed, `false` = hidden). An id here
    * decides that model on its own; an id absent here follows `visibleModels`.
    * dsh-TUI keys a staged edit by the field's path, so the checkboxes need one
-   * path per model — a map — because a boolean field cannot express "this id
-   * is a member of the array".
+   * path per model — a map.
    */
   modelVisibility?: Record<string, boolean>;
   /**
    * Extra accounts for multi-account rotation. The top-level
    * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first
-   * (`default`) account; each entry here adds one more. When a request is
-   * rejected pre-stream with 429 (usage window exhausted) or 401, the next
-   * account's key retried transparently; when every account is exhausted the
-   * request fails with a `RATE_LIMIT` error naming the earliest window
-   * reset. Entries without `apiKey` or `apiKeyEnv` are ignored.
+   * (`default`) account; each entry here adds one more, and an entry with
+   * neither `apiKey` nor `apiKeyEnv` is ignored. A pre-stream 429/401 marks
+   * the key and the next account's key is retried transparently.
    */
   accounts?: CommandCodeAccountConfig[];
   /**
    * Manually selected active account: a slot id — `default`, or an extra
-   * account's credential reference (e.g. `COMMANDCODE_API_KEY_2`). The
-   * selected account serves whenever it is usable; an unknown id or an
-   * exhausted selected account falls back to the first usable slot (automatic
-   * rotation still applies). Unset means "first usable account".
+   * account's credential reference (e.g. `COMMANDCODE_API_KEY_2`). It serves
+   * whenever usable; an unknown id or an exhausted one falls back to rotation
+   * order. Unset means "first usable account".
    */
   activeAccount?: string;
   /**
-   * Model → account routing rules. Each rule lists catalog model ids to an
-   * account slot id (`default`, or an extra account's credential reference).
-   * When a request's model is in a rule's list and the routed account is
-   * usable, that account serves — before the manual {@link activeAccount} and
-   * the passive rotation order. A routed account that is exhausted or invalid
-   * falls back to the normal selection, so the router is a hint, never a hard
-   * gate. The first matching rule wins.
+   * Model → account routing rules, each listing catalog model ids for an
+   * account slot id. A matching rule's account serves before {@link
+   * activeAccount} and the passive rotation order; an unusable routed account
+   * falls back, so the router is a hint, never a hard gate. First match wins.
    */
   modelAccountRules?: CommandCodeModelAccountRule[];
   /**
    * Whether to use Command Code as the backend for dsh's model-facing
-   * `web_search` tool. When enabled, the plugin registers a `commandcode`
-   * search provider on `ctx.web` AND selects `commandcode` in the web seam
-   * (so it wins over the shipped `deepseek-official` or a sibling search
-   * plugin's pin), using the SAME Command Code API key/base as chat. When
-   * disabled, the selection is handed back to whichever backend was there
-   * before — turning it off never forces the factory default, so a sibling
-   * search plugin (e.g. modsearch) keeps working (issue #26). The rewrite
-   * rides dsh's internal `searchProviderId`, which is read per search call,
-   * so a setting change lands on the next search without a restart.
-   * Defaults to true.
+   * `web_search` tool. Enabled registers a `commandcode` search provider on
+   * `ctx.web` AND selects it over the shipped `deepseek-official` (or a
+   * sibling plugin's pin), reusing the SAME key and apiBase as chat. Disabling
+   * hands the selection back to whichever backend was there before, so a
+   * sibling search plugin (e.g. modsearch) keeps working (issue #26). The
+   * write rides dsh's internal `searchProviderId`, read per search call, so a
+   * setting change lands on the next search without a restart. Defaults true.
    */
   webSearch?: boolean;
   /**
    * Whether the Web sidebar shows the plans & quota card
-   * (`sidebar.footer.action`). Defaults to false: the card is opt-in, so an
-   * unset document renders no quota surface in the sidebar and mounts no
-   * background usage poll for it. Only the sidebar entry is affected — the
-   * dashboard cell behind it stays registered, it simply has no trigger until
-   * the toggle is on. Read by the browser client; the adapter ignores it.
+   * (`sidebar.footer.action`). Defaults to false, so an unset document mounts
+   * no sidebar quota surface and no background usage poll for it; the
+   * dashboard cell behind it stays registered. Read by the browser client; the
+   * adapter ignores it.
    */
   showSidebarQuota?: boolean;
-  /**
-   * Whether the Command Code decision model (`typesafe/jev`) may auto-approve
-   * shell commands that dsh was about to ask about. Defaults to FALSE: the
-   * guard turns a model's opinion into a one-shot approval grant, so it is
-   * opt-in, and the command text (plus the agent's own description of it) is
-   * sent to Command Code to judge. Only commands a policy already wanted a
-   * human to look at are ever judged, and only a confident "safe" verdict
-   * (`commandGuardLevel`) skips the prompt — every other outcome, including
-   * any failure of the decision call itself, delegates to the normal approval
-   * flow. See `./command-guard.ts`.
-   */
-  commandGuard?: boolean;
-  /**
-   * How confident every verdict must be before the guard skips the approval
-   * prompt: `high` (0.95), `medium` (0.9, the default) or `low` (0.8). A lower
-   * level approves more, on less evidence. The decision budget is fixed
-   * (`COMMAND_GUARD_TIMEOUT_MS`), so this is the guard's only tuning knob.
-   */
-  commandGuardLevel?: CommandGuardLevel;
   /**
    * Whether requests enforce zero data retention: the provider then routes
    * them only through upstreams that keep no prompts/completions and never
    * train on them (its own opt-in, `CMD_ZDR=1` in the CLI / `x-cmd-zdr: 1` on
    * the Provider API). Defaults to FALSE: `zdr` changes WHERE a request is
-   * served. Every chat request carries the header when enabled; a model with
-   * no ZDR-capable upstream fails with 422 `cmd_zdr_no_providers` instead of
-   * being routed through an upstream that retains data. ZDR capacity is
-   * priced pass-through and usually costs more, and the price readout keeps
-   * quoting the ordinary catalog rates (the real per-request price shows in
-   * Command Code's Studio). The decision endpoint behind the command guard is
-   * never ZDR-enforced — see `./systemone.ts`.
+   * served. Every chat request carries the header when enabled, and a model
+   * with no ZDR-capable upstream fails with 422 `cmd_zdr_no_providers` rather
+   * than losing the guarantee. ZDR capacity is priced pass-through and usually
+   * costs more; the price readout keeps quoting the ordinary catalog rates
+   * (the real per-request price shows in Command Code's Studio).
    */
   zdr?: boolean;
   /**
    * Language override for the `/commandcode` Host-side command's user-facing
-   * copy. Host commands cannot read the client's `ctx.locale`, so this is
-   * the explicit knob: `'zh'` or `'en'`. Unset means the command reads
-   * `LC_ALL`/`LANG` from the launching shell, falling back to `'zh'`. The
-   * web settings page is unaffected — it follows the browser's language
-   * preference on its own. Two surfaces, two independent locales. The
-   * declared type is `string` (the schemastery `pattern` cannot narrow
-   * literal types); an unknown value is treated as "unset" by
-   * `pickCommandLocale`.
+   * copy. Host commands cannot read the client's `ctx.locale`, so this is the
+   * explicit knob: `'zh'` or `'en'`, defaulting to `'zh'`. The web settings
+   * page is unaffected — it follows the browser's language preference on its
+   * own. The declared type is `string` (the schemastery `pattern` cannot
+   * narrow literal types); `pickCommandLocale` treats an unknown value as
+   * "unset" and then reads `LC_ALL`/`LANG`, which is only reachable when
+   * `lang` is absent from a programmatically built config.
    */
   lang?: string;
 }
 /**
  * The Config schema: every field volatile except the composition-only `apiKey`
- * secret.
- *
- * dsh 0.1.7's settings forms are projected from the schema's `meta.volatile`
- * nodes, so an unmarked field would be invisible to AND unwritable from the
- * settings page and refused by form-edit path validation — and the loader
- * hands `apply()` a live reference per marked field, committing later writes
- * without remounting this fiber (the `loader/volatile-update` listener at the
- * bottom of `apply` covers the facts that are not re-derived per read).
+ * secret. 0.1.7's settings forms are projected from the schema's
+ * `meta.volatile` nodes, so an unmarked field would be invisible to AND
+ * unwritable from the settings page. The loader also hands `apply()` a live
+ * reference per marked field, so writes commit in place without remounting
+ * this fiber — the `loader/volatile-update` listener at the bottom of `apply`
+ * re-derives the two facts that are not re-read per request.
  */
 declare const Config: z<Config>;
 /** One resolution's complete request facts: connection plus credential reference. */
@@ -1985,7 +1808,7 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
  * The one explicit resolve step from raw config to validated connection
  * facts. Programmatic construction may bypass Schemastery normalization, so
  * every default is re-judged here — for the composition entry at load and for
- * each settings snapshot at its first use.
+ * every settings-backed read.
  */
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;

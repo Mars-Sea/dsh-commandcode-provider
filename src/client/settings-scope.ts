@@ -1,44 +1,16 @@
 /**
  * Browser settings scope over the `remote.settings` Typert namespace.
  *
- * Until dsh 0.1.6 the web client bound `ctx.settingsScope` — a wrapper
- * `ui-settings` provided, itself derived from a shared mirror of
- * `remote.settings.describe()`. The 0.1.7 settings rewrite REMOVED that
- * wrapper service (settings became schema-derived profile Config forms), but
- * the wire underneath — `describe()`, `mutate(namespace, ops, revision)`, the
- * forwarded `settings/document-updated` invalidation, and the view shape
- * `{ writable, namespaces: [{ ns, value, base, user, revision, schema }] }` —
- * is byte-identical from 0.1.2-rc.1 through 0.1.7-alpha.1 (verified against
- * both engines' `ui-settings` bundles, which drove the SAME mirror/controller
- * pair from the first release this plugin supports to the newest).
+ * The harness's own `settingsScope` client wrapper was REMOVED by the 0.1.7
+ * settings rewrite and has no replacement, so this module IS the client half:
+ * it speaks the `describe()` / `mutate(namespace, ops, revision)` wire directly
+ * and implements the `SettingsScope<T>` face the settings-page controller
+ * consumes. `view.writable` is the Host's own authorization fact — the client
+ * never infers write permission from localhost, URL shape or origin.
  *
- * So this module speaks that wire directly and implements the
- * `SettingsScope<T>` face the settings-page controller already consumes —
- * one path for every supported engine, no dependency on a wrapper that only
- * half of them ship:
- *
- *   - A mirror serializes `describe()` reads behind one snapshot store (a
- *     read during a read marks exactly one rerun; a FAILED read keeps the
- *     held view, so a transient Host error never blanks the page).
- *   - The scope derives this namespace's row from the mirror — `ready` with
- *     the row's value when present, `unavailable` when the namespace is not
- *     in the directory — and writes through a single-flight `mutate` queue
- *     fenced by the row's revision, folding each accepted answer back into
- *     the mirror and re-reading after a rejected one.
- *   - Every page asks the Host for the current directory and writes through
- *     the Host's `settings` Remote. The Host/gateway owns the authenticated
- *     remote-write decision and reports it as `view.writable`; this client does
- *     not infer write permission from localhost, URL shape, or browser origin.
- *
- * The namespace object is NOT read off the context: `remote.settings` is a
- * Cordis service nested under `remote`, and Cordis throws
- * `cannot get property "remote.settings" without inject` for an undeclared
- * read. It arrives through the `resolveRemote` seam instead — an object
- * captured inside `ctx.inject(['remote.settings'], …)` by the client entry
- * (see {@link SettingsRemoteResolver} for the failure this prevents).
- *
- * React-free on purpose, so `tests/settings-scope.test.ts` can drive the
- * whole lifecycle over a fake remote.
+ * **Capture the namespace from an inject-scoped context, never read it off
+ * `ctx.remote`.** React-free so `tests/settings-scope.test.ts` can drive the
+ * lifecycle over a fake remote.
  *
  * @module dsh-commandcode-provider/client/settings-scope
  */
@@ -86,20 +58,13 @@ export interface SettingsRemoteNamespace {
  * Reads the `remote.settings` namespace object, or `undefined` while it is not
  * mounted.
  *
- * This is a SEAM rather than a property on {@link SettingsScopeContext} because
- * `remote.settings` is a Cordis service nested under `remote`, and Cordis
- * throws for an undeclared nested read:
- *
- *     Error: cannot get property "remote.settings" without inject
- *
- * The service object therefore has to be captured inside a context that
- * declares it (`ctx.inject(['remote.settings'], (settingsCtx) => …)`) and handed
- * in here. Reading it off our own `ctx.remote` instead throws on EVERY
- * supported engine — including ≤0.1.6, whose `remote.settings` namespace is the
- * same shape — and the throw lands inside this module's own `try`/`catch`, so
- * the failure is silent: no describe is ever sent, the scope keeps its initial
- * `writable: false` snapshot, and the settings page renders read-only with every
- * control disabled. That was the 0.1.7 settings-page report.
+ * This is a SEAM rather than a property on {@link SettingsScopeContext}
+ * because the namespace has to be captured inside a context that declares it
+ * (`ctx.inject(['remote.settings'], (settingsCtx) => …)`). Reading it off our
+ * own `ctx.remote` throws `cannot get property "remote.settings" without
+ * inject` inside this module's `try`/`catch` — silently, with no describe ever
+ * sent and the scope stuck on its initial `writable: false` snapshot. Do not
+ * "simplify" this seam away (AGENTS.md has the full incident).
  */
 export type SettingsRemoteResolver = () => SettingsRemoteNamespace | undefined
 
@@ -127,16 +92,12 @@ interface MirrorState {
 /**
  * Backoff before re-reading a directory whose FIRST read failed, in millis.
  *
- * A first read can lose to a Host that is still coming up (the gateway's WS
- * handshake, a settings service mid-start): the failure is transient, but the
- * scope has nothing held, so it keeps its initial `{ status: 'loading',
- * writable: false }` snapshot — and every control on the settings page renders
- * disabled behind a "read-only" banner. Nothing else would ever re-read it:
- * the forwarded `settings/document-updated` and `connection/reset` signals need
- * a live Host to fire, and the namespace only re-mounts on a page reload. So a
- * failure with NOTHING held retries on this bounded ladder; a failure with a
- * held view keeps it (no retry — the page is already showing the last good
- * document, and `tests/settings-scope.test.ts` pins that).
+ * Only a failure with NOTHING held retries. With no view the scope keeps its
+ * initial `{ status: 'loading', writable: false }` snapshot and the settings
+ * page renders fully disabled, while the forwarded invalidation signals need a
+ * live Host to fire and the namespace only re-mounts on a reload. A failure
+ * with a held view retries nothing — the page already shows the last good
+ * document (`tests/settings-scope.test.ts` pins both).
  */
 export const SETTINGS_DESCRIBE_RETRY_MS: readonly number[] = [1000, 2000, 4000]
 
@@ -191,10 +152,6 @@ class SettingsDescribeMirror {
   private retries = 0
   private disposed = false
 
-  /**
-   * @param resolveRemote - Reads the inject-captured `remote.settings` namespace.
-   * @param timer - Retry timer seam (see {@link SETTINGS_DESCRIBE_RETRY_MS}).
-   */
   constructor(
     private readonly resolveRemote: SettingsRemoteResolver,
     private readonly timer: SettingsRetryTimer = REAL_SETTINGS_TIMER,
@@ -296,12 +253,8 @@ class SettingsDescribeMirror {
             view: held.view,
             error: outcome.failure,
           })
-          // Nothing was EVER held: the scope is stuck on its initial
-          // `loading`/`writable: false` snapshot, which the settings page
-          // renders as a fully disabled form. Retry on the bounded ladder so a
-          // Host that was still starting up heals without a page reload; a
-          // held view needs none (the page already shows the last good
-          // document).
+          // Nothing held → nothing can heal this but a retry (see
+          // SETTINGS_DESCRIBE_RETRY_MS); a held view needs none.
           if (held.view === null) this.scheduleRetry()
         }
         if (!this.rerun) break
@@ -341,9 +294,8 @@ class SettingsDescribeMirror {
 
 /**
  * One namespace's derived scope over the shared mirror, plus its serialized
- * Host writes. This is the face `CommandCodeSettingsController` consumes
- * (`getSnapshot` / `subscribe` / `set` / `unset`), so the controller itself
- * needs no changes for either generation.
+ * Host writes — the face `CommandCodeSettingsController` consumes
+ * (`getSnapshot` / `subscribe` / `set` / `unset`).
  */
 class RemoteSettingsScope<T> implements SettingsScope<T> {
   private readonly resolveRemote: SettingsRemoteResolver
@@ -527,22 +479,17 @@ export interface ManagedSettingsScope<T> extends SettingsScope<T> {
  *
  * Subscribes the two signals that can move the Host view — the forwarded
  * `settings/document-updated` invalidation and (when the client exposes it)
- * `connection/reset` — kicks the first describe read, and derives the
- * namespace row on every mirror change.
+ * `connection/reset` — kicks the first describe read, and derives the namespace
+ * row on every mirror change.
  *
- * `resolveRemote` is the INJECT-CAPTURED namespace (see
- * {@link SettingsRemoteResolver}): `remote.settings` is a Cordis service nested
- * under `remote`, so a read through our own context throws and has to be
- * replaced by an object captured inside `ctx.inject(['remote.settings'], …)`.
- * The caller that owns that inject calls {@link ManagedSettingsScope.refresh}
- * once the namespace lands, which is what turns the first, namespace-less read
- * into a served one; a profile that never mounts the namespace leaves the page
- * in its degraded (`unavailable`, read-only) state instead of throwing.
+ * `resolveRemote` must be the INJECT-CAPTURED namespace (see
+ * {@link SettingsRemoteResolver}), and the caller that owns that inject calls
+ * {@link ManagedSettingsScope.refresh} once the namespace lands — that is what
+ * turns the first, namespace-less read into a served one. A profile that never
+ * mounts the namespace leaves the page in its degraded (`unavailable`,
+ * read-only) state instead of throwing.
  *
- * @param context - The client context slice (only the declared `remote` service is read).
  * @param namespace - Settings namespace (profile entry id) this scope binds.
- * @param resolveRemote - Reads the inject-captured `remote.settings` namespace.
- * @returns The scope plus the refresh/dispose handles the entry wires into its fiber.
  */
 export function createSettingsScope<T>(
   context: SettingsScopeContext,
@@ -550,9 +497,6 @@ export function createSettingsScope<T>(
   resolveRemote: SettingsRemoteResolver,
   timer: SettingsRetryTimer = REAL_SETTINGS_TIMER,
 ): ManagedSettingsScope<T> {
-  // The Host/gateway owns the remote-write decision. The client always reads
-  // the settings directory and submits writes; `view.writable` is the Host's
-  // rendered authorization fact, not a local hostname or Origin guess.
   const mirror = new SettingsDescribeMirror(resolveRemote, timer)
   const scope = new RemoteSettingsScope<T>(resolveRemote, mirror, namespace)
   const disposers: Array<() => void> = []

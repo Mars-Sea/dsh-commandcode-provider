@@ -7,13 +7,6 @@
  * could drift from the snapshot, and a price update reaches an open page
  * without rebuilding the client bundle.
  *
- * Successful reads are cached until the Host namespace rebinds. Transient
- * failures retry three times with bounded backoff; manual refresh can retry
- * after that. Rebinding drops stale in-flight results and resets the budget.
- * Missing endpoints are permanent until the namespace changes.
- *
- * Deliberately JSX-free, mirroring `./usage.ts`.
- *
  * @module dsh-commandcode-provider/client/prices
  */
 
@@ -70,15 +63,12 @@ const RETRY_TIMER: PriceRetryTimer = {
 
 /**
  * Cache over the `commandcode/prices` Remote, with a bounded transient-retry
- * budget. Public API mirrors {@link CommandCodeUsageController}: `state()`,
- * `subscribe`, and `ensure()`; `reload()` additionally drops the cache and
- * restarts the budget when the Host namespace rebinds.
- *
- * Not a one-shot: the last fetch is cached until `reload()`, a transient
- * failure is retried three times at 1/2/4 s (the delays are bounded, not a
- * poll), and a MANUAL `ensure()` still fetches after that budget is spent. A
- * PERMANENT failure — the Host serving no such endpoint — is terminal for the
- * binding and is only cleared by `reload()`.
+ * budget (three retries at 1/2/4 s — bounded, not a poll). Public API mirrors
+ * {@link CommandCodeUsageController}: `state()`, `subscribe` and `ensure()`;
+ * `reload()` additionally drops the cache and restarts the budget when the
+ * Host namespace rebinds. A MANUAL `ensure()` still fetches after the budget
+ * is spent, and a PERMANENT failure — the Host serving no such endpoint — is
+ * terminal for the binding until `reload()`.
  */
 export class CommandCodePricesController {
   private readonly remote: PricesRemote
@@ -118,12 +108,9 @@ export class CommandCodePricesController {
 
   /**
    * Fetch the table unless it is already loaded, permanent, or in flight — and
-   * unless a bounded retry already owns the next attempt.
-   *
-   * The only callers are the client entry: `reload()` when the Remote namespace
-   * lands or rebinds, and a manual refresh. Nothing in the composer calls it, so
-   * a mounted readout does not trigger a fetch of its own — it renders whatever
-   * the table's state currently is.
+   * unless a bounded retry already owns the next attempt. Only the client
+   * entry calls this (on rebind and on a manual refresh), so a mounted readout
+   * renders the current state instead of triggering a fetch of its own.
    */
   ensure(): void {
     if (this.disposed || this.permanent || this.inFlight || this.current.status === 'ready') return

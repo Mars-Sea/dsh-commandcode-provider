@@ -1,33 +1,26 @@
 /**
- * The Command Code configuration panel inside the harness Models settings page
- * (browser half). Rendered through the `settings.models.provider-card` keyed
- * slot available in dsh 0.1.2 (rc.1), registered with
+ * The Command Code configuration panel inside the harness Models settings page,
+ * rendered through the `settings.models.provider-card` keyed slot with
  * `entryKey = 'llm-commandcode'` (the plugin's settings namespace, the key the
  * Models page dispatches for every Command Code provider row).
  *
- * The official Models page opens one editor card per provider row through its
- * own 编辑 button. For a namespace the page does not curate a layout for
- * (`llm-commandcode`), that editor is a bare shell — a pointer to
- * `settings.yaml` above a permanently disabled apply button. This panel takes
- * its place: the slot outlet renders right beside the official editor inside
- * the same row card, so the component watches the outlet's siblings and, while
+ * The official Models page opens one editor per provider row through its own
+ * 编辑 button, and for a namespace it curates no layout for (`llm-commandcode`)
+ * that editor is a bare shell: a config hint over a permanently disabled apply.
+ * This panel takes its place — it watches the slot outlet's siblings and, while
  * the official editor is open, hides the useless shell and shows the real
- * controls in its slot — the credential/route badges, the API-key field,
- * official sign-in, and the discard/save footer. Closed, it renders nothing
- * and the row looks exactly like any other provider row.
+ * controls in its slot (credential/route badges, API-key field, sign-in,
+ * discard/save). Closed, it renders nothing and the row looks exactly like any
+ * other provider row.
  *
- * The slot's owner props (`configured`, `keyConfigured`) mirror what the
- * Models page already knows; the authoritative credential facts still come
- * from this plugin's `CommandCodeSettingsController` shared with the dedicated
- * settings page, so the two surfaces can never disagree about whether a key
- * is stored.
- *
+ * The slot's owner props (`configured`, `keyConfigured`) mirror what the Models
+ * page already knows; the authoritative credential facts still come from this
+ * plugin's `CommandCodeSettingsController` — shared with the dedicated settings
+ * page, so the two surfaces can never disagree about whether a key is stored.
  * A controller-less render (panel mounted before the section registered its
  * inject face — the composition runs one apply) degrades to the stateless
- * registration notice inside the opened panel.
- *
- * Styles ride the page stylesheet the client entry injects once (`cc-`
- * prefixed classes); the card adds no CSS of its own.
+ * registration notice. Styles ride the page stylesheet the client entry injects
+ * once; the card adds no CSS of its own.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -39,10 +32,9 @@ import { LoginRow } from './login-row.tsx'
 
 /**
  * The Models-page extension slots, merged into the SlotMap with the exact
- * declarations dsh 0.1.2 (rc.1)'s ui-settings-models ships. The merge must
- * stay structurally identical to upstream's (kind/scope/owner), or a future
- * dsh carrying its own declaration would fail the duplicate-merge check at
- * compile time.
+ * declarations ui-settings-models ships. The merge must stay structurally
+ * identical to upstream's (kind/scope/owner), or a dsh carrying its own
+ * declaration would fail the duplicate-merge check at compile time.
  */
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
@@ -57,11 +49,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export interface ProviderDirectoryRow {
   /** The provider route id (`commandcode` for this plugin). */
   readonly provider: string
-  /** The row's display name. */
   readonly displayName: string
   /** The settings namespace the row configures (the slot's dispatch key). */
   readonly settingsNs: string
-  /** The settings path the row's profile lives at. */
   readonly settingsPath: readonly string[]
   /** Whether the provider route is live. */
   readonly active: boolean
@@ -105,11 +95,11 @@ export interface SlotWrapperSiblings {
  * Find the official editor card among the slot outlet's siblings, or null
  * while it is closed. The Models page renders the editor as an immediate
  * sibling of the outlet wrapper — after it in a provider row (the target of
- * the row's 编辑 toggle), before it in the first-run setup card and the
- * add-provider card, where it is always open. The editor is the only such
- * sibling whose CSS module class carries the `editor` stem
- * (`<hash>_editor`); the row header and the add card's provider select
- * never do, so the lookup needs no hash knowledge.
+ * the row's 编辑 toggle), before it in the first-run setup and add-provider
+ * cards, where it is always open. The editor is the only such sibling whose
+ * CSS module class carries the `editor` stem (`<hash>_editor`); the row header
+ * and the add card's provider select never do, so the lookup needs no hash
+ * knowledge.
  */
 export function adjacentEditorCard(wrapper: SlotWrapperSiblings | null): { className: string } | null {
   if (wrapper === null) return null
@@ -160,7 +150,7 @@ export function cardMode(
   }
 }
 
-/** Status badge for the credential state (green when configured). */
+/** Credential-state badge: the solid pill when set, the muted outline when not. */
 function StatusBadge({ ok, okLabel, pendingLabel }: {
   ok: boolean
   okLabel: string
@@ -169,7 +159,7 @@ function StatusBadge({ ok, okLabel, pendingLabel }: {
   return <span className={ok ? 'cc-badge' : 'cc-badgeMuted'}>{ok ? okLabel : pendingLabel}</span>
 }
 
-/** Compact key field for the not-configured card. */
+/** The key paste field, with the show/hide toggle over it. */
 function CardKeyField({ state, disabled, t, onEdit }: {
   state: StagedField
   disabled: boolean
@@ -204,16 +194,12 @@ function CardKeyField({ state, disabled, t, onEdit }: {
 
 /**
  * The slot component body. Dispatched on every Command Code provider card of
- * the Models page (saved row, first-run setup posture, and add-provider
- * draft).
+ * the Models page (saved row, first-run setup posture, add-provider draft).
  *
- * Closed (the official 编辑 toggle off) the panel renders nothing: the row
- * head the Models page owns already names the provider and shows the
- * credential dot, so a page full of providers stays compact. Opening the
- * official editor mounts the editor shell as the outlet's sibling; the panel
- * watches for it, hides the shell (it carries only the settings.yaml hint and
- * a disabled apply for this namespace), and shows the real controls — badges,
- * API-key field, sign-in, discard/save.
+ * Closed (the official 编辑 toggle off) it renders nothing: the row head the
+ * Models page owns already names the provider and shows the credential dot, so
+ * a page full of providers stays compact. Open, it hides that editor shell and
+ * shows the real controls — badges, API-key field, sign-in, discard/save.
  */
 export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCardOwnerProps) {
   const { t } = props
@@ -234,10 +220,10 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
   const disabled = mode.kind === 'live' && (!mode.writable || (state !== undefined && !mode.apiKeyWritable))
   const showBody = mode.kind === 'live' && mode.ready && state !== undefined
   // The official editor's open state lives in the Models page's own component
-  // state and never reaches this slot's props; the outlet wrapper is the
-  // stable neighbor, so watch its siblings for the editor's mount/unmount.
-  // The outlet stays mounted either way — it is the observation anchor — so
-  // the closed panel hides its own root instead of unmounting.
+  // state and never reaches this slot's props; the outlet wrapper is the stable
+  // neighbor, so watch ITS siblings for the editor's mount/unmount. The outlet
+  // stays mounted either way — it is the observation anchor — so the closed
+  // panel hides its own root instead of unmounting.
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   useEffect(() => {
@@ -252,8 +238,8 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
       const editor = adjacentEditorCard(wrapper) as HTMLElement | null
       setEditorOpen(editor !== null)
       if (editor !== null) {
-        // React pins no inline style on the editor shell, so this survives
-        // the shell's own re-renders; a shell that unmounts and remounts is
+        // React pins no inline style on the editor shell, so this survives the
+        // shell's own re-renders; a shell that unmounts and remounts is
         // re-hidden by the next observation.
         editor.style.display = 'none'
         hiddenEditor = editor
@@ -264,8 +250,8 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
     observer.observe(row, { childList: true })
     return () => {
       observer.disconnect()
-      // If the shell outlives the panel (plugin reload), give it back: the
-      // settings.yaml hint is the honest fallback face again.
+      // If the shell outlives the panel (plugin reload), give it back: it is
+      // the honest fallback face again.
       if (hiddenEditor !== null) hiddenEditor.style.display = ''
     }
   }, [])

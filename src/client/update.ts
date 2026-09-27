@@ -1,26 +1,21 @@
 /**
  * Plugin update hint (browser half).
  *
- * A deliberately small feature: when the "Command Code" settings page opens,
- * ask the npm registry for the package's published `latest` version and —
- * only when it is newer than the running build — let the page's footer show a
- * muted "newer version available" link to the GitHub releases. Everything
- * here is React-free and side-effect-seamed so node tests can drive it.
+ * When the "Command Code" settings page opens, ask the npm registry for the
+ * package's published `latest` version and — only when it is newer than the
+ * running build — let the page's footer show a muted "newer version available"
+ * link to the GitHub releases. Everything here is React-free and side-effect
+ * seamed so node tests can drive it.
  *
- * Behaviour contract:
- *
- * - The registry is queried at most once per {@link UPDATE_CHECK_INTERVAL_MS}
- *   per browser profile; the learned version is cached in `localStorage`
- *   alongside the attempt time, so re-opening the settings page is free.
- * - A failed check records the attempt time too (an offline browser must not
- *   hammer the registry on every page open) but keeps any previously learned
- *   version, so the hint survives transient outages until it expires.
- * - Every failure mode (blocked network, non-OK status, malformed payload,
- *   unavailable storage) degrades to "no hint"; nothing ever throws out of
- *   {@link checkForUpdate}.
- *
- * The registry serves `access-control-allow-origin: *`, so the plain browser
- * fetch works from the GUI origin without any Host-side proxying.
+ * The registry is queried at most once per {@link UPDATE_CHECK_INTERVAL_MS}
+ * per browser profile; the learned version is cached in `localStorage` with
+ * the attempt time, so re-opening the page is free. A FAILED check records the
+ * attempt time too (an offline browser must not hammer the registry) but keeps
+ * any previously learned version, so the hint survives transient outages. Every
+ * failure mode — blocked network, non-OK status, malformed payload,
+ * unavailable storage — degrades to "no hint"; nothing ever throws out of
+ * {@link checkForUpdate}. The registry serves `access-control-allow-origin: *`,
+ * so the plain browser fetch works from the GUI origin with no Host proxy.
  *
  * @module dsh-commandcode-provider/client/update
  */
@@ -39,14 +34,12 @@ export const NPM_LATEST_URL =
   'https://registry.npmjs.org/@mars-sea%2Fdsh-commandcode-provider/latest'
 
 /**
- * Compare two version strings (`major.minor.patch[-pre]`). Returns a negative
- * number when `a` sorts before `b`, positive when after, zero when equal.
+ * Compare two version strings (`major.minor.patch[-pre]`): negative when `a`
+ * sorts before `b`, positive when after, zero when equal.
  *
- * Tolerant by design: a leading `v` is stripped, unparsable numeric parts
- * count as `0`, and semver prerelease rules apply (release > prerelease;
- * numeric identifiers compare numerically, everything else lexically, a
- * shorter identifier list sorts first). Enough for release tags; not a full
- * semver validator.
+ * Tolerant by design — a leading `v` is stripped, unparsable numeric parts
+ * count as `0`, and semver prerelease rules apply. Enough for release tags,
+ * not a full semver validator.
  */
 export function compareVersions(a: string, b: string): number {
   const left = splitVersion(a)

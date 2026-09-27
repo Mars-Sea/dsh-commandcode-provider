@@ -3,31 +3,19 @@
  * reasoning-effort levels, vision/thinking flags, model → minimum plan tier,
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
- * Everything in this module is synced from official sources (the command-code
- * CLI bundle's model table and the official plan/pricing/model docs — see the
- * dsh-commandcode-upstream skill for the exact extraction procedures), and
- * changes whenever an upstream CLI release reshuffles models/plans/prices.
- * Keeping the snapshot in its own module confines those frequent sync diffs
- * here: src/adapter.ts holds only the stable wire/runtime logic and imports
- * these tables + read helpers.
- *
- * Snapshot read helpers (planLabel, dealLabel, formatContext,
- * capabilityDescription, peakPricing*, compareByPlan, modelVisibleInPlan,
- * subscriptionPlanInfo, isFreeModel) live here too — they exist only to read
- * the tables, so a sync never has to touch src/adapter.ts.
+ * Everything here is synced from official sources — the command-code CLI
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.66.0) and
+ * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
+ * for the extraction procedures. Keeping the snapshot in its own module
+ * confines those frequent sync diffs here: src/adapter.ts holds only the stable
+ * wire/runtime logic. The read helpers live here too, for the same reason.
  *
  * Ported from pi-commandcode-provider (MIT); originally part of src/adapter.ts
  * and split out so upstream syncs stay reviewable.
  */
-// ---------------------------------------------------------------------------
-// Static capability snapshot (from the official command-code@1.53.0 bundled
-// model catalog, dist/cli.mjs). The Provider API does not expose reasoning
-// metadata; models omitted here let Command Code choose their reasoning
-// depth, matching the official CLI.
-// ---------------------------------------------------------------------------
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.62.0 bundled model
+  // Re-verified against the authoritative command-code@1.66.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -35,42 +23,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // 'reasoning_effort' for them, so the picker must not offer a selector. Do
   // NOT add entries from the OAuth provider tables (anthropic/openai) - only
   // the Provider-API table is authoritative for this plugin's route.
-  // `stealth/ox-alpha` (['low', 'high', 'max']) was removed in
-  // command-code@1.34.0 when its preview ended; its successor,
-  // `z-ai/glm-5.3-flash`, ships the same effort set.
-  // `tencent/hy4-preview` gained ['low', 'medium', 'high'] in
-  // command-code@1.38.0 (it previously thought automatically with no
-  // selectable levels).
-  // `moonshotai/Kimi-K3` gained ['low', 'high', 'max'] in command-code@1.39.3
-  // (it previously thought automatically with no selectable levels).
-  // `claude-fable-5-1` (Claude Fable 5.1, command-code@1.40.0) ships the same
-  // five-level effort set as its predecessor `claude-fable-5` and is served
-  // by the Provider API (the Provider/Max tier; see KNOWN_PLANS).
-  // command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` and command-code@1.43.0
-  // added `google/gemini-3.8-flash`; both carry effort sets matching their
-  // existing family members. command-code@1.45.0 added selectable
-  // ['low', 'medium', 'high', 'xhigh'] efforts for the Muse Spark family
-  // (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor); they previously reasoned
-  // automatically with no selectable levels. command-code@1.48.0 added the
-  // `max` effort tier to Muse Spark 1.3 (previously ['low','medium','high',
-  // 'xhigh']); 1.3 and 1.3-contributor now ship different effort sets.
-  // command-code@1.49.0 added `gpt-6-astra` with the five-level effort set.
-  // command-code@1.51.0 briefly added `deepseek/deepseek-v4.1-flash-beta`
-  // (text+image, reasoning without selectable efforts, hidden behind a
-  // 2026-09-10 expiry gate); command-code@1.51.2 removed it from the bundle
-  // entirely, so no snapshot entry is needed.
-  // The 1.58.0 -> 1.62.0 train added `xai/grok-4.7` (command-code@1.59.0) and
-  // `stepfun/Step-5-Preview` (1.60.0) — the only two effort-map changes across
-  // those releases, re-verified against the 1.62.0 table; every existing entry,
-  // and every effort-less automatic-reasoning model, is unchanged.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Max-0902': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Flash': ['low', 'medium', 'xhigh'],
-  // command-code@1.56.0 added Qwen 3.8 Omni Flash — the only model-registry
-  // change across 1.54.0 -> 1.56.0, and the only catalog model with no local
-  // snapshot entry before this. Omni-modal (text+image), 1M context, reasoning
-  // with the same ['low', 'medium', 'xhigh'] set as its Qwen 3.8 siblings.
+  // command-code@1.56.0; same effort set as its Qwen 3.8 siblings.
   'Qwen/Qwen3.8-Omni-Flash': ['low', 'medium', 'xhigh'],
   'claude-fable-5-1': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -79,13 +36,9 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'claude-opus-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-sonnet-4-6': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-sonnet-5': ['low', 'medium', 'high', 'xhigh', 'max'],
-  // `deepseek/deepseek-v4-flash-fast` joined in command-code@1.39.0
-  // ("Add DeepSeek V4 Flash Fast"); 1.39.1 dropped `medium` for it, and
-  // the 1.39.2 table ships ['low', 'high', 'max'].
+  // command-code@1.39.1 dropped `medium`; the 1.39.2 table ships these three.
   'deepseek/deepseek-v4-flash-fast': ['low', 'high', 'max'],
-  // command-code@1.53.0 added DeepSeek V4.1 Flash ("Add new
-  // deepseek/deepseek-v4.1-flash model"); the bundle ships
-  // ['low', 'high', 'max'] for it.
+  // command-code@1.53.0.
   'deepseek/deepseek-v4.1-flash': ['low', 'high', 'max'],
   'deepseek/deepseek-v4-flash': ['high', 'max'],
   'deepseek/deepseek-v4-flash-vision-exp': ['high', 'max'],
@@ -102,72 +55,51 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
-  // `moonshotai/Kimi-K3` gained selectable ['low', 'high', 'max'] efforts in
-  // command-code@1.39.3 ("Add low, high, and max reasoning effort support for
-  // Kimi K3"); it previously reasoned automatically with no levels.
+  // command-code@1.39.3; it previously reasoned automatically with no levels.
   'moonshotai/Kimi-K3': ['low', 'high', 'max'],
-  // command-code@1.43.0 added Gemini 3.8 Flash with the same three-level
-  // effort set as the rest of the Gemini Flash family.
+  // command-code@1.43.0.
   'google/gemini-3.8-flash': ['low', 'medium', 'high'],
   'sakana/fugu-ultra': ['high', 'xhigh'],
-  // command-code@1.60.0 added Step 5 Preview (StepFun's 600B sparse-MoE agentic
-  // coding model, 1M context, text+image) with ['low', 'medium', 'high']
-  // efforts — the same three-level set as its Step 3.x Flash siblings, which
-  // still reason automatically with no levels and so stay out of this map.
+  // command-code@1.60.0; same three-level set as its Step 3.x Flash siblings,
+  // which still reason automatically with no levels and stay out of this map.
   'stepfun/Step-5-Preview': ['low', 'medium', 'high'],
   'tencent/hy4-preview': ['low', 'medium', 'high'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
-  // command-code@1.59.0 added Grok 4.7 ("Add Grok 4.7") with the same
-  // four-level set as Grok 4.6; 1.61.0 then put it on a 40% off launch deal
-  // (see KNOWN_DEALS).
+  // command-code@1.59.0; same four-level set as Grok 4.6. 1.61.0 put it on a
+  // 40% off launch deal (see KNOWN_DEALS).
   'xai/grok-4.7': ['low', 'medium', 'high', 'xhigh'],
   'z-ai/glm-5.3-flash': ['low', 'high', 'max'],
-  // command-code@1.57.0 added GLM-5.3 FlashX — the only model-registry change
-  // across 1.56.0 -> 1.57.0 — with the same three-level effort set as its
-  // `z-ai/glm-5.3-flash` sibling.
+  // command-code@1.57.0; same effort set as its `z-ai/glm-5.3-flash` sibling.
   'z-ai/glm-5.3-flashx': ['low', 'high', 'max'],
   'zai-org/GLM-5.2': ['high', 'max'],
   'zai-org/GLM-5.3': ['low', 'high', 'max'],
-  // Muse Spark family (command-code@1.45.0: "Reasoning levels for Muse
-  // Spark 1.3") gained selectable ['low', 'medium', 'high', 'xhigh'] efforts
-  // — they previously reasoned automatically with no levels.
+  // Muse Spark family: selectable levels in command-code@1.45.0, `max` added to
+  // 1.3 in 1.48.0 (1.3-contributor keeps the four-level set).
   'meta/muse-spark-1.1': ['low', 'medium', 'high', 'xhigh'],
   'meta/muse-spark-1.2': ['low', 'medium', 'high', 'xhigh'],
   'meta/muse-spark-1.2-contributor': ['low', 'medium', 'high', 'xhigh'],
-  // command-code@1.48.0 added `max` to Muse Spark 1.3; 1.3-contributor keeps
-  // the four-level set.
   'meta/muse-spark-1.3': ['low', 'medium', 'high', 'xhigh', 'max'],
   'meta/muse-spark-1.3-contributor': ['low', 'medium', 'high', 'xhigh'],
-  // command-code@1.49.0 added GPT-6 Astra with the full five-level effort set.
+  // command-code@1.49.0; the full five-level set.
   'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
-  // The 1.62.0 -> 1.64.0 train (1.63.0 and 1.64.0; neither has a changelog
-  // entry yet — the official changelog page still tops out at 1.62.0, so this
-  // was read from the 1.64.0 bundle and the public sources) is additive again:
-  // the registry grows 83 -> 86 with exactly three additions — Claude Opus 5.5
-  // and the GPT-6 Sol / GPT-6 Luna pair — all three text+image, reasoning with
-  // the same five-level set as `gpt-6-astra`, and no edit to any existing row.
-  // They are also the only three models the public catalog gained (77 -> 80).
+  // command-code@1.64.0: Claude Opus 5.5 and the GPT-6 Sol / Luna pair, the only
+  // registry additions in the 1.62.0 -> 1.64.0 train; all three reason with the
+  // same five-level set as `gpt-6-astra`.
   'claude-opus-5-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
-  // command-code@1.51.3 gave MiniMax M3 selectable ['low', 'medium', 'high']
-  // efforts (it previously reasoned automatically with no levels and lived in
-  // KNOWN_THINKING_MODELS; the hidden `minimax/minimax-m3-free` sibling gained
-  // the same set in the bundle). No CLI changelog entry exists for 1.51.1–1.51.3
-  // yet — this was read from the 1.51.3 bundled model table.
-  // command-code@1.52.0 added `inclusionai/ling-3.0-flash-sante:free` with
-  // automatic reasoning and no selectable efforts, so the effort map is
-  // unchanged by that release.
+  // command-code@1.51.3; it previously reasoned automatically with no levels
+  // and lived in KNOWN_THINKING_MODELS. The hidden
+  // `minimax/minimax-m3-free` sibling gained the same set in the bundle.
   'MiniMaxAI/MiniMax-M3': ['low', 'medium', 'high'],
-  // command-code@1.65.0 added `stealth/space-bunny-alpha` (Space Bunny Alpha) —
-  // the only model-registry change in the release (no official changelog entry
-  // exists for it yet; read from the 1.65.0 bundle and the public catalog,
-  // which now serves it). OpenRouter-served (`chatComplete`), text+image, 1M
-  // context, reasoning with the three-level set. It is free during the stealth
-  // preview (see KNOWN_DEALS) and is NOT routed under ZDR (see
-  // KNOWN_NON_ZDR_MODELS).
+  // command-code@1.65.0. Free during the stealth preview (see KNOWN_DEALS) and
+  // NOT routed under ZDR (see KNOWN_NON_ZDR_MODELS).
   'stealth/space-bunny-alpha': ['low', 'medium', 'high'],
+  // command-code@1.66.0. A three-level set offering `xhigh` INSTEAD of `high` —
+  // the GLM 5.3 / 5.2 family's shape, unlike Space Bunny Alpha's. Free during
+  // the stealth preview and NOT routed under ZDR (see the tables above).
+  'stealth/pixel-canary': ['low', 'medium', 'xhigh'],
 }
 
 /**
@@ -193,38 +125,30 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.8-27B',
   'Qwen/Qwen3.8-Flash',
   'Qwen/Qwen3.8-Max',
-  // command-code@1.41.0 added Qwen 3.8 Max 0902; Vision per the official
-  // registry ("Text input, Vision, Reasoning") and the CLI's
+  // command-code@1.41.0; Vision per the official registry and the CLI's
   // inputModalities:["text","image"].
   'Qwen/Qwen3.8-Max-0902',
-  // command-code@1.56.0 added Qwen 3.8 Omni Flash; Vision per the official
-  // registry and the CLI's inputModalities:["text","image"] (the pricing page
-  // also carries caps.vision: true).
+  // command-code@1.56.0; Vision per the official registry and inputModalities.
   'Qwen/Qwen3.8-Omni-Flash',
   'claude-fable-5-1',
   'claude-fable-5',
   'claude-haiku-4-5-20251001',
   'claude-opus-4-7',
   'claude-opus-4-8',
-  // command-code@1.64.0 added Claude Opus 5.5; Vision per the official registry
-  // and the CLI's inputModalities:["text","image"] (the pricing page also
-  // carries caps.vision: true).
+  // command-code@1.64.0; Vision per the official registry and inputModalities.
   'claude-opus-5-5',
   'claude-opus-5',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
   'deepseek/deepseek-v4-flash-vision-exp',
-  // command-code@1.53.0 added DeepSeek V4.1 Flash; Vision per the official
-  // registry ("Text input, Vision, Reasoning") and the CLI's
-  // inputModalities:["text","image"].
+  // command-code@1.53.0; Vision per the official registry and inputModalities.
   'deepseek/deepseek-v4.1-flash',
   'google/gemini-3.1-flash-lite',
   'google/gemini-3.5-flash',
   'google/gemini-3.5-flash-lite',
   'google/gemini-3.6-flash',
   'google/gemini-3.7-flash',
-  // command-code@1.43.0 added Gemini 3.8 Flash; Vision per the official
-  // registry and the CLI's inputModalities:["text","image"].
+  // command-code@1.43.0; Vision per the official registry and inputModalities.
   'google/gemini-3.8-flash',
   'gpt-5.3-codex',
   'gpt-5.4',
@@ -233,17 +157,14 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'gpt-5.6-luna',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
-  // command-code@1.49.0 added GPT-6 Astra; Vision per the official registry
-  // and the CLI's inputModalities:["text","image"].
+  // command-code@1.49.0; Vision per the official registry and inputModalities.
   'gpt-6-astra',
-  // command-code@1.64.0 added the GPT-6 Sol / GPT-6 Luna pair; Vision per the
-  // official registry and the CLI's inputModalities:["text","image"] (the
-  // pricing page also carries caps.vision: true).
+  // command-code@1.64.0 added the GPT-6 Sol / Luna pair; Vision per the
+  // official registry and inputModalities.
   'gpt-6-luna',
   'gpt-6-sol',
-  // command-code@1.44.0 added Muse Spark 1.3 and its Contributor sibling;
-  // both are Vision per the official registry and the CLI's
-  // inputModalities:["text","image"].
+  // command-code@1.44.0 added Muse Spark 1.3 and its Contributor sibling; both
+  // are Vision per the official registry and inputModalities.
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
   'meta/muse-spark-1.2-contributor',
@@ -255,60 +176,51 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'moonshotai/Kimi-K2.7-Code-Highspeed',
   'moonshotai/Kimi-K3',
   'sakana/fugu-ultra',
-  // command-code@1.65.0 added Space Bunny Alpha; Vision per the official
-  // registry and the CLI's inputModalities:["text","image"] (the pricing page
-  // also carries caps.vision: true).
+  // command-code@1.66.0; Vision per the official registry (the docs models page
+  // lists it in the Stealth group) and the CLI's inputModalities.
+  'stealth/pixel-canary',
+  // command-code@1.65.0; Vision per the official registry and inputModalities.
   'stealth/space-bunny-alpha',
   'stepfun/Step-3.7-Flash',
-  // command-code@1.60.0 added Step 5 Preview; Vision per the official registry
-  // ("Text input, Vision, Reasoning") and the CLI's
-  // inputModalities:["text","image"] (the pricing page also carries
-  // caps.vision: true).
+  // command-code@1.60.0; Vision per the official registry and inputModalities.
   'stepfun/Step-5-Preview',
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
   'xai/grok-4.5',
-  // command-code@1.47.0 marked Grok 4.6 vision-capable (it was text-only in
-  // 1.46.0); re-verified present in the 1.53.0 bundle's
-  // inputModalities:["text","image"] entries.
+  // command-code@1.47.0 marked Grok 4.6 vision-capable (text-only in 1.46.0).
   'xai/grok-4.6',
-  // command-code@1.59.0 added Grok 4.7; Vision per the official registry
-  // ("Text input, Vision, Reasoning"), the CLI's
-  // inputModalities:["text","image"] and the pricing page's caps.vision: true.
+  // command-code@1.59.0; Vision per the official registry and inputModalities.
   'xai/grok-4.7',
   'xiaomi/mimo-v2.5',
   // command-code@1.62.0 added the MiMo V2.6 family (Flash, Pro, Pro
-  // UltraSpeed); all three are Vision per the official registry ("Text input,
-  // Vision"), the CLI's inputModalities:["text","image"] and the pricing
-  // page's caps.vision: true. None of them carries a reasoning flag in any
-  // source, so they are plain non-thinking models — no effort or
-  // automatic-reasoning entry belongs beside these.
+  // UltraSpeed); all three are Vision. None carries a reasoning flag in any
+  // source, so no effort or automatic-reasoning entry belongs beside these.
   'xiaomi/mimo-v2.6-flash',
   'xiaomi/mimo-v2.6-pro',
   'xiaomi/mimo-v2.6-pro-ultraspeed',
   'z-ai/glm-5.3-flash',
-  // command-code@1.57.0 added GLM-5.3 FlashX; Vision per the official
-  // registry and the CLI's inputModalities:["text","image"] (the pricing page
-  // also carries caps.vision: true).
+  // command-code@1.57.0; Vision per the official registry and inputModalities.
   'z-ai/glm-5.3-flashx',
 ])
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.65.2` `dist/cli.mjs`, unchanged from 1.65.0:
- * `modelSupportsZdr(id)` is exactly `!nonZdrSet.has(canonicalize(id))`, and
- * `knownModelSupportsZdr`
- * carries the same membership in the sibling route table — the union is this
- * set). The official docs (commandcode.ai/docs/resources/zdr) put it in prose
- * — "99% of our models have ZDR-capable upstreams … only a small handful of
- * models are affected" — so the CLI's exclusion list is the only per-model
- * evidence there is; a ZDR request naming one of these fails with HTTP 422
- * `cmd_zdr_no_providers` instead of routing through a provider that retains.
+ * registry (`command-code@1.66.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
+ * carries the same membership in the sibling route table — the UNION of both
+ * is this set. Reading only the sibling route table would drop `meituan/
+ * LongCat-2.0` and `stealth/pixel-canary`, which each appear in
+ * `modelSupportsZdr` alone. The official docs (commandcode.ai/docs/resources/
+ * zdr) put it in prose — "99% of our models have ZDR-capable upstreams … only
+ * a small handful of models are affected" — so the CLI's exclusion list is
+ * the only per-model evidence there is; a ZDR request naming one of these
+ * fails with HTTP 422 `cmd_zdr_no_providers` instead of routing through a
+ * provider that retains.
  *
  * Why a NEGATIVE set, and why "not listed" answers TRUE: 99% of the catalog is
  * covered, so the maintained difference is the exception list. This helper is
  * informational; the adapter sends the ZDR header for EVERY request when the
- * switch is on. The provider remains the routing authority and refuses an
+ * switch is on — the provider remains the routing authority and refuses an
  * unsupported model rather than silently dropping the privacy guarantee.
  *
  * `minimax/minimax-m3-free` is the one entry the public catalog
@@ -319,16 +231,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * Keep in sync via the dsh-commandcode-upstream skill: the CLI's registry data
  * (its `zdr:{only:[…]}` provider routes and the per-provider `zdr`/`noTraining`
  * flags) is upstream-internal routing, not a per-model contract, so this table
- * is the snapshot of the exclusion set and nothing more. The 1.62.0 → 1.64.0
- * diff of that union is EMPTY: both anchors were extracted from both bundles
- * during the 2026-09-23 check and each carries the same 20 members — which is
- * how rare a change here is expected to be. The 1.64.0 → 1.65.0 diff (2026-09-24)
- * is the counterexample that proves the check still runs: exactly one member
- * joins (`stealth/space-bunny-alpha`), and it is in both anchors. `meituan/
- * LongCat-2.0` is the one member the two anchors disagree about (it is in
- * `modelSupportsZdr`'s set in both releases and in neither `knownModelSupportsZdr`
- * set), so the union is
- * what this table follows; reading only the sibling route table would drop it.
+ * is the snapshot of the exclusion set and nothing more. It is a rare change:
+ * 20 members held across 1.62.0 → 1.64.0, and 1.65.0 and 1.66.0 each added
+ * exactly one (the two stealth-preview models below).
  */
 export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'MiniMaxAI/MiniMax-M3',
@@ -342,11 +247,16 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'minimax/minimax-m3-free',
   'poolside/laguna-s-2.1-free',
   'sakana/fugu-ultra',
-  // command-code@1.65.0 added `stealth/space-bunny-alpha` — the first change to
-  // this set since the 1.62.0 check. It is in BOTH anchors of the 1.65.0 bundle
-  // and the pricing page's own tip says it: "Free while the preview lasts. Not
-  // routed under ZDR."
+  // command-code@1.65.0, in BOTH anchors. The pricing page's own tip agrees:
+  // "Free while the preview lasts. Not routed under ZDR."
   'stealth/space-bunny-alpha',
+  // command-code@1.66.0 added `stealth/pixel-canary` — the second stealth-preview
+  // free model, and like its sibling it is not routed under ZDR. It joins
+  // through `modelSupportsZdr` alone (the 1.66.0 bundle's
+  // `knownModelSupportsZdr` set does not repeat it), so reading only the
+  // sibling route table would drop it; the pricing page's own tip says it:
+  // "Free while the preview lasts. Not routed under ZDR."
+  'stealth/pixel-canary',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
   'xai/grok-4.5',
@@ -368,36 +278,18 @@ export function supportsZeroDataRetention(modelId: string): boolean {
 }
 
 /**
- * Models the official CLI's model table (command-code@1.53.0) marks
- * `reasoning:!0` but defines no selectable `reasoning_effort` levels — they
- * think automatically, with Command Code driving the depth. This is the
- * authoritative "thinks, effort not adjustable" set: `KNOWN_EFFORTS` (which
- * mirrors the CLI's effort map exactly) stays the sole source for selectable
- * effort levels, and this snapshot is not surfaced in the picker's compact
- * description — it exists for programmatic consumers.
+ * Models the official CLI's model table marks `reasoning:!0` but defines no
+ * selectable `reasoning_effort` levels — they think automatically, with
+ * Command Code driving the depth. `KNOWN_EFFORTS` (which mirrors the CLI's
+ * effort map exactly) stays the sole source for selectable effort levels, and
+ * this snapshot is not surfaced in the picker's compact description — it exists
+ * for programmatic consumers.
  *
- * Source: the command-code@1.53.0 bundled model table (dist/cli.mjs),
- * cross-checked with https://commandcode.ai/docs/reference/cli/models.
- * (`stealth/ox-alpha` left this set in command-code@1.32.1, which gave it
- * selectable `['low', 'high', 'max']` efforts; the preview then ended in
- * 1.34.0, removing the model from the catalog entirely. `tencent/hy4-preview`
- * joined this set in command-code@1.37.0 — reasoning:!0, no efforts, 1M
- * context, routed through OpenRouter — then gained selectable
- * `['low', 'medium', 'high']` efforts in command-code@1.38.0 and moved to
- * `KNOWN_EFFORTS`. `moonshotai/Kimi-K3` followed the same path in
- * command-code@1.39.3 — it gained `['low', 'high', 'max']` efforts and moved
- * to `KNOWN_EFFORTS`. command-code@1.42.0 added LongCat 2.0 (then
- * `meituan/LongCat-2.0:free`, now the paid `meituan/LongCat-2.0`; reasoning:!0,
- * no efforts). command-code@1.45.0 gave the Muse Spark family
- * (1.1, 1.2, 1.2-contributor, 1.3, 1.3-contributor) selectable
- * `['low', 'medium', 'high', 'xhigh']` efforts — they moved to `KNOWN_EFFORTS`.
- * command-code@1.51.3 gave `MiniMaxAI/MiniMax-M3` selectable
- * `['low', 'medium', 'high']` efforts — it moved to `KNOWN_EFFORTS` too.
- * command-code@1.52.0 added `inclusionai/ling-3.0-flash-sante:free`
- * (reasoning:!0, no efforts).)
- * command-code@1.53.0 added `deepseek/deepseek-v4.1-flash` with selectable
- * ['low', 'high', 'max'] efforts, so it lives in `KNOWN_EFFORTS`, not here.)
- * Keep in sync via the dsh-commandcode-upstream skill.
+ * Source: the bundled model table (dist/cli.mjs), cross-checked with
+ * https://commandcode.ai/docs/reference/cli/models. Keep in sync via the
+ * dsh-commandcode-upstream skill; a model that GAINS selectable efforts leaves
+ * this set for `KNOWN_EFFORTS` (Tencent Hy4 Preview, Kimi K3, the Muse Spark
+ * family and MiniMax M3 all took that path).
  */
 export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'Qwen/Qwen3.6-Max-Preview',
@@ -441,7 +333,7 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  *
  * Measured 2026-09-16 against the live catalog (command-code@1.54.0): all 69
  * models were posted to `/provider/v1/chat/completions`; exactly these eight
- * — the whole Claude family — refused, and every one of them is routed
+ * — the whole Claude family then — refused, and every one of them is routed
  * normally by `/alpha/generate` (a lower-plan key gets the ordinary
  * `MODEL_NOT_IN_PLAN` 403 there, never a routing error). So the CLI transport
  * is a complete fallback and the adapter does not need a Messages transport.
@@ -452,13 +344,15 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * the Provider API by default — picking any Claude model there failed every
  * request before this snapshot existed.
  *
- * Keep in sync when models ship (see the dsh-commandcode-upstream skill).
  * `requiresMessagesEndpoint()` additionally treats any `claude-*` id as
- * Messages-only, so a Claude model added upstream is routed correctly by an
- * un-updated plugin instead of hard-failing with the 400 above; the worst case
- * of that rule going stale the other way (upstream teaching
- * `/provider/v1/chat/completions` to serve Claude) is one model riding the CLI
- * transport it already works on.
+ * Messages-only, so a Claude model added upstream (`claude-opus-5-5` in
+ * command-code@1.64.0 was the first this snapshot missed) is still routed
+ * correctly by an un-updated plugin instead of hard-failing with the 400
+ * above. The worst case of that rule going stale the other way (upstream
+ * teaching `/provider/v1/chat/completions` to serve Claude) is one model
+ * riding the CLI transport it already works on.
+ *
+ * Keep in sync when models ship (see the dsh-commandcode-upstream skill).
  */
 export const MESSAGES_ONLY_MODELS: ReadonlySet<string> = new Set([
   'claude-sonnet-5',
@@ -478,31 +372,14 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
 
 /**
  * The minimum subscription plan a model is included in, per the official plan
- * pages (`/docs/plans/go`, `/docs/plans/goat`, `/docs/plans/pro`, `/docs/plans/max`
- * and `/docs/resources/pricing-limits`). Each plan's model list is a superset of
- * the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max. Models absent from every
- * plan list (Claude Opus/Fable, Fugu Ultra) are Provider-tier.
- * `claude-fable-5-1` (Claude Fable 5.1, added in command-code@1.40.0) is
- * Provider/Max-tier exactly like `claude-fable-5` — its availability matrix on
- * the official plan/pricing pages grants individual-provider/max/ultra and
- * teams-pro only, and the CLI's plan-access map blocks it on Go/GOAT/Pro.
- * command-code@1.41.0 added `Qwen/Qwen3.8-Max-0902` (Go) and 1.42.0 added
- * LongCat 2.0 (Go — a free promo until 2026-09-19, when the backend renamed
- * `meituan/LongCat-2.0:free` to the paid `meituan/LongCat-2.0`); 1.43.0 added
- * `google/gemini-3.8-flash` (GOAT) and 1.44.0 added `meta/muse-spark-1.3`
- * (GOAT) plus its Contributor sibling (Go); command-code@1.52.0 added the
- * free `inclusionai/ling-3.0-flash-sante:free` (Go); command-code@1.53.0
- * added `deepseek/deepseek-v4.1-flash` (Go); command-code@1.56.0 added
- * `Qwen/Qwen3.8-Omni-Flash` (Go); command-code@1.57.0 added
- * `z-ai/glm-5.3-flashx` (Go); command-code@1.59.0 added `xai/grok-4.7` (GOAT)
- * and 1.60.0 added `stepfun/Step-5-Preview` (Go); command-code@1.62.0 added the
- * MiMo V2.6 family — `xiaomi/mimo-v2.6-flash` + `xiaomi/mimo-v2.6-pro` (Go) and
- * `xiaomi/mimo-v2.6-pro-ultraspeed` (GOAT) — so the 1.58.0 -> 1.62.0 window's
- * only tier changes are additions and the superset chain still holds. The
- * 1.62.0 -> 1.65.0 window continues the pattern: 1.64.0 added
- * `claude-opus-5-5` (Provider/Max), `gpt-6-sol` (Pro) and `gpt-6-luna` (Go),
- * and 1.65.0 added `stealth/space-bunny-alpha` (Go, every tier) — additions
- * only, no tier moves.
+ * pages (`/docs/plans/go`, `/docs/plans/goat`, `/docs/plans/pro`,
+ * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
+ * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
+ * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
+ * Provider-tier. Re-verified at command-code@1.66.0 (2026-09-27): 82 catalog
+ * ids at 52/60/74/82 cumulative, a strict superset chain — every release since
+ * 1.49.0 has been additive with no tier move, and per-entry tags below name the
+ * release that added each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -513,7 +390,7 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (50) ---
+  // --- Go (52) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -525,44 +402,34 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.8-27B': 'go',
   'Qwen/Qwen3.8-Flash': 'go',
   'Qwen/Qwen3.8-Max': 'go',
-  // command-code@1.41.0 added Qwen 3.8 Max 0902; it sits on the Go plan page.
+  // command-code@1.41.0; listed on the Go plan page.
   'Qwen/Qwen3.8-Max-0902': 'go',
-  // command-code@1.56.0 added Qwen 3.8 Omni Flash; the pricing page's embedded
-  // availability grants every tier (individual-go through teams-pro) — the
-  // same "all":true shape as the rest of the Qwen 3.8 family.
+  // command-code@1.56.0; the pricing page's embedded availability grants every
+  // tier (individual-go through teams-pro) — the "all":true shape shared by the
+  // Qwen 3.8 family and the stealth-preview models below.
   'Qwen/Qwen3.8-Omni-Flash': 'go',
-  // command-code@1.39.0 added DeepSeek V4 Flash Fast; it is a Go-tier model
-  // alongside the rest of the DeepSeek V4 family.
+  // command-code@1.39.0; Go-tier like the rest of the DeepSeek V4 family.
   'deepseek/deepseek-v4-flash-fast': 'go',
-  // command-code@1.53.0 added DeepSeek V4.1 Flash ("Add new
-  // deepseek/deepseek-v4.1-flash model"); the pricing page's embedded
-  // availability grants it every plan including Go, and the Go/GOAT/Pro/Max
-  // plan pages all list it.
+  // command-code@1.53.0; every plan including Go.
   'deepseek/deepseek-v4.1-flash': 'go',
   'deepseek/deepseek-v4-flash': 'go',
   'deepseek/deepseek-v4-flash-vision-exp': 'go',
   'deepseek/deepseek-v4-pro': 'go',
   'gpt-5.6-luna': 'go',
-  // command-code@1.64.0 added GPT-6 Luna on every plan including Go (the
-  // opensource-category GPT-6 sibling): the pricing page's availability sets
-  // individual-go true and the Go plan page lists it, while its premium-category
-  // siblings Sol (Pro) and Astra (Provider/Max) do not.
+  // command-code@1.64.0; the opensource-category GPT-6, on every plan including
+  // Go, unlike its premium-category siblings Sol (Pro) and Astra (Provider/Max).
   'gpt-6-luna': 'go',
-  // command-code@1.42.0 added Meituan's LongCat 2.0 as a free Go-tier model
-  // ("LongCat 2.0 free model" — 100% off while it lasts, every plan). That
-  // promo ended 2026-09-19: the pricing page dropped the deal and the free
-  // slug, the public catalog renamed the id to `meituan/LongCat-2.0` (paid,
-  // $0.30/$1.20/$0.006), and the docs list the new id. command-code@1.58.0
-  // followed the backend: it adds the paid id and marks the retired `:free`
-  // sibling `hidden` ("LongCat 2.0 (Free)"), so the CLI registry now agrees
-  // with the catalog this map is keyed by.
+  // command-code@1.42.0 added the free LongCat 2.0 on every plan; that promo
+  // ended 2026-09-19 and the catalog renamed the id to the paid
+  // `meituan/LongCat-2.0` ($0.30/$1.20/$0.006), which keeps this slot. The CLI
+  // followed in command-code@1.58.0, marking the retired `:free` sibling
+  // `hidden`, so its registry now agrees with the catalog this map is keyed by.
   'meituan/LongCat-2.0': 'go',
-  // command-code@1.52.0 added Ling 3.0 Flash Sante as a free Go-tier model
-  // ("free, up to 100 requests a day", every plan) — the successor to the
-  // retired `inclusionai/ling-3.0-flash-free` promo.
+  // command-code@1.52.0; free on every plan ("up to 100 requests a day"),
+  // successor to the retired `inclusionai/ling-3.0-flash-free` promo.
   'inclusionai/ling-3.0-flash-sante:free': 'go',
-  // command-code@1.44.0 added Muse Spark 1.3 Contributor on every plan
-  // including Go, like its 1.2 Contributor sibling.
+  // command-code@1.44.0; on every plan including Go, like its 1.2 Contributor
+  // sibling.
   'meta/muse-spark-1.2-contributor': 'go',
   'meta/muse-spark-1.3-contributor': 'go',
 
@@ -575,15 +442,14 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'poolside/laguna-s-2.1-free': 'go',
   'stepfun/Step-3.5-Flash': 'go',
   'stepfun/Step-3.7-Flash': 'go',
-  // command-code@1.60.0 added Step 5 Preview; the pricing page's embedded
-  // availability grants every tier (individual-go through teams-pro), and the
-  // Go plan page's rendered table lists it — while GOAT/Pro/Max list it too,
-  // which is the superset chain this map encodes.
+  // command-code@1.60.0; every tier, and listed by the Go/GOAT/Pro/Max plan
+  // pages alike — the superset chain this map encodes.
   'stepfun/Step-5-Preview': 'go',
-  // command-code@1.65.0 added Space Bunny Alpha; the pricing page's embedded
-  // availability grants every tier (individual-go through teams-pro, the same
-  // "all":true shape as the Qwen 3.8 family), so it is a Go model that every
-  // higher plan also serves. Free during the stealth preview (see KNOWN_DEALS).
+  // command-code@1.66.0; all-tiers availability, so a Go model every higher
+  // plan also serves. Free during the stealth preview (see KNOWN_DEALS).
+  'stealth/pixel-canary': 'go',
+  // command-code@1.65.0; all-tiers availability. Free during the stealth
+  // preview (see KNOWN_DEALS).
   'stealth/space-bunny-alpha': 'go',
   'tencent/hy3-paid': 'go',
   'tencent/hy4-preview': 'go',
@@ -592,16 +458,14 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'xai/grok-4.5': 'go',
   'xiaomi/mimo-v2.5': 'go',
   'xiaomi/mimo-v2.5-pro': 'go',
-  // command-code@1.62.0 added MiMo V2.6 Flash and MiMo V2.6 Pro on every tier;
-  // the Go plan page lists both, and the GOAT-tier Pro UltraSpeed sibling does
-  // NOT appear there — the pricing page's availability is what separates them
-  // (individual-go: true for these two, false for UltraSpeed).
+  // command-code@1.62.0 added the MiMo V2.6 family; these two are on every tier
+  // (the Go plan page lists both), while the Pro UltraSpeed sibling is GOAT —
+  // individual-go is what separates them.
   'xiaomi/mimo-v2.6-flash': 'go',
   'xiaomi/mimo-v2.6-pro': 'go',
   'z-ai/glm-5.3-flash': 'go',
-  // command-code@1.57.0 added GLM-5.3 FlashX; the pricing page's embedded
-  // availability grants every tier (individual-go through teams-pro) — the
-  // same "all":true shape as its `z-ai/glm-5.3-flash` sibling.
+  // command-code@1.57.0; the "all":true shape shared with its
+  // `z-ai/glm-5.3-flash` sibling.
   'z-ai/glm-5.3-flashx': 'go',
   'zai-org/GLM-5': 'go',
   'zai-org/GLM-5.1': 'go',
@@ -610,24 +474,18 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'zai-org/GLM-5.3': 'go',
   // --- GOAT (8 more) ---
   'google/gemini-3.7-flash': 'goat',
-  // command-code@1.43.0 added Gemini 3.8 Flash; the pricing page marks it
-  // "Available on GOAT and above", like the rest of the Gemini Flash family.
+  // command-code@1.43.0; "Available on GOAT and above", like the rest of the
+  // Gemini Flash family.
   'google/gemini-3.8-flash': 'goat',
   'gpt-5.6-sol': 'goat',
   'meta/muse-spark-1.2': 'goat',
-  // command-code@1.44.0 added Muse Spark 1.3; the pricing page marks it
-  // "Available on GOAT and above", like the 1.2/1.1 models.
+  // command-code@1.44.0; "Available on GOAT and above", like the 1.2/1.1 models.
   'meta/muse-spark-1.3': 'goat',
   'xai/grok-4.6': 'goat',
-  // command-code@1.59.0 added Grok 4.7 on GOAT and above: the pricing page's
-  // availability sets individual-go false with goat/pro/provider/max/ultra
-  // true ("Available on GOAT and above"), and the Go plan page's table does not
-  // list it while GOAT's does.
+  // command-code@1.59.0; "Available on GOAT and above" (individual-go false).
   'xai/grok-4.7': 'goat',
-  // command-code@1.62.0 added MiMo V2.6 Pro UltraSpeed on GOAT and above, the
-  // same split as its Grok 4.7 sibling (individual-go false; the Go plan page
-  // does not list it, GOAT/Pro/Max do) — its two cheaper V2.6 siblings are Go
-  // models and sit in the section above.
+  // command-code@1.62.0; GOAT and above, the same split as its Grok 4.7
+  // sibling. Its two cheaper V2.6 siblings are Go, above.
   'xiaomi/mimo-v2.6-pro-ultraspeed': 'goat',
   // --- Pro (14 more) ---
   'claude-haiku-4-5-20251001': 'pro',
@@ -642,25 +500,23 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'gpt-5.4-mini': 'pro',
   'gpt-5.5': 'pro',
   'gpt-5.6-terra': 'pro',
-  // command-code@1.64.0 added GPT-6 Sol on Pro and above: the pricing page's
-  // availability sets individual-go/goat false with pro and above true, and the
-  // Go and GOAT plan pages do not list it while Pro/Max do.
+  // command-code@1.64.0; Pro and above (individual-go/goat false).
   'gpt-6-sol': 'pro',
   'meta/muse-spark-1.1': 'pro',
   // --- Provider / Max (8) ---
+  // command-code@1.40.0; Provider/Max exactly like its `claude-fable-5`
+  // predecessor — individual-provider/max/ultra and teams-pro only.
   'claude-fable-5-1': 'provider',
   'claude-fable-5': 'provider',
   'claude-opus-4-7': 'provider',
   'claude-opus-4-8': 'provider',
-  // command-code@1.64.0 added Claude Opus 5.5 on the Provider API only: the
-  // pricing page's availability sets go/goat/pro/pro-v1 all false with
-  // provider/max/ultra true, and the public catalog serves it with
-  // supported_endpoints ['/messages'] — the Claude family's route, which the
-  // adapter's `claude-*` prefix rule already sends down the CLI transport.
+  // command-code@1.64.0; Provider API only (go/goat/pro/pro-v1 all false), and
+  // the catalog serves it with supported_endpoints ['/messages'] — the Claude
+  // route, which the adapter's `claude-*` prefix rule already sends down the
+  // CLI transport.
   'claude-opus-5-5': 'provider',
   'claude-opus-5': 'provider',
-  // command-code@1.49.0 added GPT-6 Astra; per the pricing page it sits on
-  // Max (Provider/Max tier).
+  // command-code@1.49.0; on Max.
   'gpt-6-astra': 'provider',
   'sakana/fugu-ultra': 'provider',
 }
@@ -717,11 +573,11 @@ export function compareByPlan(
 
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
- * (located by the `"individual-go"` key in command-code@1.53.0 `dist/cli.mjs`,
- * re-verified unchanged through 1.53.0): subscription `planId`
- * prefix → display name and the plan's monthly credit total. This is the
- * account's own subscription (from `/alpha/billing/subscriptions`) — distinct
- * from {@link KNOWN_PLANS}, which maps catalog models to their minimum tier.
+ * (located by the `"individual-go"` key in `dist/cli.mjs`, re-verified unchanged
+ * through command-code@1.66.0): subscription `planId` prefix → display name and
+ * the plan's monthly credit total. This is the account's own subscription
+ * (from `/alpha/billing/subscriptions`) — distinct from {@link KNOWN_PLANS},
+ * which maps catalog models to their minimum tier.
  *
  * `tierWeight` is plugin-added (not from the CLI maps): the plan's rank on
  * the {@link PLAN_ORDER} scale, used by the picker's plan filter
@@ -819,8 +675,13 @@ export function modelVisibleForAnyAccount(
  *   render time against `Date.now()`), the deal label is hidden until the
  *   snapshot is refreshed from the official page. `undefined` means
  *   "no expiry" (permanent).
- * - `free` marks models whose requests cost no credits (Laguna S 2.1), shown
- *   as a `FREE` badge; it degrades to a plain discount once the deal lapses.
+ * - `free` marks models whose requests cost no credits, shown as a `FREE`
+ *   badge; it degrades to a plain discount once the deal lapses.
+ *
+ * A deal whose promo ENDS is removed here rather than left to lapse on
+ * `expiresAt`: the pricing page drops the entry, so a lapsed row would badge a
+ * model the catalog now serves at full price (Grok 4.7 reverts to $2.00 in /
+ * $6.00 out after its 2026-09-27 window).
  *
  * Keep in sync with the official pricing page when deals change (see the
  * dsh-commandcode-upstream skill).
@@ -835,42 +696,27 @@ export interface KnownDeal {
 }
 
 export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
-  // Gemini 3.7 Flash's 50% off deal was retired from the official pricing
-  // page's #deals section (command-code@1.38.2 sync); the model now shows at
-  // full price.
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
   'xiaomi/mimo-v2.5': { label: '98% off' },
-  // command-code@1.61.0 put Grok 4.7 on a 40% off launch deal ("Grok 4.7 40%
-  // off"), running 2026-09-21 -> 2026-09-27T23:59:59.999Z and reverting to
-  // $2.00 in / $6.00 out. The expiry is stamped from the page's own `deal`
-  // record so the badge lapses by itself: the vendored rate row already holds
-  // the discounted figures ($1.20 in / $3.60 out / $0.30 cache read, doubling
-  // past 200K), exactly like the other percentage deals here.
+  // command-code@1.61.0; the expiry is stamped from the page's own `deal`
+  // record so the badge lapses by itself, while the vendored rate row keeps the
+  // discounted figures ($1.20 in / $3.60 out / $0.30 cache read, doubling past
+  // 200K) — exactly like the other percentage deals here.
   'xai/grok-4.7': { label: '40% off', expiresAt: '2026-09-27T23:59:59.999Z' },
-  // The MiniMax M3 / M2.7 FREE promo variants were retired in
-  // command-code@1.39.2 ("Retire MiniMax free models"): the official CLI hides
-  // them and the pricing page no longer lists them as free, so the free
-  // entries that shipped through 1.38.2 (with a 2026-09-05 expiry) are removed
-  // here rather than left to lapse on schedule. The paid MiniMax M3 / M2.7
-  // rows keep their own rates.
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
-  // Meituan's LongCat 2.0 promo ended 2026-09-19 (the pricing page's deal count
-  // dropped 6 -> 5, its free count 4 -> 3, and the DEAL block no longer exists):
-  // the entry that shipped from command-code@1.42.0 on is removed here rather
-  // than left to badge a model the catalog now serves paid as
-  // `meituan/LongCat-2.0` at $0.30/$1.20/$0.006.
-  // Ling 3.0 Flash Sante (command-code@1.52.0) is free "up to 100 requests a
-  // day" while the promo lasts — a permanent-style deal (no fixed end date,
-  // like LongCat 2.0 used to be). Free requests cost no credits on every plan.
+  // command-code@1.52.0; free "up to 100 requests a day" with no published end
+  // date, so a permanent-style deal like the stealth previews below.
   'inclusionai/ling-3.0-flash-sante:free': { label: 'FREE', free: true },
   // command-code@1.65.0 added Space Bunny Alpha as a stealth-preview free model
-  // ("Free while the stealth preview lasts", 100% off, auto-applied) — a
-  // permanent-style free deal like Ling's, so no expiresAt. It is NOT routed
-  // under ZDR (see KNOWN_NON_ZDR_MODELS). The pricing page publishes its rates
-  // as a literal zero, and `modelPriceTable()` serves free models explicitly at
-  // zero, so no row is added to the vendored price table.
+  // ("Free while the stealth preview lasts", 100% off, auto-applied, no
+  // published end date), and command-code@1.66.0 added Pixel Canary on
+  // identical terms. Neither is routed under ZDR (see
+  // KNOWN_NON_ZDR_MODELS), and the pricing page publishes both at a literal
+  // zero, which `modelPriceTable()` serves from these deals — so neither gets a
+  // row in the vendored price table.
   'stealth/space-bunny-alpha': { label: 'FREE', free: true },
+  'stealth/pixel-canary': { label: 'FREE', free: true },
 }
 
 /**
@@ -879,24 +725,11 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
  * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h per
  * weekday, full price) **Monday to Friday only**; the other 17 hours of a
  * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
- * The V4 Flash Vision (exp) variant (command-code@1.32.0) shares the V4 Flash
- * rates exactly — $0.15/$0.60 off-peak and $0.30/$1.20 peak, per the page's own
- * `timeOfDay` block, not merely 2× its own off-peak figures: a rate that is
- * internally consistent can still be the wrong row, which is why the vendored
- * price table (`./model-prices.ts`) is synced from the page and not hand-kept.
- * The picker shows the
- * *current* state as a compact
- * label (`Peak`/`Half`) matching the English noun style of the other markers
- * (`Image`, `FREE`), so a developer can tell at a glance whether calling the
- * model right now is cheap or expensive.
- *
- * Authoritative extraction: the pricing page embeds a model JSON array whose
- * hourly-priced entries carry a `timeOfDay` block
- * (`{ windows: "01–04 & 06–10 UTC, Mon–Fri", peakHoursPerDay: 7,
- * offPeakHoursPerDay: 17, peak: {...}, offPeak: {...} }`). Exactly four models
- * carry it: V4 Pro, V4 Flash, V4 Flash Vision (exp), and V4.1 Flash (added in
- * command-code@1.53.0 at $0.15/$0.60 off-peak, $0.30/$1.20 peak — the same
- * schedule as the other three).
+ * Exactly four models carry the page's `timeOfDay` block (the four rows below).
+ * The picker shows the *current* state as a compact label (`Peak`/`Half`)
+ * matching the English noun style of the other markers (`Image`, `FREE`), so a
+ * developer can tell at a glance whether calling the model right now is cheap
+ * or expensive.
  *
  * Extraction caution: the rendered HTML rows are a trap. Each annotation div
  * sits inside its OWN row's container, immediately before the NEXT row starts,
@@ -904,7 +737,11 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
  * to the model printed after it — that is how `deepseek/deepseek-v4-flash-fast`
  * was wrongly added here (its row is flat-priced at $0.28/$0.56/$0.07 and has
  * no `timeOfDay` block). Trust the embedded JSON's `timeOfDay` membership and
- * the 2× price relation, never the flat-text neighbor.
+ * the 2× price relation, never the flat-text neighbor. A rate that is
+ * internally consistent can still be the wrong row (the V4 Flash Vision (exp)
+ * variant is priced from the page's own `timeOfDay` block, not from 2× its own
+ * off-peak figures), which is why the vendored price table
+ * (`./model-prices.ts`) is synced from the page and not hand-kept.
  *
  * Keep in sync with the official pricing page when the model set, the peak
  * windows, or the weekday rule change (see the dsh-commandcode-upstream skill).
@@ -913,9 +750,8 @@ export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
   'deepseek/deepseek-v4-flash-vision-exp',
-  // command-code@1.53.0 added DeepSeek V4.1 Flash with the same `timeOfDay`
-  // block as the other DeepSeek models (off-peak $0.15/$0.60, peak
-  // $0.30/$1.20, 01–04 & 06–10 UTC Mon–Fri).
+  // command-code@1.53.0; the same `timeOfDay` block as the other three
+  // (off-peak $0.15/$0.60, peak $0.30/$1.20, 01–04 & 06–10 UTC Mon–Fri).
   'deepseek/deepseek-v4.1-flash',
 ])
 
@@ -952,11 +788,8 @@ export function isPeakPricingHour(now: number = Date.now()): boolean {
 }
 
 /**
- * Whether `now` (defaults to `Date.now()`) falls in a peak-pricing window for
- * time-of-day-priced models. Peak rates apply Monday–Friday (UTC) only: the
- * official rule charges Saturday and Sunday completely off-peak for all 24
- * hours, so a weekend timestamp is off-peak even inside `PEAK_HOUR_RANGES`.
- * `undefined` for models outside the snapshot.
+ * As {@link isPeakPricingHour}, plus the {@link KNOWN_PEAK_PRICING} membership
+ * test; `undefined` for models outside the snapshot.
  */
 export function peakPricingState(
   modelId: string,
@@ -982,10 +815,6 @@ export function peakPricingLabel(
   return state === 'peak' ? 'Peak' : 'Half'
 }
 
-// ---------------------------------------------------------------------------
-// Snapshot read helpers (kept with the tables: a model/plan/deal sync must
-// never touch src/adapter.ts)
-// ---------------------------------------------------------------------------
 /**
  * Official display label for a model's minimum plan, or undefined for models
  * outside the snapshot (e.g. future catalog additions).

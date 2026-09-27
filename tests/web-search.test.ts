@@ -1,12 +1,10 @@
 /**
  * Web-search provider tests (node:test, zero deps). Run with `npm test`.
  *
- * These drive the `CommandCodeSearchProvider` against a stubbed fetch,
- * pinning the official Command Code `/alpha/web-search` wire contract:
- * - POST body `{ query, numResults }` on `{apiBase}/alpha/web-search`
- * - `Authorization: Bearer <key>` + `x-command-code-version` + CLI-environment
- * - the result mapping (`{ title, url, snippet }` → `WebSearchSource`)
- * - the missing-credential / non-2xx / unparseable / abort failure taxonomy.
+ * Drive `CommandCodeSearchProvider` against a stubbed fetch, pinning the
+ * `/alpha/web-search` wire contract (POST body, `Authorization: Bearer` +
+ * `x-command-code-version` headers), the result mapping, the failure taxonomy
+ * and the `searchProviderId` selection handoff.
  */
 
 import { test } from 'node:test'
@@ -258,9 +256,9 @@ test('available() is false for a blank or non-parseable apiBase', async () => {
 })
 
 test('applyCommandCodeSearchSelection restores a sibling pin (e.g. modsearch) on disable', () => {
-  // The issue #26 repro: a sibling plugin pinned `searchProvider: modsearch`
-  // at construction time. Enabling must remember it; disabling must hand the
-  // selection back to it — never to the factory default.
+  // Issue #26: a sibling plugin pinned `searchProvider: modsearch`. Enabling
+  // must remember it; disabling must hand the selection back, never to the
+  // factory default.
   const web = { searchProviderId: 'modsearch' } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
   const state = commandCodeSearchSelection()
 
@@ -272,9 +270,8 @@ test('applyCommandCodeSearchSelection restores a sibling pin (e.g. modsearch) on
 })
 
 test('applyCommandCodeSearchSelection leaves an unconfigured field alone when never enabled', () => {
-  // A fresh boot straight into `webSearch: false`: nothing displaced, nothing
-  // to restore — the runtime's own value (sibling pin or unset auto-select)
-  // already says what the user wants.
+  // A fresh boot straight into `webSearch: false`: nothing displaced, nothing to
+  // restore — the runtime's own value already says what the user wants.
   const pinned = { searchProviderId: 'modsearch' } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
   applyCommandCodeSearchSelection(pinned, commandCodeSearchSelection(), false)
   assert.equal((pinned as unknown as { searchProviderId?: string }).searchProviderId, 'modsearch')
@@ -297,12 +294,10 @@ test('applyCommandCodeSearchSelection keeps the displaced backend across re-enab
 })
 
 test('applyCommandCodeSearchSelection treats a pre-set commandcode pin as nothing to restore', () => {
-  // The field already read `commandcode` before we ever touched it (manual
-  // `searchProvider: commandcode` pin or a surviving runtime): disabling is a
-  // no-op rather than a guess at the factory default. A no-op means the field
-  // keeps the user's OWN id — writing `undefined` back would hand the
-  // selection to dsh-web's auto-select, where a second usable provider turns
-  // every later search into `WEB_PROVIDER_AMBIGUOUS`.
+  // The field already read `commandcode` before we touched it: disabling is a
+  // no-op, because writing `undefined` back would hand the selection to
+  // dsh-web's auto-select, where a second usable provider turns every later
+  // search into `WEB_PROVIDER_AMBIGUOUS`.
   const web = { searchProviderId: COMMANDCODE_SEARCH_PROVIDER_ID } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
   const state = commandCodeSearchSelection()
 
@@ -316,8 +311,7 @@ test('applyCommandCodeSearchSelection treats a pre-set commandcode pin as nothin
 
 test('applyCommandCodeSearchSelection still clears a field that never read our id', () => {
   // The mirror image: the field was UNSET (auto-select) when we took over, so
-  // disabling must give that back — leaving `commandcode` in place there would
-  // keep Command Code serving with the toggle off.
+  // disabling must give that back.
   const web = {} as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
   const state = commandCodeSearchSelection()
 
@@ -330,31 +324,28 @@ test('applyCommandCodeSearchSelection still clears a field that never read our i
 test('applyCommandCodeSearchSelection never throws on a hardened runtime', () => {
   const frozen = Object.freeze({}) as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
   const state = commandCodeSearchSelection()
-  // In strict-mode ESM assignment to a frozen object throws inside; the
-  // helper must swallow it and degrade to registered-but-unselected.
+  // In strict-mode ESM assignment to a frozen object throws inside; the helper
+  // must swallow it and degrade to registered-but-unselected.
   applyCommandCodeSearchSelection(frozen, state, true)
   applyCommandCodeSearchSelection(frozen, state, false)
 })
 
-
-/**
- * One config object shaped the way dsh 0.1.7's loader hands it to `apply()`:
- * every marked field is a frozen `{ get() }` reference whose value the loader
- * commits in place. `plain` is the reference-carrying object; `set()` stands in
- * for a settings write, and the caller then dispatches `loader/volatile-update`
- * exactly as `cordis-plugin-loader` does.
- */
 /**
  * Dispatch `loader/volatile-update`, the event `cordis-plugin-loader` raises on
  * the owning fiber after committing a settings write in place. Typed events do
  * not declare it (the loader is not a peer of this bundle), so the dispatch goes
- * through a structural view, exactly as the plugin's own listener does.
+ * through a structural view.
  */
 function emitVolatileUpdate(ctx: unknown): void {
   (ctx as { emit(event: string, paths: readonly (readonly string[])[]): void })
     .emit('loader/volatile-update', [['webSearch']])
 }
 
+/**
+ * A config object shaped the way dsh 0.1.7's loader hands it to `apply()`: every
+ * marked field is a frozen `{ get() }` reference whose value the loader commits
+ * in place, and `set()` stands in for a settings write.
+ */
 function volatileProbeConfig(values: Record<string, unknown>): {
   plain: Record<string, unknown>
   set(field: string, value: unknown): void
@@ -374,11 +365,9 @@ function volatileProbeConfig(values: Record<string, unknown>): {
 
 test('host apply() hands the selection back to the prior backend when webSearch turns off', async () => {
   // End-to-end over the real plugin boot: the `web` service starts with a
-  // sibling's pin (`modsearch`, as its own cordis patch would leave it).
-  // Booting with webSearch on displaces it; flipping the volatile `webSearch`
-  // field and dispatching `loader/volatile-update` — the event dsh 0.1.7's
-  // loader raises after committing a settings write in place — restores it,
-  // which is the exact issue #26 flow.
+  // sibling's pin. Booting with webSearch on displaces it; flipping the volatile
+  // field and dispatching `loader/volatile-update` restores it — the issue #26
+  // flow.
   const { Context } = await import('@deepseek-ai/cordis')
   const { apply } = await import('../src/index.ts')
   const { WebRuntime } = await import('@deepseek-ai/dsh-web')
@@ -390,8 +379,7 @@ test('host apply() hands the selection back to the prior backend when webSearch 
   })
   await ctx.plugin(WebRuntime, { searchProvider: 'modsearch' })
 
-  // A settings service stub: the plugin declares its auto-form policy on it,
-  // and this records that declaration.
+  // A settings service stub recording the auto-form policy declaration.
   const policies: unknown[] = []
   ctx.provide('settings', {
     configure: (presentation: unknown) => {
@@ -403,15 +391,14 @@ test('host apply() hands the selection back to the prior backend when webSearch 
   const config = volatileProbeConfig({ webSearch: true })
   apply(ctx, config.plain as never)
 
-  // The settings inject resolves on its own tick; the policy declaration is
-  // an effect on the settings child, so let it run before asserting.
+  // The settings inject resolves on its own tick, so let the effect run.
   await new Promise((resolve) => setImmediate(resolve))
   const web = ctx.get('web') as unknown as { searchProviderId?: string }
   assert.deepEqual(policies, [{ auto: false }])
   assert.equal(web.searchProviderId, 'commandcode')
 
-  // The loader commits a settings write in place and notifies the owning
-  // fiber; the plugin re-applies the facts config alone cannot carry.
+  // The loader notifies the owning fiber; the plugin re-applies what config
+  // alone cannot carry.
   config.set('webSearch', false)
   emitVolatileUpdate(ctx)
   assert.equal(web.searchProviderId, 'modsearch')
@@ -424,14 +411,10 @@ test('host apply() hands the selection back to the prior backend when webSearch 
 
 test('host apply() leaves a pre-existing commandcode pin alone when webSearch turns off', async () => {
   // The durable selection this repo documents: the profile pins
-  // `searchProvider: commandcode` itself (or exports
-  // `$DSH_WEB_SEARCH_PROVIDER=commandcode`). Turning the plugin's toggle off
-  // must NOT clear that pin: dsh-web reads a cleared `searchProviderId` as
-  // auto-select, and with a second usable provider registered (the shipped
-  // `deepseek-official` is usable whenever a DeepSeek key resolves) EVERY
-  // later search throws `WEB_PROVIDER_AMBIGUOUS`. The plugin's own provider
-  // stays registered either way, so leaving the field alone is the only
-  // outcome that keeps the user's own configuration intact.
+  // `searchProvider: commandcode` itself. Clearing it hands the selection to
+  // dsh-web's auto-select, and with a second usable provider registered
+  // (`deepseek-official` is usable whenever a DeepSeek key resolves) EVERY later
+  // search throws `WEB_PROVIDER_AMBIGUOUS`.
   const { Context } = await import('@deepseek-ai/cordis')
   const { apply } = await import('../src/index.ts')
   const { WebRuntime } = await import('@deepseek-ai/dsh-web')

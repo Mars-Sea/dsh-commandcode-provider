@@ -4,10 +4,9 @@
  * `commandcode/loginCancel`).
  *
  * The settings page can start a browser login against the official Command
- * Code Studio (the same loopback flow `command-code login` performs) instead
- * of pasting an API key. The loopback server must live in the Host half — it
- * binds a local port and receives the key — so the page drives it through the
- * Typert Gateway exactly like the usage report.
+ * Code Studio instead of pasting an API key. The loopback server must live
+ * in the Host half — it binds a local port and receives the key — so the page
+ * drives it through the Typert Gateway exactly like the usage report.
  *
  * This module is the single source both halves share, deliberately
  * dependency-free (`import type` edges only): the strict status validator the
@@ -85,8 +84,6 @@ const { reject, record, stringField } =
 export function parseLoginStatus(value: unknown): CommandCodeLoginStatus {
   const source = record(value, 'status')
   const state = source.state
-  // The factory's destructured-arrow `reject` is typed never-returning but
-  // TS narrows it only in the positive branch — assign inside the guard.
   if (state === 'idle' || state === 'waiting' || state === 'success' || state === 'failed') {
     const status: CommandCodeLoginStatus = { state }
     if (source.authUrl !== undefined) {

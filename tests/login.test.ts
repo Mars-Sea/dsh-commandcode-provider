@@ -1,9 +1,8 @@
 /**
  * Browser-login flow tests (node:test, zero deps). Run with `npm test`.
  *
- * These drive a REAL loopback server end to end (the flow binds 127.0.0.1 and
- * the tests POST to it with global fetch), pinning the CLI-mirrored contract:
- * POST-only /callback, state-token equality, JSON responses, whoami
+ * These drive a REAL loopback server end to end, pinning the CLI-mirrored
+ * contract: POST-only /callback, state-token equality, JSON responses, whoami
  * validation before storage, and every failure mode landing in a stable
  * `reason` the page can copy.
  */
@@ -419,12 +418,10 @@ test('a terminal state makes the next begin start fresh', async () => {
 })
 
 test('two concurrent begin() calls share one attempt and one server', async () => {
-  // Two GUI tabs (or a double click) can issue two `loginBegin` RPCs at once,
-  // and the rejoin check cannot see them: the status only becomes `waiting`
-  // AFTER the port is bound. Without the single-flight fence each call bound
-  // its own loopback server and only the last was reachable by teardown — the
-  // orphan kept listening (and answering /callback) for the process's
-  // lifetime, and ten of them exhausted the login port window.
+  // Two GUI tabs (or a double click) can issue two `loginBegin` RPCs at once and
+  // the rejoin check cannot see them: the status only becomes `waiting` AFTER
+  // the port is bound, so without a single-flight fence each call bound its own
+  // orphan loopback server.
   const harness = makeFlow()
   try {
     const [first, second] = await Promise.all([harness.flow.begin(), harness.flow.begin()])
@@ -441,10 +438,9 @@ test('two concurrent begin() calls share one attempt and one server', async () =
 })
 
 test('cancel() during a start retires the attempt instead of publishing it', async () => {
-  // The status cannot say `waiting` while the port is still being bound, so a
-  // cancel in that window used to be dropped on the floor: the attempt went on
-  // to publish a live authUrl and start a watchdog the user had already
-  // dismissed. The flag retires it as soon as the bind settles.
+  // The status cannot say `waiting` while the port is still binding, so a
+  // cancel in that window used to be dropped on the floor and the attempt
+  // published a live authUrl the user had already dismissed.
   const harness = makeFlow()
   try {
     const started = harness.flow.begin()
@@ -474,17 +470,14 @@ test('begin rejects when no candidate port is free', async () => {
   }
 })
 
-// ---------------------------------------------------------------------------
 // Callback authentication and attempt ownership
-// ---------------------------------------------------------------------------
 
 test('a denial without the state token cannot end a live attempt', async () => {
   // The denial branch is terminal, and a POST carrying `Content-Type:
   // text/plain` rides as a CORS simple request — the browser sends it whatever
-  // our origin allowlist says, so any open page could otherwise kill a login in
-  // progress by blindly posting `{"error":"access_denied"}` to the loopback
-  // port. The state token is what makes ending an attempt an authorized act
-  // (the official CLI checks it before this branch too).
+  // our origin allowlist says, so any open page could otherwise kill a login by
+  // blindly posting `{"error":"access_denied"}`. The state token is what makes
+  // ending an attempt an authorized act (the official CLI checks it too).
   const harness = makeFlow()
   try {
     const waiting = await harness.flow.begin()
@@ -504,8 +497,8 @@ test('a denial without the state token cannot end a live attempt', async () => {
 })
 
 test('a denial carrying the state token still fails the attempt', async () => {
-  // The Studio's own path must keep working: the same POST with the attempt's
-  // state is decisive.
+  // The Studio's own path must keep working: the same POST carrying the
+  // attempt's state is decisive.
   const harness = makeFlow()
   try {
     const waiting = await harness.flow.begin()
@@ -525,9 +518,7 @@ test('a denial carrying the state token still fails the attempt', async () => {
 
 test('cancel during key validation wins over the delivered credential', async () => {
   // The whoami round-trip is an await: cancelling while it is in flight must
-  // not store the key afterwards nor flip the finished status back to success
-  // (the page already stopped polling, so it would keep showing "cancelled"
-  // while the credential had in fact landed).
+  // not store the key afterwards nor flip the finished status back to success.
   const stored: CommandCodeLoginCredentials[] = []
   let releaseWhoami: (() => void) | undefined
   const gate = new Promise<void>((resolve) => { releaseWhoami = resolve })
@@ -564,16 +555,15 @@ test('cancel during key validation wins over the delivered credential', async ()
 
 test('begin() after the callback starts a fresh attempt instead of reusing the closed port', async () => {
   // Once the callback is consumed the loopback server is closed, so the stored
-  // `waiting` status no longer has anything listening. Handing it back would
-  // give the user an authUrl pointing at a dead port. The key validation is
-  // held open here so the status really is `waiting` with a closed server —
-  // otherwise the immediate whoami stub would settle it first.
+  // `waiting` status no longer has anything listening — handing it back would
+  // give the user a dead port. The whoami stub is gated here so the status
+  // really is `waiting` with a closed server.
   let releaseWhoami: (() => void) | undefined
   const gate = new Promise<void>((resolve) => { releaseWhoami = resolve })
   const harness = makeFlow({
     whoami: () => ({ status: 200, body: { user: { id: 'u1' } } }),
   })
-  // Replace the fetch with a gated one so validation cannot finish early.
+  // A second flow whose fetch is gated, so validation cannot finish early.
   const gated = new CommandCodeLoginFlow({
     storeKey: async () => {},
     fetchImpl: (async (input: RequestInfo | URL) => {

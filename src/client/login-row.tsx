@@ -1,13 +1,11 @@
 /**
- * The shared login row: one field row that starts the Host-side browser
- * login, links to the Studio authorization page while the attempt is live,
- * and reports the outcome — rendered by BOTH the settings page (`section.tsx`)
- * and the Models-page provider card (`card.tsx`) so the two surfaces share
- * one component and one hint state machine.
- *
- * The hint copy/class logic lives in the JSX-free `./login.ts`
- * (`loginHint`/`loginFailureCopy`) so node tests can drive every phase; this
- * file only renders it.
+ * The shared login row: one field row that starts the Host-side browser login,
+ * links to the Studio authorization page while the attempt is live, and reports
+ * the outcome. Rendered by BOTH the settings page (`section.tsx`) and the
+ * Models-page provider card (`card.tsx`) so the two surfaces share one
+ * component and one hint state machine — whose copy/class logic lives in the
+ * JSX-free `./login.ts` (`loginHint`/`loginFailureCopy`) so node tests can drive
+ * every phase. This file only renders it.
  *
  * @module dsh-commandcode-provider/client/login-row
  */
@@ -29,7 +27,6 @@ export interface LoginRowProps {
   onCancel(): void
 }
 
-/** The sign-in alternative to pasting a key (settings page + Models card). */
 export function LoginRow({ state, targetRef, disabled, disabledHint, t, onBegin, onCancel }: LoginRowProps) {
   const { visible: visibleState, busyElsewhere } = loginStateForTarget(state, targetRef)
   const busy = visibleState.phase === 'starting' || visibleState.phase === 'waiting'

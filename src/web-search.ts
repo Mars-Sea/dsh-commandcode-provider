@@ -1,18 +1,13 @@
 /**
- * dsh-commandcode-provider — Command Code web search provider over `ctx.web`.
+ * Command Code web-search provider over `ctx.web`.
  *
- * The official Command Code CLI ships a built-in `web_search` tool that POSTs
+ * The official CLI's built-in `web_search` tool POSTs
  * `{ query, numResults, allowedDomains?, blockedDomains? }` to
  * `{apiBase}/alpha/web-search` and reads `{ results: [{ title, url, snippet }] }`
- * back. It authenticates with the SAME `Authorization: Bearer <key>` header and
- * `x-command-code-version` the model adapter uses, so this provider reuses the
- * plugin's existing credential chain (`COMMANDCODE_API_KEY` → credentials seam →
- * `~/.commandcode/auth.json`) — no separate DeepSeek key, no extra endpoint.
- *
- * This mirrors the host-side `@deepseek-ai/dsh-web-search-deepseek` provider in
- * shape: a cordis-free class registered into the web seam, resolving its key per
- * search, mapping each server-side result to the harness's normalized
- * `WebSearchSource`. The web seam owns `maxResults` truncation.
+ * back, authenticating with the SAME `Authorization: Bearer <key>` and
+ * `x-command-code-version` headers the model adapter uses. This provider
+ * therefore reuses the plugin's existing credential chain and `apiBase`, so
+ * the model-facing `web_search` tool needs no separate configuration.
  *
  * @module dsh-commandcode-provider/web-search
  */
@@ -28,12 +23,9 @@ export const COMMANDCODE_SEARCH_PROVIDER_ID = 'commandcode'
 
 /**
  * The factory-declared search provider id dsh ships by default (from
- * `dsh-base`'s cordis patch `web.config.searchProvider`). Kept as a
- * documented reference only: disabling this plugin's `webSearch` toggle
- * restores the previously selected backend (see
- * {@link applyCommandCodeSearchSelection}) — it never forces this default,
- * because forcing it is what used to silence sibling search plugins such as
- * modsearch even with Command Code search turned off (issue #26).
+ * `dsh-base`'s cordis patch `web.config.searchProvider`). A documented
+ * reference only: disabling this plugin's `webSearch` toggle restores the
+ * PREVIOUSLY selected backend, never this default (issue #26).
  */
 export const DEFAULT_WEB_SEARCH_PROVIDER_ID = 'deepseek-official'
 
@@ -41,14 +33,14 @@ export const DEFAULT_WEB_SEARCH_PROVIDER_ID = 'deepseek-official'
  * A structurally-typed view of `WebRuntime`'s private selection field.
  *
  * `searchProviderId` is declared `private readonly` on the class, but the
- * compiled runtime property is a plain writable field read per search call
- * (`web.search()` reads `this.searchProviderId` on every invocation). dsh
- * offers no public API to change the selected search provider at runtime, so
- * this seam mutates the instance field directly. That is a deliberate, bounded
- * dependency on the runtime shape: if dsh ever makes the field `#private` or
+ * compiled runtime property is a plain writable field read per search call.
+ * dsh offers no public API to change the selected search provider at runtime,
+ * so this seam mutates the instance field directly — a deliberate, bounded
+ * dependency on the runtime shape. If dsh ever makes the field `#private` or
  * caches it in a closure, this write silently stops applying and the plugin
- * falls back to its provider remaining registered-but-unselected (the boot-time
- * `searchProvider: commandcode` cordis patch is the durable alternative).
+ * falls back to its provider remaining registered-but-unselected (the
+ * boot-time `searchProvider: commandcode` cordis patch is the durable
+ * alternative).
  */
 interface WebRuntimeSearchField {
   /** The selected search provider id; read per call by `search()`. */
@@ -58,21 +50,17 @@ interface WebRuntimeSearchField {
 /**
  * Tracked web-search selection state for one mounted `WebRuntime`.
  *
- * `owner` marks whether this plugin currently owns the selection (i.e. it
- * wrote `commandcode` and has not given it back yet). `displaced` is the
- * backend id the plugin displaced when it took over — restored when the
- * toggle turns off or the plugin unloads. `undefined` means "nothing was
- * configured, leave auto-select" and must round-trip untouched: writing the
- * factory default instead would still override a sibling plugin's own
- * constructor-time pin.
+ * `owner` marks whether this plugin currently owns the selection. `displaced`
+ * is the backend it took over — restored on disable or unload — and
+ * `undefined` means "nothing was configured, leave auto-select" and must
+ * round-trip untouched.
  *
  * `preexisting` is the one fact `displaced` cannot carry: an `undefined`
  * `displaced` means EITHER "the field was unset when we took over" (give
- * `undefined` back on disable) OR "the field already read `commandcode`"
- * (touch nothing on disable — see {@link applyCommandCodeSearchSelection}).
- * Collapsing the two is what turned a user's own `searchProvider: commandcode`
- * pin into an auto-select — and then into `WEB_PROVIDER_AMBIGUOUS` on every
- * search — the moment this plugin was disabled or unloaded.
+ * `undefined` back) OR "the field already read `commandcode`" (touch
+ * nothing). Collapsing the two is what turned a user's own
+ * `searchProvider: commandcode` pin into an auto-select, and then into
+ * `WEB_PROVIDER_AMBIGUOUS` on every search.
  */
 export interface CommandCodeSearchSelection {
   owner: boolean
@@ -91,24 +79,15 @@ export function commandCodeSearchSelection(): CommandCodeSearchSelection {
  * providers (issue #26).
  *
  * - Enabling writes `commandcode` and remembers whatever it displaced. When
- *   the plugin already owns the selection (e.g. a settings save while still
- *   on), the original `displaced` value is kept — the field currently holds
- *   our own id, which must never be mistaken for the user's backend.
- * - Disabling hands the selection back to the remembered backend. When the
- *   state holds no memory (a fresh boot straight into `webSearch: false`),
- *   the field is left alone: the runtime's current value — a sibling's
- *   cordis pin such as `searchProvider: modsearch`, or unset for
- *   auto-select — already says what the user wants.
- * - When the field already reads `commandcode` at first touch (e.g. a
- *   surviving runtime the plugin did not set, or a manual
- *   `searchProvider: commandcode` pin), `displaced` stays undefined and
- *   `preexisting` is set, so the later disable is a no-op rather than a guess
- *   at the factory default. A "no-op" means the field is left ALONE: writing
- *   that `undefined` back would destroy the user's own pin, and dsh-web reads
- *   a cleared `searchProviderId` as auto-select — where a second usable
- *   provider (the shipped `deepseek-official` is usable whenever a DeepSeek
- *   key resolves) makes EVERY later search throw
- *   `WEB_PROVIDER_AMBIGUOUS`.
+ *   the plugin already owns the selection, the original `displaced` is kept —
+ *   the field currently holds our own id, which must never be mistaken for the
+ *   user's backend.
+ * - Disabling hands the selection back to the remembered backend only when
+ *   this plugin actually took it over. A fresh boot straight into
+ *   `webSearch: false`, or a `preexisting` field, leaves it ALONE: writing the
+ *   empty memory back would clear the user's own `searchProvider: commandcode`
+ *   pin and hand the selection to dsh-web's auto-select, where a second usable
+ *   provider makes every later search throw `WEB_PROVIDER_AMBIGUOUS`.
  *
  * Never throws: like the low-level rewrite, a hardened runtime shape degrades
  * to registered-but-unselected.
@@ -129,8 +108,7 @@ export function applyCommandCodeSearchSelection(
       const prior = field.searchProviderId
       // Three cases, and `displaced` alone cannot tell the last two apart:
       // a sibling's id (restore it), the field was unset (restore `undefined`),
-      // or the field already read OUR id (touch nothing — see the disable
-      // branch). `preexisting` carries that third case.
+      // or the field already read OUR id (touch nothing).
       state.preexisting = prior === COMMANDCODE_SEARCH_PROVIDER_ID
       state.displaced = state.preexisting ? undefined : prior
       field.searchProviderId = COMMANDCODE_SEARCH_PROVIDER_ID
@@ -139,14 +117,8 @@ export function applyCommandCodeSearchSelection(
     }
     if (state.owner) {
       state.owner = false
-      // Restore ONLY a selection this plugin actually took over. `preexisting`
-      // means the field already read `commandcode` before we ever touched it
-      // (a manual `searchProvider: commandcode` patch,
-      // `$DSH_WEB_SEARCH_PROVIDER`, or a surviving runtime): assigning the
-      // empty memory back would clear the user's own pin and hand the
-      // selection to auto-select, which throws `WEB_PROVIDER_AMBIGUOUS` as
-      // soon as a second provider is usable — while our own provider stays
-      // registered either way.
+      // Restore ONLY a selection this plugin actually took over — see the
+      // `preexisting` note on {@link CommandCodeSearchSelection}.
       if (!state.preexisting) field.searchProviderId = state.displaced
       state.preexisting = false
       return
@@ -215,11 +187,11 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 /**
- * A `ctx.web` search provider backed by the Command Code Provider API. Reuses
- * the plugin's credential chain and `apiBase`, so search "just works" with the
- * existing key — the model-facing `web_search` tool needs no separate
- * configuration. Selection between multiple search providers is the web seam's
- * job (pin `searchProvider: commandcode` if ambiguous).
+ * A `ctx.web` search provider backed by the Command Code Provider API, reusing
+ * the plugin's credential chain and `apiBase` so the model-facing `web_search`
+ * tool needs no separate configuration. Selection between multiple search
+ * providers is the web seam's job (pin `searchProvider: commandcode` if
+ * ambiguous).
  */
 export class CommandCodeSearchProvider implements WebSearchProvider {
   readonly id = COMMANDCODE_SEARCH_PROVIDER_ID
@@ -337,10 +309,9 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
       if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
       // Preserve the plugin's structured credential/usage taxonomy so the web
       // tool surfaces the real cause (e.g. every account exhausted, key
-      // invalid) instead of a generic provider failure. The actionable
-      // "no key configured" case maps to WEB_PROVIDER_CREDENTIAL_MISSING;
-      // real rejection causes (INVALID_CREDENTIAL / RATE_LIMIT) keep their
-      // message but ride the provider-error code the tool understands.
+      // invalid). A MISSING credential maps to WEB_PROVIDER_CREDENTIAL_MISSING;
+      // real rejections (INVALID_CREDENTIAL / RATE_LIMIT) keep their message
+      // but ride the provider-error code the tool understands.
       if (error instanceof Error && typeof (error as HarnessError).code === 'string') {
         const code = (error as HarnessError).code
         if (code === 'MISSING_CREDENTIAL') throw new WebError(error.message, 'WEB_PROVIDER_CREDENTIAL_MISSING', { cause: error })

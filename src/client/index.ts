@@ -1,27 +1,22 @@
 /**
- * Browser half of the dsh-commandcode-provider bundle.
+ * Browser half of the dsh-commandcode-provider bundle: the "Command Code"
+ * settings page (`settings.section`, id `commandcode`), the Models-page
+ * provider card (`settings.models.provider-card`, key `llm-commandcode`, see
+ * `./card.tsx`), the plans & quota panel's `main` cell + gated
+ * `sidebar.footer.action` card, and the composer
+ * `conversation.composer.dock` cost entry.
  *
- * Two responsibilities:
- *
- * 1. A "Command Code" settings page (a `settings.section` entry at the same
- *    nav level as General / Models / Plugins). The Models page renders an
- *    unknown-adapter-family card for the `commandcode` provider and disables
- *    its submit, so the API key cannot be configured there; this page is the
- *    dedicated surface. It writes the API key through the credentials domain
- *    (the `COMMANDCODE_API_KEY` reference the plugin resolves via
- *    `ctx.remote.credentials`) and the connection facts through the
- *    `llm-commandcode` settings namespace, so a saved key or endpoint reaches
- *    the very next request.
- *
- * 2. The Models-page provider card (settings.models.provider-card) — see
- *    `./card.tsx`.
+ * The API key is written through the credentials domain (the
+ * `COMMANDCODE_API_KEY` reference the plugin resolves via
+ * `ctx.remote.credentials`), never as a settings value, and every other fact
+ * through the `llm-commandcode` namespace — so a saved key or endpoint reaches
+ * the very next request and the key literal cannot land in a settings document.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createSnapshotStore } from './snapshot-store.ts'
-// Type-only imports that pull in the client-service augmentations
-// (`slots`/`remote`/`locale` on Context) and the `settings.section` SlotMap
-// entry (declared through dsh-client-ui-settings).
+// Type-only: the client-service augmentations (`slots`/`remote`/`locale` on
+// Context) and the `settings.section` SlotMap entry.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -66,8 +61,8 @@ function injectPageCss(): void {
 
 /**
  * Install the plans & quota panel's stylesheet and return its disposer, for
- * `ctx.effect` to own. Keyed by its own `data-plugin-css` id, so the injection
- * is idempotent even if a second surface asks for it later.
+ * `ctx.effect` to own. Keyed by its own `data-plugin-css` id, so a second
+ * surface asking for it later is a no-op.
  */
 function injectPanelCss(): () => void {
   if (typeof document === 'undefined') return () => {}
@@ -86,27 +81,27 @@ function injectPanelCss(): () => void {
  * Plans & quota panel id. It is the layout's `MainPanelId`: one string shared
  * by the `sidebar.footer.action` card and the `main` slot cell, so the card
  * selects this panel and nothing else. `dsh-client-ui-layout` is not a
- * dependency of this bundle (its type is only a brand over `string`), so the
- * brand is applied at the call site instead of importing the package.
+ * dependency of this bundle, so its brand is applied at the call site instead
+ * of importing the package.
  */
 const PANEL_ID = 'commandcode-panel'
 
 /**
  * The composer figure's entry id in `conversation.composer.dock`. Its own id,
- * not the shipped `stats` cell's: reusing `stats` would REPLACE the tokens /
+ * never the shipped `stats` cell's: reusing that id would REPLACE the tokens /
  * cache-hit / throughput readout rather than inject into it, and that readout
- * is the harness's to format (see `./session-cost-display.ts`).
+ * is the harness's to format.
  */
 const SESSION_COST_ID = 'commandcode-session-cost'
 
 /**
  * The one shot of the `layout` service this plugin needs, declared
- * structurally for the same reason as {@link PANEL_ID}: importing the package
- * would make the browser resolve a client module this bundle never calls.
- * Reached through the reflective `ctx.get('layout')`, never a bare `ctx.layout`
- * property — cordis throws `cannot get property … without inject` for an
- * undeclared service, and declaring `layout` statically would park the whole
- * client fiber (settings page included) on a service some profiles never mount.
+ * structurally: importing the package would make the browser resolve a client
+ * module this bundle never calls. Read through the reflective
+ * `ctx.get('layout')`, never a bare `ctx.layout` property — `layout` is not in
+ * the exported inject list, and cordis throws `cannot get property … without
+ * inject` for an undeclared service. (The footer card's own gate below IS a
+ * static `ctx.inject(['layout'])`, but it is scoped to that one registration.)
  */
 interface LayoutSelectionSeam {
   /** `null` shows the Conversation again; a string selects that registered `main` key. */
@@ -116,29 +111,31 @@ interface LayoutSelectionSeam {
 /**
  * Client plugin body. Gates on `slots`, `locale` and `remote` — never on
  * `settingsScope`, whose wrapper service the 0.1.7 settings rewrite removed
- * (the settings scope here speaks the `remote.settings` wire directly). The
- * page mounts once `remote.credentials` appears.
+ * (the scope below speaks the `remote.settings` wire directly), because
+ * gating on a service 0.1.7 does not provide would park EVERY surface below
+ * into silence. `settingsScope` must never reappear in the exported inject
+ * list at the bottom of this file.
  */
 export function apply(ctx: Context): void {
   injectPageCss()
 
   // The "Command Code" settings page: register the section once the
   // `settings.section` declaration is on the ledger (ui-settings-general
-  // owns the shell; registration order relative to it is not constrained —
-  // `slots.inject` waits for the declaration).
+  // owns the shell; `slots.inject` waits for the declaration, so registration
+  // order relative to it does not matter).
   ctx.effect(() => ctx.locale.register('settings.commandcode', { zh, en }), 'dsh-commandcode-provider: page copy')
 
-  // The plans & quota panel's copy is a namespace of its own: the panel is not
-  // part of the settings page, but it follows the SAME active language (both
-  // panel registrations declare it below, which is what binds their `t` seat).
+  // The panel's copy is a namespace of its own: the panel is not part of the
+  // settings page, but it follows the SAME active language — declaring
+  // `PANEL_LOCALE_NS` on both panel registrations is what binds their `t` seat.
   ctx.effect(
     () => ctx.locale.register(PANEL_LOCALE_NS, { zh: PANEL_COPY_ZH, en: PANEL_COPY_EN }),
     'dsh-commandcode-provider: panel copy',
   )
 
-  // Credentials reach the browser as a Typert Remote namespace. The inject is
-  // the activation gate for every surface below, so a profile whose Host serves
-  // no credentials namespace simply never mounts the page.
+  // Credentials reach the browser as a Typert Remote namespace. This inject is
+  // the activation gate for every surface below, so a profile whose Host
+  // serves no credentials namespace simply never mounts the page.
   ctx.inject(['remote.credentials'], (remoteCtx) => {
     const credentials = (remoteCtx.remote as unknown as {
       credentials: SettingsPageApi['credentials']
@@ -152,23 +149,19 @@ function applyClientSurfaces(
   ctx: Context,
   api: SettingsPageApi,
 ): void {
-  // The settings scope: this plugin's own binding of the `llm-commandcode`
-  // namespace over `remote.settings` (see `./settings-scope.ts`). The harness
-  // used to provide a `settingsScope` service to bind here, but that wrapper
-  // existed only through 0.1.6 and was removed with the 0.1.7 settings
-  // rewrite — while the describe/mutate wire underneath spans every
-  // supported release, so one implementation now serves all of them.
+  // This plugin's own binding of the `llm-commandcode` namespace over
+  // `remote.settings` (see `./settings-scope.ts`).
   //
   // The namespace object is captured from an INJECT-SCOPED context, never read
-  // off `ctx.remote`: `remote.settings` is a Cordis service nested under
+  // off `ctx.remote`: `remote.settings` is a Cordis service NESTED under
   // `remote`, and cordis answers a read through a context that does not declare
-  // it with `Error: cannot get property "remote.settings" without inject`. That
-  // throw lands inside the scope's own `try`/`catch` (so nothing is logged),
-  // leaving the mirror unanswered, the scope on its initial `writable: false`
-  // snapshot, and the page read-only with every control disabled — the 0.1.7
-  // settings-page report. The resolver below hands the scope the very object
-  // the inject resolved; `refresh()` re-reads once it lands, and a profile whose
-  // Host serves no settings namespace simply never resolves it, where the page
+  // it with `Error: cannot get property "remote.settings" without inject` —
+  // which lands inside the scope's own `try`/`catch`, so nothing is logged and
+  // the page renders read-only with every control disabled (the 0.1.7
+  // settings-page report, CHANGELOG 0.11.9; the full incident is in
+  // AGENTS.md). The resolver hands the scope the very object the inject
+  // resolved, and `refresh()` re-reads once it lands; a profile whose Host
+  // serves no settings namespace simply never resolves it, where the page
   // keeps rendering its degraded state instead of crashing.
   let settingsNamespace: SettingsRemoteNamespace | undefined
   const scope = createSettingsScope<Record<string, unknown>>(
@@ -188,12 +181,11 @@ function applyClientSurfaces(
       settingsNamespace = undefined
     }, 'dsh-commandcode-provider: settings namespace')
   })
-  // The model catalog for the settings page's model editors (the
-  // routing-rule editor and the visible-models filter) is served by the
-  // `commandcode/models` Remote below; the controller reads it through this
-  // mutable seam so the Remote mount (which happens after the controller is
-  // constructed) still reaches the catalog fetch. Unset until the mount
-  // lands — the controller degrades to the empty-catalog state meanwhile.
+  // The model catalog for the settings page's model editors is served by the
+  // `commandcode/models` Remote mounted below, which happens after this
+  // controller is constructed — so it reads the catalog through this mutable
+  // seam. Unset until the mount lands; the controller degrades to the
+  // empty-catalog state meanwhile.
   let modelsRemote: NonNullable<SettingsPageApi['models']> | undefined
   const controller = new CommandCodeSettingsController(
     scope,
@@ -224,27 +216,21 @@ function applyClientSurfaces(
     'dsh-commandcode-provider: credential invalidations',
   )
 
-  // The account-usage card + login panel: mount the shared Remote contribution
-  // (one mount carries every endpoint this plugin serves — report, catalog,
-  // price table, and login — so the Client's bookkeeping stays 1:1 with the
-  // Host's single registry registration), then resolve the
-  // `remote.commandcode` namespace through a scoped inject. Cordis only serves
-  // services a fiber declares in `inject`, and the namespace service exists
-  // only after the mount — a static inject would deadlock the plugin (the
-  // mounter would wait for its own mount), so the inject is registered
-  // dynamically once the mount lands. A Host half that predates the Remote
-  // fails the calls instead, and the surfaces render their error branches.
+  // One mount carries every endpoint this plugin serves (report, catalog, price
+  // table, login), keeping the Client's bookkeeping 1:1 with the Host's single
+  // registry registration. Cordis only serves services a fiber declares in
+  // `inject`, and the namespace service exists only after the mount — so the
+  // `remote.commandcode` inject is registered DYNAMICALLY once the mount
+  // lands; a static one would deadlock the plugin, the mounter waiting for its
+  // own mount. A Host half that predates the Remote fails the calls instead,
+  // and the surfaces render their error branches.
   let usageNamespace: (typeof ctx.remote)['commandcode'] | undefined
   let usageMountError: string | undefined
-  // Declared here, constructed below once the Remote seam exists: the mount
-  // effect underneath calls `ensure()` from its inject callback, which cordis
-  // runs synchronously while the mount promise settles — before the
-  // controller's own `const` below would have been initialized.
+  // `pricesController` and `refreshUsage` are declared here and assigned below,
+  // because the mount effect's inject callback calls them while cordis runs it
+  // synchronously — before their own `const` would be initialized. A read in
+  // that temporal dead zone THROWS, which `?.` would not save.
   let pricesController: CommandCodePricesController | undefined
-  // The same hazard for the usage controller, whose `const` is just as far
-  // below: the inject callback needs a way to ask for a report without
-  // touching that binding before it is initialized (a `const` read in its
-  // temporal dead zone THROWS, so `?.` would not save it).
   let refreshUsage: (() => void) | undefined
   const contribution: TypertRemoteContribution = {
     package: USAGE_REMOTE_CONTRIBUTION.package,
@@ -266,12 +252,11 @@ function applyClientSurfaces(
       unmount = dispose
       ctx.inject(['remote.commandcode'], (namespaceCtx) => {
         usageNamespace = namespaceCtx.remote.commandcode
-        // The catalog Remote is live now; (re)fetch it for the model editors.
+        // The catalog Remote is live now; (re)fetch it for the model editors,
+        // and the price table the composer's cost readout needs — `ensure()` is
+        // idempotent, so asking earlier could only fail (the namespace did not
+        // exist yet).
         controller.refreshCatalog()
-        // ...and the price table, which the composer's cost readout needs. This
-        // is its only trigger: `ensure()` is idempotent, so a readout already on
-        // screen simply starts pricing when the table lands, and asking earlier
-        // could only fail (the namespace did not exist yet).
         pricesController?.reload()
         // ...and the usage report. A surface can (and on a boot with the quota
         // card on, always does) ask for it BEFORE this mount lands: the answer
@@ -317,16 +302,14 @@ function applyClientSurfaces(
       }
       const call = namespace.prices
       // A Host half older than the price table mounts no such descriptor, so
-      // the namespace member is genuinely missing. Report it as a failure the
-      // readout treats as permanent rather than throwing.
+      // the namespace member is genuinely missing. Report it as a permanent
+      // failure the readout understands rather than throwing.
       if (typeof call !== 'function') {
         return { ok: false, error: { message: 'the Host serves no commandcode/prices endpoint', permanent: true } }
       }
       return call.call(namespace)
     },
   }
-  // Wire the catalog Remote into the settings controller's models seam so the
-  // model editors can fetch the catalog once the mount lands.
   modelsRemote = () => usageRemote.models()
   const usageController = new CommandCodeUsageController(usageRemote)
   refreshUsage = () => void usageController.refresh()
@@ -334,16 +317,15 @@ function applyClientSurfaces(
   const usageStore = createSnapshotStore<UsagePageState>(usageController.state())
   usageController.subscribe(() => usageStore.set(usageController.state()))
 
-  // The composer's session-cost readout prices a session from a static table,
-  // so its controller is a one-shot cache rather than a poll: it fetches once
-  // the namespace is live and never again.
+  // The composer's session-cost readout prices from a static table, so its
+  // controller is a one-shot cache rather than a poll.
   pricesController = new CommandCodePricesController(usageRemote)
   ctx.effect(() => () => pricesController?.dispose(), 'dsh-commandcode-provider: price table')
   const pricesStore = createSnapshotStore<SessionCostPricesState>(pricesController.state())
   pricesController.subscribe(() => pricesStore.set(pricesController.state()))
 
-  // The login panel: same namespace, three endpoints; the key never crosses
-  // to the browser — the Host validates and stores it through the credentials
+  // The login panel: same namespace, three endpoints. The key NEVER crosses to
+  // the browser — the Host validates and stores it through the credentials
   // seam, and a landed login re-reads the credential badges + usage card.
   const loginRemote: LoginRemote = {
     loginBegin: async (targetRef?: string) => {
@@ -371,7 +353,7 @@ function applyClientSurfaces(
   let lastLoginPhase = loginController.state().phase
   loginController.subscribe(() => {
     const phase = loginController.state().phase
-    // A landed login stored the key Host-side behind the page's back; the
+    // A landed login stored the key Host-side behind the page's back, so the
     // badges must follow and the account card can finally fetch.
     if (phase === 'success' && lastLoginPhase !== 'success') {
       controller.refreshCredentials()
@@ -424,21 +406,20 @@ function applyClientSurfaces(
     inject: injected,
   }, CommandCodeSettingsPage))
 
-  // The Models-page provider panel (dsh 0.1.2, rc.1): a keyed slot the
-  // Models section dispatches with `entryKey = settingsNs` on every provider
-  // card of an adapter family. Registering under `llm-commandcode` mounts the
-  // panel beside the official editor on every Command Code row — including
-  // the first-run setup posture, exactly where a user without a key lands.
-  // While the official 编辑 toggle is open, the panel hides the official
-  // editor shell (for this namespace it holds only the settings.yaml hint
-  // over a disabled apply) and shows the real controls; see card.tsx.
-  // The registration carries its own inject face (store hooks + actions)
-  // because the declaring entry is ui-settings-models', not ours; the `t`
-  // seat comes from the registration's own `locale` namespace.
+  // The Models-page provider card: a keyed slot the Models section dispatches
+  // with `entryKey = settingsNs` on every provider row of an adapter family, so
+  // the panel mounts beside the official editor on every Command Code row —
+  // including the first-run setup posture, exactly where a user without a key
+  // lands. While the official 编辑 toggle is open, the card hides the official
+  // editor shell (for this namespace `layoutOf` returns "unknown", so that shell
+  // carries only a config hint over a disabled apply) and shows the real
+  // controls; see card.tsx. The registration carries its own inject face
+  // because the declaring entry is ui-settings-models', not ours; the `t` seat
+  // comes from the registration's own `locale` namespace.
   //
-  // On dsh builds without this slot the declaration never exists and
-  // `slots.inject` never fires its callback — the registration silently
-  // does not happen, and nothing else about the plugin changes.
+  // On a build without this slot the declaration never exists and `slots.inject`
+  // never fires — the registration silently does not happen. Do not "harden"
+  // that into an error.
   ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
     name: 'settings.models.provider-card',
     key: 'llm-commandcode',
@@ -456,43 +437,36 @@ function applyClientSurfaces(
     }),
   }, CommandCodeProviderCard))
 
-  // The plans & quota panel: a footer card pinned at the bottom of the
-  // sidebar, on top of the Settings seat, that opens a dashboard in the
-  // center column.
+  // The plans & quota panel: a footer card pinned at the bottom of the sidebar,
+  // on top of the Settings seat, that opens a dashboard in the center column.
   //
-  // Two registrations, one navigation entry. `sidebar.footer.action` is the
-  // list the sidebar shell renders in its foot area directly above the
-  // Settings seat (`footArea` = `footerActions` then `settingsArea`), which is
-  // what puts this card at the bottom of the column rather than at the top
-  // with the global panel icons of `sidebar.panellist`. The layout's keyed
-  // `main` slot holds the panel the card opens — `ctx.layout.selectPanel(id)`
-  // resolves the id against that registry and throws when no cell occupies it,
-  // so BOTH are required, and BOTH need the `inject` face below (an entry
-  // without one receives none of the panel's data; see the `hooks` → `useX`
-  // rule in panel-view.tsx).
+  // Two registrations, ONE navigation entry: `sidebar.footer.action` is the
+  // list the sidebar shell renders in its foot area directly above the Settings
+  // seat (`footArea` = `footerActions` then `settingsArea`), which is what puts
+  // this card at the bottom of the column rather than at the top with the
+  // global panel icons of `sidebar.panellist`. The layout's keyed `main` slot
+  // holds the panel the card opens — `selectPanel(id)` resolves the id against
+  // that registry and throws when no cell occupies it, so BOTH registrations
+  // are required, and BOTH need the `inject` face below (an entry without one
+  // receives none of the panel's data; see the `hooks` → `useX` rule in
+  // panel-view.tsx).
   //
   // Unlike a `sidebar.panellist` row, the shell renders NO chrome around a
-  // footer action: our component is the button, it owns the label (so a title
+  // footer action: our component IS the button, it owns the label (so a title
   // carrying live quota needs no re-registration — that dance exists only
   // because the shell caches a panellist entry's label), and it selects the
   // panel itself through the `open` action below.
   //
   // Both registrations declare the panel's own `locale` namespace
-  // (`panel.commandcode`, registered in `apply` above), which is what binds the
-  // `t` seat the components feed into `buildPanelView` — so the panel follows
-  // the harness's active language and a switch re-renders it (the renderer
-  // mints a fresh `t` per revision, and its identity is the invalidation).
+  // (`panel.commandcode`, registered in `apply` above): that is what binds the
+  // `t` seat the components feed into `buildPanelView`, so the panel follows
+  // the harness's active language and a switch re-renders it.
   //
-  // The footer card opens the panel through `layout.selectPanel`, so it is
-  // gated on the `layout` SERVICE rather than only on its slot: a profile whose
-  // `main` declaration exists but whose layout never mounted (a headless client)
-  // would otherwise register a card that renders and does nothing when clicked
-  // — a dead button.
-  //
-  // The dashboard cell itself needs no such gate: registering a cell for a
-  // declaration that never arrives is a no-op by construction (the callback only
-  // runs while the declaration is live). Only the always-declared footer seat
-  // needed an explicit guard.
+  // The footer card is gated on the `layout` SERVICE (below), not only on its
+  // slot: a profile whose `main` declaration exists but whose layout never
+  // mounted would otherwise register a card that renders and does nothing —
+  // a dead button. The dashboard cell needs no such gate; registering against
+  // a declaration that never arrives is a no-op by construction.
   //
   // Shape notes:
   //   * The stylesheet gets its own `ctx.effect` rather than riding an `inject`
@@ -507,16 +481,16 @@ function applyClientSurfaces(
   const panelFace = (): PanelInjected => ({
     hooks: { commandCodeUsage: usageStore, commandCodeSettings: store },
     refresh: () => { pricesController?.ensure(); void usageController.refresh() },
-    // The Host resolves every credential source, including CLI auth and literals.
-    // A browser credential-reference lookup cannot determine availability.
+    // The Host resolves every credential source, including CLI auth and
+    // literals. A browser credential-reference lookup cannot determine
+    // availability.
     startAutoRefresh: () => startPanelAutoRefresh(usageController, () => true),
     // `layout` is read reflectively AT CLICK TIME, never captured at setup:
     // ui-layout is not a dependency of this bundle (its types are not imported
-    // and its client module is never resolved), so a static `inject` would park
-    // the whole client fiber — settings page included — on a service another
-    // profile may never mount. The footer registration is gated on that same
-    // seam, so by the time this runs the method exists; the guard stays as the
-    // last line of defence against a layout that renames it.
+    // and its client module is never resolved), and it is not in the exported
+    // inject list. The footer registration below is gated on the same seam, so
+    // by the time this runs the method exists; the guard stays as the last line
+    // of defence against a layout that renames it.
     open: () => {
       const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
       layout?.selectPanel(PANEL_ID)
@@ -545,11 +519,10 @@ function applyClientSurfaces(
   }
 
   // The footer card is registered only where the layout can actually open the
-  // panel behind it. `ctx.inject(['layout'], …)` runs its body when that service
+  // panel behind it: `ctx.inject(['layout'], …)` runs its body when that service
   // is live and re-runs it if the service is replaced, mirroring how the Remote
   // namespace is mounted — so a profile without ui-layout (the TUI, a headless
-  // client) never registers the card. Without this gate the card would render
-  // and silently do nothing on click, which is worse than not being there.
+  // client) never registers the card at all.
   ctx.inject(['layout'], (layoutCtx) => {
     try {
       layoutCtx.slots.inject('sidebar.footer.action', () => layoutCtx.slots.register(
@@ -574,13 +547,9 @@ function applyClientSurfaces(
   //
   // The entry exists for its SEATS, not for a surface: `useProjection` is a
   // standard prop the composer hands every dock occupant, so this registration
-  // is the only way to read the session's token accounting. Its id must stay
-  // distinct from the shipped `stats` cell's, because registering under an
-  // existing id REPLACES that cell rather than extending it.
-  //
-  // It carries only the price-table hook: the token buckets and the model
-  // selection arrive from the composer itself as standard dock props
-  // (`useProjection`), which the owner supplies to every occupant.
+  // is the only way to read the session's token accounting. The token buckets
+  // and the model selection arrive from the composer itself as standard dock
+  // props, so the face carries only the price-table hook.
   //
   // No `locale` namespace and no `t` seat: the figure is English by
   // construction, from `./session-cost.ts`.

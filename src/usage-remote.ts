@@ -1,12 +1,12 @@
 /**
- * Host half of the account-usage Remote (`commandcode/report`).
+ * Host half of the Command Code Remotes (`commandcode/report`,
+ * `commandcode/models`, `commandcode/prices`, `commandcode/login*`).
  *
- * The settings page's account card needs the same report the `/commandcode`
- * command prints, but the browser never holds the API key — the fetch must
- * run Host-side. This module exposes `adapter.getUsage()` through the Typert
- * Gateway: a `TypertRemoteService` provides the receiver the Gateway resolves,
- * and the shared strict descriptor (`src/usage-wire.ts`) is registered on the
- * `typert` registry so the Gateway claims the `commandcode/report` endpoint.
+ * The settings page needs facts the browser cannot fetch for itself — it never
+ * holds the API key — so this module exposes them through the Typert Gateway:
+ * a `TypertRemoteService` provides the receiver the Gateway resolves, and the
+ * shared strict descriptors (`src/usage-wire.ts`, `src/login-wire.ts`) are
+ * registered on the `typert` registry so the Gateway claims the endpoints.
  *
  * The whole wiring rides an optional `ctx.inject(['typert'], ...)` fiber: a
  * profile without the web stack (no Typert registry, no Gateway) simply never
@@ -29,9 +29,9 @@ import type { CommandCodeLoginStatus } from './login-wire.ts'
 /**
  * The browser-login face the usage service exposes (`commandcode/login*`).
  * Backed by the Host-half {@link !CommandCodeLoginFlow} when the plugin entry
- * wired one; absent, `status`/`cancel` degrade to the idle status while
- * `begin` rejects with a plain message (so the page's manual paste path
- * stays the fallback instead of hanging).
+ * wired one; absent, `status`/`cancel` degrade to the idle status and `begin`
+ * rejects with a plain message, so the page's manual paste path stays the
+ * fallback instead of hanging.
  */
 export interface LoginFlowFacade {
   /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
@@ -53,10 +53,9 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
    */
   reports?: () => Promise<CommandCodeAccountsReport>
   /**
-   * Model-catalog source for the settings page's model editors (the
-   * routing-rule editor and the visible-models filter; wired by the plugin
-   * entry). Absent, the `models` endpoint answers an empty list — the page's
-   * editors degrade to the empty state.
+   * Model-catalog source for the settings page's model editors. Absent, the
+   * `models` endpoint answers an empty list — the page's editors degrade to
+   * the empty state.
    */
   listModels?: () => Promise<CommandCodeCatalog>
   /**
@@ -66,21 +65,16 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
    * only to stub it in a test.
    */
   prices?: () => CommandCodePriceTable
-  /**
-   * The browser-login flow (wired by the plugin entry). Absent means the
-   * login endpoints answer `idle` / reject with a plain message — the page's
-   * manual paste path stays the fallback.
-   */
+  /** The browser-login flow (wired by the plugin entry); see {@link LoginFlowFacade}. */
   login?: LoginFlowFacade
 }
 
 /**
  * The registry method surface this module uses. `Context['typert']` is typed
  * as the read-only `TypertRegistryContract`; contribution registration lives
- * on the concrete registry service, so the cast is spelled out once here.
- * The contribution is the combined one built below (report + models + login
- * endpoints), so the type is structural rather than tied to the
- * single-endpoint `USAGE_HOST_CONTRIBUTION` shape.
+ * on the concrete registry service, so the cast is spelled out once here. The
+ * contribution is the combined one built below, so the type is structural
+ * rather than tied to any one endpoint's shape.
  */
 interface TypertContributionRegistry {
   register(contribution: {
@@ -109,12 +103,10 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
   }
 
   /**
-   * Account, usage, and credit state for the settings page's account card —
-   * one entry per pool account when the plugin entry wired `reports`, a
-   * single default-account entry otherwise. Degrades per endpoint like the
-   * `/commandcode` command (failures land in `report.failures`); throws
-   * `MISSING_CREDENTIAL` when no key resolves, which the Gateway folds into
-   * the failure branch the page renders as a hint.
+   * Account, usage, and credit state for the settings page's account card.
+   * Degrades per endpoint like the `/commandcode` command (failures land in
+   * `report.failures`); throws `MISSING_CREDENTIAL` when no key resolves, which
+   * the Gateway folds into the failure branch the page renders as a hint.
    */
   async report(): Promise<CommandCodeAccountsReport> {
     if (this.deps.reports !== undefined) return this.deps.reports()
@@ -133,11 +125,10 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
   }
 
   /**
-   * The full model catalog for the settings page's model editors (the
-   * routing-rule editor and the visible-models filter). The browser never
-   * calls the Command Code API directly — the Host serves the catalog
-   * (already fetched/cached by the adapter) so models can be picked from
-   * the live list instead of typed by hand.
+   * The full model catalog for the settings page's model editors. The browser
+   * never calls the Command Code API directly — the Host serves the catalog
+   * (already fetched/cached by the adapter) so models can be picked from the
+   * live list instead of typed by hand.
    */
   async models(): Promise<CommandCodeCatalog> {
     return this.deps.listModels?.() ?? { models: [] }
@@ -145,9 +136,9 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
 
   /**
    * The model price table the composer prices an in-progress session with.
-   * Static vendored data (the official pricing page's rates), served Host-side
-   * so the browser bundle never carries a copy that could drift from the
-   * snapshot, and so a price update reaches an open page without a rebuild.
+   * Static vendored data, served Host-side so the browser bundle never carries
+   * a copy that could drift from the snapshot, and so a price update reaches an
+   * open page without a rebuild.
    */
   async prices(): Promise<CommandCodePriceTable> {
     return (this.deps.prices ?? modelPriceTable)()
@@ -156,8 +147,7 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
   /**
    * Start (or rejoin) a browser-login attempt and return its fresh status —
    * `waiting` carrying the Studio URL. Rejects when the flow cannot start
-   * (no free loopback port, disposed plugin); the Gateway folds the throw
-   * into the failure branch the page renders.
+   * (no free loopback port, disposed plugin).
    */
   async loginBegin(targetRef?: string): Promise<CommandCodeLoginStatus> {
     const login = this.requireLogin()

@@ -1,22 +1,15 @@
 /**
- * Wire contract for the Command Code account-usage Remote
- * (`commandcode/report`).
+ * Wire contracts for the Command Code Remotes the browser half mounts: the
+ * account-usage report (`commandcode/report`), the model catalog
+ * (`commandcode/models`) and the price table (`commandcode/prices`).
  *
- * The settings page renders the same account/usage/credit facts the
- * `/commandcode` command prints, but the browser never holds the API key —
- * the report must be produced Host-side and cross the Connection RPC carrier.
- * The harness exposes plugin-defined Host methods through the Typert Gateway:
- * the Host half registers a strict invocation descriptor against a Cordis
- * service (`src/usage-remote.ts`), and the browser half mounts the matching
- * Remote contribution on `ctx.remote` (`src/client/index.ts`).
- *
- * This module is the single source both halves share: the result validator
- * (a hand-rolled {@link TypertSchema}, so neither half needs a schema library)
- * and the exact descriptor object, so the endpoint can never drift apart.
- * It is deliberately dependency-free — the client bundle inlines it, and only
- * `import type` edges leave it (erased at build). The boundary-validator
- * helpers and the descriptor boilerplate live in `./wire-shared.ts`, shared
- * with the login wire contract.
+ * The browser never holds the API key, so every one of these is produced
+ * Host-side: the Host half registers a strict invocation descriptor against a
+ * Cordis service (`src/usage-remote.ts`) and the browser half mounts the
+ * matching contribution on `ctx.remote` (`src/client/index.ts`). This module
+ * is the single source both halves share — the hand-rolled result validators
+ * and the exact descriptor objects, so neither half can drift. It is
+ * dependency-free because the client bundle inlines it.
  *
  * @module dsh-commandcode-provider/usage-wire
  */
@@ -67,7 +60,6 @@ export const USAGE_REPORT_ENDPOINT = 'commandcode/report'
 const { reject, record, stringField, numberField, booleanField } =
   makeBoundaryValidator('commandcode/report result:')
 
-/** Validate one window-limit block (`fiveHour` / `weekly`). */
 /**
  * Parse one quota window, or undefined when the frame carries no such window.
  *
@@ -103,9 +95,6 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
 
   if (source.blocked !== undefined) {
     const blocked = source.blocked
-    // Positive check: TS's never-return control-flow analysis only recognizes
-    // function declarations, not the factory's destructured-arrow `reject`, so
-    // narrow `blocked` in the positive branch instead.
     if (blocked === 'invalid-key' || blocked === 'service-unavailable' || blocked === 'invalid-response' || blocked === 'network') {
       report.blocked = blocked
     } else {
@@ -144,22 +133,21 @@ function parseUsageReport(value: unknown): CommandCodeUsageReport {
       purchasedCredits: numberField(credits, 'purchasedCredits', 'credits.purchasedCredits'),
       freeCredits: numberField(credits, 'freeCredits', 'credits.freeCredits'),
     }
-    // OPTIONAL on the wire: a Host half that predates this field serves the
-    // scalar 0 for an omitted balance, which cannot be told from a real zero.
-    // An explicit `false` therefore means "not reported" and the panel keeps the
-    // figure off the dashboard; an absent flag (an older Host) stays unset and
-    // is read as "assume reported", so a real balance is not lost cross-version.
-    // A PRESENT value must still be a boolean, so a malformed frame is rejected
-    // here rather than coerced.
+    // OPTIONAL on the wire: an explicit `false` means the endpoint omitted the
+    // balance, which cannot be told from a real zero — the panel keeps the
+    // figure off the dashboard rather than drawing a consumed quota. An absent
+    // flag (an older Host) stays unset and reads as "assume reported", so a
+    // real balance is not lost cross-version. A PRESENT value must still be a
+    // boolean, so a malformed frame is rejected here rather than coerced.
     if (credits.monthlyReported !== undefined) {
       parsed.monthlyReported = booleanField(credits, 'monthlyReported', 'credits.monthlyReported')
     }
     for (const flag of ['purchasedReported', 'freeReported'] as const) {
       if (credits[flag] !== undefined) parsed[flag] = booleanField(credits, flag, `credits.${flag}`)
     }
-    // Absent means the endpoint reported no such window. The window parsers
-    // return undefined for an absent block, and an optional member is only set
-    // when it was really there.
+    // Absent means the endpoint reported no such window: the parsers return
+    // undefined for an absent block, and an optional member is only set when
+    // it was really there.
     const fiveHour = windowLimit(credits.fiveHour, 'credits.fiveHour')
     const weekly = windowLimit(credits.weekly, 'credits.weekly')
     if (fiveHour !== undefined) parsed.fiveHour = fiveHour
@@ -427,9 +415,8 @@ function parseRates(source: Record<string, unknown>, field: string): CommandCode
     outputCost: priceNumber(source, 'outputCost', `${field}.outputCost`),
     cacheReadCost: priceNumber(source, 'cacheReadCost', `${field}.cacheReadCost`),
   }
-  // Optional on the wire: only a minority of models publish a cache-write
-  // rate, and a present non-number is a contract violation rather than a
-  // silent zero.
+  // Optional on the wire: a present non-number is a contract violation rather
+  // than a silent zero (only a minority of models publish a cache-write rate).
   if (source.cacheWriteCost !== undefined) {
     rates.cacheWriteCost = priceNumber(source, 'cacheWriteCost', `${field}.cacheWriteCost`)
   }

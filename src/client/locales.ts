@@ -8,7 +8,6 @@
  */
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** Copy of the Command Code settings page. */
     'settings.commandcode': SettingsCommandCodeKey
   }
 }
@@ -42,13 +41,6 @@ export type SettingsCommandCodeKey =
   | 'webSearchHint'
   | 'showSidebarQuota'
   | 'showSidebarQuotaHint'
-  | 'commandGuard'
-  | 'commandGuardHint'
-  | 'commandGuardLevel'
-  | 'commandGuardLevelHint'
-  | 'commandGuardLevelHigh'
-  | 'commandGuardLevelMedium'
-  | 'commandGuardLevelLow'
   | 'zdr'
   | 'zdrHint'
   | 'accountsTitle'
@@ -202,13 +194,6 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   webSearchHint: '使用同一密钥承载 dsh 的 web_search；关闭后恢复原搜索后端。',
   showSidebarQuota: '在侧边栏显示额度卡片',
   showSidebarQuotaHint: '在侧边栏底部显示套餐与额度卡片，点击可打开完整仪表盘。默认关闭，关闭时不会为它后台刷新用量。',
-  commandGuard: 'AI 命令安全预判',
-  commandGuardHint: '命令确认弹窗前，先由 typesafe/jev 判断它是否安全；沙箱提权还会额外判断范围与必要性。三项都足够确定才自动放行，其余照常弹窗。默认关闭。',
-  commandGuardLevel: '自动放行阈值',
-  commandGuardLevelHint: '阈值越高，需要越确定才放行，弹窗越多。高 = 0.95，中 = 0.9（默认），低 = 0.8。判定超过 3 秒未返回会照常弹窗。',
-  commandGuardLevelHigh: '高',
-  commandGuardLevelMedium: '中',
-  commandGuardLevelLow: '低',
   zdr: '零数据保留（ZDR）',
   zdrHint: '仅使用不留存、不训练的上游；可用模型可能更少且价格通常更高。',
   accountsTitle: '账户',
@@ -369,18 +354,6 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   webSearchHint: 'Use the same key for dsh web search; turning it off restores the previous backend.',
   showSidebarQuota: 'Show the quota card in the sidebar',
   showSidebarQuotaHint: 'Show a plan and quota card at the bottom of the sidebar that opens the full dashboard. Off by default; while off, no background usage refresh runs for it.',
-  commandGuard: 'AI command guard',
-  commandGuardHint: 'Before a shell command asks for approval, typesafe/jev judges whether'
-    + ' it is safe. A sandbox escalation also needs separate scope and necessity'
-    + ' verdicts; all three must be confident enough to skip the prompt.'
-    + ' Off by default.',
-  commandGuardLevel: 'Auto-approve threshold',
-  commandGuardLevelHint: 'A higher threshold needs more confidence to skip the prompt, so you'
-    + ' see more prompts. High = 0.95, Medium = 0.9 (default), Low = 0.8. A judgement'
-    + ' that takes longer than 3 seconds shows the normal prompt.',
-  commandGuardLevelHigh: 'High',
-  commandGuardLevelMedium: 'Medium',
-  commandGuardLevelLow: 'Low',
   zdr: 'Zero data retention (ZDR)',
   zdrHint: 'Use only upstreams that retain no data and do not train on requests; availability and pricing may differ.',
   accountsTitle: 'Accounts',

@@ -1,36 +1,20 @@
 /**
- * Browser controller for the "Command Code" settings page.
+ * Browser controller for the "Command Code" settings page (a `settings.section`
+ * entry, id `commandcode`). React-free: it only produces the state face
+ * `section.tsx` renders, so node tests can drive it.
  *
- * The page lives at the same settings-nav level as General / Models / Plugins
- * (a `settings.section` entry, id `commandcode`). It exists because the
- * Models page renders an unknown-adapter-family card for the `commandcode`
- * provider and deliberately disables its submit — the API key cannot be
- * configured there. This page owns the connection facts the plugin resolves
- * per request:
+ * Two write paths with different contracts:
+ *   - The staged form (connection facts, behavior switches, model visibility,
+ *     plus the Models-page card's default key draft) lands on `save()`.
+ *   - Account management commits IMMEDIATELY and serially.
  *
- *   - API key   -> written through the credentials domain under the reference
- *                  the plugin resolves (`apiKeyEnv`, default
- *                  `COMMANDCODE_API_KEY`). The literal never rides a response,
- *                  so the control only reports whether one is configured.
- *   - API base  -> the `llm-commandcode` settings namespace (`apiBase`), same
- *                  namespace the Models page card addresses.
- *   - Timeouts, behavior switches, model visibility -> the same namespace,
- *                  staged and written on save.
- *   - Accounts  -> `accounts`, `activeAccount`, `modelAccountRules` and the
- *                  per-account credentials, committed immediately.
- *
- * The controller mirrors the plugin-card pattern from the harness's own
- * settings UI: it binds the `llm-commandcode` namespace through a
- * `SettingsScope` — this plugin's own binding of `remote.settings` (see
- * `./settings-scope.ts`; the harness's `settingsScope` wrapper existed only
- * through 0.1.6 and was removed with the 0.1.7 settings rewrite, while the
- * wire underneath spans every supported release) — keeps a staged draft of
- * edits, and writes them on save through `scope.set` / the credentials
- * domain. The Host stays the single fact source; the snapshot is republished
- * after each accepted write.
- *
- * This module is deliberately free of JSX — it only produces the state face
- * the React component renders.
+ * The API key is written through the CREDENTIALS domain under the reference the
+ * plugin resolves (`apiKeyEnv`), never through the settings document, so the
+ * literal cannot leak into a document; the control only reports whether one is
+ * configured. Everything else rides the `llm-commandcode` namespace through this
+ * plugin's own `SettingsScope` over `remote.settings` (see `./settings-scope.ts`).
+ * The Host stays the single fact source; the snapshot is republished after each
+ * accepted write.
  */
 
 /** The settings namespace the plugin registers (host half, src/index.ts). */
@@ -79,10 +63,8 @@ export interface SettingsPageApi {
     unset(ref: string): Promise<RemoteResult<void>>
   }
   /**
-   * The model catalog for the settings page's model editors (the
-   * routing-rule editor and the visible-models filter; Host-side). Absent
-   * on legacy transports without the Remote mount — the editors degrade to
-   * the empty-catalog state.
+   * The model catalog for the model editors (Host-side). Optional: a transport
+   * without the Remote mount leaves the editors on the empty-catalog state.
    */
   models?(): Promise<RemoteResult<{ models: CatalogModelOption[] }>>
 }
@@ -97,10 +79,7 @@ export interface StagedField {
   overridden: boolean
   /** Whether the staged draft fails to parse (blocks save). */
   invalid: boolean
-  /**
-   * Why the draft is invalid — a non-number (`format`) or an out-of-range
-   * number (`tooSmall`/`tooLarge`); undefined when valid.
-   */
+  /** `format`, `tooSmall`/`tooLarge`; undefined when valid. */
   invalidReason: InvalidReason | undefined
 }
 
@@ -114,13 +93,10 @@ export type InvalidReason = 'format' | 'tooSmall' | 'tooLarge'
 export interface AccountItemState {
   /** Stable id — the account's credential reference (also its slot id). */
   id: string
-  /** Credential reference this account's key lives under. */
   ref: string
   /** Stored label (falls back to the reference). */
   label: string
-  /** Whether a key is stored for this account (Host-reported). */
   configured: boolean
-  /** Whether the credentials domain can store the key. */
   writable: boolean
 }
 
@@ -157,11 +133,8 @@ export interface SettingsPageState {
    * settings page writes keys immediately through `setAccountKey()`.
    */
   apiKey: StagedField
-  /** apiBase draft. */
   apiBase: StagedField
-  /** requestTimeoutMs draft. */
   requestTimeoutMs: StagedField
-  /** streamIdleTimeoutMs draft. */
   streamIdleTimeoutMs: StagedField
   /**
    * transportMaxRetries draft: how many transport failures one request absorbs
@@ -171,57 +144,23 @@ export interface SettingsPageState {
    * timeout fields above rather than as a toggle with an implicit default.
    */
   transportMaxRetries: StagedField
-  /**
-   * filterModelsByPlan draft, staged as `'true'`/`'false'`/`''` (unset). The
-   * component renders it as a toggle; `''` means "inherit the default" (on).
-   */
+  /** filterModelsByPlan draft; `''` = "inherit the default" (on). */
   filterModelsByPlan: StagedField
-  /**
-   * webSearch draft, staged as `'true'`/`'false'`/`''` (unset). The component
-   * renders it as a toggle; `''` means "inherit the default" (on — Command Code
-   * serves the dsh web_search tool).
-   */
+  /** webSearch draft; `''` = "inherit the default" (on — this route serves dsh's web_search). */
   webSearch: StagedField
-  /**
-   * showSidebarQuota draft, staged as `'true'`/`'false'`/`''` (unset). The
-   * component renders it as a toggle; `''` means "inherit the default" (off —
-   * the sidebar quota card is opt-in, so an unset document shows nothing on
-   * the left).
-   */
+  /** showSidebarQuota draft; `''` = "inherit the default" (off — the card is opt-in). */
   showSidebarQuota: StagedField
-  /**
-   * commandGuard draft, staged as `'true'`/`'false'`/`''` (unset). The component
-   * renders it as a toggle; `''` means "inherit the default" (off — the guard
-   * turns a decision model's opinion into an approval grant, so it is opt-in).
-   */
-  commandGuard: StagedField
-  /**
-   * commandGuardLevel draft: `'high'` / `'medium'` / `'low'`, or `''` (unset,
-   * which the Host reads as `'medium'`). The page renders it as a three-way
-   * segmented control.
-   */
-  commandGuardLevel: StagedField
-  /**
-   * zdr draft, staged as `'true'`/`'false'`/`''` (unset). The component
-   * renders it as a toggle; `''` means "inherit the default" (off — ZDR
-   * changes which upstream serves a request and usually what it costs, so it
-   * is opt-in like the guard above).
-   */
+  /** zdr draft; `''` = "inherit the default" (off — ZDR is opt-in). */
   zdr: StagedField
   /**
    * Whether the STORED document turns the sidebar quota card on
-   * (`showSidebarQuota === true`). This is the fact the sidebar card itself
-   * follows — deliberately NOT the staged draft above: the page has an explicit
-   * Save, and a card that appeared from an unsaved draft would outlive a
-   * discarded edit (the staging lives as long as the client does) until the
-   * next page load. The stored fact flips the moment a save lands, so the card
-   * still appears/disappears without a reload.
+   * (`showSidebarQuota === true`). Deliberately NOT the staged draft above: the
+   * page has an explicit Save, and a card that appeared from an unsaved draft
+   * would outlive a discarded edit (staging lives as long as the client does)
+   * until the next page load.
    */
   sidebarQuota: boolean
-  /**
-   * The stored pinned account: a slot id (`default` or an extra account's
-   * credential reference); `''` means "auto — first usable account".
-   */
+  /** The stored pinned account: a slot id; `''` = "auto — first usable account". */
   activeAccount: string
   /** Extra accounts (multi-account rotation), in rotation order. */
   accounts: AccountItemState[]
@@ -249,11 +188,7 @@ export interface SettingsPageState {
   saving: boolean
   /** Whether the last save failed (drafts retained for correction). */
   failed: boolean
-  /**
-   * Monotonic counter bumped once per accepted save. The component watches it
-   * to flash the save bar's "saved" confirmation (timing lives in the component; the
-   * controller stays a plain state machine with no timers).
-   */
+  /** Monotonic counter bumped once per accepted save (the component flashes on it). */
   savedCount: number
 }
 
@@ -293,8 +228,7 @@ function textField(field: string): FieldSpec {
  * save, and an optional inclusive `bounds` range rejects out-of-range values
  * with a specific reason (the Host schema would reject them at save time with
  * only a generic failure — catching it here names the problem while typing).
- * Decimals pass: the Host schema is `z.number()` too, and a fractional
- * millisecond value is harmless even if pointless.
+ * Decimals pass, like the Host schema's `z.number()`.
  */
 function numberField(field: string, bounds?: { min?: number; max?: number }): FieldSpec {
   return {
@@ -308,19 +242,6 @@ function numberField(field: string, bounds?: { min?: number; max?: number }): Fi
       if (bounds?.min !== undefined && parsed < bounds.min) return { kind: 'invalid', reason: 'tooSmall' }
       if (bounds?.max !== undefined && parsed > bounds.max) return { kind: 'invalid', reason: 'tooLarge' }
       return { kind: 'set', value: parsed }
-    },
-  }
-}
-
-/** A field limited to fixed string choices; an empty draft clears it. */
-function choiceField(field: string, choices: readonly string[]): FieldSpec {
-  return {
-    field,
-    format: (value) => (typeof value === 'string' && choices.includes(value) ? value : ''),
-    parse: (text) => {
-      const trimmed = text.trim()
-      if (trimmed === '') return { kind: 'clear' }
-      return choices.includes(trimmed) ? { kind: 'set', value: trimmed } : { kind: 'invalid', reason: 'format' }
     },
   }
 }
@@ -346,19 +267,12 @@ function booleanField(field: string): FieldSpec {
 
 /**
  * Inclusive bounds for the millisecond timeout fields, mirroring the Host
- * Config schema (`z.number().min(1).max(MAX_TIMER_DELAY_MS)` in src/index.ts;
- * `MAX_TIMER_DELAY_MS` is dsh-timeout's 2^31-1 timer ceiling). The client
- * bundle cannot import the node-side package, so the bound is pinned here —
- * the host remains the final gate.
+ * Config schema (`z.number().min(1).max(MAX_TIMER_DELAY_MS)` in src/index.ts —
+ * dsh-timeout's 2^31-1 timer ceiling). The client bundle cannot import the
+ * node-side package, so the bound is pinned here; the Host stays the final gate.
  */
 export const MIN_TIMEOUT_MS = 1
 export const MAX_TIMEOUT_MS = 2147483647
-
-/** The command guard's auto-approve levels, strictest first. */
-export const COMMAND_GUARD_LEVEL_CHOICES = ['high', 'medium', 'low'] as const
-
-/** The level an unset `commandGuardLevel` reads as on the Host. */
-export const COMMAND_GUARD_DEFAULT_LEVEL_CHOICE = 'medium'
 
 /** The fields this page edits inside the `llm-commandcode` namespace. */
 const SECTION_FIELDS: FieldSpec[] = [
@@ -376,11 +290,6 @@ const SECTION_FIELDS: FieldSpec[] = [
   booleanField('filterModelsByPlan'),
   booleanField('webSearch'),
   booleanField('showSidebarQuota'),
-  booleanField('commandGuard'),
-  // Mirrors COMMAND_GUARD_LEVELS in the Host's `src/command-guard.ts`; this
-  // bundle cannot import that node-side module, and the Host schema stays the
-  // final gate.
-  choiceField('commandGuardLevel', COMMAND_GUARD_LEVEL_CHOICES),
   booleanField('zdr'),
 ]
 
@@ -429,17 +338,12 @@ function rulesFromMap(map: ReadonlyMap<string, readonly string[]>): StoredRule[]
 
 /**
  * Controller bridging the `llm-commandcode` scope and the credentials domain
- * onto the page.
+ * onto the page. See the module header for the two write paths.
  *
- * Two write paths with different contracts:
- * - The staged form (connection, behavior and model-visibility fields, plus
- *   the Models-page card's default key draft) lands on `save()`.
- * - Account management (create, rename, remove, key replacement, pinning and
- *   per-account models) commits IMMEDIATELY and serially. A new account had to
- *   be saved before browser sign-in could target it (the Host refuses a login
- *   for a reference the stored `accounts` list does not name), which turned
- *   "add an account" into edit → save → sign in; committing each operation
- *   removes that dance and keeps unrelated staged edits out of it.
+ * Account ops commit immediately, so a new account can be created, signed into
+ * and pinned in one gesture — the Host refuses a login for a reference the
+ * stored `accounts` list does not name, so a staged row could not be signed
+ * into at all.
  */
 export class CommandCodeSettingsController {
   private readonly scope: SettingsScope<Record<string, unknown>>
@@ -449,13 +353,11 @@ export class CommandCodeSettingsController {
   private readonly listeners = new Set<() => void>()
   private readonly disposers: Array<() => void> = []
   private disposed = false
-  /** The credential reference the default account resolves. */
   private credentialRef = DEFAULT_API_KEY_REF
   /** Host-reported configured/writable state per credential reference. */
   private readonly credentialStates = new Map<string, { configured: boolean; writable: boolean }>()
   /** Staged visible-model allowlist (undefined = no draft). */
   private visibleModelsDraft: string[] | undefined = undefined
-  /** The catalog the model editors offer (Host-side). */
   private catalogModels: CatalogModelOption[] = []
   private catalogFailed = false
   private saving = false
@@ -466,10 +368,6 @@ export class CommandCodeSettingsController {
   private accountPending = 0
   private accountFailed: AccountOperation | undefined = undefined
 
-  /**
-   * @param scope - bound scope for the `llm-commandcode` namespace.
-   * @param api - credentials wire face.
-   */
   constructor(
     scope: SettingsScope<Record<string, unknown>>,
     api: SettingsPageApi,
@@ -544,8 +442,6 @@ export class CommandCodeSettingsController {
       filterModelsByPlan: this.field('filterModelsByPlan'),
       webSearch: this.field('webSearch'),
       showSidebarQuota: this.field('showSidebarQuota'),
-      commandGuard: this.field('commandGuard'),
-      commandGuardLevel: this.field('commandGuardLevel'),
       zdr: this.field('zdr'),
       sidebarQuota: this.sectionValue('showSidebarQuota') === true,
       activeAccount: typeof active === 'string' ? active : '',
@@ -564,9 +460,7 @@ export class CommandCodeSettingsController {
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Staged form
-  // -----------------------------------------------------------------------
+  // --- Staged form ---
 
   /** Stage one field's draft text. */
   edit(field: string, text: string): void {
@@ -663,9 +557,7 @@ export class CommandCodeSettingsController {
     this.publish()
   }
 
-  // -----------------------------------------------------------------------
-  // Immediate account management
-  // -----------------------------------------------------------------------
+  // --- Immediate account management ---
 
   /**
    * Create one extra account now and return its credential reference, or
@@ -764,9 +656,7 @@ export class CommandCodeSettingsController {
     })
   }
 
-  // -------------------------------------------------------------------------
-  // Internals
-  // -------------------------------------------------------------------------
+  // --- Internals ---
 
   /** Run one account operation after every earlier one, tracking busy/failure. */
   private runAccountOp(op: AccountOperation, run: () => Promise<boolean>): Promise<boolean> {
@@ -795,9 +685,8 @@ export class CommandCodeSettingsController {
   }
 
   /**
-   * The first free `<credentialRef>_<n>` reference. Derived from the default
-   * reference's name, so a renamed `apiKeyEnv` yields `MY_KEY_2`-style refs
-   * consistent with the default slot.
+   * The first free `<credentialRef>_<n>` reference, so a renamed `apiKeyEnv`
+   * yields `MY_KEY_2`-style refs consistent with the default slot.
    */
   private nextAccountRef(): string {
     const used = new Set([this.credentialRef, ...this.storedExtras().map((extra) => extra.ref)])
@@ -960,10 +849,10 @@ export class CommandCodeSettingsController {
   }
 
   /**
-   * Fetch the model catalog for the settings page's model editors through
-   * the Host Remote. Runs once at construction; call again (e.g. from the
-   * client entry once the Remote mount lands) to (re)try — a later success
-   * clears a prior failure flag so the editors recover without a page reload.
+   * Fetch the model catalog through the Host Remote. Runs once at construction;
+   * call again (e.g. from the client entry once the Remote mount lands) to
+   * (re)try — a later success clears a prior failure flag, so the editors
+   * recover without a page reload.
    */
   refreshCatalog(): void {
     const models = this.api.models
@@ -997,9 +886,7 @@ export class CommandCodeSettingsController {
     }).then(() => this.publish())
   }
 
-  // -----------------------------------------------------------------------
-  // Stored accounts and rules
-  // -----------------------------------------------------------------------
+  // --- Stored accounts and rules ---
 
   /** The raw `accounts` array of the stored section, verbatim. */
   private rawStoredAccounts(): Array<Record<string, unknown>> {

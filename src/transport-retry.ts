@@ -1,45 +1,26 @@
 /**
  * A bounded retry budget for `TRANSPORT` failures (issue #39, second report).
  *
- * The route's retry policy (`providerRetryPolicy` in `./adapter.ts`) is
- * deliberately near-unbounded: 1000 attempts with waits doubling to a 15-minute
- * cap. That shape exists for the failures a provider ASKS to have retried — an
- * exhausted 5-hour window, a Cloudflare 520 — where the wait is the point.
+ * The route policy (`providerRetryPolicy` in `./adapter.ts`) is near-unbounded
+ * on purpose — 1000 attempts doubling to a 15-minute cap — because it exists
+ * for failures the provider ASKS to have retried, where the wait is the point.
+ * A connection that cannot be established is not that: either a blip the first
+ * few attempts absorb, or an outage no in-request waiting fixes (and its waits
+ * count BEFORE each attempt, so attempt 11 alone already waits 512 s). So
+ * transport failures get their own budget; waiting out a real outage is the
+ * user's call, and the next send starts a fresh budget.
  *
- * A transport failure is not that. The reporter's second event at ~710k
- * context was `Connect Timeout Error ... timeout: 10000ms` (undici's own
- * connect timeout; this plugin's `requestTimeoutMs` is 60s) and, on another
- * attempt, `read ECONNRESET` against `/alpha/generate`. Because `TRANSPORT` is
- * in the whitelist, each of those entered the same 1000-attempt loop: with
- * `initialDelayMs: 500` doubling, the wait before attempt 11 alone is 512 s and
- * the cumulative wait before it is ~500 s — the "模型请求重试已取消（11/1000）·
- * 482s" the reporter photographed is that 512 s countdown, 30 s into it — and
- * those waits are counted BEFORE each retry attempt, not after it.
+ * Not counted here: the pre-stream recovery the ADAPTER performs inside one
+ * `stream()` call (account rotation, the 413 image-budget step-down, the
+ * Provider-API → CLI switch) — invisible to the caller and bounded on its own.
+ * This budget caps only the harness's retry loop.
  *
- * A connection that cannot be established is either a sub-second blip (the
- * first few attempts recover it, invisibly) or an outage that no amount of
- * waiting inside one request will fix. So transport failures get their own
- * budget, and when it is exhausted the failure is surfaced with the diagnosis
- * instead of manufacturing a multi-minute stall. Waiting out a real outage is
- * the user's call — the next send starts a fresh budget — and
- * `dsh-llm-retry`'s window for rate limits is untouched.
- *
- * Deliberately NOT counted here: the pre-stream recovery the ADAPTER performs
- * inside one `stream()` call (account rotation on 429/401, the 413 image-budget
- * step-down, the Provider-API → CLI protocol switch). Those are invisible to
- * the caller and bounded on their own; this budget caps only the harness's
- * retry loop.
- *
- * Reset rule: the budget clears at each new STEP — one step is exactly one
- * model request (`step/start` is appended immediately before the call) — so the
- * cap is per logical request and the next step of the same turn gets its own
- * grace. `agent/status` → `idle` is NOT the reset signal even though it looks
- * like the natural one: the agent loop's `setPhase` emits it only on a status
- * CHANGE, and a turn's steps all run inside one `running` phase, so it never
- * fires between them — a budget reset only there would be per-turn, and an
- * outage would fail every later step of that turn immediately instead of
- * retrying each. `assistant/attempt` is wrong for the opposite reason: the loop
- * appends it for the FAILED attempt itself, *before* dispatching
+ * Reset rule: the budget clears at each new STEP (one step = one model request).
+ * `agent/status` → `idle` is NOT it, though it looks natural: the loop's
+ * `setPhase` emits it only on a status CHANGE, and a turn's steps all run inside
+ * one `running` phase, so a reset there would fail every later step of an outage
+ * turn at once instead of retrying each. `assistant/attempt` is wrong the other
+ * way — the loop appends it for the FAILED attempt itself, before dispatching
  * `agent/request-error`, so resetting on it would clear the budget on every
  * failure and restore the very loop this module exists to stop.
  *
@@ -52,25 +33,20 @@ export const TRANSPORT_FAILURE_CODE = 'TRANSPORT'
 /**
  * Transport failures to absorb before surfacing the failure, by default.
  *
- * The waits between the attempts come from the route policy's cadence
- * (`initialDelayMs: 500` doubling): the retries this setting buys are scheduled
- * 0.5 s, 1 s, 2 s, 4 s and 8 s after the failures that preceded them, so the
- * default absorbs an ordinary blip for ~15.5 s and then reports the failure
- * instead of continuing into the 16 s, 32 s … 15-minute waits. (Those figures
- * are the waits BEFORE each retry attempt, which is how the harness's own retry
- * chrome counts them — the `· 482s` on the reporter's row is one such wait.)
+ * On the route policy's cadence (`initialDelayMs: 500` doubling) this buys waits
+ * of 0.5/1/2/4/8 s, so the default absorbs an ordinary blip for ~15.5 s and then
+ * reports instead of continuing into the 16 s, 32 s … 15-minute waits.
  */
 export const DEFAULT_TRANSPORT_MAX_RETRIES = 5
 
 /**
  * Ceiling for {@link DEFAULT_TRANSPORT_MAX_RETRIES}'s setting.
  *
- * Deliberately far above the default rather than near it: raising the budget is
- * a legitimate answer to a genuinely flaky link, and the cap is a plausibility
- * bound, not a recommendation. The same number is mirrored in `Config`'s schema
- * and in the settings page's field bound (the client bundle cannot import this
- * node-side module); `tests/transport-retry.test.ts` pins the schema's bound
- * against this constant, which is what makes a drift visible.
+ * Far above the default on purpose: raising the budget is a legitimate answer
+ * to a genuinely flaky link, so this is a plausibility bound, not a
+ * recommendation. The same number is mirrored in `Config`'s schema and the
+ * settings page's field bound, and `tests/transport-retry.test.ts` pins the
+ * schema against this constant.
  */
 export const MAX_TRANSPORT_MAX_RETRIES = 50
 
@@ -110,15 +86,13 @@ export function resetTransportFailures(agent: object): void {
 /**
  * What one session event means for the transport budget.
  *
- * Exported and pure on purpose: the choice of event is the part of this design
- * that is easy to get plausibly wrong (`agent/status` → `idle` looks like the
- * natural reset and is not one — see the module comment), so it is stated once,
- * here, where a test can pin it, instead of being implied by a listener body.
+ * Pure and exported on purpose: the choice of event is the part of this design
+ * that is easy to get plausibly wrong (see the module comment), so it is stated
+ * once, where a test can pin it.
  *
  * @param type - the appended session event's type.
- * @returns `'reset'` for a new step (one model request), `'forget'` when the
- *   turn ended and the session → agent mapping is no longer needed, otherwise
- *   `'none'`.
+ * @returns `'reset'` for a new step, `'forget'` when the turn ended (the
+ *   session → agent mapping is no longer needed), otherwise `'none'`.
  */
 export function transportResetAction(type: string): 'reset' | 'forget' | 'none' {
   if (type === 'step/start') return 'reset'
@@ -129,9 +103,8 @@ export function transportResetAction(type: string): 'reset' | 'forget' | 'none' 
 /**
  * The diagnosis a capped turn ends with. Bilingual, because the harness renders
  * a failed turn's message verbatim and this plugin's other user-facing failures
- * are bilingual too (see the adapter's error builders). It names the retry
- * budget and the checks that actually help, instead of the bare "fetch failed"
- * chain the retry chrome would otherwise show.
+ * are too; it names the retry budget and the checks that actually help instead
+ * of the bare "fetch failed" chain the retry chrome would otherwise show.
  */
 export function transportBudgetMessage(failureMessage: string, maxRetries: number): string {
   return `${failureMessage}`

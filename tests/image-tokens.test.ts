@@ -1,12 +1,10 @@
 /**
  * Vision-token accounting and request-image targets.
  *
- * Both modules are pure and version-neutral, so they are driven directly here:
- * `image-tokens.ts` decides what one image costs on the family that serves a
- * catalog model, and `image-request.ts` decides what one request asks the
- * attachment service to encode. The adapter-level wiring (which payload each
- * engine generation hands over, and that the priced dimensions are the ones the
- * request actually carries) is pinned in `tests/adapter.test.ts`.
+ * Both modules are pure, so they are driven directly: `image-tokens.ts` decides
+ * what one image costs on the family that serves a catalog model and
+ * `image-request.ts` what one request asks the encoder for. The adapter-level
+ * wiring is pinned in `tests/adapter.test.ts`.
  */
 
 import { test } from 'node:test'
@@ -46,7 +44,6 @@ test('imageTokenFamily() reads the vendor out of the catalog id', () => {
   assert.equal(imageTokenFamily('google/gemini-3.7-flash'), 'google')
   assert.equal(imageTokenFamily('gemini-2.0-flash'), 'google')
   assert.equal(imageTokenFamily('deepseek/deepseek-v4.1-flash'), 'deepseek')
-  // Families whose published rule we cannot tell apart from the known ones:
   // Qwen's 28-px patches, MiniMax, xAI, moonshot and sakana all fall back.
   assert.equal(imageTokenFamily('Qwen/Qwen3.8-Max'), 'generic')
   assert.equal(imageTokenFamily('MiniMaxAI/MiniMax-M3'), 'generic')
@@ -55,8 +52,8 @@ test('imageTokenFamily() reads the vendor out of the catalog id', () => {
 })
 
 test('every advertised vision model resolves to a family, and its cost is positive', () => {
-  // Guards the join the adapter relies on: the pricing path is only reached for
-  // models this snapshot calls image-capable, so every one of them must price.
+  // The pricing path is only reached for models this snapshot calls
+  // image-capable, so every one of them must price.
   const families = new Set<string>()
   for (const model of KNOWN_IMAGE_MODELS) {
     const family = imageTokenFamily(model)
@@ -91,15 +88,13 @@ test('the Gemini rule charges 258 for a small image and 258 per 768-px crop', ()
 test('the DeepSeek rule charges a token grid, enlarged below its pixel floor and capped at 1024', () => {
   // 1024x1024 -> 74x74 patches -> 25x25 cells -> 25 * 26 + 2 framing tokens.
   assert.equal(imageTokenCost('deepseek', 1024, 1024), 25 * 26 + 2)
-  // The provider caps one image at 1024 tokens, so nothing can price above it
-  // however large the source is.
+  // The provider caps one image at 1024 tokens, whatever the source size.
   for (const size of [4096, 8192, 16384]) {
     const tokens = imageTokenCost('deepseek', size, size)
     assert.ok(tokens <= 1024, `${size}px priced ${tokens} tokens, above the provider cap`)
     assert.ok(tokens > 900, `${size}px priced ${tokens} tokens, implausibly far below the cap`)
   }
-  // The pixel floor enlarges a tiny image before projection, so a 1-px image is
-  // not charged one token.
+  // The pixel floor enlarges a tiny image, so a 1-px image is not charged one.
   assert.ok(imageTokenCost('deepseek', 1, 1) > 1)
   // Monotonic: a bigger source never costs fewer tokens.
   let previous = 0
@@ -136,8 +131,8 @@ test('longEdgeDimensions() projects onto the long edge and never enlarges', () =
 })
 
 test('requestImageTarget() is the projected geometry the encoder is handed', () => {
-  // The target IS what readImageRequest passes to the encoder, so it must carry
-  // exactly the target vocabulary — no pixel-budget field may ride along.
+  // The target IS what readImageRequest passes to the encoder, so it carries
+  // only the target vocabulary — no pixel-budget field rides along.
   assert.deepEqual(requestImageTarget(refAt(2880, 1800)), {
     width: 1568,
     height: 980,

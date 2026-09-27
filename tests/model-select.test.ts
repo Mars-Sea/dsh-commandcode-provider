@@ -1,11 +1,10 @@
 /**
  * Model-select helper tests (node:test, zero deps). Run with `npm test`.
  *
- * These pin the data shaping behind the settings page's model-editor
- * dropdowns (the routing-rule editor and the visible-models filter):
- * search filtering, stale-id detection, tier grouping, and selection
- * toggling. The React dropdown itself (`ModelMultiSelect` in section.tsx)
- * is a thin view over these helpers.
+ * These pin the data shaping behind the settings page's model-editor dropdowns
+ * (the routing-rule editor and the visible-models filter): search filtering,
+ * stale-id detection, tier grouping and selection toggling. The React dropdown
+ * (`ModelMultiSelect` in section.tsx) is a thin view over these helpers.
  */
 
 import { test } from 'node:test'
@@ -27,9 +26,7 @@ const CATALOG = [
   { id: 'some-future-model', name: 'Some Future Model' },
 ]
 
-// ---------------------------------------------------------------------------
 // matchesModelQuery
-// ---------------------------------------------------------------------------
 
 test('a blank query matches everything', () => {
   for (const query of ['', '   ']) {
@@ -46,9 +43,7 @@ test('matching is a case-insensitive substring over id and name', () => {
   assert.equal(matchesModelQuery(CATALOG[1]!, 'hy4'), true)
 })
 
-// ---------------------------------------------------------------------------
 // buildModelSelectOptions
-// ---------------------------------------------------------------------------
 
 test('builds one live row per catalog model in catalog order', () => {
   const options = buildModelSelectOptions(CATALOG, [])
@@ -93,9 +88,7 @@ test('a query with no matches yields no rows', () => {
   assert.deepEqual(buildModelSelectOptions(CATALOG, [], 'no-such-model'), [])
 })
 
-// ---------------------------------------------------------------------------
 // groupModelSelectOptions
-// ---------------------------------------------------------------------------
 
 const TIER_OF = (id: string): string | undefined => {
   if (id === 'deepseek/deepseek-v4-pro' || id === 'some-future-model') return 'Go'
@@ -140,9 +133,7 @@ test('an empty option list yields no groups', () => {
   assert.deepEqual(groupModelSelectOptions([], TIER_OF), [])
 })
 
-// ---------------------------------------------------------------------------
 // toggleModelSelection
-// ---------------------------------------------------------------------------
 
 test('toggling an absent id appends it', () => {
   assert.deepEqual(toggleModelSelection(['a'], 'b'), ['a', 'b'])
@@ -152,9 +143,7 @@ test('toggling a present id removes it', () => {
   assert.deepEqual(toggleModelSelection(['a', 'b'], 'a'), ['b'])
 })
 
-// ---------------------------------------------------------------------------
 // tierHeadingFor
-// ---------------------------------------------------------------------------
 
 test('maps known-plan ids to tier headings', () => {
   const knownPlans = { 'deepseek/deepseek-v4-pro': 'go', 'tencent/hy4-preview': 'goat' }
@@ -170,9 +159,7 @@ test('falls back to the raw tier key for a future tier', () => {
   assert.equal(tierHeadingFor('x/new-model', { 'x/new-model': 'ultra' }), 'ultra')
 })
 
-// ---------------------------------------------------------------------------
 // Stale-selection cleanup (only against a catalog we actually hold)
-// ---------------------------------------------------------------------------
 
 test('catalogIsReady is false while the catalog is empty or failed', () => {
   // Both states make every selected id look retired, which is what turned the

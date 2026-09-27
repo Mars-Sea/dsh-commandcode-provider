@@ -202,9 +202,7 @@ test('host and client contributions carry the same descriptor object', () => {
   assert.equal(USAGE_HOST_CONTRIBUTION.package, USAGE_REMOTE_CONTRIBUTION.package)
 })
 
-// ---------------------------------------------------------------------------
 // Model-catalog Remote (`commandcode/models`)
-// ---------------------------------------------------------------------------
 
 import { MODELS_DESCRIPTOR, MODELS_ENDPOINT, modelsSchema } from '../src/usage-wire.ts'
 
@@ -243,9 +241,7 @@ test('models descriptor targets the commandcodeUsage service and models method',
   assert.equal(MODELS_DESCRIPTOR.method, 'models')
 })
 
-// ---------------------------------------------------------------------------
 // Price-table Remote (`commandcode/prices`)
-// ---------------------------------------------------------------------------
 
 import { PRICES_DESCRIPTOR, PRICES_ENDPOINT, PRICES_REMOTE_CONTRIBUTION, pricesSchema } from '../src/usage-wire.ts'
 

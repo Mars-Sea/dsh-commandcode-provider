@@ -1,17 +1,14 @@
 /**
- * Browser controller for the settings page's login panel.
+ * Browser controller for the settings page's login panel: `begin` asks the
+ * Host to bind the callback server and returns the Studio URL, the controller
+ * polls `loginStatus` while the attempt is live, and `cancel` tears it down.
+ * The key itself never crosses to the browser — the Host validates and stores
+ * it through the credentials seam.
  *
- * The panel drives the Host-half browser login (the official
- * `command-code login` loopback dance) through the Typert Gateway: `begin`
- * asks the Host to bind the callback server and returns the Studio URL, the
- * controller polls `loginStatus` once a second while the attempt is live, and
- * `cancel` tears it down. The key itself never crosses to the browser — the
- * Host validates and stores it through the credentials seam.
- *
- * Transport-level failures (no mounted Remote, an older Host without the
- * login endpoints) land in the dedicated `unavailable` phase so the page can
- * point back at manual paste. Deliberately JSX-free, mirroring
- * `./settings.ts` and `./usage.ts`.
+ * Transport-level failures (no mounted Remote, an older Host without the login
+ * endpoints) land in the dedicated `unavailable` phase so the page can point
+ * back at manual paste. Deliberately JSX-free, mirroring `./settings.ts` and
+ * `./usage.ts`.
  *
  * @module dsh-commandcode-provider/client/login
  */
@@ -105,13 +102,12 @@ export class CommandCodeLoginController {
     this.pollMs = pollMs
   }
 
-  /** Subscribe to state projections. @returns the disposer. */
+  /** Subscribe to state projections. */
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
 
-  /** Build the current panel state face. */
   state(): LoginPageState {
     return {
       phase: this.phase,
@@ -178,14 +174,10 @@ export class CommandCodeLoginController {
     this.listeners.clear()
   }
 
-  // -----------------------------------------------------------------------
-  // Internals
-  // -----------------------------------------------------------------------
-
   /** Poll until the attempt leaves `waiting` or a newer loop supersedes us. */
   private async poll(generation: number): Promise<void> {
-    // A getter read (not the field) so control-flow narrowing across `await`
-    // cannot claim the phase is frozen.
+    // `currentPhase` is a getter, read (not the field) so control-flow
+    // narrowing across `await` cannot claim the phase is frozen.
     while (!this.disposed && !this.superseded(generation) && this.currentPhase === 'waiting') {
       await sleep(this.pollMs)
       if (this.disposed || this.superseded(generation) || this.currentPhase !== 'waiting') return
@@ -253,14 +245,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-// ---------------------------------------------------------------------------
-// Hint copy for the login panel / card row (JSX-free so node tests drive it)
-// ---------------------------------------------------------------------------
+// Hint copy for the login panel / card row, JSX-free so node tests drive it.
 
 /**
- * The per-reason copy for a failed login attempt. Shared by the settings
- * page's login panel and the Models-page card's login row — the same reasons
- * can surface from either surface.
+ * The per-reason copy for a failed attempt. Shared by the settings page's login
+ * panel and the Models-page card's login row — the same reason can surface from
+ * either.
  */
 export function loginFailureCopy(
   reason: CommandCodeLoginFailureReason | undefined,
@@ -285,8 +275,8 @@ export interface LoginHint {
 
 /**
  * The hint text + class for one login panel state, shared by the settings
- * page's `LoginPanel` and the Models-page card's login row so both surfaces
- * can never drift apart. Pure: no timers, no state — the components render it.
+ * page's login panel and the Models-page card's login row so both surfaces
+ * can never drift apart. Pure: no timers, no state.
  */
 export function loginHint(
   state: LoginPageState,

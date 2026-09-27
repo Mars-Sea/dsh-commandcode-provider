@@ -304,9 +304,7 @@ test('dispose stops polling and detaches listeners', async () => {
   assert.ok(remote.calls.length <= calls + 1, 'polling stops after dispose')
 })
 
-// ---------------------------------------------------------------------------
 // loginHint / loginFailureCopy (the shared login-row hint state machine)
-// ---------------------------------------------------------------------------
 
 /** A translate stub that echoes its key, so composed text is predictable. */
 const echoT = ((key: string) => key) as (key: string) => string

@@ -283,8 +283,7 @@ test('an unpriced cache-write row is hidden rather than shown as a blank or $0.0
 test('a session whose every billed token is unpriced renders nothing, not $0.00', () => {
   // The regression this pins: cache-write-only usage on a model with no
   // published cache-write rate. The buckets are non-zero, so the old all-zero
-  // guard passed, every priced cost was 0 for LACK OF A RATE, and the pill
-  // announced a confident `$0.00`. Nothing to price means nothing to show.
+  // guard passed and the pill announced a confident `$0.00`.
   const unpriced = buildSessionCostView(input({
     table: HOURLY,
     selection: { lastUsed: { provider: 'commandcode', model: 'deepseek/deepseek-v4-pro' }, next: null },
@@ -307,8 +306,7 @@ test('the cache-hit row is absent when no prompt token was billed', () => {
 
 test('a priced session below a cent still shows a figure, not nothing', () => {
   // The guard above must key on "no rate", never on "tiny amount": 100 output
-  // tokens on the flat table is $0.0002 — real priced spend. A guard written as
-  // `total > 0` would swallow it into a blank pill.
+  // tokens on the flat table is $0.0002 — real priced spend.
   const view = buildSessionCostView(input({ usage: { outputTokens: 100 } }))
   assert.ok(view)
   assert.equal(view.total, 0.0002)
