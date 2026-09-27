@@ -21,25 +21,19 @@ import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 
 /**
- * Upper bound on the retry wait this pool attaches to the all-exhausted
- * `RATE_LIMIT` error. Must equal the `backoff.maxDelayMs` in the adapter's
- * `providerRetryPolicy` (which imports it from here): dsh-llm-retry honors a
- * provider-specified wait verbatim only at or below that cap — a LONGER one
- * makes the executor abandon the retry instead of falling back to local backoff
- * (in normal mode), turning "poll until the window opens" into "fail now".
+ * Upper bound on the retry wait attached to the all-exhausted `RATE_LIMIT`.
+ * Must equal the adapter's `backoff.maxDelayMs`: dsh-llm-retry honors a
+ * provider wait verbatim only at or below that cap — a longer one abandons the
+ * retry instead of falling back to local backoff, turning "poll until the
+ * window opens" into "fail now".
  */
 export const RETRY_MAX_DELAY_MS = 900_000
 
 /**
  * How long an explicitly selected account's rate-limit mark may stand before
- * its window is probed again.
- *
- * A 429 whose reset was never learned marks the key `unknown`, which
- * {@link accountUsable} refuses — for a key nobody asked for that is correct
- * (only the all-marked pass clears it, and it costs one billing call), but for
- * the user's own pinned account a single 429 would demote it until the process
- * restarts (issue #51). Once per interval per key bounds a probe endpoint that
- * keeps failing; a successful probe resolves the mark for good.
+ * its window is probed again. Without this, a single 429 on the user's pinned
+ * account demotes it until the process restarts (issue #51); probing at most
+ * once per interval per key bounds a probe endpoint that keeps failing.
  */
 const EXPLICIT_ACCOUNT_PROBE_INTERVAL_MS = 60_000
 
@@ -281,26 +275,18 @@ export class CommandCodeAccountPool {
   }
 
   /**
-   * Hand out the key for a request: the model-routed account when the request's
-   * model matches a rule (and that account is usable), else the manually
-   * preferred account when usable, else the first usable account in rotation
-   * order. Returns `undefined` when no account resolves any key at all, or when
-   * an account this request already used is still UNMARKED — that rejection is
-   * the honest answer, so the caller's own rejection surfaces as itself. Throws
-   * `RATE_LIMIT` (naming the earliest window reset) or `INVALID_CREDENTIAL`
-   * when accounts exist but every one of them is marked.
+   * Hand out the key for a request: the model-routed account when usable, else
+   * the manually preferred account when usable, else the first usable account
+   * in rotation order. Returns `undefined` when no account resolves any key,
+   * or when an account this request already used is still UNMARKED — the
+   * caller's own rejection is the honest answer then. Throws `RATE_LIMIT` /
+   * `INVALID_CREDENTIAL` when every account is marked.
    *
-   * `options.model` is the request's model id; routing rules re-read per
-   * resolution, so a settings change applies live. `options.tried` lists the
-   * keys this request has already used — the just-rejected one included — and
-   * they are removed from the resolution entirely, which is what lets one
-   * request walk a four-account pool: a rejection that does not mark the key
-   * (no credits, a model outside the account's plan) would otherwise be offered
-   * again on every attempt and the accounts behind it never reached.
-   *
-   * An explicit selection (the pin or a model rule) that a rate-limit mark would
-   * demote is probed before the fallback serves, so "falls back while exhausted"
-   * never becomes "stays demoted until the process restarts" (issue #51).
+   * `options.tried` lists the keys this request already used; they are removed
+   * from the resolution entirely, which is what lets one request walk a
+   * four-account pool. An explicit selection (pin or model rule) that a
+   * rate-limit mark would demote is probed first, so a fallback never becomes
+   * permanent (issue #51). Rules re-read per resolution, so settings apply live.
    */
   async resolveKey(options?: { tried?: readonly string[]; model?: string }): Promise<{ key: string; slot: CommandCodeAccountSlot } | undefined> {
     const accounts = await this.resolvedAccounts()
@@ -314,14 +300,11 @@ export class CommandCodeAccountPool {
       ? accounts
       : accounts.filter((account) => !tried.includes(account.key))
     const preferred = this.deps.preferredId?.()
-    // Every account was already tried in this request. Nothing can be handed
-    // back: an account that is merely UNMARKED (a plan or balance rejection
-    // marks nothing) leaves the caller's own rejection as the honest answer.
-    // When every account is marked instead, the pool still owes its own
-    // diagnosis — built from the marks as they stand, WITHOUT probing: a probe
-    // here would answer a question this request cannot act on, and reviving a
-    // key mid-request would make the diagnosis describe an account that is
-    // usable again.
+    // Every account was already tried in this request: an UNMARKED account
+    // leaves the caller's own rejection as the honest answer; when every
+    // account is marked instead, the pool owes its own diagnosis — built from
+    // the marks as they stand, WITHOUT probing (a probe here answers a
+    // question this request cannot act on).
     const diagnoseOnly = available.length === 0
     if (diagnoseOnly) {
       if (selectActiveAccount(accounts, preferred) !== undefined) return undefined
@@ -364,28 +347,7 @@ export class CommandCodeAccountPool {
         this.states.delete(account.key)
         return
       }
-      // A known reset becomes a cooldown that expires by itself. An UNKNOWN one
-      // must not: `until: 0` would read as "never usable again" to
-      // {@link accountUsable} and take the account out of service for the rest
-      // of the process — the very permanence this pool must not have. The cause
-      // becomes `window` either way: a probe that read a window as exceeded IS
-      // window evidence, whatever the key was marked for. A mark that already
-      // carries a cooldown keeps it when this probe publishes no reset.
-      if (probe.resetAt > 0) {
-        this.states.set(account.key, {
-          kind: 'cooldown',
-          cause: 'window',
-          reason: account.state?.reason ?? 'usage window exhausted (429)',
-          until: probe.resetAt,
-        })
-      } else if (account.state?.kind !== 'cooldown') {
-        this.states.set(account.key, {
-          kind: 'unknown',
-          cause: 'window',
-          reason: account.state?.reason ?? 'usage window exhausted (429)',
-          until: 0,
-        })
-      }
+      this.stampWindowMark(account, probe)
     }))
 
     // Re-resolve once: the probe pass above may have revived keys, and both the
@@ -547,10 +509,21 @@ export class CommandCodeAccountPool {
       return { slot: account.slot, key: account.key, state: undefined }
     }
     // A reset time is what makes the mark expire on its own; without one the
-    // mark stays `unknown`, so a later probe can still learn it. The cause is
-    // `window` either way (the probe read the account's own usage windows), and
-    // a mark that already carries a cooldown keeps it — a known reset is never
-    // traded for an unknown one, exactly like the all-marked pass.
+    // mark stays `unknown` — see `stampWindowMark`.
+    this.stampWindowMark(account, probe)
+    return undefined
+  }
+
+  /**
+   * Stamp a probe-read window onto one key. A known reset becomes a cooldown
+   * that expires by itself; without one the mark stays `unknown`, so a later
+   * probe can still learn it — and a mark that already carries a cooldown
+   * keeps it, never trading a known reset for an unknown one. The cause is
+   * `window` either way: a probe that read a window as exceeded IS window
+   * evidence, whatever the key was marked for. An `until: 0` cooldown would
+   * read as "never usable again" to {@link accountUsable}, so `unknown` it is.
+   */
+  private stampWindowMark(account: ResolvedAccount, probe: AccountWindowProbe): void {
     if (probe.resetAt > 0) {
       this.states.set(account.key, {
         kind: 'cooldown',
@@ -566,7 +539,6 @@ export class CommandCodeAccountPool {
         until: 0,
       })
     }
-    return undefined
   }
 
   /** Hand out the chosen account's key. */

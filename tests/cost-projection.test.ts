@@ -5,7 +5,7 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { createCostProjection, installCostProjection } from '../src/cost-projection.ts'
 import { modelPriceTable } from '../src/model-prices.ts'
-import { COST_TOKEN_KEYS, zeroCostTokens } from '../src/cost-facts.ts'
+import { COST_TOKEN_KEYS, costGroupKey, zeroCostTokens } from '../src/cost-facts.ts'
 import { buildSessionCostView } from '../src/client/session-cost.ts'
 import type { CommandCodePriceTable } from '../src/usage-wire.ts'
 
@@ -16,6 +16,18 @@ const table: CommandCodePriceTable = { peakHours: [[1, 4]], models: [
   { id: 'hourly', slug: 'hourly', inputCost: .15, outputCost: .6, cacheReadCost: .003, peak: { inputCost: .3, outputCost: 1.2, cacheReadCost: .006 } },
 ] }
 const off = Date.parse('2026-09-14T00:30Z'), peak = Date.parse('2026-09-14T01:30Z')
+
+test('group classification follows price rows changed in place', () => {
+  const prices: CommandCodePriceTable = { models: [], peakHours: [] }
+  const group = { provider: 'commandcode', model: 'model', at: off, contextTokens: 1, tokens: zeroCostTokens() }
+  const unpriced = costGroupKey(group, prices)
+  prices.models.push({ id: 'model', slug: 'model', inputCost: 1, outputCost: 2, cacheReadCost: 0 })
+  const priced = costGroupKey(group, prices)
+  assert.notEqual(priced, unpriced)
+  prices.models[0] = { id: 'other', slug: 'other', inputCost: 1, outputCost: 2, cacheReadCost: 0 }
+  assert.equal(costGroupKey(group, prices), unpriced)
+})
+
 function harness(prices = table) {
   const unit = createCostProjection(prices)
   let state = unit.init()

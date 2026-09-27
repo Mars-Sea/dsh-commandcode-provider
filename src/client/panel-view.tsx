@@ -24,7 +24,7 @@ import type { SnapshotStore } from './snapshot-store.ts'
 import type { UsagePageState } from './usage.ts'
 import type { SettingsPageState } from './settings.ts'
 import { buildPanelView } from './panel.ts'
-import type { PanelAccountView, PanelStatView, PanelView, PanelWindowView } from './panel.ts'
+import type { PanelAccountView, PanelView, PanelWindowView } from './panel.ts'
 import { panelTextEN } from './panel-copy.ts'
 import type { PanelKey } from './panel-copy.ts'
 // SlotMap merge for `main` / `sidebar.footer.action` (load-bearing: the slots
@@ -182,11 +182,6 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
   )
 }
 
-/** One usage tile. */
-function StatTile({ stat, label }: { stat: PanelStatView; label: string }) {
-  return <Tile label={label} value={stat.value} sub={stat.sub} />
-}
-
 /** The rotation/credential badge line for one account. */
 function markText(account: PanelAccountView, text: (key: PanelKey) => string): string {
   if (account.mark === undefined) return ''
@@ -296,7 +291,7 @@ function AccountCard({ account, view }: { account: PanelAccountView; view: Panel
           <h4 className="ccp-blockTitle">{text('usage')}</h4>
           <div className="ccp-tiles">
             {account.stats.map((stat) => (
-              <StatTile key={stat.label} stat={stat} label={text(stat.label)} />
+              <Tile key={stat.label} label={text(stat.label)} value={stat.value} sub={stat.sub} />
             ))}
           </div>
         </div>

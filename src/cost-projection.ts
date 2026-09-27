@@ -73,11 +73,17 @@ export function createCostProjection(table = modelPriceTable()) {
       const group: CostUsageGroup = { provider: state.selection?.provider ?? '', model: state.selection?.model ?? '', at: state.at, contextTokens: tokens.uncachedInputTokens + tokens.cacheReadTokens + tokens.cacheWriteTokens, tokens }
       if (previous && JSON.stringify(previous) === JSON.stringify(group)) return state
       const groups = state.facts.groups.map(g => ({ ...g, tokens: { ...g.tokens } }))
+      // One pass over the groups replaces the two linear `find` scans; the
+      // first index wins, matching `find` on duplicate keys.
+      const byKey = new Map<string, number>()
+      groups.forEach((g, i) => { const key = costGroupKey(g, table); if (!byKey.has(key)) byKey.set(key, i) })
+      const groupKey = costGroupKey(group, table)
       if (previous) {
-        const old = groups.find(g => costGroupKey(g, table) === costGroupKey(previous, table))
-        if (old) for (const k of COST_TOKEN_KEYS) old.tokens[k] -= previous.tokens[k]
+        const old = byKey.get(costGroupKey(previous, table))
+        if (old !== undefined) for (const k of COST_TOKEN_KEYS) groups[old]!.tokens[k] -= previous.tokens[k]
       }
-      let target = groups.find(g => costGroupKey(g, table) === costGroupKey(group, table))
+      const targetIdx = byKey.get(groupKey)
+      let target = targetIdx === undefined ? undefined : groups[targetIdx]
       if (!target) { target = { ...group, tokens: zeroCostTokens() }; groups.push(target) }
       for (const k of COST_TOKEN_KEYS) target.tokens[k] += tokens[k]
       return { ...state, last: { turn: data.turn, step: data.step, group }, facts: { pricingKey: version, groups: groups.filter(g => COST_TOKEN_KEYS.some(k => g.tokens[k] > 0)) } }

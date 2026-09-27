@@ -2,13 +2,10 @@
  * SlotMap merge for the two seats the plans & quota panel registers into.
  *
  * Neither is ours: `main` is declared by dsh-client-ui-layout and
- * `sidebar.footer.action` by dsh-client-ui-sidebar. Neither is a dependency
- * (the panel needs only their shapes at compile time), so the declarations are
- * re-stated and merged into the framework's `SlotMap`, exactly as `card.tsx`
- * does. They MUST stay structurally identical to upstream's: the registration
- * site then typechecks against the real contract, and a dsh that ships either
- * declaration to the client by another path collides at compile time — the
- * intended alarm, and why this is a merge and not a local cast.
+ * `sidebar.footer.action` by dsh-client-ui-sidebar. Neither is a dependency,
+ * so the declarations are re-stated and merged exactly as `card.tsx` does —
+ * they must stay structurally identical to upstream's (a drift is a compile
+ * error here rather than a silent mis-registration).
  *
  * @module dsh-commandcode-provider/client/panel-slots
  */

@@ -2,27 +2,18 @@
  * A bounded retry budget for `TRANSPORT` failures (issue #39, second report).
  *
  * The route policy (`providerRetryPolicy` in `./adapter.ts`) is near-unbounded
- * on purpose — 1000 attempts doubling to a 15-minute cap — because it exists
- * for failures the provider ASKS to have retried, where the wait is the point.
- * A connection that cannot be established is not that: either a blip the first
- * few attempts absorb, or an outage no in-request waiting fixes (and its waits
- * count BEFORE each attempt, so attempt 11 alone already waits 512 s). So
- * transport failures get their own budget; waiting out a real outage is the
- * user's call, and the next send starts a fresh budget.
+ * on purpose — 1000 attempts doubling to a 15-minute cap — for failures the
+ * provider ASKS to have retried. A connection that cannot be established is
+ * not that: a blip the first few attempts absorb, or an outage no in-request
+ * waiting fixes (attempt 11 alone already waits 512 s). So transport failures
+ * get their own budget, cleared at each new STEP (one step = one model
+ * request). `agent/status` → `idle` is NOT the reset (one `running` phase spans
+ * a turn's steps), and neither is `assistant/attempt` (appended for the FAILED
+ * attempt itself, which would clear the budget on every failure).
  *
- * Not counted here: the pre-stream recovery the ADAPTER performs inside one
- * `stream()` call (account rotation, the 413 image-budget step-down, the
- * Provider-API → CLI switch) — invisible to the caller and bounded on its own.
- * This budget caps only the harness's retry loop.
- *
- * Reset rule: the budget clears at each new STEP (one step = one model request).
- * `agent/status` → `idle` is NOT it, though it looks natural: the loop's
- * `setPhase` emits it only on a status CHANGE, and a turn's steps all run inside
- * one `running` phase, so a reset there would fail every later step of an outage
- * turn at once instead of retrying each. `assistant/attempt` is wrong the other
- * way — the loop appends it for the FAILED attempt itself, before dispatching
- * `agent/request-error`, so resetting on it would clear the budget on every
- * failure and restore the very loop this module exists to stop.
+ * Not counted here: the adapter's in-`stream()` pre-stream recovery (account
+ * rotation, the 413 step-down, the Provider-API → CLI switch) — invisible to
+ * the caller and bounded on its own.
  *
  * @module
  */
@@ -30,24 +21,10 @@
 /** Failure code this budget covers. */
 export const TRANSPORT_FAILURE_CODE = 'TRANSPORT'
 
-/**
- * Transport failures to absorb before surfacing the failure, by default.
- *
- * On the route policy's cadence (`initialDelayMs: 500` doubling) this buys waits
- * of 0.5/1/2/4/8 s, so the default absorbs an ordinary blip for ~15.5 s and then
- * reports instead of continuing into the 16 s, 32 s … 15-minute waits.
- */
+/** Transport failures to absorb before the failure surfaces (default 5: ~15 s of blip cover on the route cadence). */
 export const DEFAULT_TRANSPORT_MAX_RETRIES = 5
 
-/**
- * Ceiling for {@link DEFAULT_TRANSPORT_MAX_RETRIES}'s setting.
- *
- * Far above the default on purpose: raising the budget is a legitimate answer
- * to a genuinely flaky link, so this is a plausibility bound, not a
- * recommendation. The same number is mirrored in `Config`'s schema and the
- * settings page's field bound, and `tests/transport-retry.test.ts` pins the
- * schema against this constant.
- */
+/** Ceiling for the setting above (plausibility bound, not a recommendation; mirrored in `Config`'s schema and pinned by tests). */
 export const MAX_TRANSPORT_MAX_RETRIES = 50
 
 /** Why {@link absorbTransportFailure} answered the way it did. */

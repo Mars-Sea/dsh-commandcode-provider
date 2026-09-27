@@ -273,7 +273,7 @@ function UsageWindow({
 }
 
 /** One pool account's facts (identity, totals, credits, window limits). */
-function AccountReport({ entry, fetchedAt, t, summaryOnly = false, headless = false }: {
+function AccountReport({ entry, fetchedAt, t, headless = false }: {
   entry: CommandCodeAccountUsage
   /**
    * When the shared usage snapshot was fetched — shares the account's bottom
@@ -282,8 +282,6 @@ function AccountReport({ entry, fetchedAt, t, summaryOnly = false, headless = fa
    */
   fetchedAt?: number | undefined
   t: Translate<SettingsCommandCodeKey>
-  /** Collapsed card mode: identity, errors and quota windows without the stat grids. */
-  summaryOnly?: boolean
   /** Omit the identity header (the account row already shows it). */
   headless?: boolean
 }) {
@@ -324,7 +322,7 @@ function AccountReport({ entry, fetchedAt, t, summaryOnly = false, headless = fa
         </div>
       ) : null}
 
-      {!summaryOnly && report.usage !== undefined ? (
+      {report.usage !== undefined ? (
         <div className="cc-usageStats cc-usageStatsActivity">
           <UsageStat
             label={t('usageRequests')}
@@ -345,7 +343,7 @@ function AccountReport({ entry, fetchedAt, t, summaryOnly = false, headless = fa
         </div>
       ) : null}
 
-      {!summaryOnly && credits !== undefined ? (
+      {credits !== undefined ? (
         <div className="cc-usageStats cc-usageStatsBalance">
           <UsageStat label={t('usageMonthly')} value={credits.monthlyReported === false ? '—' : formatMoney(credits.monthlyCredits)} />
           <UsageStat label={t('usagePurchased')} value={credits.purchasedReported === false ? '—' : formatMoney(credits.purchasedCredits)} />

@@ -60,6 +60,10 @@ export function pricingKey(table: CommandCodePriceTable): number {
 
 /** Only safe to merge requests whose billing classification is identical. */
 export function costGroupKey(group: CostUsageGroup, table: CommandCodePriceTable): string {
+  // The table is mutable, so an identity-keyed index can keep stale model
+  // mappings after its rows are changed in place. The projection already
+  // indexes its usage groups once per settlement; scan the small price table
+  // here so every call observes the current rows.
   const price = table.models.find(p => p.id === group.model || p.slug === group.model)
   return JSON.stringify([group.provider, group.model, price === undefined ? null : requestRates(price, group.at, group.contextTokens, table), group.at === null])
 }

@@ -616,26 +616,18 @@ declare class CommandCodeAccountPool {
    */
   describeAccounts(): Promise<ResolvedAccount[]>;
   /**
-   * Hand out the key for a request: the model-routed account when the request's
-   * model matches a rule (and that account is usable), else the manually
-   * preferred account when usable, else the first usable account in rotation
-   * order. Returns `undefined` when no account resolves any key at all, or when
-   * an account this request already used is still UNMARKED — that rejection is
-   * the honest answer, so the caller's own rejection surfaces as itself. Throws
-   * `RATE_LIMIT` (naming the earliest window reset) or `INVALID_CREDENTIAL`
-   * when accounts exist but every one of them is marked.
+   * Hand out the key for a request: the model-routed account when usable, else
+   * the manually preferred account when usable, else the first usable account
+   * in rotation order. Returns `undefined` when no account resolves any key,
+   * or when an account this request already used is still UNMARKED — the
+   * caller's own rejection is the honest answer then. Throws `RATE_LIMIT` /
+   * `INVALID_CREDENTIAL` when every account is marked.
    *
-   * `options.model` is the request's model id; routing rules re-read per
-   * resolution, so a settings change applies live. `options.tried` lists the
-   * keys this request has already used — the just-rejected one included — and
-   * they are removed from the resolution entirely, which is what lets one
-   * request walk a four-account pool: a rejection that does not mark the key
-   * (no credits, a model outside the account's plan) would otherwise be offered
-   * again on every attempt and the accounts behind it never reached.
-   *
-   * An explicit selection (the pin or a model rule) that a rate-limit mark would
-   * demote is probed before the fallback serves, so "falls back while exhausted"
-   * never becomes "stays demoted until the process restarts" (issue #51).
+   * `options.tried` lists the keys this request already used; they are removed
+   * from the resolution entirely, which is what lets one request walk a
+   * four-account pool. An explicit selection (pin or model rule) that a
+   * rate-limit mark would demote is probed first, so a fallback never becomes
+   * permanent (issue #51). Rules re-read per resolution, so settings apply live.
    */
   resolveKey(options?: {
     tried?: readonly string[];
@@ -699,6 +691,16 @@ declare class CommandCodeAccountPool {
    * attempt waits out the interval.
    */
   private probeExplicit;
+  /**
+   * Stamp a probe-read window onto one key. A known reset becomes a cooldown
+   * that expires by itself; without one the mark stays `unknown`, so a later
+   * probe can still learn it — and a mark that already carries a cooldown
+   * keeps it, never trading a known reset for an unknown one. The cause is
+   * `window` either way: a probe that read a window as exceeded IS window
+   * evidence, whatever the key was marked for. An `until: 0` cooldown would
+   * read as "never usable again" to {@link accountUsable}, so `unknown` it is.
+   */
+  private stampWindowMark;
   /** Hand out the chosen account's key. */
   private pick;
 }

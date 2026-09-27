@@ -23,7 +23,7 @@ import { MODELS_DESCRIPTOR } from './usage-wire.ts'
 import { PRICES_DESCRIPTOR } from './usage-wire.ts'
 import type { CommandCodeAccountsReport, CommandCodeCatalog, CommandCodePriceTable } from './usage-wire.ts'
 import { modelPriceTable } from './model-prices.ts'
-import { LOGIN_DESCRIPTORS } from './login-wire.ts'
+import { LOGIN_HOST_CONTRIBUTION } from './login-wire.ts'
 import type { CommandCodeLoginStatus } from './login-wire.ts'
 
 /**
@@ -192,7 +192,7 @@ export function applyUsageRemote<C extends CommandCodeConnectionOptions>(
     // Client mount) 1:1.
     const unregister = registry.register({
       ...USAGE_HOST_CONTRIBUTION,
-      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, MODELS_DESCRIPTOR, PRICES_DESCRIPTOR, ...LOGIN_DESCRIPTORS],
+      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, MODELS_DESCRIPTOR, PRICES_DESCRIPTOR, ...LOGIN_HOST_CONTRIBUTION.invocations],
     })
     // The registry's own effect would outlive this fiber; withdraw the
     // contribution when the plugin unloads.

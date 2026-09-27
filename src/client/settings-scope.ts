@@ -84,7 +84,7 @@ export interface SettingsScopeContext {
 
 /** Mirror snapshot: one in-flight-or-idle describe read and its held view. */
 interface MirrorState {
-  status: 'idle' | 'loading' | 'ready' | 'unavailable'
+  status: 'idle' | 'loading' | 'ready'
   view: SettingsView | null
   error: string | null
 }

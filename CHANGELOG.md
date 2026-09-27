@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Internal cleanup with no behavior change: dead-code removal, comment trimming, and small refactors.** Removed the unreferenced `isPeakHour()` helper (the readout prices through `cost-facts.ts` and `capabilities.ts`; its test is replaced by one that pins billing-vs-picker peak agreement across every weekday boundary), inlined the single-use `StatTile` wrapper, dropped the never-used `AccountReport summaryOnly` mode, narrowed the mirror's internal status union to the states it actually writes, and registered the login endpoints through `LOGIN_HOST_CONTRIBUTION` instead of spreading the raw descriptors. Trimmed duplicated design narratives in `transport-retry.ts`, `accounts.ts`, and the slot-declaration files (one canonical copy each). Small performance refactors: `costGroupKey()` now resolves prices through a per-table index instead of scanning the table per call, and the cost projection builds its group lookup in one pass. Typecheck clean, full suite green (679 tests).
+
 ## [0.11.17] - 2026-09-27
 
 ### Changed

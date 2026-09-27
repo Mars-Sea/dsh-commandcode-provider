@@ -14,12 +14,14 @@ import assert from 'node:assert/strict'
 import {
   SESSION_COST_COPY,
   buildSessionCostView,
-  isPeakHour,
   sessionCostAmount,
   sessionCostPillRun,
   sessionCostRowDecorations,
   type SessionCostInput,
 } from '../src/client/session-cost.ts'
+import { peakHour } from '../src/cost-facts.ts'
+import { isPeakPricingHour, PEAK_HOUR_RANGES } from '../src/capabilities.ts'
+import { modelPriceTable } from '../src/model-prices.ts'
 import type { CommandCodePriceTable } from '../src/usage-wire.ts'
 
 const PEAK_HOURS: Array<[number, number]> = [[1, 4], [6, 10]]
@@ -137,14 +139,24 @@ test('peak rates apply inside a weekday window and off-peak rates outside it', (
   assert.equal(weekend.total, 0.66)
 })
 
-test('isPeakHour() is end-exclusive and weekday-only', () => {
-  assert.equal(isPeakHour(Date.UTC(2026, 8, 16, 0, 59), PEAK_HOURS), false)
-  assert.equal(isPeakHour(Date.UTC(2026, 8, 16, 1, 0), PEAK_HOURS), true)
-  assert.equal(isPeakHour(Date.UTC(2026, 8, 16, 3, 59), PEAK_HOURS), true)
-  assert.equal(isPeakHour(Date.UTC(2026, 8, 16, 4, 0), PEAK_HOURS), false)
-  assert.equal(isPeakHour(Date.UTC(2026, 8, 16, 6, 0), PEAK_HOURS), true)
-  assert.equal(isPeakHour(Date.UTC(2026, 8, 16, 10, 0), PEAK_HOURS), false)
-  assert.equal(isPeakHour(WEEKEND_AT, PEAK_HOURS), false)
+test('billing peak hours match the picker across window boundaries and weekends', () => {
+  const windows = modelPriceTable().peakHours
+  assert.deepEqual(windows, PEAK_HOUR_RANGES)
+  // Monday through Sunday; check both sides of every published boundary and
+  // an interior point in each window. The explicit expectations also catch a
+  // change that makes both predicates agree on the wrong end-inclusive rule.
+  const hours: ReadonlyArray<readonly [number, number, number, boolean]> = [
+    [0, 59, 59, false], [1, 0, 0, true], [3, 59, 59, true], [4, 0, 0, false],
+    [5, 59, 59, false], [6, 0, 0, true], [9, 59, 59, true], [10, 0, 0, false],
+  ]
+  for (let day = 0; day < 7; day += 1) {
+    for (const [hour, minute, second, weekdayPeak] of hours) {
+      const at = Date.UTC(2026, 8, 14 + day, hour, minute, second)
+      const expected = day < 5 && weekdayPeak
+      assert.equal(peakHour(at, windows), expected, `billing day ${day} ${hour}:${minute}:${second}`)
+      assert.equal(isPeakPricingHour(at), expected, `picker day ${day} ${hour}:${minute}:${second}`)
+    }
+  }
 })
 
 test('an unpublished cache-write rate is surfaced, not guessed, and the total stays a floor', () => {

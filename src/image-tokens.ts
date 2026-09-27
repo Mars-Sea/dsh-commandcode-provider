@@ -20,7 +20,7 @@
  * @module dsh-commandcode-provider/image-tokens
  */
 
-import { longEdgeDimensions } from './image-request.ts'
+import { longEdgeDimensions, REQUEST_IMAGE_MAX_LONG_EDGE } from './image-request.ts'
 
 /** The published visual-token rules this route can tell apart. */
 export type ImageTokenFamily = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'generic'
@@ -64,12 +64,12 @@ export function commandCodeImageTokens(modelId: string, width: number, height: n
 }
 
 /**
- * Anthropic: the image is first scaled so its long edge is at most 1568 px
- * (never enlarged), then charged roughly one token per 750 pixels.
+ * Anthropic: the image is first scaled to the request long edge (never
+ * enlarged), then charged roughly one token per 750 pixels.
  * Source: Anthropic vision documentation, "Image size and token usage".
  */
 function anthropicImageTokens(width: number, height: number): number {
-  const projected = longEdgeDimensions(width, height, 1568)
+  const projected = longEdgeDimensions(width, height, REQUEST_IMAGE_MAX_LONG_EDGE)
   return Math.max(1, Math.ceil((projected.width * projected.height) / 750))
 }
 

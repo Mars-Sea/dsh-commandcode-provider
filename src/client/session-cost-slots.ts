@@ -1,12 +1,10 @@
 /**
  * SlotMap merge for the composer readout's seat.
  *
- * `conversation.composer.dock` is declared by dsh-client-ui-conversation and
- * occupied by dsh-client-ui-chat's `stats` cell. Neither is a dependency (we
- * need only the shape at compile time), so the declaration is re-stated and
- * merged exactly as `panel-slots.ts` does — and must stay structurally identical
- * to upstream's `{ kind: 'list'; scope: 'session' }`, so a drift is a compile
- * error here rather than a silent mis-registration.
+ * `conversation.composer.dock` is declared by dsh-client-ui-conversation, not
+ * a dependency, so the declaration is re-stated and merged exactly as
+ * `card.tsx` does — it must stay structurally identical to upstream's
+ * `{ kind: 'list'; scope: 'session' }`.
  *
  * Only the slot's own contract is restated: the dock's standard props
  * (`useProjection`, `sessionId`, …) come from the owner at runtime, so the

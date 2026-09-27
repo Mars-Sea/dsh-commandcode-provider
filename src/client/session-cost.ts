@@ -156,20 +156,6 @@ function count(value: number | undefined): number {
 }
 
 /**
- * Whether `now` falls inside a peak-pricing window, per the windows that travel
- * with the price table. Monday–Friday (UTC) only, and each window is
- * end-exclusive. The schedule is read from the wire rather than restated, so
- * there is one definition of the windows, on the Host.
- */
-export function isPeakHour(now: number, peakHours: ReadonlyArray<readonly [number, number]>): boolean {
-  const at = new Date(now)
-  const day = at.getUTCDay()
-  if (day === 0 || day === 6) return false
-  const hour = at.getUTCHours()
-  return peakHours.some(([start, end]) => hour >= start && hour < end)
-}
-
-/**
  * Index a price table for lookup. Rows are keyed by catalog id and by pricing
  * slug, both exact and lowercased, because a session reports a catalog id while
  * a row no catalog model claims is served under the page's slug.
