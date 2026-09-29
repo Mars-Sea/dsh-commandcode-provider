@@ -43,7 +43,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   labels are the `chat` locale's, so they are never read) and confirmed by the
   token count each row must be showing. **The pill's scope is the OUTLET, and
   its row marker is a PREFERENCE.** `data-composer-stats` IS present on
-  0.2.0-rc.1, but it has already been deleted once upstream while the row's
+  0.2.0-rc.2, but it has already been deleted once upstream while the row's
   markup stayed otherwise identical, so `STATS_ROOT` narrows the lookup when it
   is there and the lookup falls back to the dock outlet
   (`[data-slot="conversation.composer.dock"]`, a `display:contents` div holding

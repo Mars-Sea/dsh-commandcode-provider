@@ -43,7 +43,10 @@ function verifyIsolatedInstall() {
       packDir,
     ], repositoryDir).stdout
     const packed = JSON.parse(packOutput)
-    // npm ≤10 emits an array; npm 11+ emits a keyed object.
+    // `npm pack --json` reports an array in every published npm, but the shape
+    // is not contractual: `logTar` keys the entry by index and the CLI merges
+    // numeric keys back into an array, so a change to either could hand back a
+    // keyed object instead. Accept both rather than pin one.
     const entry = Array.isArray(packed)
       ? packed[0]
       : Object.values(packed)[0]

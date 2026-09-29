@@ -32,8 +32,8 @@ test('every Harness peer and development package shares one supported release ra
     assert.equal(dev[name], range, `${name} development range`)
   }
   // Why an exact-version disjunction rather than a caret: semver admits a
-  // prerelease only inside the SAME major.minor.patch tuple, so `^0.2.0-rc.1`
-  // resolves to 0.2.0-rc.1 alone. This bundle supports ONE engine release, and a
+  // prerelease only inside the SAME major.minor.patch tuple, so `^0.2.0-rc.2`
+  // resolves to 0.2.0-rc.2 alone. This bundle supports ONE engine release, and a
   // range that quietly admitted a neighbour is how a broken pairing stayed
   // invisible (issue #43).
   assert.ok(!range.includes('x') && !range.includes('>='), 'no compact comparator form can express this')
