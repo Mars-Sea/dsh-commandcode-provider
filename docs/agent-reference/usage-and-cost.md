@@ -136,7 +136,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   the retried attempt's tokens, and because the client requires per-bucket
   EQUALITY against `tokenUsage` (`src/client/session-cost.ts`), a session that
   retried there loses the readout entirely rather than showing a wrong figure.
-  Retries are routine on this route (429 plus the near-unbounded retry policy),
+  Retries are routine on this route (confirmed 429 windows can wait for recovery;
+  other transient failures have bounded budgets),
   so this is a real gap, not a theoretical one. Closing it means recording which
   fold rule wrote a group. Until then, do NOT "fix" the equality gate by
   loosening it: that gate is what keeps a mismatched fold from being priced.

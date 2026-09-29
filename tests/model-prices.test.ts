@@ -105,46 +105,46 @@ test('a dated catalog id resolves to the page\'s undated slug', () => {
   assert.equal(haiku.inputCost, 1)
 })
 
-test('a lapsed deal reverts the row to its pre-discount listRates', () => {
-  // Grok 4.7's 40%-off launch promotion ran 2026-09-21 → 2026-09-27T23:59:59.999Z.
-  // The page still publishes the promotional rates as the row's own figures, so
-  // without the `listRates` fallback a session priced after that instant would
-  // under-report by 40% — and its context tiers by the same factor.
-  const during = modelPriceTable(Date.parse('2026-09-26T12:00:00Z')).models.find((m) => m.id === 'xai/grok-4.7')
+test('a row with no deal serves its rates and never reverts', () => {
+  // Grok 4.7's 40%-off launch promotion ran 2026-09-21 → 2026-09-27T23:59:59.999Z
+  // and the pricing page has since dropped it (command-code@1.72.1): the model
+  // now publishes at list price, so its row carries plain `rates` and NO
+  // `listRates`. Every clock therefore reads the same figures.
+  const before = modelPriceTable(Date.parse('2026-09-21T00:00:00Z')).models.find((m) => m.id === 'xai/grok-4.7')
   const after = modelPriceTable(Date.parse('2026-09-28T00:00:00Z')).models.find((m) => m.id === 'xai/grok-4.7')
-  assert.ok(during && after)
+  assert.ok(before && after)
 
   assert.deepEqual(
-    [during.inputCost, during.outputCost, during.cacheReadCost],
-    [1.2, 3.6, 0.3],
-    'inside the promotion window the page rates are what is charged',
+    [before.inputCost, before.outputCost, before.cacheReadCost],
+    [2, 6, 0.5],
+    'the promotional figures are gone from the page, so list is what is charged',
   )
   assert.deepEqual(
     [after.inputCost, after.outputCost, after.cacheReadCost],
     [2, 6, 0.5],
-    'past it the row reverts to the published list price',
+    'past the old expiry nothing changes — there is no listRates to fall back to',
   )
-  // Both context bands switch together: a revert that only moved the base rates
-  // would price a >200K request off a mixed pair.
-  assert.deepEqual(during.contextTiers?.map((t) => t.inputCost), [1.2, 2.4])
+  // Context bands are flat too: the row used to switch 1.2/2.4 with the deal.
+  assert.deepEqual(before.contextTiers?.map((t) => t.inputCost), [2, 4])
   assert.deepEqual(after.contextTiers?.map((t) => t.inputCost), [2, 4])
-  assert.deepEqual(after.contextTiers?.map((t) => t.cacheReadCost), [0.5, 1])
 })
 
 test('the badge and the price revert on the same instant', () => {
   // The picker hides a lapsed deal through `dealLabel()`; the composer prices
   // through this table. One clock, or a user sees "no discount" next to a
   // discounted number. The boundary is inclusive on the expiry side.
+  //
+  // Grok 4.7 used to be the row carrying a dated deal; with it removed
+  // (command-code@1.72.1) the snapshot has no live `expiresAt` left, so the
+  // mechanism is pinned against its old boundary while asserting the row is
+  // inert on BOTH sides — a future dated deal has to keep this agreement, and
+  // a row whose deal is gone has to stop moving.
   const boundary = Date.parse('2026-09-27T23:59:59.999Z')
-  for (const [at, live] of [
-    [boundary - 1, true],
-    [boundary, false],
-    [boundary + 1, false],
-  ] as const) {
+  for (const at of [boundary - 1, boundary, boundary + 1]) {
     const price = modelPriceTable(at).models.find((m) => m.id === 'xai/grok-4.7')
     assert.ok(price)
-    assert.equal(dealLabel('xai/grok-4.7', at) !== undefined, live, `badge at ${at}`)
-    assert.equal(price.inputCost, live ? 1.2 : 2, `rate at ${at}`)
+    assert.equal(dealLabel('xai/grok-4.7', at) !== undefined, false, `badge at ${at}`)
+    assert.equal(price.inputCost, 2, `rate at ${at}`)
   }
 })
 

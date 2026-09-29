@@ -186,11 +186,19 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'gpt-5.6-sol', rates: [5, 30, 0.5, 6.25], allowance: { goat: 70, pro: 80 }, contextTiers: [{"maxContext":272000,"rates":[5,30,0.5,6.25]},{"rates":[10,45,1,12.5]}] },
   { id: 'gpt-5.6-terra', rates: [2, 12, 0.2, 2.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,12,0.2,2.5]},{"rates":[4,18,0.4,5]}] },
   { id: 'gpt-6-astra', rates: [10, 50, 1, 12.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[10,50,1,12.5]},{"rates":[20,75,2,25]}] },
+  // command-code@1.71.0; Max-and-above (see KNOWN_PLANS). Same list rates as its
+  // `gpt-6-sol` predecessor but HALF the cache-read price ($0.10 vs $0.20 per
+  // 1M inside 272K, $0.20 vs $0.40 above it), and no introductory deal.
+  { id: 'gpt-6.1-sol', rates: [2, 10, 0.1, 2.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,10,0.1,2.5]},{"rates":[4,15,0.2,5]}] },
   { id: 'gpt-6-luna', rates: [0.1, 0.5, 0.01, 0.125], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":272000,"rates":[0.1,0.5,0.01,0.125]},{"rates":[0.2,0.75,0.02,0.25]}] },
   { id: 'gpt-6-sol', rates: [2, 10, 0.2, 2.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,10,0.2,2.5]},{"rates":[4,15,0.4,5]}] },
   { id: 'grok-4.5', rates: [2, 6, 0.5], allowance: { goat: 20, pro: 30 } },
   { id: 'grok-4.6', rates: [2, 6, 0.5], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":200000,"rates":[2,6,0.5]},{"rates":[4,12,1]}] },
-  { id: 'grok-4.7', rates: [1.2, 3.6, 0.3], listRates: [2, 6, 0.5], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":200000,"rates":[1.2,3.6,0.3],"listRates":[2,6,0.5]},{"rates":[2.4,7.2,0.6],"listRates":[4,12,1]}] },
+  // command-code@1.72.1: the 40%-off launch deal that ran to
+  // 2026-09-27T23:59:59.999Z is gone from the pricing page, which now publishes
+  // this model at its list price directly — so the row carries plain `rates`
+  // with no `listRates` to fall back to, exactly like `grok-4.6` above.
+  { id: 'grok-4.7', rates: [2, 6, 0.5], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":200000,"rates":[2,6,0.5]},{"rates":[4,12,1]}] },
   { id: 'inkling', rates: [1, 4.05, 0.17], allowance: { goat: 20, pro: 30 } },
   { id: 'inkling-small', rates: [0.5, 1.2, 0.1], allowance: { goat: 20, pro: 30 } },
   { id: 'kimi-k2.5', rates: [0.6, 3, 0.1], allowance: { goat: 20, pro: 30 } },

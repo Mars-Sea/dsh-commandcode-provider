@@ -2,12 +2,24 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
-- **Zero data retention (`Config.zdr`, default off)**: `connectGenerate()` sends `x-cmd-zdr: 1` on BOTH chat
+- **Lone UTF-16 surrogate halves are stripped from every outgoing request body.** The strip runs as the
+  `JSON.stringify` replacer at the single serialization point in `streamRequest()`, so all three transports
+  and every field are covered without enumerating text-bearing fields. `sanitizeSurrogates()` returns any
+  string with no surrogate unchanged, and a flagless range pre-test (`ANY_SURROGATE_PATTERN`) gates the
+  lookaround pattern (`LONE_SURROGATE_PATTERN`) because V8 cannot fast-scan lookaround: 0.77 ms against
+  1.40 ms on a 412 KB body, where a bare `JSON.stringify` is 0.59 ms. **The pre-test must stay non-global** —
+  a global regex is stateful, so `test()` would advance `lastIndex` and alternate between true and false on
+  repeated calls. **Paired surrogates must survive**: a well-formed astral character is a surrogate pair, so
+  a naive range filter would delete every emoji. Context: `JSON.stringify` accepts a lone half as the escape
+  `"\ud83d"` rather than failing, so this guards a strict upstream decoder, not a local crash — the official
+  provider for pi applies the same strip to every outgoing string on this endpoint. `tests/adapter.test.ts`
+  pins the strip on all three transports and the emoji round-trip.
+- **Zero data retention (`Config.zdr`, default off)**: `connectGenerate()` sends `x-cmd-zdr: 1` on ALL THREE
   transports for EVERY request when enabled. The provider refuses a model without an available ZDR upstream
   with `422 cmd_zdr_no_providers`; `generateHttpError()` diagnoses it bilingually. NEVER omit the header
   based on `KNOWN_NON_ZDR_MODELS` or retry without it: that would silently lose the privacy guarantee. The
   snapshot in `src/capabilities.ts` is informational and may lag provider coverage or capacity.
-  `tests/adapter.test.ts` checks both transports, off by default, unsupported models retaining the header,
+  `tests/adapter.test.ts` checks the chat transports, off by default, unsupported models retaining the header,
   and 422 diagnosis.
 - **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.68.0):
   - `POST {apiBase}/alpha/generate` — CLI transport body `{ config, memory, taste, skills, params: { model,
@@ -21,12 +33,124 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     "restore" the old drop-reasoning behavior: it was ported from the pi plugin and is no longer upstream's
     shape.
   - `POST {apiBase}/provider/v1/chat/completions` — documented OpenAI-format transport with a flat body `{
-    model, messages, tools?, max_tokens, temperature, stream, reasoning_effort? }`. Used for accounts with
-    Provider API access; historical reasoning is replayed as `reasoning_content`.
+    model, messages, tools?, max_tokens, temperature, stream, reasoning_effort? }`. Used for every account
+    with Provider API access whose model the catalog does not route to `/messages`; historical reasoning is
+    replayed as `reasoning_content`.
+  - `POST {apiBase}/provider/v1/messages` — **Anthropic Messages transport, the only Provider API route the
+    Claude family answers** (see the routing bullet below). Every clause below was measured live on
+    2026-09-29 against `claude-sonnet-5-5`; the shapes differ from `dsh-llm-deepseek`'s Messages API in two
+    places that make copying that adapter fail:
+    - `thinking` accepts ONLY `{ type: 'adaptive' }`, and it is sent ONLY when the model publishes
+      selectable effort levels. `enabled` and `disabled` are refused
+      (`"thinking.type.enabled" is not supported for this model. Use "thinking.type.adaptive" and
+      "output_config.effort" to control thinking behavior.`) and `between_tools` fails validation outright;
+      the switch and the strength it carries are one decision, so a model with neither (e.g.
+      `claude-haiku-4-5-20251001`, which the official CLI marks neither `reasoning_effort` nor
+      `reasoning:!0`) gets neither field. Reasoning strength travels in `output_config.effort`, whose
+      accepted values are `low | medium | high | xhigh | max` — **no `none`, and `xhigh` is absent from
+      DeepSeek's own type**, so `reasoningEffort: 'off'` must send no `output_config` at all. The presence
+      test reuses the `KNOWN_EFFORTS` lookup `stream()` already performed (`selectableEffort` in
+      `GenerateCallFacts`). Measured 2026-09-29: the switch does NOT suppress thinking — six live requests
+      across `adaptive` present/absent × `temperature` present/absent all produced a thinking block, so the
+      apparent difference in one probe run was the `max` vs `xhigh` effort, not the switch.
+    - `max_tokens` is capped PER MODEL and the endpoint names the ceiling in its rejection
+      (`max_tokens: 200000 > 128000, which is the maximum allowed number of output tokens for
+      claude-sonnet-5-5`). `/provider/v1/models` publishes no `max_output_tokens`, so the ceiling comes from
+      `MODEL_OUTPUT_TOKEN_LIMITS` in `./capabilities.ts` and an unlisted Messages-route model falls back to
+      `DEFAULT_MESSAGES_MAX_TOKENS` (64 000) rather than the global default — see
+      `modelOutputTokenLimit()` in `./adapter.ts`. A catalog that has not warmed yet still applies it.
+      That table is generated by `scripts/sync-output-limits.mjs` from models.dev and records only ceilings
+      the catalog states outright (a first-party vendor row, or unanimity across every provider carrying the
+      id); the 10 models whose providers disagree are left out on purpose and learned at runtime instead
+      (issue #71).
+    - **`max_output_tokens` is read even though the endpoint does not send it.** The gateway's schema has
+      the field and the official pi provider already prefers it, but `/provider/v1/models` currently stops
+      after `supported_endpoints`; it is read anyway so the published figure takes over the moment it
+      appears, with no change here. It lands in `publishedOutputLimits`, which outranks the models.dev
+      snapshot and is outranked only by a live rejection, and it is the ONE value the catalog cache carries
+      across (`publishedMaxTokens`) because it cannot be re-derived. `maxTokens` in that same file is
+      derived and is **recomputed on read** — trusting it would let a cache written before a snapshot update
+      pin the old ceiling for as long as the file survives. Above all of them sits
+      `DEFAULT_GENERATE_MAX_TOKENS` (131 072), which is a measured **gateway-wide** cap rather than a
+      default: 200 000 answers and 200 704 is refused, identically on a 262 144-window model and a
+      1 000 000-token one.
+    - Stream events are the standard Anthropic sequence: `message_start` (carries input usage), then per
+      block `content_block_start` / `content_block_delta`* / `content_block_stop`, then `message_delta`
+      (`stop_reason` plus the final usage) and `message_stop`; a `ping` keepalive interleaves freely and
+      carries no content. Deltas are `text_delta`, `thinking_delta`, `signature_delta` and
+      `input_json_delta` (the last accumulates into the raw JSON string the harness wants).
+      `stop_reason` is `end_turn` / `tool_use` / `max_tokens`; `tool_use` maps to `tool-calls`.
+    - `usage` carries `input_tokens` (already excluding cache), `output_tokens`,
+      `cache_read_input_tokens`, `cache_creation_input_tokens` and
+      `output_tokens_details.thinking_tokens`; `mapMessagesUsage()` maps them as-is rather than reducing,
+      matching `dsh-llm-deepseek`.
+    - **The body sets three ephemeral cache breakpoints** — the `system` block (sent as a one-block ARRAY
+      rather than the bare string the other two transports use), the LAST tool declaration, and the last
+      block of the last `user` message. Anthropic caching is opt-in per block, so an unmarked request is
+      re-prefilled at the full input rate every turn: a 10-turn `claude-sonnet-5-5` session measured
+      2026-09-29 billed $0.5648 with every request at the undiscounted rate, against $0.1869 with the three
+      markers (−66.9%) and no other field changed. The last user turn is the ROLLING boundary — DSH resends
+      the whole history each turn, so a marker there grows with the conversation, whereas a
+      `system`-only marker leaves everything after the first turn uncached. `messagesMessageCodec` renders
+      tool results as `role: 'user'`, so a tool loop's trailing turn is markable too; `thinking` and
+      `tool_use` blocks are never marked. No `ttl` is sent — the 5-minute entry covers an advancing session
+      and `ttl: "1h"` reads and writes at identical prices. Placements mirror the official Command Code
+      provider for pi, whose `@earendil-works/pi-ai` `anthropic-messages` transport marks exactly these three
+      positions on the same endpoint; both were verified against registry-published sha512 digests
+      (pi-ai 0.87.1, command-code 1.68.0), not against a live Command Code response — see
+      [docs/issue-64-cache-review.md](../issue-64-cache-review.md). If the gateway ever ignores the field,
+      the request is unchanged in price and shape.
+    - **A replayed `thinking` block requires its `signature`** (`thinking.signature: Field required`, and
+      `each thinking block must contain thinking` when the text is empty and the signature blank), yet
+      dropping the block entirely is accepted (verified 200 either way) — the OPPOSITE of issue #34, where
+      the DeepSeek route refuses a tool loop whose reasoning was not sent back. The signature therefore
+      rides the per-block replay envelope (`ReplayEnvelope.blocks`, one entry per emitted block, indexed by
+      the same harness chunk index) and `messagesSignatureAt()` restores it; a reasoning block with no
+      recorded signature is DROPPED rather than sent half-formed. This is the only transport that writes
+      `replayState.blocks`.
+    - **`tool_result.content` accepts image blocks**, so tool-result images are NOT split into a following
+      user message here (`carriesToolResultMedia`). The other two transports still must, and still do
+      (issue #30).
+    - `tool_use.id` needs no truncation: 44- and 86-character ids are both accepted as long as
+      `tool_result.tool_use_id` matches, so `wireToolCallIds()`' 64-character clamp is CLI-specific.
+    - **`temperature` is never sent.** Adaptive thinking constrains it to 1, and a value below that is
+      refused outright: `` `temperature` may only be set to 1 when thinking is enabled or in adaptive mode ``
+      (measured 2026-09-29). Omission is the only field state that satisfies both the thinking switch and a
+      caller that asked for a temperature, so Claude loses sampling control on this route **because the
+      endpoint removed it, not because this adapter dropped it**. This was a live-only failure: the unit
+      tests all passed while every real request was refused.
+    - Rejections come in three shapes and the parser must take all of them: the Anthropic envelope
+      (`{"type":"error","error":{"type":…,"message":…}}`), the same envelope with a whole second JSON
+      document inside `message` (unwrapped once by `unwrapProviderMessage()` for the message shown to the
+      user, while `ParsedProviderError.rawMessage` keeps the original for pattern matching — the embedded
+      `type: "provider_error"` is part of how the overflow classifier tells an over-reserved request from an
+      ordinary one), and BARE PROSE (`Invalid input: expected number, received undefined at max_tokens`)
+      which `parseProviderError()` now keeps as the message instead of discarding. A plan refusal has no
+      `code` member — `MODEL_NOT_IN_PLAN` is a message PREFIX — and the prose classifier in
+      `classifyAccountRejection()` already reads it, so the account rotates instead of the turn dying. A
+      conversation may not end with an assistant turn (`This model does not support assistant message
+      prefill`), which the tool loop never produces.
+    - A `max_tokens` refusal must NOT reach the context-overflow branch: the overflow pattern matches a
+      bare `max_tokens`, so `OUTPUT_LIMIT_REJECTION` claims the request-side shapes first and returns a
+      bilingual `PROVIDER_HTTP_ERROR` quoting the endpoint's own numbers. Otherwise the harness would compact
+      a session that is not oversized — at full price, on a long context — and be refused identically. The
+      same ordering applies inside `streamErrorToLlmError()`, which is the path when the refusal arrives in
+      a 200 body rather than as a status; issue #71 reported it in exactly that shape.
+    - **An output-ceiling refusal is retried once, at the ceiling the endpoint names.** `streamRequest()`
+      wraps `streamAttempt()` and, on failure before the first chunk reaches the host, reads Y out of
+      `max_tokens: X > Y`, records it in `learnedOutputLimits` and re-sends. Both refusal shapes are covered
+      (HTTP 400 and the in-stream error frame), because the recovery is the same either way. The learned
+      value is process-wide and only ever tightens, so the next turn for that model is built correctly
+      without spending the 400 again; a warm catalog row cannot mask it because `streamAttempt()` takes the
+      smaller of the two. A refusal that arrives after a delta has been delivered is NOT retried — the
+      answer is already partly on screen and a second request would duplicate it — and a second refusal
+      within one turn surfaces, so the downshift is once per turn, not a loop.
   - **Every tool's root schema is normalized to `type: 'object'`** by `toolParametersSchema()` before either
     body is built (issue #35). The gateway validates the root of each function schema and rejects the entire
     request otherwise (`Invalid schema for function 'x': schema must be a JSON Schema of 'type: "object"',
-    got 'type: null'`). The harness's own `defineTool` always declares that root, so the failing schema
+    got 'type: null'`; on the Messages endpoint the same rule reads
+    `tools.0.custom.input_schema.type: Field required`). The harness's own `defineTool` always declares that
+    root, so the failing schema
     comes from a tool registered outside it — a third-party plugin's or MCP bridge's hand-written schema (a
     type-less `{ properties, required }`), an empty `{}`, or a generator's root `$ref`. A schema that
     already declares an object root passes through untouched; a type-less object-shaped one gains the type;
@@ -34,8 +158,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     flattened (branch properties unioned, `required` kept only where every alternative demands it); anything
     else degrades to a permissive free-form object, since a refused request helps no one. Only the root is
     touched and every path returns a copy (the harness may deep-freeze tool schemas), and the walk is
-    depth-bounded so a self-referential JS schema cannot spin. `toolParametersSchema()` is applied at both
-    call sites, so the CLI `input_schema` and the OpenAI `function.parameters` cannot drift apart.
+    depth-bounded so a self-referential JS schema cannot spin. `toolParametersSchema()` is applied at all
+    three call sites, so the CLI `input_schema`, the OpenAI `function.parameters` and the Messages
+    `input_schema` cannot drift apart.
   - Image parts on `/alpha/generate` use the official CLI's FINAL `toWireMessages()` shape: `{ type:
     'image', image: 'data:<mime>;base64,...', mimeType: '<mime>' }`. The `{ type: 'image', source: { type:
     'base64', media_type, data } }` shape is an internal CLI input block, not what it posts. OpenAI
@@ -73,11 +198,13 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     a scalar beside an array is never double-counted, that encrypted-blob entries contribute nothing, and
     that the block still closes before the text block opens.
   - Catalog: `GET {apiBase}/provider/v1/models` → `{ object: 'list', data: [{ id, name, context_length,
-    supported_endpoints }] }`. The `supported_endpoints` member is new as of command-code@1.55.0/1.56.0 and
-    is the authoritative per-model route list (65 × `['/chat/completions','/responses']`, 9 Claude ids ×
-    `['/messages']` (`claude-opus-5-5` is the ninth), and 8 × `['/chat/completions']` as of the 2026-09-27
-    public catalog, which serves 82 models); this adapter ignores it and keeps the `claude-*` prefix rule in
-    `requiresMessagesEndpoint()`, which agrees with it today.
+    supported_endpoints }] }`. `supported_endpoints` is the authoritative route list when present;
+    `requiresMessagesEndpoint()` supplies the `claude-*` fallback when it is absent. The in-memory directory
+    is invalidated when `apiBase` or `modelsCachePath` changes. Version 3 of the disk cache records `apiBase`
+    and is read only for that exact gateway; an unscoped older file or a different gateway's file is ignored
+    until a successful refresh rewrites it. A refresh still has a five-minute TTL, and failure waits ten
+    seconds before another fetch. Output-ceiling facts derived from the directory are also scoped by
+    `apiBase`, so a custom gateway cannot constrain another gateway's same-named model.
   - Provider API endpoints (docs, 2026-09-25): `/provider/v1/chat/completions`, `/provider/v1/responses`
     (OpenAI + open models; added in command-code@1.55.0), `/provider/v1/messages` (Claude family only),
     `/provider/v1/models`. The provider also publishes `/provider/v1/systemone` (System One decisions, model
@@ -90,11 +217,11 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     `x-command-code-version` as generate.
   - Defaults: `apiBase = https://api.commandcode.ai`, `COMMAND_CODE_CLI_VERSION = '1.68.0'`.
   - **Request image budget (issue #37)**: the gateway caps a whole request body at a measured ~50.17 MB
-    (undocumented — their Error Codes page has no 413). Both transports inline every historical image as
+    (undocumented — their Error Codes page has no 413). All three transports inline every historical image as
     base64 and the harness never reclaims history, so a long session (a vision self-check loop reading back
     dozens of screenshots) used to cross the cap once and then fail EVERY later request on this route with
-    HTTP 413, while the same conversation worked on another provider. `stream()` therefore builds both
-    bodies from a PROJECTED history, never the raw one, and the offload set is a DURABLE session fact:
+    HTTP 413, while the same conversation worked on another provider. `stream()` therefore builds every
+    body from a PROJECTED history, never the raw one, and the offload set is a DURABLE session fact:
     `withSurfaceOffload()` renders the surface's `offloaded` marks through the engine's
     `projectOffloadedImages` (so an evicted image can never be re-sent as pixels) and an over-budget history
     FAILS with `IMAGE_OFFLOAD_REQUIRED` + the count from `requiredImageOffload`, which the default
@@ -129,21 +256,27 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     apart (under-reporting context is what walks a session into its own window).
 - **StreamChunk contract** (dsh-llm): each block starts with `block-start`, deltas by `index`, ends with
   `block-end`; `usage` before `finish`; nothing after `finish`. Tool-call `arguments` are raw JSON strings.
-  Historical reasoning blocks are replayed on BOTH transports for tool-loop continuity — as a `{ type:
-  'reasoning', text }` assistant part on `/alpha/generate` (the official CLI's shape) and as
-  `reasoning_content` on `/provider/v1/chat/completions` (see the wire-protocol bullet; issue #34). Only
-  tool calls with a paired tool result are replayed on both transports. **Tool-result images** (`read_image`
-  returns text + a nested `image` block): neither wire can hold an image inside a tool result — the CLI's
-  `tool-result.output` is text-only (the official CLI's own `toV2ToolOutput` filters out everything but
-  text) and Chat Completions forbids non-text `role: 'tool'` content — so `toolResultMedia()` splits each
-  result and both converters emit the bytes in a user message immediately after the tool message, led by the
-  `Attached image(s) from tool result:` note (the shape `@deepseek-ai/dsh-llm-deepseek` uses). Deduplicated
+  Historical reasoning blocks are replayed on BOTH Chat-shaped transports for tool-loop continuity — as a
+  `{ type: 'reasoning', text }` assistant part on `/alpha/generate` (the official CLI's shape) and as
+  `reasoning_content` on `/provider/v1/chat/completions` (see the wire-protocol bullet; issue #34). The
+  Messages transport has its own rule: its `thinking` block needs a `signature`, travels in the per-block
+  replay envelope, and is omitted when no signature was recorded (see the wire-protocol bullet). Only
+  tool calls with a paired tool result are replayed. **Tool-result images** (`read_image` returns text + a
+  nested `image` block): the CLI wire cannot hold an image inside a tool result — `tool-result.output` is
+  text-only (the official CLI's own `toV2ToolOutput` filters out everything but text) — and Chat Completions
+  forbids non-text `role: 'tool'` content, so for those TWO transports `toolResultMedia()` splits each result
+  and both converters emit the bytes in a user message immediately after the tool message, led by the
+  `Attached image(s) from tool result:` note (the shape `@deepseek-ai/dsh-llm-deepseek` uses).
+  **Messages is the exception**: its `tool_result.content` accepts image blocks natively, so
+  `carriesToolResultMedia` suppresses the split and the bytes stay where the model produced them
+  (issue #30). Deduplicated
   by attachment id per result; an image-only result gets a `(image returned; see the attached image)` tool
   text instead of an empty string; a result without a paired call drops its images with the result. Never
   flatten a tool result with `blockText` alone again — that is issue #30. The `hasImageContent` gate (model
   Vision capability + attachment seam) already recurses into tool results, so these images ride the same
   `readImage` resolver user attachments use.
-- **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 → `RATE_LIMIT`;
+- **Errors**: throw `LlmError` with stable codes. 401 → `INVALID_CREDENTIAL`; 429 with a confirmed usage
+  window → `RATE_LIMIT`, a bare throttle → `THROTTLED`;
   **pre-stream 5xx → `SERVER` and 408 → `TIMEOUT`** (`httpErrorCode()`, so a gateway blip — e.g.
   Cloudflare's 520 "Upstream model provider is temporarily unavailable" — reaches the retry whitelist
   instead of failing the turn); other HTTP → `PROVIDER_HTTP_ERROR` (403 body's `error.code`, e.g.
@@ -160,7 +293,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   mention its way into a compaction. A terminal marker (`insufficient credits` / `model not in plan` /
   `premium credits exhausted`, underscored or spaced — the separator is normalized, like the pre-stream
   classifier) and an explicit `isRetryable: false` OUTRANK a retryable status, so a 5xx carrying one stays
-  non-retryable `PROVIDER_STREAM_ERROR` instead of entering the 1000-attempt cadence. Never route a
+  non-retryable `PROVIDER_STREAM_ERROR` instead of entering the transient-retry budget. Never route a
   transient status onto a code outside `providerRetryPolicy()`'s whitelist: dsh-llm-retry matches the code
   only, never the status. Unsupported options (`stop`) and image input throw `UNSUPPORTED_OPTION` /
   `UNSUPPORTED_CONTENT` rather than silently dropping.
@@ -175,7 +308,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   [docs/issue-64-cache-review.md](../issue-64-cache-review.md) for upstream evidence and the remaining
   live-session acceptance check.
 - **Stream termination must distinguish an answer, an empty completion, and a cut**
-  (`CommandCodeAdapter.stream()`, `src/stream-trace.ts`). A terminal CLI `finish` or OpenAI `finish_reason`
+  (`CommandCodeAdapter.stream()`, `src/stream-trace.ts`). A terminal CLI `finish`, an OpenAI
+  `finish_reason` or a Messages `message_delta` carrying `stop_reason`
   is necessary but not sufficient for success: reasoning alone, empty text, whitespace, and `tool_calls: []`
   are not an answer. Hold the success `finish` until validation; DSH 0.1.7 converts an adapter throw into an
   error finish, so throwing after publishing success creates two terminal events. A terminal response with
@@ -194,25 +328,30 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   request credentials or headers. Tests cover both transports, limit aliases, missing usage, valid
   text/tools, EOF, and a failure before any success finish. `scripts/probe-stream.mjs` tests a separate
   request; its result is not evidence for a prior session.
-- **The Claude family is Messages-only, so it takes the CLI transport — and that decision must NOT be
-  cached** (`MESSAGES_ONLY_MODELS`/`requiresMessagesEndpoint()` in `src/capabilities.ts`, the first lines of
-  `resolveProtocol()` in `src/adapter.ts`; issue #46). The Provider API serves the whole Claude family only
-  through `/provider/v1/messages` (Anthropic Messages shape): posted to `/provider/v1/chat/completions`, all
-  eight catalog Claude ids answer `400 Model "<id>" must be called via /provider/v1/messages (Anthropic
-  Messages shape)`. Measured 2026-09-16 by posting all 69 catalog models to that endpoint — exactly those
-  eight refused, and every one of them is routed normally by `/alpha/generate` (a lower-plan key gets the
-  ordinary `MODEL_NOT_IN_PLAN` 403 there, never a routing error), which is why the adapter carries NO
-  Messages transport. The bug this fixes is a routing one: the pre-stream fallback only recognised the
-  Go-plan `upgrade_required` 403, so the 400 surfaced as `PROVIDER_HTTP_ERROR` — and because the non-Go
-  tiers are exactly the ones `resolveProtocol()` sends to the Provider API, the accounts ENTITLED to Claude
-  (Pro for Sonnet, Provider/Max for Opus) were the ones that could never use it. `resolveProtocol(apiKey,
-  model)` now returns `'cli'` for these models on any tier AND under a forced `'openai'` preference, since
-  that option is documented as "prefer the Provider API, still fall back" rather than a hard gate. **The
-  call to `rememberProtocol()` is deliberately absent on that path**: `protocolCache` is keyed by API key
-  ALONE, so remembering it would pin the whole ACCOUNT to the CLI transport and drag DeepSeek, GLM and Qwen
-  — all correctly served by the Provider API — along with it until the entry expired.
-  `tests/adapter.test.ts` pins the route, the `claude-*` prefix rule that covers a model shipping after this
-  release, and that a Claude request followed by a DeepSeek one still lands on the Provider API.
+- **Routing is decided by the catalog's `supported_endpoints`, with the `claude-*` prefix as the fallback —
+  and the decision must NOT be cached** (`routesToMessages()` / `resolveProtocol()` in `src/adapter.ts`,
+  `MESSAGES_ONLY_MODELS`/`requiresMessagesEndpoint()` in `src/capabilities.ts`; issue #46). The Provider API
+  serves the whole Claude family only through `/provider/v1/messages`: posted to
+  `/provider/v1/chat/completions`, every catalog Claude id answers `400 Model "<id>" must be called via
+  /provider/v1/messages (Anthropic Messages shape)`, and a non-Claude model posted to `/provider/v1/messages`
+  answers `400 Model "<id>" is not supported on this endpoint. Use /provider/v1/chat/completions for OpenAI
+  and OSS models.` (measured 2026-09-29 against the 84-model catalog, whose ten `claude-*` ids are the only
+  ones carrying `supported_endpoints: ["/messages"]`; 66 carry `["/chat/completions","/responses"]` and 8
+  carry `["/chat/completions"]`). **`/provider/v1/messages` is therefore a first-class transport, not a
+  fallback** — see the wire-protocol bullet for its measured contract. `resolveProtocol(apiBase, apiKey, model)`
+  returns `'messages'` when the catalog entry lists `/messages`, and otherwise falls back to
+  `requiresMessagesEndpoint()` so a catalog entry without a route list (every pre-1.55 cache file, and a
+  hand-built one) still routes a newly shipped Claude model instead of hard-failing. This holds on any tier
+  AND under a forced `'openai'` preference, since that option is documented as "prefer the Provider API, still
+  fall back" rather than a hard gate. **The call to `rememberProtocol()` is deliberately absent on this
+  path**: `protocolCache` is keyed by gateway and API key, while the decision also depends on the MODEL; remembering it
+  would pin the whole ACCOUNT to one transport and drag DeepSeek, GLM and Qwen along with it until the entry
+  expired. The same rule governs the `upgrade_required` downgrade: a Messages refusal is not cached, while a
+  Chat Completions one is. A Go-plan account never reaches either, because its cached billing tier already
+  routes to the CLI transport — which is the only reason that transport still exists.
+  `tests/adapter.test.ts` pins the route, the catalog-over-name precedence, the `claude-*` fallback for an
+  entry with no route list, and that a Claude request followed by a DeepSeek one still lands on Chat
+  Completions.
 - **Tool-result history has two supported envelopes** (`toolResultOf()` in `src/adapter.ts`). Through 0.1.6
   the Harness emits a `role: 'user'` message with a first `tool-result` block; 0.1.7 emits `role: 'tool'`,
   message-level `toolCallId`/`isError`, and raw text/image blocks. Pairing AND both serializers must consume

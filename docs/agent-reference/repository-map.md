@@ -13,14 +13,18 @@ An unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-har
 ## Repository layout
 
 ```
-src/adapter.ts        CommandCodeAdapter (LlmAdapter) — wire protocol, message
-                      conversion, SSE/JSONL stream parsing, catalog + cache,
-                      pre-stream account rotation loop.
+src/adapter.ts        CommandCodeAdapter (LlmAdapter) — wire protocol (three
+                      transports: the private CLI protocol, OpenAI Chat
+                      Completions, and Anthropic Messages), message
+                      conversion, SSE/JSONL stream parsing, catalog + cache
+                      (incl. `supported_endpoints`), pre-stream account
+                      rotation loop.
 src/capabilities.ts   Static capability snapshot (model efforts/vision/thinking,
                       plan tiers, subscription plans, deals, peak pricing) +
                       its read helpers — the sync-only surface for upstream
                       CLI/doc updates; imported by src/adapter.ts and re-exported
-                      from src/index.ts.
+                      from src/index.ts. Also holds the Messages-route model set
+                      and the per-model output ceilings the catalog omits.
 src/accounts.ts       CommandCodeAccountPool — multi-account slots, per-key
                       rotation state (429/401 marks), window-probe revival.
 src/image-request.ts  Request-image target: the long-edge/byte budget one
@@ -33,9 +37,12 @@ src/image-tokens.ts   Per-family visual-token estimates (Anthropic, OpenAI,
 src/transport-retry.ts  The bounded retry budget for `TRANSPORT` failures: the
                       per-agent failure count, its reset, and the bilingual
                       diagnosis a capped turn ends with (issue #39's second
-                      report — the route policy's 1000-attempt cadence is for
-                      failures the provider ASKS to have retried, not for a
-                      connection that cannot be established).
+                      report). Confirmed usage windows keep the route's long
+                      retry cadence; transport errors use their own budget.
+src/transient-retry.ts  Three-retry budget for ordinary transient failures;
+                      confirmed usage windows and transport errors are separate.
+src/request-timing.ts  Opt-in numeric phase and first-content timing summary
+                      (`DSH_COMMANDCODE_TIMING`), without request contents.
 src/stream-trace.ts   The opt-in raw-stream trace (`DSH_COMMANDCODE_TRACE`),
                       and the reason it exists: a stream this route cuts
                       mid-generation used to be reported as a finished turn,
@@ -148,7 +155,12 @@ locale/en.json         Plugin-manager localized title/description dictionaries
 locale/zh.json         (`locale/*.json`, `meta.{title,description}`; en.json is
                       the anchor file the reader requires). Pure metadata —
                       older engines ignore both.
-tests/adapter.test.ts Core adapter unit tests (node:test + tsx).
+tests/adapter.test.ts Core adapter unit tests (node:test + tsx), including the
+                      Anthropic Messages transport: adaptive thinking, effort
+                      mapping, tool-schema root, `input_json_delta` assembly,
+                      usage mapping, per-block thinking-signature replay, native
+                      tool-result images, the three rejection shapes, and
+                      `supported_endpoints` routing.
 tests/accounts.test.ts Account-pool rotation tests.
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/settings.test.ts settings-page controller tests.
@@ -221,6 +233,36 @@ tests/stream-trace.test.ts  the raw-stream trace: switch resolution, JSONL
 scripts/probe-stream.mjs  One-shot LIVE probe with the trace on: drives the
                       adapter without the harness, so a cut here is the
                       provider's and a clean finish means the cut is above it.
+scripts/verify-messages-live.mjs  LIVE end-to-end run of the plugin's OWN
+                      Messages transport (not a hand-written fetch): routing,
+                      stream assembly, tool loop, images, native tool-result
+                      media, thinking-signature replay. This is the check that
+                      catches what unit tests cannot — it found the `temperature`
+                      rejection that failed every real request while the suite
+                      was green. `VERIFY_DRY_RUN=1` sends nothing.
+scripts/probe-messages-contract.mjs  LIVE `/provider/v1/messages` request-shape
+                      probes that the gateway rejects early (routing, tool-schema
+                      root, `max_tokens` ceiling, bare-prose validation), so
+                      most of the contract costs no output tokens.
+scripts/probe-messages-stream.mjs     LIVE Messages success-path probes: the
+                      event sequence, tool-call fragment assembly, images, and
+                      tool-result media. Needs a Claude-entitled key.
+scripts/probe-messages-thinking-trigger.mjs  LIVE hunting for the request shape
+                      that makes the model emit a thinking block, then the
+                      replay matrix that proves a signature is required and
+                      omission is accepted. Also covers the `output_config.effort`
+                      value domain and whether `tool_use.id` length is bounded
+                      (it is not; only the two sides must agree). Needs a
+                      Claude-entitled key.
+scripts/sync-output-limits.mjs  Regenerates `MODEL_OUTPUT_TOKEN_LIMITS` in
+                       `src/capabilities.ts` from models.dev. Command Code calls
+                       these models through their vendor's own API, so the
+                       vendor's published `max_tokens` ceiling is what it
+                       records — 74 of 84 ids, falling back to a `:free`/`-free`
+                       variant and then to unanimity across providers. The 10
+                       no vendor publishes are learned at runtime from the
+                       endpoint's own refusal (issue #71). `--check` reports an
+                       unreachable catalog distinctly from real drift.
 scripts/verify-isolated-install.mjs  pnpm 10 marketplace-generation tarball install smoke.
 scripts/verify-engine-load.mjs  Engine-load smoke: stages the published surface against a
                       real dsh engine and imports it there, so a bundle that cannot link

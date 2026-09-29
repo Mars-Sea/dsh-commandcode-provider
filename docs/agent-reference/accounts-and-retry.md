@@ -175,8 +175,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 - **`TRANSPORT` carries its own bounded budget, and the route policy cannot express it**
   (`src/transport-retry.ts` + the `agent/request-error` listener in `src/index.ts`; issue #39's second
   report). `providerRetryPolicy()` is captured once per route, so every code in its whitelist shares one
-  window: 1000 attempts, waits doubling to 15 minutes. That shape is right for `RATE_LIMIT`/`SERVER` — an
-  exhausted 5-hour window is a failure that ASKS to be waited out — and wrong for a connection that cannot
+  window: 1000 attempts, waits doubling to 15 minutes. That shape is needed for a confirmed `RATE_LIMIT`
+  window, while `SERVER` now has a separate three-retry cap and a connection that cannot
   be established. The reporter's second event at ~710k tokens was undici's own `Connect Timeout Error ...
   timeout: 10000ms` (its default connect timeout; `requestTimeoutMs` is 300 s and the connect phase never
   runs against the body upload) plus a `read ECONNRESET` on `/alpha/generate`; on the shared cadence the
@@ -198,13 +198,23 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   1.9/2.7/5.7 s, so the "long context" correlation in the report is not a size rejection.
   `tests/transport-retry.test.ts` pins the budget, per-agent isolation, the cancellation ordering and the
   message.
-- **Retry**: `providerRetryPolicy()` pins a near-unbounded transient-only policy (`mode: 'normal'`,
-  `maxRetries: 1000`, whitelist `EMPTY_RESPONSE`/`RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`) —
-  opencode-style persistence that still fails fast on permanent errors (`INVALID_CREDENTIAL` etc. are not
-  retryable); waits double from 500 ms and cap at 15 min (`RETRY_MAX_DELAY_MS` in accounts.ts, ±10% jitter);
-  executed by dsh-llm-retry (active in every default profile via dsh-base) at agent-step boundaries. Smart
-  waits ride `providerRetryAfterMs` on the thrown `LlmError`: a 429's `Retry-After` header is parsed and
-  attached, and the rotation pool's all-exhausted `RATE_LIMIT` attaches the wait until the earliest known
-  window reset — both **capped at `RETRY_MAX_DELAY_MS`**, because in normal mode the executor abandons (not
-  falls back on) a retry whose attached wait exceeds the cap. Captured once at route registration, so any
-  future config knob for it would apply on profile restart.
+- **重试策略**：`providerRetryPolicy()` 保留官方 `dsh-llm-retry` 的退避与服务商等待时间处理；其路由级
+  `maxRetries: 1000` 仅让明确额度窗口的 `RATE_LIMIT` 能持续等待。插件的 `agent/request-error` 监听器对
+  `EMPTY_RESPONSE`、`SERVER`、`TIMEOUT`、`THROTTLED` 共用每次模型请求 3 次的预算；`TRANSPORT` 继续使用
+  `transportMaxRetries` 独立预算。无窗口证据的裸 429 归为 `THROTTLED`，不能冒充已耗尽额度窗口。
+  `step/start` 重置预算，失败尝试的 `assistant/attempt` 不重置，用户取消也不消耗次数。退避从 500 毫秒
+  倍增，最长 15 分钟（±10% 抖动）；明确窗口的 `providerRetryAfterMs` 最多附加到同一上限，超过它会使
+  官方执行器放弃重试。永久错误仍不在允许重试的代码列表内。参见[《决策记录》第一章](../决策记录.md#一请求失败恢复)。
+- **跨 `stream()` 调用存活的故障状态必须按会话隔离**（`headerTimeoutStreak` → `headerTimeoutStreaks`
+  in `src/adapter.ts`；不是 issue #67 本身的回归，是同一批新增重试预算暴露出的既有单例状态问题）。
+  `CommandCodeAdapter` 全进程只 `new` 一次并注册一次（`src/index.ts`），供所有并发 agent 共享，而
+  `gradeHeaderTimeout()` 用来判断"同一请求连续 N 次 header 超时"的计数曾是该单例上的普通实例字段——
+  这个状态必须跨 `stream()` 调用存活（`TIMEOUT` 不在账号轮换循环内重试，一次超时就让整个 `stream()`
+  抛出，由 `dsh-llm-retry` 发起下一次 `stream()` 调用），所以不能像别的每调用状态那样收窄到局部变量。
+  并发下单例字段导致两种互相矛盾的故障：任意一个会话的成功响应会清空所有会话的计数（升级诊断在并发下
+  基本不触发），而不同会话的请求体指纹不同又会不断把计数重置回 1（升级诊断永远打不到阈值）。修复为
+  `Map<sessionId, {...}>`：不能照抄 `transient-retry.ts`/`transport-retry.ts` 的 `WeakMap<agent, …>`
+  模式，因为 `GenerateOptions` 不携带 `agent` 引用，只有 `sessionId`；字符串 key 的 Map 无法用 WeakMap
+  自动回收，改为容量上限 200 条 + 先进先出淘汰。无 `sessionId` 的一次性调用退回旧的单槽全局行为。
+  `tests/adapter.test.ts` 新增并发会话独立累计、无会话回退两个用例。参见
+  [《决策记录》第一章第 3 条](../决策记录.md#一请求失败恢复)。

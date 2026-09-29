@@ -132,6 +132,11 @@ test('getUsage reports an empty plan when the subscription has no planId', async
 test('subscriptionPlanInfo matches the longest plan-id prefix', async () => {
   const { subscriptionPlanInfo } = await import('../src/capabilities.ts')
   assert.deepEqual(subscriptionPlanInfo('individual-pro-v1'), { name: 'Pro', monthlyCredits: 80, tierWeight: 2 })
+  // command-code@1.69.0 added this second Go row alongside `individual-go`
+  // (same name and credits); the longest-prefix match has to reach it rather
+  // than stopping at the base key, exactly as it does for Pro above.
+  assert.deepEqual(subscriptionPlanInfo('individual-go-v1'), { name: 'Go', monthlyCredits: 10, tierWeight: 0 })
+  assert.deepEqual(subscriptionPlanInfo('individual-go'), { name: 'Go', monthlyCredits: 10, tierWeight: 0 })
   assert.deepEqual(subscriptionPlanInfo('individual-provider'), { name: 'Provider', monthlyCredits: 15, tierWeight: 3 })
   assert.deepEqual(subscriptionPlanInfo('INDIVIDUAL_GO'), { name: 'Go', monthlyCredits: 10, tierWeight: 0 })
   assert.deepEqual(subscriptionPlanInfo('teams-pro'), { name: 'Teams Pro', monthlyCredits: 40, tierWeight: 2 })

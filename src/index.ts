@@ -39,6 +39,7 @@ import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import type {} from '@deepseek-ai/dsh-settings'
 import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './adapter.ts'
+import { absorbTransientFailure, resetTransientFailures, transientBudgetMessage } from './transient-retry.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { AccountRotationReason, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
 import { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
@@ -191,9 +192,9 @@ export interface Config {
   offloadSeenImagesForCache?: boolean
   /**
    * Transport failures one request absorbs before the failure is surfaced;
-   * defaults to 5. The route's retry policy is near-unbounded on purpose
-   * (1000 attempts, waits doubling to 15 minutes) because that shape is for
-   * the failures a provider asks to have retried; a transport failure is not
+   * defaults to 5. The route's policy allows long waits for confirmed usage
+   * windows, while ordinary transient errors have a separate three-retry
+   * budget. A transport failure is not
    * one of those, and after ~15.5 s of grace the wait is pure stall, so it is
    * capped here (issue #39). 0 surfaces every transport failure immediately.
    */
@@ -540,13 +541,13 @@ export function apply(ctx: Context, config: Config): void {
   ])
   ctx.llm.registerAdapter([PROVIDER], adapter)
 
-  // Bounded retry for TRANSPORT failures (issue #39). The route policy is
-  // near-unbounded on purpose (see `providerRetryPolicy`) because an exhausted
-  // rate-limit window or a gateway 520 is a failure that ASKS to be retried —
-  // a connection that cannot be established is not, and the unbounded cadence
+  // Bounded retry for TRANSPORT failures (issue #39). The route policy allows
+  // long recovery for a confirmed usage window; ordinary 520s now have their
+  // own three-retry cap. A connection that cannot be established needs its
+  // separate budget, or the shared cadence
   // turned a 10-second connect timeout into an ~8-minute stall, so the first
   // few transport failures are absorbed here and the rest surface with a
-  // diagnosis. `dsh-llm-retry` keeps its window for every other code.
+  // diagnosis. `dsh-llm-retry` still owns the wait between allowed attempts.
   //
   // The failure is surfaced by THROWING out of the waterfall: the agent loop
   // wraps the rejection into the turn's error, so the retry chain stops here.
@@ -568,13 +569,17 @@ export function apply(ctx: Context, config: Config): void {
   // request-error payload hands over). Weak on BOTH sides so a long-lived Host
   // cannot be held open by sessions whose turn never appended a `turn/end`.
   const sessionAgents = new WeakMap<object, object>()
-  ctx.on('agent/request-error', async ({ agent, failure, signal }, next) => {
+  ctx.on('agent/request-error', async ({ agent, provider, failure, signal }, next) => {
     // Checked BEFORE the budget: a cancelled turn is the user's own stop, so it
     // must neither be answered with a retry nor consume the slot a later live
     // failure needs.
-    if (signal.aborted) return next()
+    if (signal.aborted || provider !== PROVIDER) return next()
     const session: unknown = Reflect.get(agent, 'session')
     if (typeof session === 'object' && session !== null) sessionAgents.set(session, agent)
+    const transient = absorbTransientFailure(agent, failure.code)
+    if (transient === 'exhausted') throw new Error(transientBudgetMessage(failure.code, failure.message))
+    // 只约束次数；仍由官方重试器决定退避和 Retry-After，避免即时重发。
+    if (transient === 'retry') return next()
     const decision = absorbTransportFailure(agent, failure.code, transportMaxRetries())
     if (decision === 'ignored') return next()
     // The literal is spelled as the event's own decision type; the union this
@@ -606,10 +611,16 @@ export function apply(ctx: Context, config: Config): void {
     }
     if (action !== 'reset') return
     const agent = sessionAgents.get(session)
-    if (agent !== undefined) resetTransportFailures(agent)
+    if (agent !== undefined) {
+      resetTransportFailures(agent)
+      resetTransientFailures(agent)
+    }
   })
   ctx.on('agent/status', ({ agent, status }) => {
-    if (status === 'idle') resetTransportFailures(agent)
+    if (status === 'idle') {
+      resetTransportFailures(agent)
+      resetTransientFailures(agent)
+    }
   })
 
   // Per-account usage for the /commandcode dashboard and the settings

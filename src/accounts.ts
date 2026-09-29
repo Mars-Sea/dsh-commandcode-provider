@@ -18,6 +18,7 @@
  */
 
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { THROTTLED_CODE } from './transient-retry.ts'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 
 /**
@@ -600,7 +601,7 @@ function allAccountsUnusable(accounts: readonly ResolvedAccount[]): LlmError {
         + ' — the provider did not report an exhausted usage window; retrying'
         + `；全部 ${accounts.length} 个 Command Code 账户被限流（429）`
         + '——服务商未报告用量窗口用尽，正在重试',
-      'RATE_LIMIT',
+      THROTTLED_CODE,
     )
   }
   const resets = windowMarked

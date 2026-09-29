@@ -25,3 +25,7 @@ lib/
 # Maintainer-local release guide: never commit, never publish.
 RELEASES.local.md
 __pycache__/
+
+# Maintainer-local issue reply drafts, same rule as RELEASES.local.md: they are
+# unsent text, never commit and never publish.
+issue-replies.local.md

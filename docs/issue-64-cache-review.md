@@ -2,6 +2,24 @@
 
 The current patch improves CLI request alignment and diagnostics. It does **not** establish that the intermittent cache misses reported in [issue #64](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/64) are fixed. A synthetic authenticated replay now reproduces the same first-image cache boundary on the real `/alpha/generate` service; the reporter's original requests and the gateway's internal prompt layout remain unavailable.
 
+## 2026-09-29 the Messages route: a separate zero, found by billing rather than by cache
+
+Everything above concerns the CLI transport. The Claude family does not use it — it answers only on `/provider/v1/messages` — and that route had a different and quieter defect: **it sent no cache marker at all**.
+
+The evidence is a 10-turn `claude-sonnet-5-5` session's own billed rows. Repricing each against Claude Sonnet 5.5's published rates (`input` $2/M, `output` $10/M, `cache read` $0.20/M, `cache write` $2.5/M) reproduces all ten to the cent, for example `37898 × $2/M + 1312 × $10/M = $0.088916` against a logged `$0.0889`, and `$0.56484` across the session. A single cached token anywhere in those ten requests would have moved the total, so the whole session ran at the undiscounted rate. `mapMessagesUsage()` was not at fault: it already maps `cache_read_input_tokens` and `cache_creation_input_tokens`, and it was faithfully reporting the zero the request had asked for. `buildMessagesBody()` was the cause — it set `system` to a bare string and marked nothing, and Anthropic's caching is opt-in per block, so an unmarked prefix is re-prefilled at full price on every turn. This is the opposite failure mode from #64, and #64's CLI experiments could not have found it.
+
+**The fix copies the official client's breakpoints rather than inventing them.** No quota remained for a live A/B, so the placements come from what Command Code's own clients send to this same endpoint. Three artifacts were fetched and each was checked against its registry-published sha512 digest before reading:
+
+| Artifact | Digest | What it establishes |
+| --- | --- | --- |
+| `command-code@1.68.0` | matches | The CLI's only `cache_control` is in `toWireSystem()`. It never posts to `/provider/v1/messages` at all (0 occurrences), so it is silent on this route. |
+| `CommandCodeAI/pi-commandcode-provider` (official repo) | n/a (source) | Calls this endpoint through the Anthropic SDK and reads `pricing.cache_read` / `pricing.cache_write` from the model list to price results. |
+| `@earendil-works/pi-ai@0.87.1` | matches | Its `anthropic-messages` transport sets exactly three markers: the `system` block, the last tool (when `compat.supportsCacheControlOnTools`), and the last block of the last `user` message. TTL stays unset unless retention is `long` on a `supportsLongCacheRetention` model. |
+
+The adapter now sets the same three. The last user turn is what makes it pay: DSH resends the entire history each request, so a marker there is a rolling boundary, whereas the `system`-only marker the CLI uses would leave everything after the first turn uncached. The session reprices to $0.1869, a 66.9% reduction, with no other field changed.
+
+**What this does not prove.** That the gateway honours `cache_control` on this endpoint is inferred, not measured: the official pi provider depends on the field for its own cost display, so a gateway stripping it would misprice every Claude session visibly. The exposure is bounded in both directions — a gateway that ignored the field would change nothing, and one that honoured it without a hit would bill only the first turn's write at $2.5/M against $2/M, with later turns hitting inside the 5-minute window. A live A/B remains the acceptance check once quota exists: post the same history twice, with and without the markers, and compare `cache_creation_input_tokens` / `cache_read_input_tokens`.
+
 ## 2026-09-28 image-path follow-up
 
 The reporter's [0.11.17 follow-up](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/64#issuecomment-5854327366) narrows the symptom: all 15 misses in a 161-request session immediately followed a tool result that added an image, and the cached prefix repeatedly stopped near the first image boundary. This is a correlation, not yet a wire-level proof of the cause.

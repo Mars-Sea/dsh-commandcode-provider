@@ -5,11 +5,12 @@
  * community-maintained integration; you need your own Command Code account
  * and API key or subscription, and Command Code's terms apply.
  *
- * Owns the two chat transports (`/alpha/generate`, `/provider/v1/chat/completions`),
+ * Owns the three chat transports (`/alpha/generate`, `/provider/v1/chat/completions`,
+ * `/provider/v1/messages`),
  * message conversion, SSE/JSONL parsing, the catalog + its on-disk cache, and
  * the pre-stream account rotation loop. The wire protocol is
- * reverse-engineered (command-code@1.28.4, re-verified through 1.68.0);
- * AGENTS.md holds the full protocol record.
+ * reverse-engineered (command-code@1.28.4, re-verified through 1.72.1);
+ * docs/agent-reference/adapter-protocol.md holds the full protocol record.
  *
  * The adapter is deliberately free of cordis/schemastery: it receives a
  * per-request options thunk and an API-key resolver from the plugin entry
@@ -63,11 +64,15 @@ import { requestImageTarget } from './image-request.ts'
 import { commandCodeImageTokens } from './image-tokens.ts'
 import { allowanceTierForWeight } from './model-prices.ts'
 import { boundTraceText, openStreamTrace, STREAM_TRACE_ENV } from './stream-trace.ts'
+import { openRequestTiming, type RequestTiming, type RequestTimingSink } from './request-timing.ts'
+import { THROTTLED_CODE } from './transient-retry.ts'
 import { booleanValue, isRecord, numberValue, stringValue } from './wire-guards.ts'
 
 import {
+  DEFAULT_MESSAGES_MAX_TOKENS,
   KNOWN_EFFORTS,
   KNOWN_IMAGE_MODELS,
+  MODEL_OUTPUT_TOKEN_LIMITS,
   capabilityDescription,
   compareByPlan,
   modelVisibleForAnyAccount,
@@ -75,6 +80,103 @@ import {
   subscriptionPlanInfo,
   type CommandCodeBillingAccess,
 } from './capabilities.ts'
+
+/**
+ * Output ceilings the endpoint has named in a live rejection, per model.
+ *
+ * The snapshot in ./capabilities.ts carries the vendor-published ceiling for
+ * 74 of the 84 catalog models (see scripts/sync-output-limits.mjs). The other
+ * 10 are models no vendor publishes yet, and a gateway is free to sit below
+ * the vendor figure even where one exists — so this map is the correction
+ * channel, not a fallback of last resort: the endpoint states the model's own
+ * ceiling in its rejection, so one wasted round trip is enough to know it for
+ * the rest of the process.
+ *
+ * Shared by adapters for the same gateway, but not across apiBase values: a
+ * proxy can enforce a smaller ceiling for the same model id. Only ever tightens
+ * within that gateway, so a stale catalog row cannot undo a live refusal.
+ */
+const learnedOutputLimits = new Map<string, Map<string, number>>()
+
+/**
+ * Output ceilings the CATALOG published, per model.
+ *
+ * `/provider/v1/models` carries `max_output_tokens` in its schema and the
+ * official pi provider already prefers it, but the endpoint does not send it
+ * yet — so this is empty today and fills in on its own the day it does. It sits
+ * above the models.dev snapshot and below what a live rejection proved, because
+ * that ordering is also the order of trust: the gateway knows its own ceiling,
+ * a rejection proves it, and models.dev is a third party describing the same
+ * model. Restored from the on-disk catalog cache so a published ceiling
+ * survives a restart without waiting for the next catalog fetch.
+ */
+const publishedOutputLimits = new Map<string, Map<string, number>>()
+
+/** Keep model facts from one gateway from constraining another gateway. */
+function outputLimitsFor(store: Map<string, Map<string, number>>, apiBase: string): Map<string, number> {
+  let limits = store.get(apiBase)
+  if (limits === undefined) {
+    limits = new Map()
+    store.set(apiBase, limits)
+  }
+  return limits
+}
+
+/**
+ * The output ceiling this gateway route sends for `modelId`.
+ *
+ * `/provider/v1/models` publishes `context_length` and `supported_endpoints`
+ * but no output cap today, while each endpoint refuses a larger `max_tokens` per
+ * model — the Messages endpoint names its own in the rejection (`max_tokens:
+ * 200000 > 128000, which is the maximum allowed number of output tokens for
+ * claude-sonnet-5-5`). What the endpoint has already named wins, then the
+ * catalog's own figure once it publishes one, then the snapshot, then — for
+ * the Messages-route models only — the conservative value, because the ceilings
+ * actually observed are below the global default and assuming otherwise would
+ * fail every request.
+ */
+function modelOutputTokenLimit(apiBase: string, modelId: string): number {
+  const learned = outputLimitsFor(learnedOutputLimits, apiBase).get(modelId)
+  const known = outputLimitsFor(publishedOutputLimits, apiBase).get(modelId) ?? MODEL_OUTPUT_TOKEN_LIMITS.get(modelId)
+  if (learned !== undefined && (known === undefined || learned < known)) return learned
+  if (known !== undefined) return known
+  return requiresMessagesEndpoint(modelId) ? DEFAULT_MESSAGES_MAX_TOKENS : DEFAULT_MAX_OUTPUT_TOKENS
+}
+
+/**
+ * Record a ceiling the endpoint just stated, if it is one this route can act
+ * on: a real number, and one below what the next request would otherwise send.
+ * A ceiling at or above the current budget describes a request that was not
+ * refused for being too large, and acting on it would be a guess.
+ */
+function noteOutputCeiling(apiBase: string, modelId: string, ceiling: number): boolean {
+  if (!Number.isSafeInteger(ceiling) || ceiling <= 0) return false
+  if (ceiling >= modelOutputTokenLimit(apiBase, modelId)) return false
+  outputLimitsFor(learnedOutputLimits, apiBase).set(modelId, ceiling)
+  return true
+}
+
+/**
+ * The ceiling to retry this turn with, when `error` is a request-side output
+ * refusal the route can act on — else undefined, meaning surface it.
+ *
+ * Read from the message, so it covers both shapes the same refusal arrives in:
+ * an HTTP 400 (`PROVIDER_HTTP_ERROR`) and an in-stream error frame
+ * (`PROVIDER_STREAM_ERROR`). Both carry the endpoint's wording, and both are
+ * already classified as output refusals rather than context overflows by the
+ * time they reach here.
+ *
+ * Recording is what makes the retry pay off: the ceiling is kept for this
+ * gateway and model, so a refused turn leaves its next request correct.
+ */
+function outputCeilingRefusal(apiBase: string, modelId: string, error: unknown): number | undefined {
+  if (!(error instanceof LlmError)) return undefined
+  const detail = error.message
+  if (!OUTPUT_LIMIT_REJECTION.test(detail)) return undefined
+  const stated = parseOutputCeiling(detail)
+  if (stated === undefined) return undefined
+  return noteOutputCeiling(apiBase, modelId, stated) ? stated : undefined
+}
 
 /** Keep the two user-facing languages and error metadata together. */
 function bilingual(code: string, en: string, zh: string, options?: LlmErrorOptions): LlmError {
@@ -85,7 +187,7 @@ function bilingual(code: string, en: string, zh: string, options?: LlmErrorOptio
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.68.0'
+export const COMMAND_CODE_CLI_VERSION = '1.72.1'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**
@@ -123,6 +225,9 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 131_072
 /** Preserve a small usable answer budget when the heuristic overshoots. */
 const MIN_CONTEXT_OUTPUT_TOKENS = 1_024
 export const MODELS_TIMEOUT_MS = 10_000
+/** 目录短期复用；刷新失败只短暂退避，避免反复阻塞模型选择器。 */
+export const MODEL_CATALOG_TTL_MS = 5 * 60_000
+const MODEL_CATALOG_RETRY_MS = 10_000
 /** How long the picker's plan-filter billing facts stay cached before refetching. */
 export const BILLING_ACCESS_TTL_MS = 5 * 60_000
 /**
@@ -131,8 +236,18 @@ export const BILLING_ACCESS_TTL_MS = 5 * 60_000
  * account can recover without a restart.
  */
 export const PROTOCOL_CACHE_TTL_MS = 15 * 60_000
-/** Endpoint protocol selected for one generate call. */
-type CommandCodeProtocol = 'cli' | 'openai'
+/**
+ * Endpoint protocol selected for one generate call.
+ *
+ * `messages` is the Anthropic Messages surface at
+ * `{apiBase}/provider/v1/messages`, the only Provider API route the Claude
+ * family answers (posted to `/chat/completions` they refuse with `400 Model
+ * "<id>" must be called via /provider/v1/messages`). `openai` is the
+ * documented Chat Completions surface; `cli` is Command Code's private
+ * `/alpha/generate` transport, kept for Go-plan keys (the one plan without
+ * Provider API access) and as the `upgrade_required` fallback.
+ */
+type CommandCodeProtocol = 'cli' | 'openai' | 'messages'
 
 /** The entry-plan tier weight (`individual-go` in KNOWN_SUBSCRIPTION_PLANS). */
 const GO_TIER_WEIGHT = 0
@@ -167,7 +282,8 @@ const ACTIVE_SUBSCRIPTION_STATUSES: ReadonlySet<string> = new Set(['active', 'tr
 export const DEFAULT_REQUEST_TIMEOUT_MS = 300_000
 /** Stream idle timeout: a generation that stalls this long is a dead connection. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
-const MODEL_CACHE_VERSION = 1
+/** Version 3 binds cached catalog facts to their gateway; older files lack a safe source. */
+const MODEL_CACHE_VERSION = 3
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -177,6 +293,52 @@ const MODEL_CACHE_VERSION = 1
 interface ValueFingerprint {
   bytes: number
   sha256: string
+}
+
+/**
+ * A lone UTF-16 surrogate half: a high surrogate not followed by a low one, or
+ * a low surrogate not preceded by a high one. Such a half is not a character —
+ * it only arises from a truncated slice, a lossy decode, or a lone `\uD83D`
+ * escape — and it survives `JSON.stringify` as an escape (`"\ud83d"`) rather
+ * than failing locally, so the request leaves the process carrying a string no
+ * UTF-8 consumer can round-trip. Providers running strict decoders reject it.
+ *
+ * This is the same expression `@earendil-works/pi-ai` applies to every outgoing
+ * string on this endpoint. Valid astral characters (emoji and anything else
+ * outside the BMP) are PAIRED surrogates and pass through untouched.
+ */
+const LONE_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g
+
+/**
+ * A cheap pre-test for "this string contains any surrogate code unit at all",
+ * paired or not. The exact pattern above needs lookaround, which V8 cannot
+ * optimize into a fast scan; this one is a plain range test. Real prompts are
+ * overwhelmingly ASCII-plus-CJK with no surrogates, so the common case pays one
+ * linear scan instead of the lookaround pass. Measured on a 412 KB request
+ * body: 1.40 ms with the exact pattern alone against 0.77 ms with this gate,
+ * where a bare `JSON.stringify` is 0.59 ms.
+ */
+const ANY_SURROGATE_PATTERN = /[\uD800-\uDFFF]/
+
+/**
+ * Drop lone surrogate halves from one outgoing string.
+ *
+ * Applied at the single point a request body is serialized, so every field of
+ * every transport is covered — system text, message content, tool schemas and
+ * tool results alike — instead of enumerating the fields that can carry text
+ * and missing one. The value is returned unchanged whenever it holds no
+ * surrogate at all, which is the ordinary case.
+ *
+ * The `test()` call deliberately uses the flagless {@link ANY_SURROGATE_PATTERN}:
+ * a global regex is stateful, so testing with one would advance `lastIndex` and
+ * make consecutive calls on the same string alternate between true and false.
+ * `replace()` resets `lastIndex` itself, so the global pattern is safe there.
+ */
+function sanitizeSurrogates<T>(value: T): T {
+  if (typeof value !== 'string') return value
+  return ANY_SURROGATE_PATTERN.test(value)
+    ? (value.replace(LONE_SURROGATE_PATTERN, '') as T)
+    : value
 }
 
 /** Hash one request value without retaining or logging its contents. */
@@ -375,6 +537,37 @@ function isContextOverflowDetail(detail: string): boolean {
 const AMBIGUOUS_SIZE_REJECTION = /\bmodel could not complete the request\b/i
 
 /**
+ * A request-side `max_tokens` refusal, told apart from a context overflow that
+ * mentions the same field. Kept narrow on purpose: the overflow pattern also
+ * matches a bare `max_tokens`, so this must name the specific shapes the
+ * endpoint uses — a ceiling comparison, its prose about output tokens, or a
+ * request-validation error on the field.
+ */
+const OUTPUT_LIMIT_REJECTION = new RegExp([
+  'max_tokens:\\s*\\d+\\s*>\\s*\\d+',
+  'maximum allowed number of output tokens',
+  'invalid input[^\\n]*max_tokens',
+  'expected number[^\\n]*at max_tokens',
+].join('|'), 'i')
+
+/**
+ * The output ceiling the endpoint states in a `max_tokens` refusal, read off
+ * its own comparison: `max_tokens: 131072 > 128000` yields 128000.
+ *
+ * Only the comparison form is parsed. The other shapes
+ * {@link OUTPUT_LIMIT_REJECTION} matches — a bare validation error, or the
+ * prose without the numbers — name no ceiling, and guessing one would be worse
+ * than failing: a fabricated value is indistinguishable from a real one at the
+ * point where it decides the next request's budget.
+ */
+function parseOutputCeiling(detail: string): number | undefined {
+  const stated = /max_tokens:\s*\d+\s*>\s*(\d+)/i.exec(detail)?.[1]
+  if (stated === undefined) return undefined
+  const ceiling = Number(stated)
+  return Number.isSafeInteger(ceiling) && ceiling > 0 ? ceiling : undefined
+}
+
+/**
  * The advice floor for a Provider-API timeout: doubling a 60 s budget is still
  * short for a slow upstream first token, so the suggestion never goes below 5
  * minutes. Capped by `RETRY_MAX_DELAY_MS` rather than the schema's timer
@@ -430,6 +623,9 @@ export function headersTimeoutAdvice(
  * answer either way.
  */
 const MAX_CONSECUTIVE_HEADER_TIMEOUTS = 3
+
+/** Streak key for a session-less call, so those keep the old single-slot semantics instead of never escalating. */
+const GLOBAL_HEADER_TIMEOUT_KEY = '\u0000global'
 
 /** UTF-8 byte length, computed only on the timeout path so a large body is encoded once, not per attempt. */
 function utf8ByteLength(text: string): number {
@@ -526,6 +722,28 @@ function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmErr
     .join(' ')
   const statusOption = statusCode !== undefined ? { status: statusCode } : undefined
 
+  if (OUTPUT_LIMIT_REJECTION.test(detail)) {
+    // Checked BEFORE the overflow test, and that ordering is the whole point:
+    // `isContextOverflowDetail` matches a bare `max_tokens`, so this refusal
+    // used to be reported as an oversized session. The harness then compacted a
+    // context that was within budget and resent the identical request, which the
+    // endpoint refused identically (issue #71) — a turn that could not recover,
+    // described to the user as one that could. A stream-side refusal has no
+    // status to report, so the wording names the field only.
+    const stated = /max_tokens:\s*\d+\s*>\s*\d+/i.exec(detail)?.[0]
+    return bilingual(
+      'PROVIDER_STREAM_ERROR',
+      `Command Code refused the request's max_tokens for this model`
+      + (stated !== undefined ? ` (${stated})` : '')
+      + ' — the session is not oversized, so compacting it will not help;'
+      + ' lower "Max output tokens" or pick a model with a larger output ceiling',
+      `Command Code 拒绝了本次请求的 max_tokens（该模型的输出上限更低）`
+      + (stated !== undefined ? `（${stated}）` : '')
+      + '——会话内容并未超长，压缩上下文无效；请调低「最大输出 token」或改用输出上限更大的模型',
+      statusOption,
+    )
+  }
+
   if (isContextOverflowDetail(detail)) {
     // Bilingual — the harness renders this message verbatim in its retry
     // chrome — and it names the recovery the harness is already performing.
@@ -540,7 +758,7 @@ function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmErr
   const retryableStatus = statusCode !== undefined && (statusCode === 429 || statusCode >= 500)
   // An explicit refusal and a terminal marker both outrank the STATUS, so a 5xx
   // that carries "insufficient credits" (or `isRetryable: false`) cannot be
-  // answered with `SERVER` and handed to dsh-llm-retry's 1000-attempt cadence.
+  // answered with `SERVER` and unnecessarily retried by the route policy.
   // An explicit `isRetryable: true` still wins over everything.
   const retryable = isRetryable === true
     || (isRetryable === false || terminal
@@ -551,6 +769,16 @@ function streamErrorToLlmError(value: unknown, fallbackMessage?: string): LlmErr
       `Command Code stream error: ${message}`,
       'PROVIDER_STREAM_ERROR',
       statusOption,
+    )
+  }
+  const rejection = classifyAccountRejection(statusCode ?? 0, JSON.stringify(value) ?? message)
+  if (rejection?.reason === 'rate-limit' || rejection?.reason === 'throttled') {
+    const wait = rejection.resetAtMs === undefined ? 0 : Math.min(RETRY_MAX_DELAY_MS, Math.max(1000, rejection.resetAtMs - Date.now()))
+    return bilingual(
+      rejection.reason === 'rate-limit' ? 'RATE_LIMIT' : THROTTLED_CODE,
+      `Command Code stream error: ${message}`,
+      rejection.reason === 'rate-limit' ? 'Command Code 用量窗口已限流，等待恢复' : 'Command Code 请求暂时被限流，正在重试',
+      { ...statusOption, ...(wait > 0 ? { providerRetryAfterMs: wait } : {}) },
     )
   }
   return new LlmError(
@@ -786,12 +1014,36 @@ interface CommandCodeModel {
   name: string
   contextWindow: number
   maxTokens: number
+  /**
+   * The output ceiling the catalog PUBLISHED for this model, as distinct from
+   * the one {@link maxTokens} was resolved to. The gateway has this field in
+   * its schema and the official pi provider already reads it, but it does not
+   * send it yet — the endpoint currently stops after `supported_endpoints`
+   * (see the pi provider's `CommandCodeModelListItem`). Carried separately so
+   * that a value cached before this field existed cannot outlive it: the
+   * snapshot in ./capabilities.ts and the runtime's learned limits are both
+   * re-derivable, while a published number is the one thing only the gateway
+   * can say.
+   */
+  publishedMaxTokens?: number
+  /**
+   * The catalog's own per-model route list, e.g. `['/chat/completions',
+   * '/responses']` or `['/messages']`. New as of command-code@1.55.0 and the
+   * authoritative routing source: a model listed only under `/messages`
+   * answers `400 Model "<id>" must be called via /provider/v1/messages` on
+   * every other route. Absent from older cache files, in which case
+   * `resolveProtocol()` falls back to {@link requiresMessagesEndpoint}.
+   */
+  supportedEndpoints: readonly string[]
 }
 
-function parseCatalogResponse(value: unknown): CommandCodeModel[] {
+function parseCatalogResponse(value: unknown, apiBase: string): CommandCodeModel[] {
   if (!isRecord(value) || value.object !== 'list' || !Array.isArray(value.data)) {
     throw new LlmError('Unexpected Command Code models response shape', 'PROVIDER_PROTOCOL_ERROR')
   }
+  // A refreshed catalog may remove a previously published field; do not let
+  // its older value silently outlive the response from this same gateway.
+  publishedOutputLimits.set(apiBase, new Map())
   const models: CommandCodeModel[] = []
   for (const entry of value.data) {
     if (!isRecord(entry)) continue
@@ -799,11 +1051,25 @@ function parseCatalogResponse(value: unknown): CommandCodeModel[] {
     const name = stringValue(entry.name)
     const contextLength = numberValue(entry.context_length)
     if (!id || !name || !contextLength || contextLength <= 0) continue
+    const endpoints = Array.isArray(entry.supported_endpoints)
+      ? entry.supported_endpoints.filter((item): item is string => typeof item === 'string')
+      : []
+    // The gateway's own ceiling, when it publishes one. Today it sends nothing
+    // after `supported_endpoints`, so this is normally absent and the snapshot
+    // answers instead; recording it here is what lets the published figure take
+    // over the moment it appears, with no change here.
+    const published = numberValue(entry.max_output_tokens)
+    if (published !== undefined && published > 0) outputLimitsFor(publishedOutputLimits, apiBase).set(id, published)
     models.push({
       id,
       name,
       contextWindow: contextLength,
-      maxTokens: Math.min(contextLength, DEFAULT_MAX_OUTPUT_TOKENS),
+      // The catalog publishes no output ceiling yet, but each endpoint refuses a
+      // larger `max_tokens` per model (the Messages endpoint names its own in
+      // the rejection), so the ceiling comes from the capability snapshot.
+      maxTokens: Math.min(contextLength, modelOutputTokenLimit(apiBase, id)),
+      ...(published !== undefined && published > 0 ? { publishedMaxTokens: published } : {}),
+      supportedEndpoints: endpoints,
     })
   }
   if (models.length === 0) {
@@ -812,23 +1078,62 @@ function parseCatalogResponse(value: unknown): CommandCodeModel[] {
   return models
 }
 
-async function readModelsCache(cachePath: string): Promise<CommandCodeModel[]> {
+async function readModelsCache(cachePath: string, apiBase: string): Promise<CommandCodeModel[]> {
   const parsed: unknown = JSON.parse(await readFile(cachePath, 'utf-8'))
-  if (!isRecord(parsed) || parsed.version !== MODEL_CACHE_VERSION || !Array.isArray(parsed.models)) {
+  // Earlier cache files did not identify their gateway. Even the default path
+  // may have been written by a custom apiBase, so an unscoped file is unsafe.
+  if (!isRecord(parsed) || parsed.version !== MODEL_CACHE_VERSION
+    || parsed.apiBase !== apiBase || !Array.isArray(parsed.models)) {
     throw new Error(`Invalid model cache at ${cachePath}`)
   }
-  return parsed.models as CommandCodeModel[]
+  publishedOutputLimits.set(apiBase, new Map())
+  // Normalize rather than trust the file: a hand-edited or fixture cache may
+  // omit `supported_endpoints`, and an absent list must degrade to the
+  // `claude-*` prefix rule instead of routing Claude to the wrong transport.
+  return parsed.models.map((entry) => {
+    const model = isRecord(entry) ? entry : {}
+    const endpoints = Array.isArray(model.supportedEndpoints)
+      ? model.supportedEndpoints.filter((item): item is string => typeof item === 'string')
+      : []
+    // A published ceiling is the gateway's own, so it is restored — but
+    // `maxTokens` is NOT taken from the file. It is a DERIVED value: the
+    // snapshot, the fallback and the gateway's published figure can all move
+    // between two runs, and a cache written before any of them moved would
+    // otherwise pin the old answer for as long as the file survives. The
+    // catalog cache exists to spare a network fetch, not to freeze a
+    // conclusion (issue #71).
+    const id = stringValue(model.id)
+    const published = numberValue(model.publishedMaxTokens)
+    if (id !== undefined && published !== undefined && published > 0) {
+      outputLimitsFor(publishedOutputLimits, apiBase).set(id, published)
+    }
+    const contextWindow = numberValue(model.contextWindow)
+    return {
+      ...model,
+      supportedEndpoints: endpoints,
+      maxTokens: id === undefined || contextWindow === undefined
+        ? numberValue(model.maxTokens) ?? DEFAULT_MAX_OUTPUT_TOKENS
+        : Math.min(contextWindow, modelOutputTokenLimit(apiBase, id)),
+    } as unknown as CommandCodeModel
+  })
 }
 
-async function writeModelsCache(cachePath: string, models: CommandCodeModel[]): Promise<void> {
+async function writeModelsCache(
+  cachePath: string,
+  apiBase: string,
+  models: CommandCodeModel[],
+  mayCommit: () => boolean,
+): Promise<void> {
   await mkdir(dirname(cachePath), { recursive: true })
-  const tmp = `${cachePath}.${process.pid}.tmp`
+  // Separate refreshes can overlap while settings change; one refresh must
+  // never rename or delete another refresh's temporary file.
+  const tmp = `${cachePath}.${process.pid}.${randomUUID()}.tmp`
   try {
-    await writeFile(tmp, `${JSON.stringify({ version: MODEL_CACHE_VERSION, models }, null, 2)}\n`, {
+    await writeFile(tmp, `${JSON.stringify({ version: MODEL_CACHE_VERSION, apiBase, models }, null, 2)}\n`, {
       encoding: 'utf-8',
       mode: 0o600,
     })
-    await rename(tmp, cachePath)
+    if (mayCommit()) await rename(tmp, cachePath)
   } finally {
     await rm(tmp, { force: true }).catch(() => undefined)
   }
@@ -1221,7 +1526,42 @@ async function readRequestImage(
   return attachments.readImageRequest(ref, requestImageTarget(ref))
 }
 
-type ReadRequestImage = (ref: ImageAttachmentRef) => Promise<RequestImageAttachment>
+type ReadRequestImage = ((ref: ImageAttachmentRef) => Promise<RequestImageAttachment>) & {
+  prepare?: (refs: readonly ImageAttachmentRef[]) => Promise<void>
+}
+
+/** 同一次生成及其协议切换共享图片读取，最多同时准备四张，避免内存峰值失控。 */
+function requestImages(attachments: AttachmentStore, signal: AbortSignal | undefined, timing: RequestTiming): ReadRequestImage {
+  const cache = new Map<string, Promise<RequestImageAttachment>>()
+  const read: ReadRequestImage = (ref) => {
+    signal?.throwIfAborted()
+    const key = JSON.stringify([ref.attachmentId, requestImageTarget(ref)])
+    let pending = cache.get(key)
+    if (!pending) {
+      pending = readRequestImage(attachments, ref)
+      cache.set(key, pending)
+    }
+    return pending
+  }
+  read.prepare = async (refs) => {
+    if (refs.length === 0) return
+    const finishImages = timing.phase('images')
+    let cursor = 0
+    try {
+      const workers = Array.from({ length: Math.min(4, refs.length) }, async () => {
+        while (cursor < refs.length) {
+          signal?.throwIfAborted()
+          await read(refs[cursor++]!)
+        }
+      })
+      // 等所有已开始的读取结束再抛错，避免失败请求留下未处理拒绝或后台工作。
+      const results = await Promise.allSettled(workers)
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure?.status === 'rejected') throw failure.reason
+    } finally { finishImages() }
+  }
+  return read
+}
 
 /**
  * Price one request occurrence.
@@ -1273,7 +1613,51 @@ interface MessageCodec {
     paired: ReadonlySet<string>,
     wireIds: ReadonlyMap<string, string>,
   ) => unknown | undefined
-  encodeTool: (result: ToolResultView, media: ToolResultMedia, wireId: string, toolName: string) => unknown
+  encodeTool: (
+    result: ToolResultView,
+    media: ToolResultMedia,
+    wireId: string,
+    toolName: string,
+    readImage: ReadRequestImage | undefined,
+  ) => unknown | Promise<unknown>
+  /**
+   * True when the transport can carry images inside a tool result, so
+   * `convertMessages` must not split them into a following user message.
+   * Only the Messages surface can: its `tool_result.content` accepts image
+   * blocks, while the CLI's `tool-result.output` is text-only and Chat
+   * Completions forbids non-text `role: 'tool'` content (issue #30).
+   */
+  carriesToolResultMedia: boolean
+}
+
+/**
+ * One emitted block's replay metadata, stored in the terminal chunk's
+ * `replayState.blocks` and handed back on the next request through the
+ * assistant message's `source.replayState`.
+ *
+ * The Messages endpoint rejects a replayed `thinking` block without its
+ * `signature` (`thinking.signature: Field required`), and a thinking block
+ * with empty text is accepted, so the signature is the part that must
+ * survive the round trip.
+ */
+interface MessagesReplayBlock {
+  type: 'text' | 'reasoning' | 'tool-call'
+  signature?: string
+}
+
+/**
+ * The signature recorded for the reasoning block at `position` of a
+ * historical assistant message, or undefined when the message was produced
+ * by another route or an older plugin version.
+ */
+function messagesSignatureAt(
+  message: Extract<RequestMessage, { role: 'assistant' }>,
+  position: number,
+): string | undefined {
+  const replay = message.source?.replayState
+  if (!isRecord(replay) || !Array.isArray(replay.blocks)) return undefined
+  const entry = replay.blocks[position]
+  return isRecord(entry) ? stringValue(entry.signature) : undefined
 }
 
 /**
@@ -1288,6 +1672,17 @@ async function convertMessages(
 ): Promise<unknown[]> {
   const out: unknown[] = []
   const { ids: paired, names: toolNames } = pairedToolCalls(messages)
+  if (readImage?.prepare) {
+    const refs: ImageAttachmentRef[] = []
+    // 只预读投影后实际发送的图片；孤立工具结果和已卸载图片不触碰附件服务。
+    for (const message of messages) {
+      const result = toolResultOf(message)
+      if (message.role === 'user' && !result) {
+        for (const block of message.content) if (block.type === 'image') refs.push(block.attachment)
+      } else if (result && paired.has(result.toolCallId)) refs.push(...toolResultMedia(result).images)
+    }
+    await readImage.prepare(refs)
+  }
   const wireIds = wireToolCallIds(paired)
   // Consecutive tool results must precede user image carriers, including when
   // an assistant turn has several parallel calls.
@@ -1328,8 +1723,8 @@ async function convertMessages(
     if (!result || !paired.has(result.toolCallId)) continue
     const media = toolResultMedia(result)
     const wireId = wireIds.get(result.toolCallId) ?? result.toolCallId
-    out.push(codec.encodeTool(result, media, wireId, toolNames.get(result.toolCallId) || 'unknown'))
-    if (media.images.length > 0) {
+    out.push(await codec.encodeTool(result, media, wireId, toolNames.get(result.toolCallId) || 'unknown', readImage))
+    if (!codec.carriesToolResultMedia && media.images.length > 0) {
       const carried: unknown[] = [{ type: 'text', text: toolResultImageNote(media, wireId) }]
       for (const attachment of media.images) carried.push(await encodeImage(attachment))
       pendingImages.push(codec.encodeUser(carried))
@@ -1340,6 +1735,7 @@ async function convertMessages(
 }
 
 const ccMessageCodec: MessageCodec = {
+  carriesToolResultMedia: false,
   encodeImage: imageToCommandCode,
   encodeUser: (parts) => ({ role: 'user', content: parts }),
   encodeAssistant: (message, paired, wireIds) => {
@@ -1406,6 +1802,7 @@ async function imageToOpenAI(
  * replayed (same policy as the CLI path).
  */
 const openAiMessageCodec: MessageCodec = {
+  carriesToolResultMedia: false,
   encodeImage: imageToOpenAI,
   encodeUser: (parts) => {
     const hasImage = parts.some((part) => (part as { type?: string }).type === 'image_url')
@@ -1447,6 +1844,113 @@ async function messagesToOpenAI(
   readImage?: ReadRequestImage,
 ): Promise<unknown[]> {
   return convertMessages(messages, readImage, openAiMessageCodec)
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic Messages transport (`/provider/v1/messages`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert one image reference to the Messages wire shape. Unlike the other two
+ * transports this one keeps the native media type rather than a data URL, and
+ * it may be used INSIDE a tool result — `tool_result.content` accepts image
+ * blocks, which is why this codec sets `carriesToolResultMedia`.
+ */
+async function imageToMessages(
+  ref: ImageAttachmentRef,
+  readImage: ReadRequestImage,
+): Promise<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }> {
+  const version = await readImage(ref)
+  return {
+    type: 'image',
+    source: { type: 'base64', media_type: version.mediaType, data: Buffer.from(version.data).toString('base64') },
+  }
+}
+
+/** A tool call's `arguments` is a raw JSON string in the harness, an object here. */
+function parseToolArguments(raw: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return isRecord(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Convert harness messages to the Anthropic Messages request shape.
+ *
+ * Differences from the other two transports, all measured against the live
+ * endpoint on 2026-09-29:
+ *
+ * - Content is always a block array; there is no string shorthand, so a
+ *   single-text user turn is still `{ role: 'user', content: [{type:'text'…}] }`.
+ * - Tool results live in a `user` turn as `tool_result` blocks (not a
+ *   `role: 'tool'` message) and may carry images natively, so no image is
+ *   split into a separate user message here.
+ * - A replayed `thinking` block is only valid WITH its `signature`: the
+ *   endpoint answers `thinking.signature: Field required` without it, and
+ *   `each thinking block must contain thinking` when the text is empty and
+ *   the signature is blank. A reasoning block with no recorded signature is
+ *   therefore dropped rather than sent — replaying it would fail the request,
+ *   while omitting it is accepted (verified 200 both ways).
+ * - The conversation must end with a user turn; the endpoint refuses an
+ *   assistant prefill (`This model does not support assistant message
+ *   prefill`), which `convertMessages` already guarantees for a tool loop.
+ */
+const messagesMessageCodec: MessageCodec = {
+  carriesToolResultMedia: true,
+  encodeImage: imageToMessages,
+  encodeUser: (parts) => ({ role: 'user', content: parts }),
+  encodeAssistant: (message, paired, wireIds) => {
+    const parts: unknown[] = []
+    let position = 0
+    for (const block of message.content) {
+      if (block.type === 'text') {
+        parts.push({ type: 'text', text: block.text })
+        position++
+        continue
+      }
+      if (block.type === 'reasoning') {
+        const signature = messagesSignatureAt(message, position)
+        if (signature !== undefined) {
+          parts.push({ type: 'thinking', thinking: block.text, signature })
+        }
+        position++
+        continue
+      }
+      if (block.type === 'tool-call' && paired.has(block.id)) {
+        parts.push({
+          type: 'tool_use',
+          id: wireIds.get(block.id) ?? block.id,
+          name: block.name,
+          input: parseToolArguments(block.arguments),
+        })
+        position++
+      }
+    }
+    return parts.length > 0 ? { role: 'assistant', content: parts } : undefined
+  },
+  encodeTool: async (result, media, wireId, _toolName, readImage) => {
+    const content: unknown[] = []
+    // Only this transport can carry the bytes here, so the resolver must exist
+    // whenever the session holds a tool-result image; `convertMessages` has
+    // already refused a request that carries one without it.
+    if (readImage) {
+      for (const attachment of media.images) content.push(await imageToMessages(attachment, readImage))
+    }
+    content.push({ type: 'text', text: toolResultTextForWire(media) })
+    const toolResult: Record<string, unknown> = { type: 'tool_result', tool_use_id: wireId, content }
+    if (result.isError) toolResult.is_error = true
+    return { role: 'user', content: [toolResult] }
+  },
+}
+
+async function messagesToMessages(
+  messages: readonly RequestMessage[],
+  readImage?: ReadRequestImage,
+): Promise<unknown[]> {
+  return convertMessages(messages, readImage, messagesMessageCodec)
 }
 
 /** Connection facts resolved fresh per request by the plugin entry. */
@@ -1550,6 +2054,8 @@ export interface AccountRotationContext {
 
 /** Everything the adapter needs beyond the request itself. */
 export interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
+  /** 可选的数值耗时接收器；不接收提示词、凭据或错误正文。 */
+  onRequestTiming?: RequestTimingSink
   /** Resolve the current connection facts (fresh per request, settings-aware). */
   options: () => C
   /**
@@ -1832,6 +2338,14 @@ interface GenerateCallFacts {
   maxTokens: number
   /** Validated reasoning effort, or undefined when unset/unsupported. */
   reasoningEffort: string | undefined
+  /**
+   * True when the model publishes selectable effort levels, i.e. when thinking
+   * is a choice this route can express. A model that neither offers levels nor
+   * appears in `KNOWN_THINKING_MODELS` does not reason at all — the official
+   * CLI's table marks it neither `reasoning_effort` nor `reasoning:!0` — so
+   * the Messages transport must not open its thinking switch for it.
+   */
+  selectableEffort: boolean
   /** Folded system text (top-level system + system-role messages). */
   systemText: string
   /** Per-call request-image resolver; set only when the request carries images. */
@@ -1885,6 +2399,52 @@ function cliSystem(systemText: string): string | Record<string, unknown>[] {
     text: systemText,
     cache_control: { type: 'ephemeral' },
   }]
+}
+
+/**
+ * The Anthropic ephemeral cache marker, shared by every breakpoint this route
+ * sets. One object is reused across positions because it is only ever
+ * serialized, never mutated.
+ *
+ * No `ttl` is sent: the default 5-minute entry covers a continuously advancing
+ * session, and `ttl: "1h"` is a separate billable tier whose read/write prices
+ * are identical — it would only lengthen survival, not reduce cost.
+ */
+const EPHEMERAL_CACHE_CONTROL = { type: 'ephemeral' }
+
+/**
+ * Content-block types that may carry the rolling breakpoint. Matches what the
+ * official Command Code provider for pi marks through
+ * `@earendil-works/pi-ai`'s `anthropic-messages` transport (its own list also
+ * holds pi-internal `tool_addition` / `tool_removal`, which this route never
+ * emits). Assistant-side blocks are deliberately excluded: a breakpoint on a
+ * `thinking` or `tool_use` block caches a prefix the next turn invalidates.
+ */
+const CACHEABLE_BLOCK_TYPES: ReadonlySet<string> = new Set(['text', 'image', 'tool_result'])
+
+/**
+ * Mark the last user turn as the rolling cache breakpoint.
+ *
+ * Anthropic caching is explicit — a prefix is stored only when a
+ * `cache_control` marker names it — so an unmarked route re-prefills the whole
+ * replayed history at the full input price on every turn. Measured cost of that
+ * omission on a 10-turn session: $0.5648, all of it at the undiscounted
+ * $2/M input rate, against $0.1869 with the three breakpoints this route sets.
+ *
+ * The final user message is the rolling boundary: DSH resends the whole
+ * history each turn, so a marker here grows with the conversation, whereas a
+ * fixed `system`-only marker would leave every later turn's history
+ * uncached. {@link messagesMessageCodec} renders both user input and tool
+ * results as `role: 'user'`, so this covers a tool loop's trailing turn too.
+ */
+function markLastUserCacheControl(messages: unknown[]): void {
+  const last = messages[messages.length - 1]
+  if (!isRecord(last) || last.role !== 'user' || !Array.isArray(last.content)) return
+  const lastBlock = last.content[last.content.length - 1]
+  if (isRecord(lastBlock) && typeof lastBlock.type === 'string'
+    && CACHEABLE_BLOCK_TYPES.has(lastBlock.type)) {
+    lastBlock.cache_control = EPHEMERAL_CACHE_CONTROL
+  }
 }
 
 /** Build the legacy CLI (`/alpha/generate`) request body for one call. */
@@ -1953,6 +2513,81 @@ async function buildOpenAIBody(
     stream: true,
     ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
   }
+}
+
+/**
+ * Build the Anthropic Messages request body for one call.
+ *
+ * Measured deviations from DeepSeek's own Messages API (the shape
+ * `dsh-llm-deepseek` implements), all confirmed on 2026-09-29:
+ *
+ * - `thinking` accepts ONLY `{ type: 'adaptive' }` here. `enabled` and
+ *   `disabled` are refused with `"thinking.type.enabled" is not supported for
+ *   this model. Use "thinking.type.adaptive" and "output_config.effort" to
+ *   control thinking behavior.`, and a `between_tools` value fails validation
+ *   outright. The model reasons on its own; this switch only admits it.
+ * - Reasoning strength travels in `output_config.effort`, whose accepted
+ *   values are `low | medium | high | xhigh | max` — there is no `none`, and
+ *   `xhigh` is absent from DeepSeek's own type.
+ * - `stop_sequences` is a real field here, but this adapter still rejects
+ *   `GenerateOptions.stop` in `stream()` because Command Code documents no
+ *   equivalent for the other two transports.
+ * - **`temperature` is never sent.** Adaptive thinking constrains it to 1:
+ *   `` `temperature` may only be set to 1 when thinking is enabled or in
+ *   adaptive mode `` (measured 2026-09-29 — every request carrying the other
+ *   transports' 0.3 default was refused with HTTP 400). Omitting the field
+ *   is the only way to honour both the thinking switch and a caller that
+ *   asked for a temperature, so Claude loses sampling control on this route
+ *   because the endpoint, not this adapter, removed it.
+ * - `system` travels as a one-block ARRAY carrying `cache_control`, not as the
+ *   bare string the other two transports send. Anthropic's caching is opt-in
+ *   per block, and this route is the only Claude path, so the marker is what
+ *   makes a session's replayed history bill at the cache-read rate instead of
+ *   the full input rate. See {@link EPHEMERAL_CACHE_CONTROL}.
+ */
+async function buildMessagesBody(
+  options: GenerateOptions,
+  facts: Pick<GenerateCallFacts, 'maxTokens' | 'reasoningEffort' | 'selectableEffort' | 'systemText' | 'readImage'>,
+): Promise<Record<string, unknown>> {
+  const body: Record<string, unknown> = {
+    model: options.model,
+    max_tokens: facts.maxTokens,
+    stream: true,
+    messages: await messagesToMessages(options.messages, facts.readImage),
+  }
+  // The thinking switch and the effort that drives it are one decision: the
+  // endpoint's own wording is "Use `thinking.type.adaptive` AND
+  // `output_config.effort` to control thinking behavior". Opening the switch
+  // for a model that publishes neither (`claude-haiku-4-5-20251001` — no effort
+  // levels, absent from `KNOWN_THINKING_MODELS`, so the official CLI does not
+  // mark it `reasoning:!0` either) would ask a non-reasoning model to reason.
+  // The field is accepted either way, so this is a correctness call rather than
+  // a failure avoidance one.
+  if (facts.selectableEffort) body.thinking = { type: 'adaptive' }
+  if (facts.systemText) {
+    body.system = [{
+      type: 'text',
+      text: facts.systemText,
+      cache_control: EPHEMERAL_CACHE_CONTROL,
+    }]
+  }
+  if (facts.reasoningEffort) body.output_config = { effort: facts.reasoningEffort }
+  const tools: Record<string, unknown>[] = (options.tools ?? []).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    // The gateway rejects a tool whose root schema is not `type: 'object'`
+    // (`tools.0.custom.input_schema.type: Field required`), so the same
+    // normalization the other transports use applies here.
+    input_schema: toolParametersSchema(tool.parameters),
+  }))
+  if (tools.length > 0) {
+    // The last declaration is the one that closes the cached tools prefix;
+    // marking an earlier tool would let the suffix re-prefill every turn.
+    tools[tools.length - 1]!.cache_control = EPHEMERAL_CACHE_CONTROL
+    body.tools = tools
+  }
+  markLastUserCacheControl(body.messages as unknown[])
+  return body
 }
 
 interface RequestContextBudget {
@@ -2028,10 +2663,19 @@ function requestContextBudget(
  * the rotation loop's mutation of `protocol`/`body` stays visible at the
  * call site.
  */
+/** The generate endpoint one protocol posts to. */
+function protocolEndpoint(protocol: CommandCodeProtocol, apiBase: string): string {
+  if (protocol === 'cli') return `${apiBase}/alpha/generate`
+  return protocol === 'messages'
+    ? `${apiBase}/provider/v1/messages`
+    : `${apiBase}/provider/v1/chat/completions`
+}
+
 interface GenerateConnectDeps {
   options: GenerateOptions
   connection: CommandCodeConnectionOptions
   fetchImpl: typeof fetch
+  timing: RequestTiming
   /** Observe headers even on rejected attempts before rotation/fallback. */
   onResponse: (response: Response) => void
 }
@@ -2048,14 +2692,12 @@ async function connectGenerate(
   deps: GenerateConnectDeps,
   key: string,
   protocol: CommandCodeProtocol,
-  body: Record<string, unknown>,
+  serializedBody: string,
 ): Promise<{ response: Response; cleanup: () => void } | { status: number; errText: string; retryAfterMs?: number }> {
   const { options, connection, fetchImpl } = deps
   const connectAbort = new AbortController()
   let connectTimedOut = false
-  const endpoint = protocol === 'cli'
-    ? `${connection.apiBase}/alpha/generate`
-    : `${connection.apiBase}/provider/v1/chat/completions`
+  const endpoint = protocolEndpoint(protocol, connection.apiBase)
   const connectTimer = setTimeout(() => {
     connectTimedOut = true
     connectAbort.abort(
@@ -2088,36 +2730,31 @@ async function connectGenerate(
   // fails with 422 rather than sending the prompt through a retaining upstream.
   // Never omit the header based on a client-side capability snapshot.
   const zdr = connection.zdr === true
+  const sharedHeaders = {
+    'Content-Type': 'application/json',
+    ...IDENTITY_ENCODING_HEADER,
+    Authorization: `Bearer ${key}`,
+    ...(zdr ? { 'x-cmd-zdr': '1' } : {}),
+    ...attributionHeaders(),
+  }
   const headers = protocol === 'cli'
     ? {
-        'Content-Type': 'application/json',
-        ...IDENTITY_ENCODING_HEADER,
-        Authorization: `Bearer ${key}`,
+        ...sharedHeaders,
         'x-command-code-version': COMMAND_CODE_CLI_VERSION,
         'x-cli-environment': 'production',
         'x-project-slug': projectSlugFromPath(connection.workingDir),
         'x-taste-learning': 'true',
         'x-co-flag': 'false',
-        ...(zdr ? { 'x-cmd-zdr': '1' } : {}),
-        ...attributionHeaders(),
       }
     : {
-        'Content-Type': 'application/json',
-        ...IDENTITY_ENCODING_HEADER,
-        Authorization: `Bearer ${key}`,
+        ...sharedHeaders,
         Accept: 'text/event-stream',
-        // Deliberately no x-command-code-version / x-cli-environment:
-        // this is the documented OpenAI-format surface, not the CLI
-        // transport — do not "fix" these in. ZDR is the one header both
-        // transports share: the Provider API documents `x-cmd-zdr: 1`
-        // itself (commandcode.ai/docs/provider#zero-data-retention-zdr).
-        ...(zdr ? { 'x-cmd-zdr': '1' } : {}),
-        ...attributionHeaders(),
+        // Deliberately no x-command-code-version / x-cli-environment on either
+        // documented Provider API surface: those identify the CLI transport,
+        // not a public API client. ZDR is the one business header both share.
       }
-  // Serialized once: the timeout path needs its exact byte length for the
-  // large-input diagnosis, and re-stringifying a multi-MB body per attempt
-  // would be pure waste on a route that can retry.
-  const serializedBody = JSON.stringify(body)
+  // 请求体由调用层缓存，同协议换账号只替换请求头，不重复序列化历史。
+  const finishHeaders = deps.timing.attempt(protocol, Buffer.byteLength(serializedBody))
   try {
     response = await fetchImpl(endpoint, {
       method: 'POST',
@@ -2125,8 +2762,10 @@ async function connectGenerate(
       body: serializedBody,
       signal: connectAbort.signal,
     })
+    finishHeaders(response.status)
     clearTimeout(connectTimer)
   } catch (error: unknown) {
+    finishHeaders()
     cleanup()
     if (options.signal?.aborted) {
       throw error
@@ -2186,6 +2825,27 @@ interface BlockAssembler {
   cliCacheWriteTokens: number | undefined
   /** Buffered OpenAI tool-call fragments, flushed at finish. */
   openAiToolCalls: Array<{ index: number; id?: string; name: string; arguments: string }>
+  /** Messages-transport block state, keyed by the wire `index`. */
+  messagesBlocks: Map<number, MessagesBlockState>
+  /**
+   * Per-emitted-block replay metadata, indexed by the harness chunk index.
+   * Only the Messages transport records entries (the thinking `signature`);
+   * the other two leave it empty, which is legal — an adapter whose metadata
+   * is independent of block structure omits the field entirely.
+   */
+  replayBlocks: MessagesReplayBlock[]
+}
+
+/** One Messages content block while it streams. */
+interface MessagesBlockState {
+  type: 'text' | 'reasoning' | 'tool-call'
+  text: string
+  signature: string
+  json: string
+  id: string
+  name: string
+  /** The harness chunk index this block was opened under, or -1 before open. */
+  chunkIndex: number
 }
 
 /** Fresh block-assembly state for one stream. */
@@ -2200,6 +2860,8 @@ function createBlockAssembler(): BlockAssembler {
     finishReason: undefined,
     cliCacheWriteTokens: undefined,
     openAiToolCalls: [],
+    messagesBlocks: new Map(),
+    replayBlocks: [],
   }
 }
 
@@ -2245,6 +2907,7 @@ function* emitOpenAiToolCalls(asm: BlockAssembler): Generator<StreamChunk> {
 
 export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private catalog: CommandCodeModel[] = []
+  private catalogState: { source: string; expiresAt: number; inflight?: Promise<CommandCodeModel[]> } | undefined
   private readonly fetchImpl: typeof fetch
   private readonly resolveAttachments: ResolveAttachments | undefined
   /**
@@ -2252,27 +2915,39 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * contract cannot change while the process runs.
    */
   private readonly surfaceOffload: SurfaceImagePolicy
-  // Billing facts are per account: with a multi-account pool each key has its
-  // own subscription tier, so the cache and the in-flight dedupe are keyed by
-  // the resolved API key (process-local only, never logged). Entries are
+  // Billing facts are per gateway and account: a custom gateway can give the
+  // same key a different tier. The key remains process-local and is never logged. Entries are
   // small and bounded by the account count in practice; a changed key simply
   // starts a fresh entry while the orphaned one goes cold (no eviction —
   // transience is intentional, persistence would serve stale tiers).
   private readonly billingAccess = new Map<string, { value: CommandCodeBillingAccess | undefined; at: number }>()
   private readonly billingAccessInflight = new Map<string, Promise<CommandCodeBillingAccess | undefined>>()
-  // Protocol preference is per account: the Go plan is the only plan without
+  // Protocol preference is per gateway and account: the Go plan is the only plan without
   // Provider API access, and that fact is independent of model. A negative
   // result (provider API rejected this key with upgrade_required) is cached so
   // every request does not pay the double TTFT of probing then falling back.
   // Same bounded-by-account-count note as above: no eviction by design.
-  private readonly protocolCache = new Map<string, { useCli: boolean; at: number }>()
+  private readonly protocolCache = new Map<string, { protocol: 'cli' | 'openai'; at: number }>()
+
+  /** Namespace account-derived facts by gateway without exposing the key. */
+  private accountCacheKey(apiBase: string, apiKey: string): string {
+    return JSON.stringify([apiBase, apiKey])
+  }
   /**
    * Consecutive header timeouts for the last request shape, counted ACROSS
    * `stream()` calls: dsh-llm-retry re-invokes this same instance, so this is
-   * the only place a streak can live. One slot rather than a map is the point —
-   * the claim is "consecutive", and a single record cannot grow.
+   * the only place a streak can live. Keyed by `sessionId` (not by `agent`:
+   * `GenerateOptions` carries no agent reference, only `sessionId`) so
+   * concurrent sessions on this one shared adapter instance cannot clear or
+   * inflate each other's count. A call with no `sessionId` (a one-shot,
+   * session-less caller) falls back to {@link GLOBAL_HEADER_TIMEOUT_KEY},
+   * matching the old single-slot behavior for exactly that case. Bounded by
+   * {@link MAX_HEADER_TIMEOUT_STREAK_ENTRIES} with FIFO eviction (`Map`
+   * preserves insertion order) since the key space is per-session rather than
+   * per-account/model, so it is not naturally small like `protocolCache`.
    */
-  private headerTimeoutStreak: { fingerprint: string; count: number } | undefined
+  private readonly headerTimeoutStreaks = new Map<string, { fingerprint: string; count: number }>()
+  private static readonly MAX_HEADER_TIMEOUT_STREAK_ENTRIES = 200
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
     super()
@@ -2286,11 +2961,9 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * payload eventually leaves the retryable whitelist.
    *
    * `providerRetryPolicy()` cannot express this itself — dsh-llm's
-   * `NormalRetryPolicyConfig` carries a single scalar `maxRetries` next to the
-   * code list, so there is no per-code limit to lower. Escalating from here is
-   * the only way to keep `RATE_LIMIT` / `SERVER` / `TRANSPORT` retryable (each
-   * carries a real "try again later" signal) while stopping the one code that,
-   * repeated unchanged, only burns the user's session.
+   * `NormalRetryPolicyConfig` carries one `maxRetries` for every listed code.
+   * Escalating here stops repeated identical header timeouts with a specific
+   * diagnosis; the agent listener separately caps ordinary transient errors.
    *
    * @returns the error to surface: unchanged for any other failure, the
    * original timeout below the threshold, and a terminal one at it.
@@ -2300,17 +2973,32 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     protocol: CommandCodeProtocol,
     body: Record<string, unknown>,
     timeoutMs: number,
+    sessionId: string | undefined,
   ): unknown {
     const timedOut = error instanceof LlmError && error.code === 'TIMEOUT'
     if (!timedOut) return error
+    const key = sessionId ?? GLOBAL_HEADER_TIMEOUT_KEY
     const fingerprint = `${protocol}:${fingerprintValue(body).sha256}`
-    const count = this.headerTimeoutStreak?.fingerprint === fingerprint
-      ? this.headerTimeoutStreak.count + 1
-      : 1
-    this.headerTimeoutStreak = { fingerprint, count }
+    const previous = this.headerTimeoutStreaks.get(key)
+    const count = previous?.fingerprint === fingerprint ? previous.count + 1 : 1
+    if (previous === undefined) {
+      // FIFO eviction: the key space is per-session (unlike protocolCache's
+      // per-account/model bound), so an unbounded Map would leak one entry
+      // per abandoned session that timed out below the threshold and never
+      // got a success or an escalation to clear it.
+      if (this.headerTimeoutStreaks.size >= CommandCodeAdapter.MAX_HEADER_TIMEOUT_STREAK_ENTRIES) {
+        const oldest = this.headerTimeoutStreaks.keys().next().value
+        if (oldest !== undefined) this.headerTimeoutStreaks.delete(oldest)
+      }
+    } else {
+      // Re-inserting moves the key to the end, so FIFO eviction above evicts
+      // truly idle sessions first rather than one mid-streak.
+      this.headerTimeoutStreaks.delete(key)
+    }
+    this.headerTimeoutStreaks.set(key, { fingerprint, count })
     if (count < MAX_CONSECUTIVE_HEADER_TIMEOUTS) return error
     // Reset so a later attempt starts a fresh streak instead of failing at once.
-    this.headerTimeoutStreak = undefined
+    this.headerTimeoutStreaks.delete(key)
     return bilingual(
       'PROVIDER_HTTP_ERROR',
       `Command Code API stopped retrying: the gateway returned no response headers on ${count} consecutive attempts at the same request, each after the full ${timeoutMs}ms budget, so this is not a network blip — it is provider queueing, a Go-plan capacity limit, or a network/proxy path problem. Resending the identical payload again is unlikely to help; wait for the provider to recover, or switch model or account.`,
@@ -2330,12 +3018,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /**
-   * Near-unbounded retry for transient failures only (`mode: 'normal'` with
-   * an explicit 1000-attempt cap — opencode-style persistence without the
-   * unbounded loop): `RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`/
-   * `EMPTY_RESPONSE` retry up to 1000 times with waits doubling from 500 ms
-   * and capping at 15 minutes (±10% jitter), so an exhausted 5-hour window
-   * recovers in-session instead of failing after two tries. Permanent failures
+   * The official executor owns backoff and provider reset waits. Its high
+   * route-wide cap lets a confirmed `RATE_LIMIT` window recover in-session;
+   * our request-error listener limits `SERVER`/`TIMEOUT`/`EMPTY_RESPONSE`/
+   * `THROTTLED` to three retries and `TRANSPORT` to its separate budget.
+   * Waits double from 500 ms and cap at 15 minutes (±10% jitter). Permanent failures
    * (an invalid key's `INVALID_CREDENTIAL`, `UNSUPPORTED_CONTENT`, plan
    * rejections) are absent from the whitelist and surface immediately instead
    * of looping. Waits the pool/adapter attach as `providerRetryAfterMs` are
@@ -2351,7 +3038,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       {
         mode: 'normal',
         maxRetries: 1000,
-        retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+        retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', THROTTLED_CODE, 'SERVER', 'TIMEOUT', 'TRANSPORT'],
         backoff: { initialDelayMs: 500, maxDelayMs: RETRY_MAX_DELAY_MS, jitterRatio: 0.1 },
       },
       'llm-commandcode: retryPolicy',
@@ -2377,28 +3064,60 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
   }
 
-  /** Refresh the catalog (live fetch, cache fallback) and return it. */
-  private async loadCatalog(signal?: AbortSignal): Promise<CommandCodeModel[]> {
-    const { apiBase, modelsCachePath } = this.deps.options()
-    try {
-      const { status, record } = await this.fetchJson(
-        `${apiBase}/provider/v1/models`,
-        { accept: 'application/json', ...IDENTITY_ENCODING_HEADER, ...attributionHeaders() },
-        MODELS_TIMEOUT_MS,
-        signal,
-      )
-      if (status < 200 || status >= 300) throw new Error(`models endpoint returned ${status}`)
-      this.catalog = parseCatalogResponse(record)
-      await writeModelsCache(modelsCachePath, this.catalog).catch(() => undefined)
-    } catch (error) {
-      if (signal?.aborted) throw error
-      // A catalog refresh failure is a degradation, not a request failure:
-      // fall back to the last successful catalog on disk (or the in-memory
-      // one from an earlier successful load). The adapter still serves any
-      // model the user names; only the advisory selector loses entries.
-      this.catalog = await readModelsCache(modelsCachePath).catch(() => this.catalog)
+  /** 地址或缓存文件变化时丢弃旧目录，防止旧网关的路由声明影响新请求。 */
+  private currentCatalogState(connection = this.deps.options()) {
+    const { apiBase, modelsCachePath } = connection
+    const source = JSON.stringify([apiBase, modelsCachePath])
+    if (this.catalogState?.source !== source) {
+      this.catalog = []
+      this.catalogState = { source, expiresAt: 0 }
     }
-    return this.catalog
+    return this.catalogState
+  }
+
+  /** 共享一次刷新；调用者取消只结束自己的等待，不取消其他调用者的请求。 */
+  private async loadCatalog(signal?: AbortSignal): Promise<CommandCodeModel[]> {
+    signal?.throwIfAborted()
+    const connection = this.deps.options()
+    const state = this.currentCatalogState(connection)
+    if (Date.now() < state.expiresAt) return this.catalog
+    const { apiBase, modelsCachePath } = connection
+    if (!state.inflight) {
+      const fallback = this.catalog
+      state.inflight = (async () => {
+        let models: CommandCodeModel[]
+        let ttl = MODEL_CATALOG_TTL_MS
+        try {
+          const { status, record } = await this.fetchJson(
+            `${apiBase}/provider/v1/models`,
+            { accept: 'application/json', ...IDENTITY_ENCODING_HEADER, ...attributionHeaders() },
+            MODELS_TIMEOUT_MS,
+          )
+          if (status < 200 || status >= 300) throw new Error(`models endpoint returned ${status}`)
+          models = parseCatalogResponse(record, apiBase)
+          // 旧地址的并发刷新不得覆盖新地址的内存或磁盘目录。
+          if (this.catalogState === state) {
+            await writeModelsCache(modelsCachePath, apiBase, models, () => this.catalogState === state).catch(() => undefined)
+          }
+        } catch {
+          ttl = MODEL_CATALOG_RETRY_MS
+          models = await readModelsCache(modelsCachePath, apiBase).catch(() => fallback)
+        }
+        if (this.catalogState === state) {
+          this.catalog = models
+          state.expiresAt = Date.now() + ttl
+        }
+        return models
+      })().finally(() => { delete state.inflight })
+    }
+    if (!signal) return state.inflight
+    const inflight = state.inflight
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+      inflight.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+      if (signal.aborted) abort()
+    })
   }
 
   override async listModels(
@@ -2493,6 +3212,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     model: string,
     signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo> {
+    this.currentCatalogState()
     const entry =
       this.catalog.find((m) => m.id === model) ??
       (await this.loadCatalog(signal)).find((m) => m.id === model)
@@ -2601,7 +3321,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   private async loadPoolBillingAccess(): Promise<readonly (CommandCodeBillingAccess | undefined)[] | undefined> {
     const keys = await this.poolAccountKeys()
     if (keys.length === 0) return undefined
-    return Promise.all(keys.map((key) => this.loadBillingAccessForKey(key)))
+    const apiBase = this.deps.options().apiBase
+    return Promise.all(keys.map((key) => this.loadBillingAccessForKey(apiBase, key)))
   }
 
   /**
@@ -2630,20 +3351,21 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * shared across concurrent callers. `undefined` means "unknown — show
    * everything" (fail-open).
    */
-  private async loadBillingAccessForKey(apiKey: string): Promise<CommandCodeBillingAccess | undefined> {
-    const cached = this.billingAccess.get(apiKey)
+  private async loadBillingAccessForKey(apiBase: string, apiKey: string): Promise<CommandCodeBillingAccess | undefined> {
+    const cacheKey = this.accountCacheKey(apiBase, apiKey)
+    const cached = this.billingAccess.get(cacheKey)
     if (cached !== undefined && Date.now() - cached.at < BILLING_ACCESS_TTL_MS) return cached.value
-    const existing = this.billingAccessInflight.get(apiKey)
+    const existing = this.billingAccessInflight.get(cacheKey)
     if (existing !== undefined) return existing
-    const inflight = this.fetchBillingAccess(apiKey)
+    const inflight = this.fetchBillingAccess(apiBase, apiKey)
       .then((value) => {
-        this.billingAccess.set(apiKey, { value, at: Date.now() })
+        this.billingAccess.set(cacheKey, { value, at: Date.now() })
         return value
       })
       .finally(() => {
-        this.billingAccessInflight.delete(apiKey)
+        this.billingAccessInflight.delete(cacheKey)
       })
-    this.billingAccessInflight.set(apiKey, inflight)
+    this.billingAccessInflight.set(cacheKey, inflight)
     return inflight
   }
 
@@ -2656,14 +3378,12 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * fallback (the CLI stamps plan identity from it too). Any failure resolves
    * to `undefined` (fail-open) rather than breaking the picker.
    */
-  private async fetchBillingAccess(apiKey: string): Promise<CommandCodeBillingAccess | undefined> {
+  private async fetchBillingAccess(apiBase: string, apiKey: string): Promise<CommandCodeBillingAccess | undefined> {
     try {
-      const connection = this.deps.options()
       const headers = await this.accountHeaders(apiKey)
-      const base = connection.apiBase
       // Billing probe fails open silently: any non-record is "unknown".
       const getJson = async (path: string): Promise<Record<string, unknown> | undefined> =>
-        (await this.fetchJson(`${base}${path}`, headers)).record
+        (await this.fetchJson(`${apiBase}${path}`, headers)).record
       const whoami = await getJson('/alpha/whoami')
       const orgData = whoami && isRecord(whoami.org) ? whoami.org : undefined
       const orgId = orgData === undefined ? undefined : stringValue(orgData.id)
@@ -2693,50 +3413,68 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /** Fresh cached billing tier weight for a key, or undefined when not known. */
-  private cachedBillingTierWeight(apiKey: string): number | undefined {
-    const hit = this.billingAccess.get(apiKey)
+  private cachedBillingTierWeight(apiBase: string, apiKey: string): number | undefined {
+    const hit = this.billingAccess.get(this.accountCacheKey(apiBase, apiKey))
     if (hit === undefined || Date.now() - hit.at >= BILLING_ACCESS_TTL_MS) return undefined
     return hit.value?.tierWeight
   }
 
   /** Cached protocol decision for a key, or undefined when expired/unknown. */
-  private cachedProtocolUseCli(apiKey: string): boolean | undefined {
-    const hit = this.protocolCache.get(apiKey)
+  private cachedProtocol(apiBase: string, apiKey: string): 'cli' | 'openai' | undefined {
+    const hit = this.protocolCache.get(this.accountCacheKey(apiBase, apiKey))
     if (hit === undefined || Date.now() - hit.at >= PROTOCOL_CACHE_TTL_MS) return undefined
-    return hit.useCli
+    return hit.protocol
   }
 
-  private rememberProtocol(apiKey: string, useCli: boolean): void {
-    this.protocolCache.set(apiKey, { useCli, at: Date.now() })
+  private rememberProtocol(apiBase: string, apiKey: string, protocol: 'cli' | 'openai'): void {
+    this.protocolCache.set(this.accountCacheKey(apiBase, apiKey), { protocol, at: Date.now() })
   }
 
   /**
-   * Choose the initial protocol for one request. A fresh protocol cache entry
-   * wins; otherwise a cached (not network-fetched) billing tier of Go is
-   * treated as CLI-only. Unknown accounts default to Provider API and fall
-   * back only after an `upgrade_required` rejection.
+   * True when the catalog routes `model` to `/provider/v1/messages`.
    *
-   * Models the Provider API serves ONLY through `/provider/v1/messages` (the
-   * Claude family — `requiresMessagesEndpoint()`) always take the CLI
-   * transport, on any tier and even under a forced `'openai'` preference:
-   * that option is documented as "prefer the Provider API, still fall back",
-   * and the 400 these models answer with is not a preference to be honoured
-   * but a hard refusal. `/alpha/generate` routes every one of them, so this
-   * costs nothing.
+   * The catalog's own `supported_endpoints` is authoritative (it is what
+   * upstream publishes per model); `requiresMessagesEndpoint()` — the
+   * `claude-*` prefix rule — is the fallback for a catalog entry that carries
+   * no route list, which is the shape every pre-1.55 cache file has.
+   */
+  private routesToMessages(model: string): boolean {
+    const entry = this.catalog.find((candidate) => candidate.id === model)
+    if (entry !== undefined && entry.supportedEndpoints.length > 0) {
+      return entry.supportedEndpoints.includes('/messages')
+    }
+    return requiresMessagesEndpoint(model)
+  }
+
+  /**
+   * Choose the initial protocol for one request.
+   *
+   * Models the Provider API serves only through `/provider/v1/messages` (the
+   * Claude family) take the Messages transport on any tier and even under a
+   * forced `'openai'` preference: that option is documented as "prefer the
+   * Provider API, still fall back", and the 400 these models answer with on
+   * Chat Completions (`Model "<id>" must be called via /provider/v1/messages`)
+   * is a hard refusal, not a preference to honour.
    *
    * That decision is deliberately NOT written to `protocolCache`, which is
-   * keyed by API key alone: remembering it would pin the whole ACCOUNT to the
-   * CLI transport and drag every other model off it until the entry expired.
+   * keyed by gateway and API key: it depends on the model, not just the account, so
+   * remembering it would pin the whole ACCOUNT to one transport and drag
+   * every other model along (issue #46).
+   *
+   * Otherwise a fresh protocol cache entry wins, then a cached (not
+   * network-fetched) billing tier of Go — the one plan without Provider API
+   * access. Unknown accounts default to Chat Completions and fall back to the
+   * CLI transport only after an `upgrade_required` rejection.
    */
-  private resolveProtocol(apiKey: string, model: string): CommandCodeProtocol {
+  private resolveProtocol(apiBase: string, apiKey: string, model: string): CommandCodeProtocol {
     const forced = this.deps.options().protocol
     if (forced === 'cli') return forced
-    if (requiresMessagesEndpoint(model)) return 'cli'
+    if (this.routesToMessages(model)) return 'messages'
     if (forced === 'openai') return forced
-    const cached = this.cachedProtocolUseCli(apiKey)
-    if (cached !== undefined) return cached ? 'cli' : 'openai'
-    if (this.cachedBillingTierWeight(apiKey) === GO_TIER_WEIGHT) {
-      this.rememberProtocol(apiKey, true)
+    const cached = this.cachedProtocol(apiBase, apiKey)
+    if (cached !== undefined) return cached
+    if (this.cachedBillingTierWeight(apiBase, apiKey) === GO_TIER_WEIGHT) {
+      this.rememberProtocol(apiBase, apiKey, 'cli')
       return 'cli'
     }
     return 'openai'
@@ -2911,6 +3649,69 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const timing = openRequestTiming(options.model, this.deps.onRequestTiming)
+    let outcome: 'finished' | 'error' | 'aborted' | 'cancelled' = 'cancelled'
+    let errorCode: string | undefined
+    try {
+      for await (const chunk of this.streamRequest(options, timing)) {
+        if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-call-delta') {
+          timing.first('firstContentMs')
+        }
+        if (chunk.type === 'finish') outcome = 'finished'
+        yield chunk
+      }
+    } catch (error) {
+      outcome = options.signal?.aborted ? 'aborted' : 'error'
+      errorCode = error instanceof LlmError ? error.code : 'unknown'
+      throw error
+    } finally {
+      await timing.close(outcome, errorCode)
+    }
+  }
+
+  /**
+   * One turn, with at most one output-ceiling downshift.
+   *
+   * The ceiling a model accepts is not published anywhere the request can be
+   * built from (see `modelOutputTokenLimit`), and the endpoint states it only
+   * by refusing. That refusal is worth one retry rather than a failed turn: the
+   * harness's own recovery for it — compact the context — cannot help, because
+   * nothing about the context is wrong, and resending the identical request
+   * would be refused identically (issue #71). Reading the stated ceiling off
+   * the rejection turns one wasted turn into one, for good: it is recorded
+   * process-wide, so the next request for this model is built correctly
+   * without spending the round trip again.
+   *
+   * Only BEFORE the first chunk reaches the host. Once a delta has been
+   * delivered the answer is already partly on screen, and a second request
+   * would duplicate it — so from that point the error stands and says what is
+   * actually wrong. One downshift per turn, and a second refusal surfaces.
+   */
+  private async *streamRequest(options: GenerateOptions, timing: RequestTiming): AsyncIterable<StreamChunk> {
+    for (let attempt = 0; ; attempt++) {
+      const connection = this.deps.options()
+      // Set before the hand-off, not after: a consumer that tears down on the
+      // chunk has already seen it.
+      let delivered = false
+      try {
+        for await (const chunk of this.streamAttempt(options, timing, connection)) {
+          delivered = true
+          yield chunk
+        }
+        return
+      } catch (error) {
+        const ceiling = delivered ? undefined : outputCeilingRefusal(connection.apiBase, options.model, error)
+        if (attempt > 0 || ceiling === undefined) throw error
+      }
+    }
+  }
+
+  private async *streamAttempt(
+    options: GenerateOptions,
+    timing: RequestTiming,
+    connection: C,
+  ): AsyncIterable<StreamChunk> {
+    this.currentCatalogState(connection)
     if (options.stop?.length) {
       // The Command Code wire format has no documented stop field; refuse
       // loudly instead of silently dropping a request field.
@@ -2943,18 +3744,31 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           'UNSUPPORTED_CONTENT',
         )
       }
-      readImage = (ref) => readRequestImage(attachments, ref)
+      readImage = requestImages(attachments, options.signal, timing)
     }
 
-    const connection = this.deps.options()
     // The model id reaches key resolution so hosts with model→account routing
     // rules can pick the account that covers this model.
-    let apiKey = await this.deps.resolveApiKey(connection, options.model)
+    const finishCredentials = timing.phase('credentials')
+    let apiKey: string
+    try { apiKey = await this.deps.resolveApiKey(connection, options.model) } finally { finishCredentials() }
     // Cap maxTokens from the in-memory catalog: it warms via listModels /
     // resolveModel on picker paths, and a fresh-process catalog must not add
     // a models fetch (and its failure modes) in front of every generate.
     const modelEntry = this.catalog.find((m) => m.id === options.model)
-    const modelMax = modelEntry?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+    // A catalog that has not warmed yet must still respect the model's own
+    // output ceiling: the Messages endpoint refuses a `max_tokens` above it by
+    // name, and falling back to the global default here would fail every first
+    // request of a fresh process for a Messages-route model.
+    //
+    // Both candidates are ceilings, so the smaller binds. A warm catalog row is
+    // a context-derived estimate (see parseCatalogResponse), and a value the
+    // endpoint has already named outranks any estimate — otherwise a learned
+    // limit would be masked by a catalog that warmed from the same guess.
+    const modelMax = Math.min(
+      modelEntry?.maxTokens ?? Infinity,
+      modelOutputTokenLimit(connection.apiBase, options.model),
+    )
     const requestedMaxTokens = Math.min(
       options.maxTokens ?? modelMax,
       modelMax,
@@ -2979,8 +3793,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
     // Endpoint protocol: billing/cache may know Go plan -> CLI; unknown
     // accounts default to the documented Provider Chat Completions surface
-    // (`resolveProtocol()` also forces the CLI transport for Claude).
-    let protocol: CommandCodeProtocol = this.resolveProtocol(apiKey, options.model)
+    // (`resolveProtocol()` routes Claude to Messages on Provider API access).
+    let protocol: CommandCodeProtocol = this.resolveProtocol(connection.apiBase, apiKey, options.model)
     // Image budget (issue #37): the body is built from the PROJECTED history,
     // never the raw one. Rung 0 is the standing budget; a 413 below steps down
     // the ladder. The session surface owns the offload set, so this throws
@@ -2991,10 +3805,22 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       connection.offloadSeenImagesForCache === true && protocol === 'cli' ? options.model : undefined,
     )
     const buildBody = async (target: CommandCodeProtocol): Promise<Record<string, unknown>> => {
-      const facts = { maxTokens: requestedMaxTokens, reasoningEffort, systemText, readImage }
+      const finishBody = timing.phase('body')
+      try {
+      const facts = {
+        maxTokens: requestedMaxTokens,
+        reasoningEffort,
+        // Reuse the lookup `stream()` already did: a model with no effort
+        // levels offers nothing for the thinking switch to control.
+        selectableEffort: supported !== undefined && supported.length > 0,
+        systemText,
+        readImage,
+      }
       const built = target === 'cli'
         ? await buildCliBody(requestOptions, connection, facts)
-        : await buildOpenAIBody(requestOptions, facts)
+        : target === 'messages'
+          ? await buildMessagesBody(requestOptions, facts)
+          : await buildOpenAIBody(requestOptions, facts)
       contextBudget = requestContextBudget(
         target, built, requestOptions.messages, options.model, modelEntry?.contextWindow, requestedMaxTokens,
       )
@@ -3002,8 +3828,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       if (target === 'cli') recordOrEmpty(built.params).max_tokens = maxTokens
       else built.max_tokens = maxTokens
       return built
+      } finally { finishBody() }
     }
     let body: Record<string, unknown> = await buildBody(protocol)
+    const serializedBodies = new WeakMap<Record<string, unknown>, string>()
 
     // The opt-in trace now starts before the first connect attempt so a cache
     // miss can be correlated with the exact request shape that produced it.
@@ -3020,17 +3848,15 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     let attemptNumber = 0
     let responseMetadata: ResponseMetadata = { protocol, headers: {} }
     const connectDeps: GenerateConnectDeps = {
-      options, connection, fetchImpl: this.fetchImpl,
+      options, connection, fetchImpl: this.fetchImpl, timing,
       onResponse: (response) => {
         // Any answer from the gateway ends a header-timeout streak, whatever
         // its status: the silence being measured is over.
-        this.headerTimeoutStreak = undefined
+        this.headerTimeoutStreaks.delete(options.sessionId ?? GLOBAL_HEADER_TIMEOUT_KEY)
         responseMetadata = { protocol, headers: responseIdentifiers(response.headers) }
         trace.record('response', {
           protocol,
-          endpoint: protocol === 'cli'
-            ? `${connection.apiBase}/alpha/generate`
-            : `${connection.apiBase}/provider/v1/chat/completions`,
+          endpoint: protocolEndpoint(protocol, connection.apiBase),
           status: response.status,
           attempt: attemptNumber,
           accountsTried: tried.size,
@@ -3051,22 +3877,42 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           sessionId: options.sessionId,
           ...requestFingerprint(protocol, body),
         })
-        const attempt = await connectGenerate(connectDeps, apiKey, protocol, body)
+        let serialized = serializedBodies.get(body)
+        if (serialized === undefined) {
+          const finishSerialization = timing.phase('serialization')
+          // The replacer runs at the one boundary every transport and every
+          // field crosses, so a lone surrogate anywhere in the body is removed
+          // before it can reach the wire. Non-string values pass through the
+          // identity path, and a string without surrogates is returned as-is.
+          try {
+            serialized = JSON.stringify(body, (_key, value: unknown) => sanitizeSurrogates(value))
+          } finally { finishSerialization() }
+          serializedBodies.set(body, serialized)
+        }
+        const attempt = await connectGenerate(connectDeps, apiKey, protocol, serialized)
         if ('response' in attempt) {
           connected = attempt
           break
         }
         const providerError = parseProviderError(attempt.errText)
-        // Provider API is the preferred surface for non-Go accounts. If the
+        // The Provider API is the preferred surface for non-Go accounts. If the
         // gateway says the key is on the Go plan (the only plan without API
-        // access), remember that and retry the same key through /alpha/generate
-        // without burning the double TTFT on every later request.
+        // access), retry the same key through /alpha/generate without burning
+        // the double TTFT on every later request.
+        //
+        // The Messages surface is included, but its downgrade is NOT cached:
+        // the cache is keyed by gateway and API key, and a Claude-only refusal says
+        // nothing about the account's other models, so remembering it would
+        // drag DeepSeek, GLM and Qwen off the Provider API for the whole TTL
+        // (issue #46). A Go-plan account never reaches here in the first place
+        // — its cached billing tier already routes it to the CLI transport.
         if (
-          protocol === 'openai'
+          protocol !== 'cli'
           && isUpgradeRequiredError(attempt.status, attempt.errText, providerError)
         ) {
+          const wasMessages = protocol === 'messages'
           protocol = 'cli'
-          this.rememberProtocol(apiKey, true)
+          if (!wasMessages) this.rememberProtocol(connection.apiBase, apiKey, 'cli')
           requestOptions = withSurfaceOffload(
             options, this.surfaceOffload, REQUEST_IMAGE_BUDGETS[0]!,
             connection.offloadSeenImagesForCache === true ? options.model : undefined,
@@ -3108,6 +3954,16 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           })
           if (next !== undefined && !tried.has(next)) {
             apiKey = next
+            // 降级只描述上一账号；新账号必须按自己的套餐/缓存重新选择通道。
+            const nextProtocol = this.resolveProtocol(connection.apiBase, apiKey, options.model)
+            if (nextProtocol !== protocol) {
+              protocol = nextProtocol
+              requestOptions = withSurfaceOffload(
+                options, this.surfaceOffload, REQUEST_IMAGE_BUDGETS[0]!,
+                connection.offloadSeenImagesForCache === true && protocol === 'cli' ? options.model : undefined,
+              )
+              body = await buildBody(protocol)
+            }
             continue
           }
         }
@@ -3123,22 +3979,19 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         // The two reasons keep their own wording: only a NAMED window may be
         // described as a spent window (issue #54), while a plain throttle says
         // what it is and leaves the window verdict to the pool's own diagnosis.
-        // A status that already maps to RATE_LIMIT (a plain 429) keeps that
-        // mapping — `generateHttpError` owns the `Retry-After` header's cap and
-        // finiteness rules there — unless the body named its own reset.
+        // 只有明确的额度窗口保留长等待；普通限流使用独立的短重试预算。
         if (
           rejection !== undefined
           && (rejection.reason === 'rate-limit' || rejection.reason === 'throttled')
-          && (rejection.resetAtMs !== undefined || attempt.status !== 429)
         ) {
           const reset = rejection.resetAtMs
           const wait = reset === undefined
-            ? 0
+            ? (attempt.retryAfterMs ?? 0)
             : Math.min(Math.max(1000, reset - Date.now()), RETRY_MAX_DELAY_MS)
           const when = reset === undefined ? undefined : new Date(reset).toISOString()
           const window = rejection.reason === 'rate-limit'
           throw bilingual(
-            'RATE_LIMIT',
+            window ? 'RATE_LIMIT' : THROTTLED_CODE,
             (window
               ? 'llm-commandcode: the Command Code account is rate limited'
               : 'llm-commandcode: the Command Code account is rate limited (429)'
@@ -3148,7 +4001,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
                 ? '当前 Command Code 账户已被限流'
                 : '当前 Command Code 账户被限流（429），服务商未报告用量窗口用尽')
               + (when === undefined ? '' : `，服务商给出的重置时间为 ${when}`),
-            wait > 0 ? { providerRetryAfterMs: wait } : undefined,
+            { status: attempt.status, ...(wait > 0 && wait <= RETRY_MAX_DELAY_MS ? { providerRetryAfterMs: wait } : {}) },
           )
         }
         throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs, providerError, contextBudget.sizePressure)
@@ -3158,7 +4011,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       trace.close()
       if (options.signal?.aborted) throw error
       throw failureWithRequestId(
-        this.gradeHeaderTimeout(error, protocol, body, connection.requestTimeoutMs),
+        this.gradeHeaderTimeout(error, protocol, body, connection.requestTimeoutMs, options.sessionId),
         responseMetadata,
       )
     }
@@ -3283,6 +4136,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           break
         }
         const text = decoder.decode(value, { stream: true })
+        if (value.byteLength > 0) timing.first('firstByteMs')
         buffer += text
         chunkCount += 1
         totalBytes += value.byteLength
@@ -3321,8 +4175,21 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         })
         endRecorded = true
         if (failure !== undefined) throw failure
-        yield hasResponseIdentifiers(responseMetadata)
-          ? { ...finish, replayState: { response: responseMetadata } }
+        // One envelope for both halves: response-level correlation ids and,
+        // on the Messages transport, the per-block thinking signature the next
+        // request must replay. DSH discards the whole envelope when `blocks`
+        // does not line up with the emitted block count, so the array is
+        // indexed by the same chunk index that was allocated at block-start.
+        const replayBlocks = asm.replayBlocks
+        const carryReplay = hasResponseIdentifiers(responseMetadata) || replayBlocks.length > 0
+        yield carryReplay
+          ? {
+              ...finish,
+              replayState: {
+                response: responseMetadata,
+                ...(replayBlocks.length > 0 ? { blocks: replayBlocks } : {}),
+              },
+            }
           : finish
       } else {
         // The stream ended without its terminal event, and that is NOT a normal
@@ -3411,27 +4278,67 @@ interface ParsedProviderError {
   nested?: Record<string, unknown> | undefined
   code?: string | undefined
   type?: string | undefined
+  /** The sentence to SHOW: one nesting level peeled when the body double-encoded it. */
   message?: string | undefined
+  /**
+   * The message exactly as the body carried it. Pattern matching must read
+   * this, not {@link message}: the double-encoded form embeds a whole second
+   * document whose `type` (`provider_error`) is part of how a gateway
+   * distinguishes an over-reserved request from an ordinary one, and peeling
+   * it before the test drops that evidence.
+   */
+  rawMessage?: string | undefined
   rateLimit?: Record<string, unknown> | undefined
+}
+
+/**
+ * Unwrap one level of a double-encoded provider message.
+ *
+ * The Messages endpoint sometimes reports a rejection with `error.message`
+ * holding a whole JSON document rather than the sentence
+ * (`{"type":"error","error":{"type":"invalid_request_error","message":"{\"type\":
+ * \"error\",…}"},"request_id":"req_…"}`, measured 2026-09-29). Showing that blob
+ * to the user hides the actual refusal, so one nesting level is peeled; the
+ * outer text is returned unchanged when it is not JSON or carries no message.
+ */
+function unwrapProviderMessage(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined
+  const trimmed = raw.trim()
+  if (!trimmed.startsWith('{')) return raw
+  try {
+    const inner: unknown = JSON.parse(trimmed)
+    if (!isRecord(inner)) return raw
+    const nested = isRecord(inner.error) ? inner.error : undefined
+    return stringValue((nested ?? inner).message) ?? raw
+  } catch {
+    return raw
+  }
 }
 
 /** Parse a rejected body once, retaining the nested/root distinction. */
 function parseProviderError(errText: string): ParsedProviderError {
   try {
     const parsed: unknown = JSON.parse(errText)
-    if (!isRecord(parsed)) return {}
+    if (!isRecord(parsed)) return { message: errText }
     const nested = isRecord(parsed.error) ? parsed.error : undefined
     const body = nested ?? parsed
+    const rawMessage = stringValue(body.message)
     return {
       root: parsed,
       nested,
       code: stringValue(body.code),
       type: stringValue(body.type),
-      message: stringValue(body.message),
+      rawMessage,
+      // The body itself is the floor, never `undefined`: the Messages endpoint
+      // answers some rejections with bare prose (`Invalid input: expected
+      // number, received undefined at max_tokens`, `Too small: expected array to
+      // have >=1 items at messages`), and dropping those lost the only sentence
+      // the user could act on.
+      message: unwrapProviderMessage(rawMessage) ?? errText,
       rateLimit: isRecord(body.rateLimit) ? body.rateLimit : undefined,
     }
   } catch {
-    return {}
+    return { message: errText }
   }
 }
 
@@ -3445,7 +4352,9 @@ function generateHttpError(
   // Historically this diagnosis reads only a nested `error` envelope; root
   // fields still feed account rotation and the Go-plan fallback below.
   const providerCode = parsed.nested === undefined ? undefined : parsed.code
-  const providerDetail = parsed.nested === undefined ? '' : [parsed.code, parsed.type, parsed.message]
+  // The RAW message joins the detail: pattern tests below need every field the
+  // body carried, including the parts `unwrapProviderMessage` peels off.
+  const providerDetail = parsed.nested === undefined ? '' : [parsed.code, parsed.type, parsed.rawMessage ?? parsed.message]
     .filter((part): part is string => part !== undefined && part !== '')
     .join(' ')
   const detail = providerCode ?? `HTTP ${status}`
@@ -3461,6 +4370,30 @@ function generateHttpError(
   // 500`) are inspected, and the parsed provider fields are preferred over the
   // raw body, so an HTML error page cannot mention its way into a compaction.
   const overflowDetail = providerDetail !== '' ? providerDetail : errText.slice(0, 500)
+  // A request-side OUTPUT cap is not a context overflow, but it reads like one:
+  // the endpoint's own rejection is `max_tokens: 200000 > 128000, which is the
+  // maximum allowed number of output tokens for <model>` (measured 2026-09-29),
+  // and `max_tokens` is one of the overflow patterns. Letting it through would
+  // compact a session that is not oversized — at full price, on a long context —
+  // and the reduced request would be refused identically. Checked first.
+  if (status < 500 && OUTPUT_LIMIT_REJECTION.test(overflowDetail)) {
+    // Quote what the endpoint said: "200000 against a 128000 ceiling" and a bare
+    // validation error are different problems, and naming neither leaves the
+    // user guessing which setting to change.
+    const stated = /max_tokens:\s*\d+\s*>\s*\d+/.exec(overflowDetail)?.[0]
+      ?? (parsed.message !== undefined && parsed.message.length <= 200 ? parsed.message : undefined)
+    return bilingual(
+      'PROVIDER_HTTP_ERROR',
+      `Command Code API error ${status}: this request's max_tokens is not valid for this model`
+      + (stated ? ` (${stated})` : '')
+      + ' — the session is not oversized, so compacting it will not help; lower "Max output tokens"'
+      + ' or pick a model with a larger output ceiling',
+      `Command Code API 返回 ${status}：本次请求的 max_tokens 对该模型不合法`
+      + (stated ? `（${stated}）` : '')
+      + '——会话内容并未超长，压缩上下文无效；请调低「最大输出 token」或改用输出上限更大的模型',
+      { status },
+    )
+  }
   if (status < 500 && isContextOverflowDetail(overflowDetail)) {
     return bilingual(
       CONTEXT_WINDOW_EXCEEDED_CODE,
@@ -3555,7 +4488,7 @@ function generateHttpError(
  * rejection repeats identically on every attempt.
  */
 function httpErrorCode(status: number): string {
-  if (status === 429) return 'RATE_LIMIT'
+  if (status === 429) return THROTTLED_CODE
   if (status === 408) return 'TIMEOUT'
   if (status >= 500) return 'SERVER'
   return 'PROVIDER_HTTP_ERROR'
@@ -3771,8 +4704,174 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
 }
 
 /** Dispatch one parsed stream event to the active transport's handler. */
+/**
+ * Messages `usage` → the harness meter.
+ *
+ * The field names are the Anthropic ones, and unlike Chat Completions
+ * `input_tokens` already excludes cache reads and writes, so it is mapped
+ * as-is rather than reduced (the shape `dsh-llm-deepseek` implements).
+ * Measured 2026-09-29: `{ input_tokens, cache_creation_input_tokens,
+ * cache_read_input_tokens, output_tokens, output_tokens_details:
+ * { thinking_tokens } }`, plus gateway additions the meter ignores.
+ */
+function mapMessagesUsage(raw: unknown): TokenUsage | undefined {
+  if (!isRecord(raw)) return undefined
+  const inputTokens = numberValue(raw.input_tokens) ?? 0
+  const outputTokens = numberValue(raw.output_tokens) ?? 0
+  const cacheRead = numberValue(raw.cache_read_input_tokens) ?? 0
+  const cacheWrite = numberValue(raw.cache_creation_input_tokens) ?? 0
+  const details = isRecord(raw.output_tokens_details) ? raw.output_tokens_details : undefined
+  const reasoningTokens = numberValue(details?.thinking_tokens)
+  const usage: TokenUsage = {
+    inputTokens: Math.max(0, inputTokens),
+    outputTokens,
+    cacheReadTokens: cacheRead,
+  }
+  if (cacheWrite > 0) usage.cacheWriteTokens = cacheWrite
+  if (reasoningTokens !== undefined) usage.reasoningTokens = reasoningTokens
+  return usage
+}
+
+/** The harness block type one Messages content block maps to. */
+function messagesBlockType(native: Record<string, unknown>): MessagesBlockState['type'] | undefined {
+  if (native.type === 'text') return 'text'
+  if (native.type === 'thinking') return 'reasoning'
+  if (native.type === 'tool_use') return 'tool-call'
+  return undefined
+}
+
+/**
+ * Handle one Messages-transport stream event, appending harness StreamChunks.
+ *
+ * The event sequence is the Anthropic one measured on 2026-09-29:
+ * `message_start`, then per content block `content_block_start` /
+ * `content_block_delta`* / `content_block_stop`, then `message_delta`
+ * (carrying `stop_reason` and the final usage) and `message_stop`. A `ping`
+ * keepalive interleaves freely and carries no content. The terminal chunks are
+ * NOT emitted here: `stream()` holds the success finish until it has validated
+ * the assembled answer, and it attaches the replay envelope.
+ */
+function handleMessagesEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
+  const chunks: StreamChunk[] = []
+  if (!isRecord(event)) return chunks
+
+  switch (event.type) {
+    case 'message_start': {
+      const message = isRecord(event.message) ? event.message : undefined
+      const usage = mapMessagesUsage(message?.usage)
+      if (usage) chunks.push({ type: 'usage', usage })
+      break
+    }
+    case 'content_block_start': {
+      const wireIndex = numberValue(event.index)
+      const native = isRecord(event.content_block) ? event.content_block : undefined
+      const type = native ? messagesBlockType(native) : undefined
+      if (wireIndex === undefined || type === undefined) break
+      // Allocate the harness index only for a block this route can represent,
+      // so replayBlocks stays aligned with the emitted block count.
+      const chunkIndex = asm.nextIndex++
+      const state: MessagesBlockState = {
+        type,
+        text: stringValue(native?.text) ?? '',
+        signature: stringValue(native?.signature) ?? '',
+        json: '',
+        id: stringValue(native?.id) ?? '',
+        name: stringValue(native?.name) ?? '',
+        chunkIndex,
+      }
+      asm.messagesBlocks.set(wireIndex, state)
+      asm.replayBlocks[chunkIndex] = { type }
+      chunks.push({ type: 'block-start', index: chunkIndex, blockType: type })
+      if (type === 'tool-call' && state.id !== '') {
+        chunks.push({
+          type: 'tool-call-delta',
+          index: chunkIndex,
+          id: ToolCallId(state.id),
+          name: state.name,
+          argumentsDelta: '',
+        })
+      }
+      break
+    }
+    case 'content_block_delta': {
+      const wireIndex = numberValue(event.index)
+      const state = wireIndex === undefined ? undefined : asm.messagesBlocks.get(wireIndex)
+      const delta = isRecord(event.delta) ? event.delta : undefined
+      if (!state || !delta) break
+      const index = state.chunkIndex
+      if (delta.type === 'text_delta' && state.type === 'text') {
+        const text = stringValue(delta.text) ?? ''
+        state.text += text
+        if (text.trim() !== '') asm.sawContent = true
+        chunks.push({ type: 'text-delta', index, text })
+      } else if (delta.type === 'thinking_delta' && state.type === 'reasoning') {
+        const text = stringValue(delta.thinking) ?? ''
+        state.text += text
+        chunks.push({ type: 'reasoning-delta', index, text })
+      } else if (delta.type === 'signature_delta' && state.type === 'reasoning') {
+        // Not model-visible content: it rides the replay envelope so the next
+        // request can send the block back, never a reasoning delta.
+        state.signature += stringValue(delta.signature) ?? ''
+        const entry = asm.replayBlocks[index]
+        if (entry) entry.signature = state.signature
+      } else if (delta.type === 'input_json_delta' && state.type === 'tool-call') {
+        const fragment = stringValue(delta.partial_json) ?? ''
+        state.json += fragment
+        chunks.push({
+          type: 'tool-call-delta',
+          index,
+          id: ToolCallId(state.id),
+          name: state.name,
+          argumentsDelta: fragment,
+        })
+      }
+      break
+    }
+    case 'content_block_stop': {
+      const wireIndex = numberValue(event.index)
+      if (wireIndex === undefined) break
+      const state = asm.messagesBlocks.get(wireIndex)
+      if (!state) break
+      asm.messagesBlocks.delete(wireIndex)
+      const index = state.chunkIndex
+      if (state.type === 'text') {
+        if (state.text.trim() !== '') asm.sawContent = true
+        chunks.push({ type: 'block-end', index, block: { type: 'text', text: state.text } })
+      } else if (state.type === 'reasoning') {
+        chunks.push({ type: 'block-end', index, block: { type: 'reasoning', text: state.text } })
+      } else {
+        if (state.id !== '') asm.sawContent = true
+        chunks.push({
+          type: 'block-end',
+          index,
+          block: { type: 'tool-call', id: ToolCallId(state.id), name: state.name, arguments: state.json || '{}' },
+        })
+      }
+      break
+    }
+    case 'message_delta': {
+      const delta = isRecord(event.delta) ? event.delta : undefined
+      const reason = stringValue(delta?.stop_reason)
+      if (reason !== undefined) asm.finishReason = reason
+      const usage = mapMessagesUsage(event.usage)
+      if (usage) chunks.push({ type: 'usage', usage })
+      chunks.push({ type: 'finish', reason: mapFinishReason(reason) })
+      break
+    }
+    case 'message_stop':
+    case 'ping':
+      break
+    case 'error':
+      throw streamErrorToLlmError(event.error ?? event, stringValue(event.message))
+    default:
+      break
+  }
+  return chunks
+}
+
 function handleEvent(asm: BlockAssembler, protocol: CommandCodeProtocol, event: unknown): StreamChunk[] {
-  return protocol === 'openai' ? handleOpenAIEvent(asm, event) : handleCliEvent(asm, event)
+  if (protocol === 'cli') return handleCliEvent(asm, event)
+  return protocol === 'messages' ? handleMessagesEvent(asm, event) : handleOpenAIEvent(asm, event)
 }
 
 
@@ -3805,7 +4904,7 @@ function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): 
  * one function serves both — a new reason cannot drift between them.
  */
 function mapFinishReason(reason: unknown): FinishReason {
-  if (reason === 'tool-calls' || reason === 'tool_calls') return { kind: 'tool-calls' }
+  if (reason === 'tool-calls' || reason === 'tool_calls' || reason === 'tool_use') return { kind: 'tool-calls' }
   if (
     reason === 'length' ||
     reason === 'max_tokens' ||
@@ -3906,8 +5005,8 @@ function classifyAccountRejection(
   // like `RATE_LIMITED` above: a gateway that proxies the provider's own
   // credits/plan rejection under a 5xx is still reporting a fact about this
   // account, and treating it as "the provider is unavailable" is what turned a
-  // permanent refusal into a retried one — `SERVER` reaches dsh-llm-retry's
-  // 1000-attempt cadence while the sibling accounts that could serve are never
+  // permanent refusal into a retried one — `SERVER` enters the retry policy
+  // while the sibling accounts that could serve are never
   // consulted. The guard below therefore covers only the rejections with NO
   // such code, whose evidence is prose.
   if (code !== undefined && ACCOUNT_UNAVAILABLE_CODES.has(code)) return { reason: 'unavailable' }

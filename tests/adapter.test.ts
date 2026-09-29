@@ -30,6 +30,7 @@ import {
   KNOWN_PLANS,
   KNOWN_DEALS,
   KNOWN_PEAK_PRICING,
+  MODEL_OUTPUT_TOKEN_LIMITS,
   MESSAGES_ONLY_MODELS,
   PEAK_HOUR_RANGES,
   isPeakPricingHour,
@@ -105,6 +106,27 @@ function makeAdapter(overrides: Partial<CommandCodeAdapterDeps> = {}): CommandCo
 
 function userMessage(text: string): Message {
   return { id: messageId(), role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }
+}
+
+/**
+ * A successful `/provider/v1/messages` text stream, in the exact event order the
+ * endpoint emits (measured 2026-09-29): `message_start`, one content block,
+ * then `message_delta` carrying `stop_reason` plus the final usage, then
+ * `message_stop`. A `ping` keepalive is interleaved because the real stream
+ * sends one and the parser must ignore it.
+ */
+function messagesStream(text: string, options: { inputTokens?: number; outputTokens?: number } = {}): Response {
+  const usage = { input_tokens: options.inputTokens ?? 8, output_tokens: options.outputTokens ?? 4 }
+  const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  return new Response([
+    sse('message_start', { type: 'message_start', message: { model: 'm', usage: { ...usage, output_tokens: 0 } } }),
+    sse('ping', { type: 'ping' }),
+    sse('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+    sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }),
+    sse('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    sse('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage }),
+    sse('message_stop', { type: 'message_stop' }),
+  ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } })
 }
 
 /** A tiny valid-ish PNG byte blob for byte-round-trip assertions. */
@@ -2452,6 +2474,35 @@ test('listModels() caches the billing access across picker loads', async () => {
   assert.deepEqual(ids.sort(), ['claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model'])
 })
 
+test('套餐缓存按网关隔离，同一密钥在新网关重新查询套餐', async (t) => {
+  const cachePath = join(tmpdir(), `cc-cross-gateway-billing-${process.pid}.json`)
+  t.after(() => rmSync(cachePath, { force: true }))
+  let apiBase = 'https://first.invalid'
+  const subscriptions: string[] = []
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), apiBase, modelsCachePath: cachePath }),
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/provider/v1/models')) return new Response(JSON.stringify(PLAN_FILTER_CATALOG))
+      if (url.endsWith('/alpha/whoami')) return new Response(JSON.stringify({ org: { id: 'org1' } }))
+      if (url.includes('/alpha/billing/subscriptions')) {
+        subscriptions.push(new URL(url).origin)
+        return new Response(JSON.stringify({ data: { status: 'active', planId: apiBase === 'https://first.invalid' ? 'individual-go' : 'individual-pro' } }))
+      }
+      if (url.endsWith('/alpha/billing/credits')) return new Response(JSON.stringify(billingBody(undefined, 0, 0)))
+      throw new Error(`Unexpected request: ${url}`)
+    }) as typeof fetch,
+  })
+  assert.deepEqual((await adapter.listModels('commandcode')).map((model) => model.id).sort(), [
+    'deepseek/deepseek-v4-pro', 'some-future-model',
+  ])
+  apiBase = 'https://second.invalid'
+  assert.deepEqual((await adapter.listModels('commandcode')).map((model) => model.id).sort(), [
+    'claude-sonnet-5', 'deepseek/deepseek-v4-pro', 'some-future-model',
+  ])
+  assert.deepEqual(subscriptions, ['https://first.invalid', 'https://second.invalid'])
+})
+
 test('listModels() lists a model only another account in the pool includes', async () => {
   // Issue #51's follow-up: keyed on the account that happened to serve, the picker's
   // contents changed as rotation moved between accounts, and a model only the
@@ -3236,15 +3287,42 @@ test('auto protocol falls back to CLI on 403 upgrade_required and caches per acc
   assert.ok(calls[2]!.includes('/alpha/generate'))
 })
 
-test('Messages-only (Claude) models take the CLI transport without poisoning the account protocol cache', async () => {
+test('协议回退缓存不会把旧网关的同一密钥带到新网关', async () => {
+  let apiBase = 'https://first.invalid'
+  const paths: string[] = []
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), apiBase, protocol: 'auto' }),
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      paths.push(url)
+      if (url.startsWith('https://first.invalid') && url.endsWith('/provider/v1/chat/completions')) {
+        return new Response('{"error":{"code":"upgrade_required"}}', { status: 403 })
+      }
+      return new Response(url.endsWith('/alpha/generate')
+        ? FINISH_STREAM
+        : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n')
+    }) as typeof fetch,
+  })
+  const options = { provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }
+  await collect(adapter.stream(options))
+  await collect(adapter.stream(options))
+  apiBase = 'https://second.invalid'
+  await collect(adapter.stream(options))
+  assert.deepEqual(paths.map((url) => new URL(url).pathname), [
+    '/provider/v1/chat/completions', '/alpha/generate', '/alpha/generate', '/provider/v1/chat/completions',
+  ])
+})
+
+test('Messages-only (Claude) models take the Messages transport without poisoning the account protocol cache', async () => {
   // The Provider API answers every Claude model with HTTP 400 "must be called via
-  // /provider/v1/messages"; `/alpha/generate` serves them, so they are routed there
+  // /provider/v1/messages"; that endpoint serves them, so they are routed there
   // up front — and because `protocolCache` is keyed by API key alone, that must
-  // not be remembered, or the whole account is pinned to the CLI transport.
+  // not be remembered, or the whole account is pinned off the Provider API.
   const calls: string[] = []
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = String(input)
     calls.push(url)
+    if (url.includes('/provider/v1/messages')) return messagesStream('hi')
     if (url.includes('/provider/v1/chat/completions')) {
       return new Response('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
         status: 200,
@@ -3273,18 +3351,925 @@ test('Messages-only (Claude) models take the CLI transport without poisoning the
 
   await collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-4-8', messages: [userMessage('hi')] }))
   assert.equal(calls.length, 1)
-  assert.ok(calls[0]!.includes('/alpha/generate'), 'a Claude model must never be posted to chat/completions')
+  assert.ok(calls[0]!.includes('/provider/v1/messages'), 'a Claude model must be posted to the Messages endpoint')
 
   // A model added upstream after this plugin shipped is covered by the
   // `claude-*` prefix rule rather than needing a new snapshot entry.
   await collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-6', messages: [userMessage('hi')] }))
   assert.equal(calls.length, 2)
-  assert.ok(calls[1]!.includes('/alpha/generate'), 'an unknown claude-* id must take the same route')
+  assert.ok(calls[1]!.includes('/provider/v1/messages'), 'an unknown claude-* id must take the same route')
 
   // The account itself is still on the Provider API for every other model.
   await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')] }))
   assert.equal(calls.length, 3)
-  assert.ok(calls[2]!.includes('/provider/v1/chat/completions'), 'the Claude route must not pin the account to CLI')
+  assert.ok(calls[2]!.includes('/provider/v1/chat/completions'), 'the Claude route must not pin the account off the Provider API')
+})
+
+test('the catalog supported_endpoints decides the route, and a missing list falls back to the claude-* rule', async () => {
+  // `/provider/v1/models` publishes `supported_endpoints` per model and that list
+  // is authoritative; the `claude-*` prefix rule only covers an entry that
+  // carries no list (every pre-1.55 cache file, and a hand-built one).
+  const calls: string[] = []
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    calls.push(url)
+    if (url.endsWith('/provider/v1/models')) {
+      return new Response(JSON.stringify({ object: 'list', data: [
+        { id: 'vendor/messages-only', name: 'Messages Only', context_length: 200_000, supported_endpoints: ['/messages'] },
+        { id: 'vendor/chat-only', name: 'Chat Only', context_length: 200_000, supported_endpoints: ['/chat/completions'] },
+        // A non-Claude model the catalog nevertheless routes to Messages must be
+        // honoured: the snapshot's model list is a fallback, not the truth.
+        { id: 'acme/renamed-claude', name: 'Renamed Claude', context_length: 200_000, supported_endpoints: ['/messages'] },
+        { id: 'vendor/unlisted-route', name: 'No Route List', context_length: 200_000 },
+      ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (url.includes('/provider/v1/messages')) return messagesStream('hi')
+    return new Response('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+
+  const adapter = new CommandCodeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    }),
+    resolveApiKey: async () => 'k',
+    fetchImpl,
+  })
+  await adapter.listModels('commandcode', { unfiltered: true })
+
+  const routeOf = async (model: string) => {
+    const before = calls.length
+    await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+    return calls[before]!
+  }
+  assert.ok((await routeOf('vendor/messages-only')).includes('/provider/v1/messages'))
+  assert.ok((await routeOf('vendor/chat-only')).includes('/provider/v1/chat/completions'))
+  // Catalog wins over the name: this id does not start with `claude-`, yet the
+  // catalog is the routing authority.
+  assert.ok((await routeOf('acme/renamed-claude')).includes('/provider/v1/messages'))
+  // No route list at all: the `claude-*` prefix rule takes over.
+  assert.ok((await routeOf('claude-anything-new')).includes('/provider/v1/messages'))
+})
+
+// ---------------------------------------------------------------------------
+// Anthropic Messages transport (`/provider/v1/messages`)
+// Every expectation below was measured against the live endpoint on 2026-09-29.
+// ---------------------------------------------------------------------------
+
+/** Options that pin the Messages transport without a catalog fetch. */
+function MESSAGES_OPTIONS(overrides: Record<string, unknown> = {}) {
+  return () => ({
+    apiBase: 'https://api.commandcode.ai',
+    workingDir: '/tmp/project',
+    modelsCachePath: '/tmp/cc-models-cache.json',
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    protocol: 'openai' as const,
+    ...overrides,
+  })
+}
+
+/** Post a Messages request and hand back the parsed body. */
+function messagesAdapter(
+  response: (body: Record<string, unknown>) => Response,
+  deps: Partial<CommandCodeAdapterDeps> = {},
+): { adapter: CommandCodeAdapter; sent: () => Record<string, unknown>[] } {
+  const sent: Record<string, unknown>[] = []
+  const adapter = makeAdapter({
+    options: MESSAGES_OPTIONS(),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/provider/v1/models')) {
+        return new Response(JSON.stringify({ object: 'list', data: [
+          { id: 'claude-opus-4-8', name: 'Claude', context_length: 1_000_000, supported_endpoints: ['/messages'] },
+        ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      sent.push(body)
+      return response(body)
+    }) as unknown as typeof fetch,
+    ...deps,
+  })
+  return { adapter, sent: () => sent }
+}
+
+test('the Messages body carries adaptive thinking, output_config.effort and Anthropic tools', async () => {
+  const { adapter, sent } = messagesAdapter(() => messagesStream('hi'))
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-opus-4-8',
+    system: 'Be terse.',
+    reasoningEffort: 'high' as never,
+    tools: [{ name: 'read', description: 'Read a file', parameters: { properties: { path: { type: 'string' } }, required: ['path'] } as never }],
+    messages: [userMessage('hi')],
+  }))
+  const body = sent()[0]!
+  // `enabled` / `disabled` are refused outright by this gateway; only
+  // `adaptive` is accepted, and effort — not a budget — is the strength knob.
+  assert.deepEqual(body.thinking, { type: 'adaptive' })
+  assert.deepEqual(body.output_config, { effort: 'high' })
+  // The system text travels as a block array so it can carry the cache marker;
+  // the CLI and OpenAI transports send the same text as a bare string.
+  assert.deepEqual(body.system, [{
+    type: 'text',
+    text: 'Be terse.',
+    cache_control: { type: 'ephemeral' },
+  }])
+  assert.equal(body.stream, true)
+  // The model's own output ceiling, which the endpoint names in any refusal
+  // above it. This one is 128000, so the Messages-only fallback of 64000 that
+  // predated the ceiling table was halving every Opus answer to stay safe
+  // (issue #71).
+  assert.equal(body.max_tokens, 128_000)
+  // Adaptive thinking constrains temperature to 1, so the field must be absent
+  // even when the caller asks for a value the other transports honour. Sending
+  // the 0.3 default was a live 400 on every request (found by
+  // scripts/verify-messages-live.mjs, not by a unit test).
+  assert.equal(body.temperature, undefined, 'Messages must not send temperature')
+  const tools = body.tools as Array<Record<string, unknown>>
+  assert.equal(tools[0]!.name, 'read')
+  // The gateway rejects a tool whose root schema is not `type: 'object'`.
+  assert.deepEqual((tools[0]!.input_schema as { type: string }).type, 'object')
+  // A type-less schema still reaches the wire normalized, never dropped.
+  assert.equal((body.messages as WireMessage[])[0]!.role, 'user')
+})
+
+/**
+ * Anthropic caching is opt-in per block, so a request that marks nothing is
+ * re-prefilled at the full input rate on every turn. Measured on a 10-turn
+ * claude-sonnet-5-5 session: $0.5648 unmarked against $0.1869 with the three
+ * breakpoints this route sets — a 66.9% difference, with no other field
+ * changed. The placements mirror the official Command Code provider for pi,
+ * whose `@earendil-works/pi-ai` `anthropic-messages` transport marks exactly
+ * these three positions on the same endpoint.
+ */
+test('the Messages body marks the last tool, not an earlier one', async () => {
+  const { adapter, sent } = messagesAdapter(() => messagesStream('hi'))
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-opus-4-8',
+    tools: [
+      { name: 'read', description: 'Read a file', parameters: { properties: { path: { type: 'string' } } } as never },
+      { name: 'write', description: 'Write a file', parameters: { properties: { path: { type: 'string' } } } as never },
+    ],
+    messages: [userMessage('hi')],
+  }))
+  const tools = sent()[0]!.tools as Array<Record<string, unknown>>
+  // The final declaration closes the cached tools prefix; an earlier marker
+  // would leave every later tool re-prefilled on every turn.
+  assert.equal(tools[0]!.cache_control, undefined)
+  assert.deepEqual(tools[1]!.cache_control, { type: 'ephemeral' })
+})
+
+test('the Messages body marks the last user turn and nothing before it', async () => {
+  const { adapter, sent } = messagesAdapter(() => messagesStream('hi'))
+  const callId = ToolCallId('call-1')
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-opus-4-8',
+    messages: [
+      userMessage('hi'),
+      { id: messageId(), role: 'assistant', source: { kind: 'model', provider: 'commandcode', model: 'claude-opus-4-8' }, content: [
+        { type: 'tool-call', id: callId, name: 'read', arguments: JSON.stringify({ path: 'a' }) },
+      ] },
+      toolMessage(callId, [{ type: 'text', text: 'contents' }]),
+    ],
+  }))
+  const messages = sent()[0]!.messages as Array<Record<string, unknown>>
+  // DSH resends the whole history every turn, so the trailing turn is the
+  // rolling boundary. A marker on the opening turn would freeze the cache at
+  // its first turn and re-prefill everything after it.
+  assert.equal(messages[0]!.role, 'user')
+  const firstBlocks = messages[0]!.content as Array<Record<string, unknown>>
+  assert.equal(firstBlocks[0]!.cache_control, undefined)
+  // `messagesMessageCodec` renders a tool result as a user turn, so a tool loop
+  // still ends on a markable block.
+  const last = messages[messages.length - 1]!
+  assert.equal(last.role, 'user')
+  const lastBlocks = last.content as Array<Record<string, unknown>>
+  assert.equal(lastBlocks[0]!.type, 'tool_result')
+  assert.deepEqual(lastBlocks[lastBlocks.length - 1]!.cache_control, { type: 'ephemeral' })
+})
+
+test('no cache markers are sent when the Messages request has no system or tools', async () => {
+  const { adapter, sent } = messagesAdapter(() => messagesStream('hi'))
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-opus-4-8',
+    messages: [userMessage('hi')],
+  }))
+  const body = sent()[0]!
+  // An empty system must stay absent rather than become an empty marked block,
+  // which the endpoint would read as a cacheable zero-length section.
+  assert.equal(body.system, undefined)
+  assert.equal(body.tools, undefined)
+  const messages = body.messages as Array<Record<string, unknown>>
+  const blocks = messages[messages.length - 1]!.content as Array<Record<string, unknown>>
+  assert.deepEqual(blocks[0]!.cache_control, { type: 'ephemeral' })
+})
+
+test('the CLI and OpenAI transports keep their own cache handling', async () => {
+  // The markers are a Messages-route concern. The CLI route already marked its
+  // system section before this change and must not gain a messages breakpoint;
+  // the OpenAI route never sends cache_control at all. A non-Claude model keeps
+  // the request on the pinned transport instead of exercising the Messages
+  // downgrade the markers belong to.
+  for (const protocol of ['cli', 'openai'] as const) {
+    const sent: Array<Record<string, unknown>> = []
+    const adapter = makeAdapter({
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai',
+        workingDir: '/tmp/project',
+        modelsCachePath: '/tmp/cc-models-cache.json',
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+        protocol,
+      }),
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/provider/v1/models')) {
+          return new Response(JSON.stringify({ object: 'list', data: [
+            { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek', context_length: 128_000, supported_endpoints: ['/chat/completions'] },
+          ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return okStream(protocol)
+      }) as unknown as typeof fetch,
+    })
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      system: 'Be terse.',
+      messages: [userMessage('hi')],
+    }))
+    const raw = JSON.stringify(sent[0])
+    if (protocol === 'cli') {
+      // The pre-existing system marker is the CLI's only one.
+      const params = sent[0]!.params as { system: unknown; messages: unknown[] }
+      assert.deepEqual(params.system, [{ type: 'text', text: 'Be terse.', cache_control: { type: 'ephemeral' } }])
+      assert.equal(raw.match(/cache_control/g)?.length, 1, 'CLI must not mark its messages')
+    } else {
+      assert.equal(raw.includes('cache_control'), false, 'OpenAI route must send no cache_control')
+    }
+  }
+})
+
+/**
+ * A lone surrogate half is not a character: it comes from a truncated slice or
+ * a lossy decode, and it survives `JSON.stringify` as an escape rather than
+ * failing locally, so it would otherwise reach the wire as a string no UTF-8
+ * consumer can round-trip. The official provider for pi strips these from every
+ * outgoing string on this same endpoint; this adapter strips them at the one
+ * serialization boundary, which covers all three transports at once.
+ */
+test('a lone surrogate is stripped from the serialized request on every transport', async () => {
+  const lone = String.fromCharCode(0xd83d)
+  // A Claude id keeps the request on Messages whatever the pinned transport is
+  // (`resolveProtocol()` routes the family there first); the other two runs pin
+  // their own protocol, so all three transports are covered.
+  const cases = [
+    { protocol: 'cli' as const, model: 'deepseek/deepseek-v4.1-flash' },
+    { protocol: 'openai' as const, model: 'deepseek/deepseek-v4.1-flash' },
+    { protocol: 'openai' as const, model: 'claude-opus-4-8' },
+  ]
+  for (const { protocol, model } of cases) {
+    const sent: string[] = []
+    const adapter = makeAdapter({
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai',
+        workingDir: '/tmp/project',
+        modelsCachePath: '/tmp/cc-models-cache.json',
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+        protocol,
+      }),
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/provider/v1/models')) {
+          return new Response(JSON.stringify({ object: 'list', data: [
+            { id: model, name: 'M', context_length: 128_000, supported_endpoints: ['/chat/completions'] },
+          ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        sent.push(String(init?.body))
+        return model.startsWith('claude-') ? messagesStream('hi') : okStream(protocol)
+      }) as unknown as typeof fetch,
+    })
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model,
+      // The lone half rides the system text and a user turn: the carriers whose
+      // content comes from a file read or a truncated stream.
+      system: `sys${lone}tem`,
+      messages: [userMessage(`before${lone}after`)],
+    }))
+    const label = `${protocol}/${model}`
+    const body = sent[0]!
+    // The escape must not survive anywhere in the serialized body...
+    assert.equal(/\\ud83d/i.test(body), false, `${label}: lone high surrogate reached the wire`)
+    assert.equal(body.includes(lone), false, `${label}: lone surrogate reached the wire`)
+    // ...while the surrounding text is preserved, so the strip is surgical.
+    assert.match(body, /beforeafter/)
+    assert.match(body, /system/)
+  }
+})
+
+test('paired surrogates (emoji) survive sanitization untouched', async () => {
+  const sent: string[] = []
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai',
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai',
+    }),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/provider/v1/models')) {
+        return new Response(JSON.stringify({ object: 'list', data: [
+          { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek', context_length: 128_000, supported_endpoints: ['/chat/completions'] },
+        ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      sent.push(String(init?.body))
+      return okStream('openai')
+    }) as unknown as typeof fetch,
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'deepseek/deepseek-v4.1-flash',
+    system: 'Keep the emoji: \u{1F648} and \u{1F680}',
+    messages: [userMessage('a \u{1F648} b')],
+  }))
+  // A well-formed astral character IS a surrogate pair, so a naive filter would
+  // delete every emoji. Both must round-trip.
+  const body = sent[0]!
+  assert.match(body, /\u{1F648}/u)
+  assert.match(body, /\u{1F680}/u)
+})
+
+test('an unsupported effort is dropped rather than sent as output_config', async () => {
+  const { adapter, sent } = messagesAdapter(() => messagesStream('hi'))
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-opus-4-8',
+    reasoningEffort: 'off' as never,
+    messages: [userMessage('hi')],
+  }))
+  // `output_config.effort` has no `none` value, so "off" must not travel.
+  assert.equal(sent()[0]!.output_config, undefined)
+})
+
+test('Messages drops an explicit temperature, which adaptive thinking constrains to 1', async () => {
+  // Live failure, 2026-09-29: every request carrying the other transports' 0.3
+  // default was refused with
+  // `temperature` may only be set to 1 when thinking is enabled or in adaptive
+  // mode. Omission is the only value that satisfies both the thinking switch
+  // and a caller that asked for a temperature.
+  for (const temperature of [0, 0.3, 1, 2]) {
+    const { adapter, sent } = messagesAdapter(() => messagesStream('hi'))
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'claude-opus-4-8',
+      temperature,
+      messages: [userMessage('hi')],
+    }))
+    assert.equal(sent()[0]!.temperature, undefined, `temperature=${temperature} must not be sent`)
+  }
+})
+
+test('Messages omits the thinking switch for a model that publishes no effort levels', async () => {
+  // `claude-haiku-4-5-20201001`'s sibling case: the official CLI marks
+  // `claude-haiku-4-5-20251001` neither `reasoning_effort` (no levels, so absent
+  // from KNOWN_EFFORTS) nor `reasoning:!0` (so absent from
+  // KNOWN_THINKING_MODELS) — it does not reason. The endpoint accepts the field
+  // regardless, which makes this a correctness call rather than a failure
+  // avoidance one: the switch exists to be driven by `output_config.effort`,
+  // and with neither there is nothing to control.
+  const { adapter, sent } = messagesAdapter(() => messagesStream('hi'))
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-haiku-4-5-20251001',
+    // An effort the caller asked for that this model cannot honour.
+    reasoningEffort: 'high' as never,
+    messages: [userMessage('hi')],
+  }))
+  const body = sent()[0]!
+  assert.equal(body.thinking, undefined, 'a non-reasoning model must not get the thinking switch')
+  assert.equal(body.output_config, undefined, 'a model with no effort levels must not get output_config')
+  // The rest of the request must still be well-formed.
+  assert.equal(body.model, 'claude-haiku-4-5-20251001')
+  assert.equal(body.max_tokens, 64_000)
+})
+
+// ---------------------------------------------------------------------------
+// Output-ceiling downshift (issue #71)
+// ---------------------------------------------------------------------------
+
+/**
+ * A model the catalog does not list and the ceiling snapshot does not carry, so
+ * the only ceiling it has is the one the endpoint names in its refusal. The
+ * `claude-` prefix keeps it on the Messages transport without a route lookup.
+ *
+ * Every test passes its own id: a learned ceiling is remembered process-wide,
+ * which is the whole point of learning it, so a shared id would let one test's
+ * 400 pre-answer another's.
+ */
+function ceilingProbeAdapter(
+  id: string,
+  response: (attempt: number) => Response,
+): { adapter: CommandCodeAdapter; model: string; sent: () => number[]; attempts: () => number } {
+  const sent: number[] = []
+  let attempts = 0
+  const adapter = makeAdapter({
+    options: MESSAGES_OPTIONS(),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/provider/v1/models')) {
+        return new Response(JSON.stringify({ object: 'list', data: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      sent.push(body.max_tokens as number)
+      return response(attempts++)
+    }) as unknown as typeof fetch,
+  })
+  // The refusal text names the model, so the id travels in it too: a test that
+  // forgot to pass a matching id would otherwise assert against a ceiling that
+  // was learned for a different model.
+  return { adapter, model: id, sent: () => sent, attempts: () => attempts }
+}
+
+/** The refusal shape the Messages endpoint uses, as an HTTP 400. */
+function ceilingRejection(status: number, message: string): Response {
+  return new Response(
+    JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } }),
+    { status },
+  )
+}
+
+test('an HTTP output-ceiling refusal retries once at the ceiling the endpoint names', async () => {
+  const { adapter, model, sent, attempts } = ceilingProbeAdapter('claude-ceiling-http', (attempt) =>
+    attempt === 0
+      ? ceilingRejection(400, 'max_tokens: 64000 > 32000, which is the maximum allowed number of output tokens for claude-ceiling-http')
+      : messagesStream('ok'))
+  const chunks = await collect(adapter.stream({
+    provider: 'commandcode', model, messages: [userMessage('hi')],
+  }))
+  // The turn survives on the ceiling the refusal stated, not on a guess.
+  assert.deepEqual(sent(), [64_000, 32_000])
+  assert.equal(attempts(), 2)
+  assert.ok(chunks.some((c) => c.type === 'finish'))
+})
+
+test('an in-stream output-ceiling refusal retries once too', async () => {
+  // The same refusal arrives inside a 200 body on this transport, and the
+  // first line of issue #71 is that stream-error wording. A retry that only
+  // covered HTTP status would leave the reported case unfixed.
+  const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  const { adapter, model, sent, attempts } = ceilingProbeAdapter('claude-ceiling-stream', (attempt) =>
+    attempt === 0
+      ? new Response(sse('error', { type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens: 64000 > 16000, which is the maximum allowed number of output tokens for claude-ceiling-stream' } }), {
+        status: 200, headers: { 'content-type': 'text/event-stream' },
+      })
+      : messagesStream('ok'))
+  await collect(adapter.stream({
+    provider: 'commandcode', model, messages: [userMessage('hi')],
+  }))
+  assert.deepEqual(sent(), [64_000, 16_000])
+  assert.equal(attempts(), 2)
+})
+
+test('an in-stream output-ceiling refusal with no number in it is still not called a context overflow', async () => {
+  // The other shape the endpoint uses: a bare validation error naming the
+  // field and nothing else. There is no ceiling to read here, so there is
+  // nothing to retry — but the wording is what issue #71 complained about, and
+  // it is the only part of this fix a user ever sees. Reported as an oversized
+  // context, it sends the harness to compact a session that fits.
+  const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  const { adapter, model } = ceilingProbeAdapter('claude-ceiling-bare', () =>
+    new Response(sse('error', { type: 'error', error: { type: 'invalid_request_error', message: 'Invalid input: expected number, received undefined at max_tokens' } }), {
+      status: 200, headers: { 'content-type': 'text/event-stream' },
+    }))
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      const message = (error as Error).message
+      // The code is the part the harness routes on, and it is what handed
+      // this turn to the compaction before.
+      assert.equal((error as { code?: string }).code, 'PROVIDER_STREAM_ERROR')
+      assert.doesNotMatch(message, /content is too long|上下文窗口/u)
+      // The message has to say compacting is the wrong move, not merely avoid
+      // the word — "压缩上下文无效" is what a user needs to read to stop
+      // retrying a fix that cannot work.
+      assert.match(message, /compacting it will not help/u)
+      assert.match(message, /压缩上下文无效/u)
+      return true
+    },
+  )
+})
+
+test('a second output-ceiling refusal fails the turn and does not blame the context', async () => {
+  const { adapter, model, sent, attempts } = ceilingProbeAdapter('claude-ceiling-twice', () =>
+    ceilingRejection(400, 'max_tokens: 64000 > 8000, which is the maximum allowed number of output tokens for claude-ceiling-twice'))
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      const message = (error as Error).message
+      assert.equal((error as { code?: string }).code, 'PROVIDER_HTTP_ERROR')
+      // The regression this guards: the refusal text contains `max_tokens`, so
+      // it used to classify as a context overflow — the harness compacted an
+      // oversized-looking session, resent the identical request, and told the
+      // user to start a new one.
+      assert.doesNotMatch(message, /context window|上下文窗口/u)
+      assert.match(message, /8000/u)
+      return true
+    },
+  )
+  // One downshift per turn; the second refusal surfaces rather than looping.
+  assert.deepEqual(sent(), [64_000, 8_000])
+  assert.equal(attempts(), 2)
+})
+
+test('a ceiling learned from a refusal is what the next turn sends', async () => {
+  const { adapter, model, sent } = ceilingProbeAdapter('claude-ceiling-learned', (attempt) =>
+    attempt === 0
+      ? ceilingRejection(400, 'max_tokens: 64000 > 24000, which is the maximum allowed number of output tokens for claude-ceiling-learned')
+      : messagesStream('ok'))
+  const options = { provider: 'commandcode', model, messages: [userMessage('hi')] }
+  await collect(adapter.stream(options))
+  await collect(adapter.stream(options))
+  // The second turn never spends a 400 finding out what the first one learned.
+  assert.deepEqual(sent(), [64_000, 24_000, 24_000])
+})
+
+test('旧网关学到的输出上限不会压低新网关的同名模型', async () => {
+  let apiBase = 'https://first.invalid'
+  const model = 'claude-cross-gateway-learned'
+  const sent: number[] = []
+  const adapter = makeAdapter({
+    options: () => ({ ...MESSAGES_OPTIONS()(), apiBase }),
+    fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push((JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens)
+      return sent.length === 1
+        ? ceilingRejection(400, `max_tokens: 64000 > 24000, which is the maximum allowed number of output tokens for ${model}`)
+        : messagesStream('ok')
+    }) as typeof fetch,
+  })
+  const options = { provider: 'commandcode', model, messages: [userMessage('hi')] }
+  await collect(adapter.stream(options))
+  apiBase = 'https://second.invalid'
+  await collect(adapter.stream(options))
+  assert.deepEqual(sent, [64_000, 24_000, 64_000])
+})
+
+/**
+ * A Messages-route adapter whose catalog carries one entry, so a test can
+ * decide whether the gateway published a ceiling for it. The id is not in
+ * `KNOWN_PLANS`, so without a published figure it resolves through the
+ * conservative Messages fallback.
+ */
+function publishedCeilingAdapter(model: string, published: number | undefined) {
+  const entry: Record<string, unknown> = {
+    id: model, name: 'Probe', context_length: 1_000_000, supported_endpoints: ['/messages'],
+  }
+  if (published !== undefined) entry.max_output_tokens = published
+  const catalog = JSON.stringify({ object: 'list', data: [entry] })
+  const sent: number[] = []
+  const adapter = makeAdapter({
+    options: MESSAGES_OPTIONS(),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/provider/v1/models')) {
+        return new Response(catalog, { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      sent.push((JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens)
+      return messagesStream('ok')
+    }) as unknown as typeof fetch,
+  })
+  return { adapter, sent: () => sent }
+}
+
+test('a catalog that publishes max_output_tokens outranks the fallback ceiling', async () => {
+  // The field is in the gateway's schema and the official pi provider already
+  // prefers it; it just is not sent yet. When it arrives it is the gateway
+  // speaking about its own model, so it takes over from the conservative
+  // Messages fallback with no change here.
+  // 90 000 sits deliberately between the two values it has to be told apart
+  // from: above the 64 000 fallback it replaces, below the 131 072 the gateway
+  // accepts globally. A figure outside that band would pass for the wrong
+  // reason — above it the gateway's own cap decides the answer regardless.
+  const model = 'claude-published-takeover'
+  const { adapter, sent } = publishedCeilingAdapter(model, 90_000)
+  await adapter.listModels('commandcode')
+  await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+  assert.deepEqual(sent(), [90_000])
+})
+
+test('a published ceiling above the gateway-wide cap is still held under it', async () => {
+  // `DEFAULT_GENERATE_MAX_TOKENS` is not a default: probing showed 200 000
+  // answering and 200 704 refused on a 262 144-window model as well as a
+  // 1 000 000-token one, so the cap is global rather than per model. A catalog
+  // figure above it is a model capability, not a request size.
+  const model = 'claude-published-over-cap'
+  const { adapter, sent } = publishedCeilingAdapter(model, 400_000)
+  await adapter.listModels('commandcode')
+  await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+  assert.deepEqual(sent(), [131_072])
+})
+
+test('a model with no published ceiling still resolves through the fallback', async () => {
+  // The control for the test above: same adapter, same id shape, field absent.
+  // Without it, "the published figure was used" would also pass if the fallback
+  // had simply been removed.
+  const model = 'claude-published-absent'
+  const { adapter, sent } = publishedCeilingAdapter(model, undefined)
+  await adapter.listModels('commandcode')
+  await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+  assert.deepEqual(sent(), [64_000])
+})
+
+test('旧网关公布的输出上限不会覆盖新网关的目录', async (t) => {
+  const cachePath = join(tmpdir(), `cc-cross-gateway-published-${process.pid}.json`)
+  t.after(() => rmSync(cachePath, { force: true }))
+  let apiBase = 'https://first.invalid'
+  const model = 'claude-cross-gateway-published'
+  const sent: number[] = []
+  const adapter = makeAdapter({
+    options: () => ({ ...MESSAGES_OPTIONS()(), apiBase, modelsCachePath: cachePath }),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/provider/v1/models')) {
+        const entry = {
+          id: model, name: 'Probe', context_length: 1_000_000, supported_endpoints: ['/messages'],
+          ...(apiBase === 'https://first.invalid' ? { max_output_tokens: 90_000 } : {}),
+        }
+        return new Response(JSON.stringify({ object: 'list', data: [entry] }))
+      }
+      sent.push((JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens)
+      return messagesStream('ok')
+    }) as typeof fetch,
+  })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+  apiBase = 'https://second.invalid'
+  await adapter.listModels('commandcode', { unfiltered: true })
+  await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+  assert.deepEqual(sent, [90_000, 64_000])
+})
+
+test('a published ceiling outlives the process through the catalog cache', async () => {
+  // The gateway's own number is the one thing the snapshot cannot re-derive,
+  // so the cache has to carry it. A later run whose catalog fetch fails must
+  // still use it rather than fall back to the conservative value — and must
+  // prefer it over the derived `maxTokens` frozen in the same file.
+  const model = 'claude-published-cached'
+  const cachePath = join(tmpdir(), `cc-published-cache-${process.pid}.json`)
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(cachePath, JSON.stringify({
+    version: 3, apiBase: 'https://api.commandcode.ai',
+    models: [{
+      id: model, name: 'Probe', contextWindow: 1_000_000, maxTokens: 64_000,
+      publishedMaxTokens: 90_000, supportedEndpoints: ['/messages'],
+    }],
+  }))
+  try {
+    const sent: number[] = []
+    const adapter = new CommandCodeAdapter({
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai', workingDir: '/tmp', modelsCachePath: cachePath,
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      }),
+      resolveApiKey: async () => 'k',
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/provider/v1/models')) throw new Error('network down')
+        sent.push((JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens)
+        return messagesStream('ok')
+      }) as unknown as typeof fetch,
+    })
+    await adapter.listModels('commandcode')
+    await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+    assert.deepEqual(sent, [90_000])
+  } finally {
+    rmSync(cachePath, { force: true })
+  }
+})
+
+test('a cached derived ceiling is recomputed rather than trusted', async () => {
+  // `maxTokens` in the cache file is a derived value — snapshot, fallback and
+  // published figure can all move between runs. Reading it back verbatim would
+  // let a cache written before any of them moved pin the old answer for as long
+  // as the file survives, which is the same staleness the snapshot was
+  // introduced to remove.
+  const cachePath = join(tmpdir(), `cc-derived-cache-${process.pid}.json`)
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(cachePath, JSON.stringify({
+    version: 3, apiBase: 'https://api.commandcode.ai',
+    // `claude-sonnet-5-5`'s real ceiling is 128000; a cache frozen while the
+    // conservative 64000 was in force would otherwise keep it there.
+    models: [{ id: 'claude-sonnet-5-5', name: 'Sonnet', contextWindow: 1_000_000, maxTokens: 64_000 }],
+  }))
+  try {
+    const sent: number[] = []
+    const adapter = new CommandCodeAdapter({
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai', workingDir: '/tmp', modelsCachePath: cachePath,
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      }),
+      resolveApiKey: async () => 'k',
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/provider/v1/models')) throw new Error('network down')
+        sent.push((JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens)
+        return messagesStream('ok')
+      }) as unknown as typeof fetch,
+    })
+    await adapter.listModels('commandcode')
+    await collect(adapter.stream({ provider: 'commandcode', model: 'claude-sonnet-5-5', messages: [userMessage('hi')] }))
+    assert.deepEqual(sent, [128_000])
+  } finally {
+    rmSync(cachePath, { force: true })
+  }
+})
+
+test('the Messages stream assembles a tool call from input_json_delta fragments', async () => {
+  const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  const { adapter } = messagesAdapter(() => new Response([
+    sse('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_01ABC', name: 'read', input: {} } }),
+    sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path"' } }),
+    sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: ':"/etc/hosts"}' } }),
+    sse('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    sse('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 30, output_tokens: 20 } }),
+  ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
+
+  const chunks = await collect(adapter.stream({
+    provider: 'commandcode',
+    model: 'claude-opus-4-8',
+    tools: [{ name: 'read', description: 'Read', parameters: { type: 'object', properties: {} } as never }],
+    messages: [userMessage('read it')],
+  }))
+  const end = chunks.find((chunk) => chunk.type === 'block-end')
+  assert.equal(end?.type === 'block-end' && end.block.type, 'tool-call')
+  // The fragments concatenate into the single raw JSON string the harness wants.
+  assert.equal(end?.type === 'block-end' && end.block.type === 'tool-call' ? end.block.arguments : '', '{"path":"/etc/hosts"}')
+  const finish = chunks.find((chunk) => chunk.type === 'finish')
+  assert.deepEqual(finish?.type === 'finish' ? finish.reason : undefined, { kind: 'tool-calls' })
+})
+
+test('Messages usage maps cache and thinking tokens', async () => {
+  const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  const { adapter } = messagesAdapter(() => new Response([
+    sse('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+    sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } }),
+    sse('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    sse('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: {
+      input_tokens: 11, output_tokens: 40, cache_read_input_tokens: 900, cache_creation_input_tokens: 120,
+      output_tokens_details: { thinking_tokens: 25 },
+    } }),
+  ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
+
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-4-8', messages: [userMessage('hi')] }))
+  const usage = chunks.filter((chunk) => chunk.type === 'usage').at(-1)
+  assert.equal(usage?.type === 'usage' ? usage.usage.inputTokens : 0, 11)
+  assert.equal(usage?.type === 'usage' ? usage.usage.outputTokens : 0, 40)
+  assert.equal(usage?.type === 'usage' ? usage.usage.cacheReadTokens : 0, 900)
+  assert.equal(usage?.type === 'usage' ? usage.usage.cacheWriteTokens : 0, 120)
+  assert.equal(usage?.type === 'usage' ? usage.usage.reasoningTokens : 0, 25)
+})
+
+test('a Messages thinking signature is replayed on the next turn, and dropped when absent', async () => {
+  const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  // A fresh Response per call: a body can only be read once, and this stream
+  // answers three turns.
+  const signatureStream = () => new Response([
+    sse('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } }),
+    sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'weighing options' } }),
+    sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-abc-123' } }),
+    sse('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    sse('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_01Z', name: 'read', input: {} } }),
+    sse('content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } }),
+    sse('content_block_stop', { type: 'content_block_stop', index: 1 }),
+    sse('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 20, output_tokens: 30 } }),
+  ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+
+  const { adapter, sent } = messagesAdapter(() => signatureStream())
+  const first = await collect(adapter.stream({
+    provider: 'commandcode', model: 'claude-opus-4-8',
+    tools: [{ name: 'read', description: 'Read', parameters: { type: 'object', properties: {} } as never }],
+    messages: [userMessage('read it')],
+  }))
+  const finish = first.find((chunk) => chunk.type === 'finish')
+  assert.equal(finish?.type, 'finish')
+  const replay = finish?.type === 'finish' ? finish.replayState : undefined
+  assert.ok(replay, 'a Messages turn must carry a replay envelope')
+  // Per-block metadata, index-aligned with the emitted blocks.
+  assert.deepEqual(replay?.blocks, [{ type: 'reasoning', signature: 'sig-abc-123' }, { type: 'tool-call' }])
+
+  // The next turn replays the thinking block WITH its signature; the endpoint
+  // answers `thinking.signature: Field required` without one.
+  const withSignature: Message = {
+    id: messageId(), role: 'assistant',
+    source: { kind: 'model', provider: 'commandcode', model: 'claude-opus-4-8', replayState: replay },
+    content: [
+      { type: 'reasoning', text: 'weighing options' },
+      { type: 'tool-call', id: ToolCallId('toolu_01Z'), name: 'read', arguments: '{}' },
+    ],
+  }
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'claude-opus-4-8',
+    tools: [{ name: 'read', description: 'Read', parameters: { type: 'object', properties: {} } as never }],
+    messages: [userMessage('read it'), withSignature, toolMessage(ToolCallId('toolu_01Z'), [{ type: 'text', text: 'contents' }])],
+  }))
+  const assistant = (sent()[1]!.messages as WireMessage[])[1]!
+  const parts = assistant.content as Array<Record<string, unknown>>
+  assert.deepEqual(parts[0], { type: 'thinking', thinking: 'weighing options', signature: 'sig-abc-123' })
+
+  // Without a recorded signature the thinking block is dropped rather than sent
+  // half-formed: replaying it unanswered would fail the whole request.
+  const withoutSignature: Message = { ...withSignature, source: { kind: 'model', provider: 'commandcode', model: 'claude-opus-4-8' } }
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'claude-opus-4-8',
+    tools: [{ name: 'read', description: 'Read', parameters: { type: 'object', properties: {} } as never }],
+    messages: [userMessage('read it'), withoutSignature, toolMessage(ToolCallId('toolu_01Z'), [{ type: 'text', text: 'contents' }])],
+  }))
+  const dropped = (sent()[2]!.messages as WireMessage[])[1]!
+  const kept = (dropped.content as Array<Record<string, unknown>>).filter((part) => part.type !== 'thinking')
+  assert.equal(kept.length, (dropped.content as unknown[]).length, 'no thinking block may survive without its signature')
+  assert.equal((dropped.content as Array<Record<string, unknown>>)[0]!.type, 'tool_use')
+})
+
+test('a tool-result image rides inside tool_result on Messages, with no extra user turn', async () => {
+  const { adapter, sent } = messagesAdapter(() => messagesStream('ok'), {
+    resolveAttachments: () => fakeAttachments({ [imageRef().attachmentId]: pngBytes }),
+  })
+  const callId = ToolCallId('toolu_01IMG')
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'claude-opus-4-8',
+    tools: [{ name: 'shot', description: 'Screenshot', parameters: { type: 'object', properties: {} } as never }],
+    messages: [
+      userMessage('shoot'),
+      { id: messageId(), role: 'assistant', source: { kind: 'model', provider: 'commandcode', model: 'claude-opus-4-8' },
+        content: [{ type: 'tool-call', id: callId, name: 'shot', arguments: '{}' }] },
+      toolMessage(callId, [{ type: 'image', attachment: imageRef() }, { type: 'text', text: 'here' }]),
+    ],
+  }))
+  const messages = sent()[0]!.messages as WireMessage[]
+  // Messages is the one transport that can hold an image inside a tool result,
+  // so the tool result is a `user` turn carrying `tool_result` and NO follow-up
+  // user message is synthesized for the bytes (issue #30 on the other two).
+  assert.equal(messages.length, 3)
+  const result = messages[2]!
+  assert.equal(result.role, 'user')
+  const blocks = result.content as Array<Record<string, unknown>>
+  assert.equal(blocks[0]!.type, 'tool_result')
+  const inner = blocks[0]!.content as Array<Record<string, unknown>>
+  assert.equal(inner[0]!.type, 'image')
+  const source = inner[0]!.source as Record<string, unknown>
+  // Native media type, not a data URL.
+  assert.equal(source.media_type, 'image/png')
+  assert.equal(source.type, 'base64')
+  assert.equal(typeof source.data, 'string')
+})
+
+test('a Messages rejection is read whether it nests JSON in the message or is bare prose', async () => {
+  const cases: Array<[string, RegExp]> = [
+    // The message field holds a whole second document.
+    [JSON.stringify({ type: 'error', error: {
+      type: 'invalid_request_error',
+      message: JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens: 200000 > 128000' } }),
+    }, request_id: 'req_1' }), /200000 > 128000/u],
+    // Bare prose with no JSON at all.
+    ['Invalid input: expected number, received undefined at max_tokens', /expected number, received undefined/u],
+  ]
+  for (const [body, expected] of cases) {
+    const { adapter } = messagesAdapter(() => new Response(body, { status: 400 }))
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-4-8', messages: [userMessage('hi')] })),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'PROVIDER_HTTP_ERROR')
+        // The sentence the user can act on, never a JSON blob.
+        assert.match((error as Error).message, expected)
+        return true
+      },
+    )
+  }
+})
+
+test('a Messages plan refusal rotates the account instead of failing the turn', async () => {
+  const { adapter } = messagesAdapter(() => new Response(JSON.stringify({
+    type: 'error', error: { type: 'permission_error', message: 'MODEL_NOT_IN_PLAN: Claude Sonnet 4.6 available in Pro and above plans' },
+  }), { status: 403 }))
+  let rotatedTo: string | undefined
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-4-8', messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      // The code lives in the message prefix on this transport, not in
+      // `error.code`; the prose classifier still recognizes it.
+      assert.match((error as Error).message, /MODEL_NOT_IN_PLAN/u)
+      return true
+    },
+  )
+  assert.equal(rotatedTo, undefined)
+  assert.ok(adapter)
 })
 
 // ---------------------------------------------------------------------------
@@ -3304,11 +4289,11 @@ test('stream() maps 401 to INVALID_CREDENTIAL', async () => {
   )
 })
 
-test('stream() maps 429 to RATE_LIMIT', async () => {
+test('stream() 将普通 429 与额度窗口限流分别分类', async () => {
   const adapter = makeAdapter({ fetchImpl: fetchReturning(429, 'rate limited') })
   await assert.rejects(
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
-    (err: unknown) => (err as { code?: string }).code === 'RATE_LIMIT',
+    (err: unknown) => (err as { code?: string }).code === 'THROTTLED',
   )
 })
 
@@ -3926,7 +4911,11 @@ test('listModels() falls back to the on-disk cache when the fetch fails', async 
   const cachePath = `/tmp/cc-test-cache-${process.pid}.json`
   const { writeFileSync, rmSync } = await import('node:fs')
   writeFileSync(cachePath, JSON.stringify({
-    version: 1,
+    // Matches MODEL_CACHE_VERSION: a stale version is rejected outright, so the
+    // fixture has to carry the current one to exercise the fallback at all.
+    version: 3, apiBase: 'https://api.commandcode.ai',
+    // No `supportedEndpoints`: a hand-built cache entry may omit it, and the
+    // reader must normalize that instead of routing a Claude id wrongly.
     models: [{ id: 'cached-model', name: 'Cached', contextWindow: 1000, maxTokens: 500 }],
   }))
   try {
@@ -3947,6 +4936,33 @@ test('listModels() falls back to the on-disk cache when the fetch fails', async 
   } finally {
     rmSync(cachePath, { force: true })
   }
+})
+
+test('目录缓存拒绝旧格式和其他网关，并在成功刷新后保存来源', async (t) => {
+  const cachePath = join(tmpdir(), `cc-catalog-source-${process.pid}.json`)
+  t.after(() => rmSync(cachePath, { force: true }))
+  const { writeFileSync, readFileSync } = await import('node:fs')
+  const models = [{ id: 'model-a', name: 'A', contextWindow: 1000, maxTokens: 500, supportedEndpoints: ['/messages'] }]
+  const options = () => ({ ...OPENAI_OPTIONS(), apiBase: 'https://second.invalid', modelsCachePath: cachePath })
+  const offline = () => makeAdapter({ options, fetchImpl: (async () => { throw new Error('network down') }) as typeof fetch })
+  for (const cache of [
+    { version: 2, models },
+    { version: 3, apiBase: 'https://first.invalid', models },
+  ]) {
+    writeFileSync(cachePath, JSON.stringify(cache))
+    assert.deepEqual(await offline().listModels('commandcode', { unfiltered: true }), [])
+  }
+  const online = makeAdapter({
+    options,
+    fetchImpl: (async () => new Response(JSON.stringify({ object: 'list', data: [
+      { id: 'model-b', name: 'B', context_length: 1000, supported_endpoints: ['/chat/completions'] },
+    ] }))) as typeof fetch,
+  })
+  await online.listModels('commandcode', { unfiltered: true })
+  const saved = JSON.parse(readFileSync(cachePath, 'utf-8')) as { apiBase: string; version: number }
+  assert.equal(saved.apiBase, 'https://second.invalid')
+  assert.equal(saved.version, 3)
+  assert.equal((await offline().listModels('commandcode', { unfiltered: true }))[0]?.id, 'model-b')
 })
 
 test('resolveModel() exposes reasoning efforts only for known models', async () => {
@@ -4006,7 +5022,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the command-code provider table; `src/capabilities.ts` owns the
-  // table and is currently synced to command-code@1.68.0.
+  // table and is currently synced to command-code@1.72.1.
   // Every model the CLI's provider table ships effort levels for must be present, and
   // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
   // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
@@ -4045,7 +5061,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
   // Retired models (the MiniMax free variants, stealth/ox-alpha) belong to neither set.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
-  // Same provenance: `src/capabilities.ts`, synced to the command-code@1.68.0
+  // Same provenance: `src/capabilities.ts`, synced to the command-code@1.72.1
   // provider table.
   // Every model that reasons automatically (reasoning:true, no selectable effort
   // levels) belongs in this set, and every model that gained selectable efforts has
@@ -4058,6 +5074,10 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('meituan/LongCat-2.0'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meituan/LongCat-2.0:free'))
   assert.ok(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
+  // command-code@1.70.0: Ling 3.1 Flash gained selectable efforts, so it moved
+  // OUT of this set and into KNOWN_EFFORTS — its free predecessor did not.
+  assert.ok(!KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash:free'))
+  assert.deepEqual(KNOWN_EFFORTS['inclusionai/ling-3.1-flash:free'], ['low', 'medium', 'high'])
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
   assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0'])
@@ -4200,6 +5220,23 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // not fail open and show a Provider/Max model to every subscription.
   assert.equal(KNOWN_PLANS['claude-fable-5-1'], 'provider')
   assert.equal(KNOWN_PLANS['sakana/fugu-ultra'], 'provider')
+  // command-code@1.71.0: GPT-6.1 Sol is the catalog's FIRST Max-minimum model —
+  // every lower tier is false and only individual-max / individual-ultra /
+  // teams-pro are true, one step above every Provider row above.
+  assert.equal(KNOWN_PLANS['gpt-6.1-sol'], 'max')
+  assert.equal(planLabel('gpt-6.1-sol'), 'Max')
+  // It sorts strictly after every lower tier, so a Pro account's picker hides it:
+  // `compareByPlan` ranks by PLAN_ORDER, and only a free model may outrank it.
+  const highestTier = { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }
+  assert.ok(
+    Object.keys(KNOWN_PLANS).every((id) => id === 'gpt-6.1-sol' || isFreeModel(id) || compareByPlan(highestTier, { id, name: '' }) > 0),
+    'a Max-minimum model must sort after every non-free model of lower minimum plan',
+  )
+  // Its predecessor stays Pro — the two must not collapse into one tier.
+  assert.equal(KNOWN_PLANS['gpt-6-sol'], 'pro')
+  // command-code@1.70.0: Ling 3.1 Flash is free on every plan including Go.
+  assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash:free'], 'go')
+  assert.equal(planLabel('inclusionai/ling-3.1-flash:free'), 'Go')
   // Labels match the official tier names.
   assert.equal(planLabel('MiniMaxAI/MiniMax-M3'), 'Go')
   assert.equal(planLabel('claude-sonnet-5'), 'Pro')
@@ -4229,10 +5266,18 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free']?.free, true)
   // Ling 3.0 Flash Sante is free "up to 100 requests a day" — also permanent-style.
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.0-flash-sante:free']?.free, true)
-  // Grok 4.7's 40% off launch deal carries the page's own expiry stamp, so the badge
-  // lapses without another sync; its vendored rate row already holds the discount.
-  assert.equal(KNOWN_DEALS['xai/grok-4.7']?.label, '40% off')
-  assert.equal(KNOWN_DEALS['xai/grok-4.7']?.expiresAt, '2026-09-27T23:59:59.999Z')
+  // Grok 4.7's 40% off launch deal ran to 2026-09-27T23:59:59.999Z and the
+  // pricing page dropped it: the entry is REMOVED rather than left to lapse, so
+  // it never badges a model the catalog now serves at its list price.
+  assert.equal(KNOWN_DEALS['xai/grok-4.7'], undefined)
+  // Ling 3.1 Flash (command-code@1.70.0) is free "while it lasts" like its
+  // `ling-3.0-flash-sante:free` predecessor — permanent-style, so no expiresAt.
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash:free']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash:free']?.free, true)
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash:free']?.expiresAt, undefined)
+  assert.equal(isFreeModel('inclusionai/ling-3.1-flash:free'), true)
+  // GPT-6.1 Sol (command-code@1.71.0) ships at full price with no promotion.
+  assert.equal(KNOWN_DEALS['gpt-6.1-sol'], undefined)
   // The pricing page still embeds an already-expired (2026-06-22)
   // `qwen-3.7-max-2x-usage` record its own Deals section does not list, so it stays
   // out of the snapshot — the rate row already carries the discounted figures.
@@ -4260,11 +5305,13 @@ test('dealLabel() hides a deal after its expiry date', () => {
   assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
-  // Grok 4.7's 40% off launch deal carries the page's own expiry
-  // (2026-09-27T23:59:59.999Z), so it hides itself afterwards.
-  assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-21T00:00:00Z')), '40% off')
-  assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-27T12:00:00Z')), '40% off')
+  // Grok 4.7's 40% off launch deal lapsed 2026-09-27T23:59:59.999Z and was then
+  // removed from the page, so there is no label at any time.
+  assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-21T00:00:00Z')), undefined)
+  assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-27T12:00:00Z')), undefined)
   assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-28T00:00:00Z')), undefined)
+  // Ling 3.1 Flash is permanent-style, so every clock still reads FREE.
+  assert.equal(dealLabel('inclusionai/ling-3.1-flash:free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
   assert.equal(dealLabel('claude-sonnet-5'), undefined)
   // Gemini 3.7 Flash's deal was retired: no label at any time.
   assert.equal(dealLabel('google/gemini-3.7-flash', Date.parse('2026-12-31T12:00:00Z')), undefined)
@@ -4456,7 +5503,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.68.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.72.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -4568,7 +5615,7 @@ test('stream() ends a bare RATE_LIMITED as a retryable RATE_LIMIT that claims no
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
     (err: unknown) => {
       const caught = err as { code?: string; message?: string }
-      assert.equal(caught.code, 'RATE_LIMIT')
+      assert.equal(caught.code, 'THROTTLED')
       assert.match(caught.message ?? '', /did not report an exhausted usage window/)
       assert.match(caught.message ?? '', /未报告用量窗口用尽/)
       return true
@@ -4604,7 +5651,7 @@ test('stream() surfaces the 429 when rotation offers no other account', async ()
   })
   await assert.rejects(
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
-    (err: unknown) => (err as { code?: string }).code === 'RATE_LIMIT',
+    (err: unknown) => (err as { code?: string }).code === 'THROTTLED',
   )
   assert.equal(calls.length, 1)
 })
@@ -4623,7 +5670,7 @@ test('stream() never retries with a key it already tried', async () => {
   })
   await assert.rejects(
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
-    (err: unknown) => (err as { code?: string }).code === 'RATE_LIMIT',
+    (err: unknown) => (err as { code?: string }).code === 'THROTTLED',
   )
   assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
 })
@@ -5003,7 +6050,7 @@ test('providerRetryPolicy() pins the near-unbounded transient-only retry policy'
   const policy = adapter.providerRetryPolicy('commandcode')
   assert.equal(policy.mode, 'normal')
   assert.equal(policy.maxRetries, 1000)
-  assert.deepEqual([...policy.retryableCodes], ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
+  assert.deepEqual([...policy.retryableCodes], ['EMPTY_RESPONSE', 'RATE_LIMIT', 'THROTTLED', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
   // IMAGE_OFFLOAD_REQUIRED is deliberately outside the whitelist (issue #43):
   // the harness mutates the session surface and retries, so a byte-identical
   // resend from dsh-llm-retry could never succeed.
@@ -5027,7 +6074,7 @@ test('stream() attaches a 429 Retry-After header as providerRetryAfterMs', async
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
     (err: unknown) => {
       const e = err as { code?: string; failure?: { providerRetryAfterMs?: number } }
-      return e.code === 'RATE_LIMIT' && e.failure?.providerRetryAfterMs === 7000
+      return e.code === 'THROTTLED' && e.failure?.providerRetryAfterMs === 7000
     },
   )
 })
@@ -5041,7 +6088,7 @@ test('stream() drops a non-finite Retry-After instead of failing error construct
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
     (err: unknown) => {
       const e = err as { code?: string; failure?: { providerRetryAfterMs?: number } }
-      return e.code === 'RATE_LIMIT' && e.failure?.providerRetryAfterMs === undefined
+      return e.code === 'THROTTLED' && e.failure?.providerRetryAfterMs === undefined
     },
   )
 })
@@ -5055,7 +6102,7 @@ test('stream() drops a Retry-After above the policy cap so normal mode keeps ret
     collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
     (err: unknown) => {
       const e = err as { code?: string; failure?: { providerRetryAfterMs?: number } }
-      return e.code === 'RATE_LIMIT' && e.failure?.providerRetryAfterMs === undefined
+      return e.code === 'THROTTLED' && e.failure?.providerRetryAfterMs === undefined
     },
   )
 })
@@ -5436,12 +6483,222 @@ test('an answered request ends a header-timeout streak', async () => {
   assert.equal((await generateFailure(adapter)).code, 'TIMEOUT')
   silent = false
   // A streamed answer proves the gateway answered, whatever the status was.
+  // Same sessionId as generateFailure()'s calls: the streak is now keyed by
+  // session, so a session-less success would clear the WRONG entry.
   for await (const _ of adapter.stream({
     provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')],
+    sessionId: 'streak-probe-session' as unknown as NonNullable<GenerateOptions['sessionId']>,
   })) { /* drain */ }
   silent = true
   assert.equal((await generateFailure(adapter)).code, 'TIMEOUT', 'the streak restarted after the answer')
   assert.equal((await generateFailure(adapter)).code, 'TIMEOUT')
   const third = await generateFailure(adapter)
   assert.equal(third.code, 'PROVIDER_HTTP_ERROR', 'and only then escalates again')
+})
+
+/** Like {@link generateFailure}, but with a caller-chosen sessionId instead of the fixed probe one. */
+async function generateFailureAs(
+  adapter: CommandCodeAdapter,
+  sessionId: string,
+): Promise<{ code: string; message: string }> {
+  try {
+    for await (const _ of adapter.stream({
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      messages: [userMessage('hi')],
+      sessionId: sessionId as unknown as NonNullable<GenerateOptions['sessionId']>,
+    })) { /* drain */ }
+  } catch (error) {
+    const coded = error as { code?: string; message?: string }
+    return { code: String(coded.code), message: String(coded.message) }
+  }
+  throw new Error('expected the generate to fail')
+}
+
+test('concurrent sessions keep independent header-timeout streaks', async () => {
+  // Before the fix, `headerTimeoutStreak` was one field on the shared adapter
+  // instance: a different session's body hashes to a different fingerprint,
+  // so interleaving two sessions kept resetting the single slot back to 1 and
+  // NEITHER session could ever reach the escalation threshold. Two isolated
+  // per-session counts must each reach it on their own schedule.
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai', workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 30, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'cli' as const,
+    }),
+    fetchImpl: neverSettlingFetch(),
+  })
+  assert.equal((await generateFailureAs(adapter, 'session-a')).code, 'TIMEOUT')
+  assert.equal((await generateFailureAs(adapter, 'session-b')).code, 'TIMEOUT')
+  assert.equal((await generateFailureAs(adapter, 'session-a')).code, 'TIMEOUT', 'session-a is still only on its 2nd timeout')
+  const sessionAThird = await generateFailureAs(adapter, 'session-a')
+  assert.equal(sessionAThird.code, 'PROVIDER_HTTP_ERROR', 'session-a reaches its own 3rd consecutive timeout')
+  const sessionBSecond = await generateFailureAs(adapter, 'session-b')
+  assert.equal(sessionBSecond.code, 'TIMEOUT', 'session-b is unaffected by session-a escalating, and is only on its 2nd timeout')
+})
+
+test('a session-less call keeps the old single-slot streak so it still escalates', async () => {
+  // openai protocol, not cli: the CLI body embeds a threadId that falls back
+  // to a fresh randomUUID() per call with no sessionId (cliThreadId()), which
+  // would change the fingerprint every attempt regardless of this fix — that
+  // is pre-existing and orthogonal to the session-keying change under test.
+  // The flat OpenAI body carries no such field, so it stays identical across
+  // session-less calls and the streak can actually accumulate.
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai', workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 30, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: neverSettlingFetch(),
+  })
+  const generateWithoutSession = async (): Promise<{ code: string; message: string }> => {
+    try {
+      for await (const _ of adapter.stream({
+        provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')],
+      })) { /* drain */ }
+    } catch (error) {
+      const coded = error as { code?: string; message?: string }
+      return { code: String(coded.code), message: String(coded.message) }
+    }
+    throw new Error('expected the generate to fail')
+  }
+  assert.equal((await generateWithoutSession()).code, 'TIMEOUT')
+  assert.equal((await generateWithoutSession()).code, 'TIMEOUT')
+  assert.equal((await generateWithoutSession()).code, 'PROVIDER_HTTP_ERROR', 'still escalates on the 3rd, same as before the session-keyed fix')
+})
+
+// 请求准备和跨账号重试的回归场景，全部使用本地替身，不访问真实服务。
+test('降级后换账号重新选择协议，且三次尝试均进入耗时摘要', async () => {
+  const paths: string[] = []
+  const bodies: Record<string, unknown>[] = []
+  const summaries: import('../src/request-timing.ts').RequestTimingSummary[] = []
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), protocol: 'auto' }),
+    resolveApiKey: async () => 'private-test-key-one',
+    rotateApiKey: async () => 'private-test-key-two',
+    onRequestTiming: (summary) => { summaries.push(summary) },
+    fetchImpl: (async (url, init) => {
+      paths.push(new URL(String(url)).pathname)
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      if (paths.length === 1) return new Response('{"error":{"code":"upgrade_required"}}', { status: 403 })
+      if (paths.length === 2) return new Response('rate limited', { status: 429 })
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n')
+    }) as typeof fetch,
+  })
+  await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('private-user-text')] }))
+  assert.deepEqual(paths, ['/provider/v1/chat/completions', '/alpha/generate', '/provider/v1/chat/completions'])
+  assert.equal(bodies[0]?.model, 'm')
+  assert.ok(bodies[1]?.params)
+  assert.equal(bodies[2]?.model, 'm')
+  assert.equal(summaries[0]?.outcome, 'finished')
+  assert.deepEqual(summaries[0]?.attempts.map((attempt) => attempt.status), [403, 429, 200])
+  assert.equal(typeof summaries[0]?.firstContentMs, 'number')
+  assert.doesNotMatch(JSON.stringify(summaries), /private-test-key|private-user-text|Authorization/)
+})
+
+test('同协议换账号不重新序列化请求体', async () => {
+  let serialized = 0
+  let calls = 0
+  const args = { toJSON: () => { serialized++; return { value: 1 } } }
+  const adapter = makeAdapter({
+    rotateApiKey: async () => 'second-key',
+    fetchImpl: (async () => ++calls === 1
+      ? new Response('rate limited', { status: 429 }) : new Response(FINISH_STREAM)) as typeof fetch,
+  })
+  await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')],
+    tools: [{ name: 'tool', description: 'test', parameters: { type: 'object', properties: { value: args } } }],
+  }))
+  assert.equal(calls, 2)
+  assert.equal(serialized, 1)
+})
+
+test('同次请求并行读取图片不超过四张，重复图片及协议降级复用读取', async () => {
+  const refs = Array.from({ length: 7 }, (_, i) => ({ ...imageRef(), attachmentId: AttachmentId(`image-${i}`) }))
+  const attachments = fakeAttachments(Object.fromEntries(refs.map((ref) => [ref.attachmentId, pngBytes])))
+  const original = attachments.readImageRequest.bind(attachments)
+  let active = 0, peak = 0, reads = 0, calls = 0
+  attachments.readImageRequest = async (ref, target) => {
+    reads++; active++; peak = Math.max(peak, active)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    try { return await original(ref, target) } finally { active-- }
+  }
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), protocol: 'auto' }),
+    resolveAttachments: () => attachments,
+    fetchImpl: (async () => ++calls === 1
+      ? new Response('{"error":{"code":"upgrade_required"}}', { status: 403 }) : new Response(FINISH_STREAM)) as typeof fetch,
+  })
+  await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [
+    { id: messageId(), role: 'user', source: { kind: 'user' }, content: [...refs, refs[0]!].map((attachment) => ({ type: 'image', attachment })) },
+  ] }))
+  assert.equal(reads, 7)
+  assert.equal(peak, 4)
+  assert.equal(calls, 2)
+})
+
+test('目录刷新合并并发等待，单个调用取消不会影响其他调用', async (t) => {
+  const path = join(tmpdir(), `cc-catalog-concurrent-${process.pid}.json`)
+  t.after(() => rmSync(path, { force: true }))
+  let calls = 0
+  let release!: (response: Response) => void
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), modelsCachePath: path }),
+    fetchImpl: (() => { calls++; return new Promise<Response>((resolve) => { release = resolve }) }) as typeof fetch,
+  })
+  const controller = new AbortController()
+  const cancelled = adapter.resolveModel('commandcode', 'm', controller.signal)
+  const rejected = assert.rejects(cancelled, { name: 'AbortError' })
+  const listing = adapter.listModels('commandcode', { unfiltered: true })
+  controller.abort()
+  await rejected
+  release(new Response(JSON.stringify({ object: 'list', data: [{ id: 'm', name: 'm', context_length: 1000 }] })))
+  assert.equal((await listing).length, 1)
+  await adapter.listModels('commandcode', { unfiltered: true })
+  assert.equal(calls, 1)
+})
+
+test('目录有效期到期或网关地址变化后重新获取', async (t) => {
+  const path = join(tmpdir(), `cc-catalog-expiry-${process.pid}.json`)
+  t.after(() => rmSync(path, { force: true }))
+  const originalNow = Date.now
+  let now = originalNow(), base = 'https://first.invalid', calls = 0
+  Date.now = () => now
+  t.after(() => { Date.now = originalNow })
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), apiBase: base, modelsCachePath: path }),
+    fetchImpl: (async () => {
+      calls++
+      return new Response(JSON.stringify({ object: 'list', data: [{ id: base, name: base, context_length: 1000 }] }))
+    }) as typeof fetch,
+  })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  assert.equal(calls, 1)
+  now += 5 * 60_000 + 1
+  await adapter.listModels('commandcode', { unfiltered: true })
+  assert.equal(calls, 2)
+  base = 'https://second.invalid'
+  assert.equal((await adapter.listModels('commandcode', { unfiltered: true }))[0]?.id, base)
+  assert.equal(calls, 3)
+})
+
+test('every new-arrival model carries an output ceiling or is left to runtime learning', () => {
+  // Issue #71: the endpoint refuses a `max_tokens` above the model's own ceiling,
+  // and the refusal text was ALSO being read as a context overflow, so the harness
+  // compacted a healthy session. A catalog arrival therefore either gets a ceiling
+  // here or must be one the runtime learns from the refusal — never neither.
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('gpt-6.1-sol'), 128000)
+  // Hand-recorded: models.dev has no `ling-3.1` row yet (see MANUAL_CEILINGS in
+  // scripts/sync-output-limits.mjs), so this takes the Ling family's uniform 32768
+  // rather than starting at DEFAULT_MESSAGES_MAX_TOKENS.
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash:free'), 32768)
+  // A ceiling is a CEILING, not a window: both are far below their own context,
+  // which is the whole point of the table — deriving `max_tokens` from
+  // `context_length` is exactly what produced #71.
+  assert.ok(MODEL_OUTPUT_TOKEN_LIMITS.get('gpt-6.1-sol')! < 1_050_000)
+  assert.ok(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash:free')! < 262_144)
 })

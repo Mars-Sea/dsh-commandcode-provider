@@ -235,7 +235,7 @@ test('a bare 429 is reported as a throttle, never as an exhausted usage window',
     () => assert.fail('expected resolveKey to throw'),
     (caught: unknown) => caught as Error & { code?: string },
   )
-  assert.equal(error.code, 'RATE_LIMIT')
+  assert.equal(error.code, 'THROTTLED')
   assert.match(error.message, /are rate limited \(429\)/)
   assert.match(error.message, /did not report an exhausted usage window/)
   assert.match(error.message, /全部 1 个 Command Code 账户被限流/)

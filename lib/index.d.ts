@@ -6,8 +6,30 @@ import { WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from
 import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
+//#region src/request-timing.d.ts
+type Phase = 'credentials' | 'images' | 'body' | 'serialization' | 'headers';
+type Outcome = 'finished' | 'error' | 'aborted' | 'cancelled';
+interface RequestTimingSummary {
+  version: 1;
+  startedAt: number;
+  model: string;
+  outcome: Outcome;
+  errorCode?: string;
+  totalMs: number;
+  phasesMs: Record<Phase, number>;
+  firstByteMs?: number;
+  firstContentMs?: number;
+  attempts: Array<{
+    protocol: string;
+    bodyBytes: number;
+    headersMs: number;
+    status?: number;
+  }>;
+}
+type RequestTimingSink = (summary: RequestTimingSummary) => void | Promise<void>;
+//#endregion
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.68.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.72.1";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.
@@ -42,8 +64,18 @@ declare const DEFAULT_GENERATE_MAX_TOKENS = 131072;
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 /** How long the picker's plan-filter billing facts stay cached before refetching. */
 declare const BILLING_ACCESS_TTL_MS: number;
-/** Endpoint protocol selected for one generate call. */
-type CommandCodeProtocol = 'cli' | 'openai';
+/**
+ * Endpoint protocol selected for one generate call.
+ *
+ * `messages` is the Anthropic Messages surface at
+ * `{apiBase}/provider/v1/messages`, the only Provider API route the Claude
+ * family answers (posted to `/chat/completions` they refuse with `400 Model
+ * "<id>" must be called via /provider/v1/messages`). `openai` is the
+ * documented Chat Completions surface; `cli` is Command Code's private
+ * `/alpha/generate` transport, kept for Go-plan keys (the one plan without
+ * Provider API access) and as the `upgrade_required` fallback.
+ */
+type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
 /**
  * Head-of-request timeout: how long to wait for the first response byte.
  *
@@ -181,6 +213,8 @@ interface AccountRotationContext {
 }
 /** Everything the adapter needs beyond the request itself. */
 interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
+  /** 可选的数值耗时接收器；不接收提示词、凭据或错误正文。 */
+  onRequestTiming?: RequestTimingSink;
   /** Resolve the current connection facts (fresh per request, settings-aware). */
   options: () => C;
   /**
@@ -326,6 +360,7 @@ interface CommandCodeUsageReport {
 declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private readonly deps;
   private catalog;
+  private catalogState;
   private readonly fetchImpl;
   private readonly resolveAttachments;
   /**
@@ -336,24 +371,32 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   private readonly billingAccess;
   private readonly billingAccessInflight;
   private readonly protocolCache;
+  /** Namespace account-derived facts by gateway without exposing the key. */
+  private accountCacheKey;
   /**
    * Consecutive header timeouts for the last request shape, counted ACROSS
    * `stream()` calls: dsh-llm-retry re-invokes this same instance, so this is
-   * the only place a streak can live. One slot rather than a map is the point —
-   * the claim is "consecutive", and a single record cannot grow.
+   * the only place a streak can live. Keyed by `sessionId` (not by `agent`:
+   * `GenerateOptions` carries no agent reference, only `sessionId`) so
+   * concurrent sessions on this one shared adapter instance cannot clear or
+   * inflate each other's count. A call with no `sessionId` (a one-shot,
+   * session-less caller) falls back to {@link GLOBAL_HEADER_TIMEOUT_KEY},
+   * matching the old single-slot behavior for exactly that case. Bounded by
+   * {@link MAX_HEADER_TIMEOUT_STREAK_ENTRIES} with FIFO eviction (`Map`
+   * preserves insertion order) since the key space is per-session rather than
+   * per-account/model, so it is not naturally small like `protocolCache`.
    */
-  private headerTimeoutStreak;
+  private readonly headerTimeoutStreaks;
+  private static readonly MAX_HEADER_TIMEOUT_STREAK_ENTRIES;
   constructor(deps: CommandCodeAdapterDeps<C>);
   /**
    * Grade one failed attempt: a headers timeout that repeats on an unchanged
    * payload eventually leaves the retryable whitelist.
    *
    * `providerRetryPolicy()` cannot express this itself — dsh-llm's
-   * `NormalRetryPolicyConfig` carries a single scalar `maxRetries` next to the
-   * code list, so there is no per-code limit to lower. Escalating from here is
-   * the only way to keep `RATE_LIMIT` / `SERVER` / `TRANSPORT` retryable (each
-   * carries a real "try again later" signal) while stopping the one code that,
-   * repeated unchanged, only burns the user's session.
+   * `NormalRetryPolicyConfig` carries one `maxRetries` for every listed code.
+   * Escalating here stops repeated identical header timeouts with a specific
+   * diagnosis; the agent listener separately caps ordinary transient errors.
    *
    * @returns the error to surface: unchanged for any other failure, the
    * original timeout below the threshold, and a terminal one at it.
@@ -368,12 +411,11 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    */
   providerInfo(provider: string): LlmProviderInfo;
   /**
-   * Near-unbounded retry for transient failures only (`mode: 'normal'` with
-   * an explicit 1000-attempt cap — opencode-style persistence without the
-   * unbounded loop): `RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`/
-   * `EMPTY_RESPONSE` retry up to 1000 times with waits doubling from 500 ms
-   * and capping at 15 minutes (±10% jitter), so an exhausted 5-hour window
-   * recovers in-session instead of failing after two tries. Permanent failures
+   * The official executor owns backoff and provider reset waits. Its high
+   * route-wide cap lets a confirmed `RATE_LIMIT` window recover in-session;
+   * our request-error listener limits `SERVER`/`TIMEOUT`/`EMPTY_RESPONSE`/
+   * `THROTTLED` to three retries and `TRANSPORT` to its separate budget.
+   * Waits double from 500 ms and cap at 15 minutes (±10% jitter). Permanent failures
    * (an invalid key's `INVALID_CREDENTIAL`, `UNSUPPORTED_CONTENT`, plan
    * rejections) are absent from the whitelist and surface immediately instead
    * of looping. Waits the pool/adapter attach as `providerRetryAfterMs` are
@@ -397,7 +439,9 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * requirement — the meter throws when the counts differ.
    */
   imageRequestPricing(_provider: string, model: string): LlmImageRequestPricing | undefined;
-  /** Refresh the catalog (live fetch, cache fallback) and return it. */
+  /** 地址或缓存文件变化时丢弃旧目录，防止旧网关的路由声明影响新请求。 */
+  private currentCatalogState;
+  /** 共享一次刷新；调用者取消只结束自己的等待，不取消其他调用者的请求。 */
   private loadCatalog;
   listModels(provider: string, opts?: {
     unfiltered?: boolean;
@@ -466,25 +510,36 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   /** Fresh cached billing tier weight for a key, or undefined when not known. */
   private cachedBillingTierWeight;
   /** Cached protocol decision for a key, or undefined when expired/unknown. */
-  private cachedProtocolUseCli;
+  private cachedProtocol;
   private rememberProtocol;
   /**
-   * Choose the initial protocol for one request. A fresh protocol cache entry
-   * wins; otherwise a cached (not network-fetched) billing tier of Go is
-   * treated as CLI-only. Unknown accounts default to Provider API and fall
-   * back only after an `upgrade_required` rejection.
+   * True when the catalog routes `model` to `/provider/v1/messages`.
    *
-   * Models the Provider API serves ONLY through `/provider/v1/messages` (the
-   * Claude family — `requiresMessagesEndpoint()`) always take the CLI
-   * transport, on any tier and even under a forced `'openai'` preference:
-   * that option is documented as "prefer the Provider API, still fall back",
-   * and the 400 these models answer with is not a preference to be honoured
-   * but a hard refusal. `/alpha/generate` routes every one of them, so this
-   * costs nothing.
+   * The catalog's own `supported_endpoints` is authoritative (it is what
+   * upstream publishes per model); `requiresMessagesEndpoint()` — the
+   * `claude-*` prefix rule — is the fallback for a catalog entry that carries
+   * no route list, which is the shape every pre-1.55 cache file has.
+   */
+  private routesToMessages;
+  /**
+   * Choose the initial protocol for one request.
+   *
+   * Models the Provider API serves only through `/provider/v1/messages` (the
+   * Claude family) take the Messages transport on any tier and even under a
+   * forced `'openai'` preference: that option is documented as "prefer the
+   * Provider API, still fall back", and the 400 these models answer with on
+   * Chat Completions (`Model "<id>" must be called via /provider/v1/messages`)
+   * is a hard refusal, not a preference to honour.
    *
    * That decision is deliberately NOT written to `protocolCache`, which is
-   * keyed by API key alone: remembering it would pin the whole ACCOUNT to the
-   * CLI transport and drag every other model off it until the entry expired.
+   * keyed by gateway and API key: it depends on the model, not just the account, so
+   * remembering it would pin the whole ACCOUNT to one transport and drag
+   * every other model along (issue #46).
+   *
+   * Otherwise a fresh protocol cache entry wins, then a cached (not
+   * network-fetched) billing tier of Go — the one plan without Provider API
+   * access. Unknown accounts default to Chat Completions and fall back to the
+   * CLI transport only after an `upgrade_required` rejection.
    */
   private resolveProtocol;
   /**
@@ -535,6 +590,26 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
     resetAt: number;
   } | undefined>;
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
+  /**
+   * One turn, with at most one output-ceiling downshift.
+   *
+   * The ceiling a model accepts is not published anywhere the request can be
+   * built from (see `modelOutputTokenLimit`), and the endpoint states it only
+   * by refusing. That refusal is worth one retry rather than a failed turn: the
+   * harness's own recovery for it — compact the context — cannot help, because
+   * nothing about the context is wrong, and resending the identical request
+   * would be refused identically (issue #71). Reading the stated ceiling off
+   * the rejection turns one wasted turn into one, for good: it is recorded
+   * process-wide, so the next request for this model is built correctly
+   * without spending the round trip again.
+   *
+   * Only BEFORE the first chunk reaches the host. Once a delta has been
+   * delivered the answer is already partly on screen, and a second request
+   * would duplicate it — so from that point the error stands and says what is
+   * actually wrong. One downshift per turn, and a second refusal surfaces.
+   */
+  private streamRequest;
+  private streamAttempt;
 }
 //#endregion
 //#region src/accounts.d.ts
@@ -821,7 +896,7 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.68.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.72.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table would drop `meituan/
@@ -882,7 +957,7 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.68.0 (2026-09-29): 84 catalog
+ * Provider-tier. Re-verified at command-code@1.72.1 (2026-09-30): 86 catalog
  * ids at 53/62/76/84 cumulative, a strict superset chain — every release since
  * 1.49.0 has been additive with no tier move, and per-entry tags below name the
  * release that added each row.
@@ -911,7 +986,7 @@ declare function compareByPlan(a: {
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
  * (located by the `"individual-go"` key in `dist/cli.mjs`, re-verified unchanged
- * through command-code@1.68.0): subscription `planId` prefix → display name and
+ * through command-code@1.72.1): subscription `planId` prefix → display name and
  * the plan's monthly credit total. This is the account's own subscription
  * (from `/alpha/billing/subscriptions`) — distinct from {@link KNOWN_PLANS},
  * which maps catalog models to their minimum tier.
@@ -1798,9 +1873,9 @@ interface Config {
   offloadSeenImagesForCache?: boolean;
   /**
    * Transport failures one request absorbs before the failure is surfaced;
-   * defaults to 5. The route's retry policy is near-unbounded on purpose
-   * (1000 attempts, waits doubling to 15 minutes) because that shape is for
-   * the failures a provider asks to have retried; a transport failure is not
+   * defaults to 5. The route's policy allows long waits for confirmed usage
+   * windows, while ordinary transient errors have a separate three-retry
+   * budget. A transport failure is not
    * one of those, and after ~15.5 s of grace the wait is pure stall, so it is
    * capped here (issue #39). 0 surfaces every transport failure immediately.
    */

@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.68.0) and
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.72.1) and
  * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
  * for the extraction procedures. Keeping the snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
@@ -19,7 +19,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.68.0 bundled model
+  // Re-verified against the authoritative command-code@1.72.1 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -110,6 +110,15 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // the GLM 5.3 / 5.2 family's shape, unlike Space Bunny Alpha's. Free during
   // the stealth preview and NOT routed under ZDR (see the tables above).
   'stealth/pixel-canary': ['low', 'medium', 'xhigh'],
+  // command-code@1.71.0. Max-and-above availability (see KNOWN_PLANS), Vision
+  // per the official registry and inputModalities:["text","image"], and the
+  // same five-level set as its `gpt-6-astra` / `gpt-6-sol` predecessors.
+  'gpt-6.1-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
+  // command-code@1.70.0. Free during "while it lasts" (see KNOWN_DEALS) but,
+  // unlike the free stealth previews and its own `ling-3.0-flash-sante:free`
+  // predecessor, it still carries selectable efforts — so it belongs here and
+  // NOT in KNOWN_THINKING_MODELS.
+  'inclusionai/ling-3.1-flash:free': ['low', 'medium', 'high'],
 }
 
 /**
@@ -178,6 +187,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // official registry and inputModalities.
   'gpt-6-luna',
   'gpt-6-sol',
+  // command-code@1.71.0; Vision per the official registry and the CLI's
+  // inputModalities:["text","image"] — unlike the text-only Ling free models.
+  'gpt-6.1-sol',
   // command-code@1.44.0 added Muse Spark 1.3 and its Contributor sibling; both
   // are Vision per the official registry and inputModalities.
   'meta/muse-spark-1.1',
@@ -220,7 +232,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.68.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.72.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table would drop `meituan/
@@ -350,16 +362,22 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
 /**
  * Catalog models the Provider API serves ONLY through `/provider/v1/messages`
  * (Anthropic Messages shape). Every other model in the catalog answers on
- * `/provider/v1/chat/completions`; these reject it outright with HTTP 400
- * `Model "<id>" must be called via /provider/v1/messages (Anthropic Messages
- * shape)`.
+ * `/provider/v1/chat/completions`.
  *
- * Measured 2026-09-16 against the live catalog (command-code@1.54.0): all 69
- * models were posted to `/provider/v1/chat/completions`; exactly these eight
- * — the whole Claude family then — refused, and every one of them is routed
- * normally by `/alpha/generate` (a lower-plan key gets the ordinary
- * `MODEL_NOT_IN_PLAN` 403 there, never a routing error). So the CLI transport
- * is a complete fallback and the adapter does not need a Messages transport.
+ * Measured 2026-09-16 (command-code@1.54.0, 69 models posted to
+ * `/provider/v1/chat/completions`): exactly the then-entire Claude family
+ * refused with HTTP 400 `Model "<id>" must be called via
+ * /provider/v1/messages (Anthropic Messages shape)`, and every one of them is
+ * routed normally by `/alpha/generate`.
+ *
+ * Re-measured 2026-09-29 against the 84-model catalog: the same ten
+ * `claude-*` ids are the only ones carrying `supported_endpoints:
+ * ["/messages"]`, and posting a non-Claude model to the endpoint answers 400
+ * `Model "<id>" is not supported on this endpoint. Use
+ * /provider/v1/chat/completions for OpenAI and OSS models.` The adapter routes
+ * on that field when the catalog supplies it, so this set is the FALLBACK for
+ * a cached or hand-built catalog, not the primary source — see
+ * `requiresMessagesEndpoint()`.
  *
  * Note what this list is NOT: it is not a plan gate. `claude-sonnet-5` is
  * Pro-tier and `claude-opus-4-8` Provider-tier, so the accounts entitled to
@@ -368,20 +386,21 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
  * request before this snapshot existed.
  *
  * `requiresMessagesEndpoint()` additionally treats any `claude-*` id as
- * Messages-only, so a Claude model added upstream (`claude-opus-5-5` in
- * command-code@1.64.0 was the first this snapshot missed) is still routed
- * correctly by an un-updated plugin instead of hard-failing with the 400
- * above. The worst case of that rule going stale the other way (upstream
- * teaching `/provider/v1/chat/completions` to serve Claude) is one model
- * riding the CLI transport it already works on.
+ * Messages-only, so a Claude model added upstream is still routed correctly
+ * by an un-updated plugin instead of hard-failing with the 400 above. The
+ * worst case of that rule going stale the other way (upstream teaching
+ * `/provider/v1/chat/completions` to serve Claude) is one model riding a
+ * transport it already works on.
  *
  * Keep in sync when models ship (see the dsh-commandcode-upstream skill).
  */
 export const MESSAGES_ONLY_MODELS: ReadonlySet<string> = new Set([
+  'claude-sonnet-5-5',
   'claude-sonnet-5',
   'claude-sonnet-4-6',
   'claude-fable-5-1',
   'claude-fable-5',
+  'claude-opus-5-5',
   'claude-opus-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
@@ -394,12 +413,217 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
 }
 
 /**
+ * Per-model output ceilings, which `/provider/v1/models` does NOT publish (it
+ * carries `context_length` and `supported_endpoints` only) while every endpoint
+ * refuses a larger `max_tokens` per model. Sending the context window as the
+ * output budget is what produced issue #71: `claude-sonnet-5-5` has a
+ * 1 000 000-token window and a 128 000-token ceiling, the adapter derived
+ * 131072, and the endpoint refused every request of a fresh process.
+ *
+ * **Generated — do not hand-edit.** `scripts/sync-output-limits.mjs` rewrites
+ * this literal from models.dev; run it after a catalog sync, and use its
+ * `--check` in CI. Command Code resells these models through their VENDOR's own
+ * API, so the vendor's published ceiling is the value recorded: 76 of the 86
+ * catalog ids as of 2026-09-30. Each row carries a comment naming the entry it
+ * came from.
+ *
+ * Two of those 76 rest on more than a vendor lookup. `gpt-6.1-sol` (128000) comes
+ * from OpenAI's own row and is corroborated by every other provider carrying it.
+ * `inclusionai/ling-3.1-flash:free` (32768) is hand-recorded in the script's
+ * `MANUAL_CEILINGS`: models.dev has no `ling-3.1` entry yet, so it takes the Ling
+ * family's uniform ceiling. Both are still correctable — a stricter gateway costs
+ * one refused request, and `streamRequest()` remembers what the endpoint said.
+ *
+ * The 10 unlisted models are ones no vendor publishes and the aggregators
+ * disagree about. They are NOT a gap: a refusal states the ceiling in full, and
+ * `streamRequest()` reads it off, retries once and remembers it for the model
+ * (issue #71). A vendor figure the gateway turns out to be stricter than costs
+ * one round trip; a conservative guess costs half of every answer, forever —
+ * which is why the unlisted path defers to the endpoint rather than to a
+ * fallback here.
+ *
+ * An unlisted Messages-route model still falls back to
+ * {@link DEFAULT_MESSAGES_MAX_TOKENS} before any request is made, so a ceiling
+ * is never absent when the body is built.
+ */
+export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
+  // anthropic
+  ['claude-fable-5', 128000],
+  // anthropic
+  ['claude-fable-5-1', 128000],
+  // anthropic
+  ['claude-haiku-4-5-20251001', 64000],
+  // anthropic
+  ['claude-opus-4-7', 128000],
+  // anthropic
+  ['claude-opus-4-8', 128000],
+  // anthropic
+  ['claude-opus-5', 128000],
+  // anthropic
+  ['claude-opus-5-5', 128000],
+  // anthropic
+  ['claude-sonnet-4-6', 128000],
+  // anthropic
+  ['claude-sonnet-5', 128000],
+  // anthropic
+  ['claude-sonnet-5-5', 128000],
+  // deepseek
+  ['deepseek/deepseek-v4-flash', 393216],
+  // deepseek
+  ['deepseek/deepseek-v4-flash-vision-exp', 393216],
+  // deepseek
+  ['deepseek/deepseek-v4-pro', 393216],
+  // google
+  ['google/gemini-3.1-flash-lite', 65536],
+  // google
+  ['google/gemini-3.5-flash', 65536],
+  // google
+  ['google/gemini-3.5-flash-lite', 65536],
+  // google
+  ['google/gemini-3.6-flash', 65536],
+  // google
+  ['google/gemini-3.7-flash', 65536],
+  // google
+  ['google/gemini-3.8-flash', 65536],
+  // openai
+  ['gpt-5.3-codex', 128000],
+  // openai
+  ['gpt-5.4', 128000],
+  // openai
+  ['gpt-5.4-mini', 128000],
+  // openai
+  ['gpt-5.5', 128000],
+  // openai
+  ['gpt-5.6-luna', 128000],
+  // openai
+  ['gpt-5.6-sol', 128000],
+  // openai
+  ['gpt-5.6-terra', 128000],
+  // openai
+  ['gpt-6-astra', 128000],
+  // openai
+  ['gpt-6-luna', 128000],
+  // openai
+  ['gpt-6-sol', 128000],
+  // openai
+  ['gpt-6.1-sol', 128000],
+  // 2 provider(s), unanimous
+  ['inclusionai/ling-3.0-flash-sante:free', 32768],
+  // manual: no models.dev row; Ling family ceiling 32768, see MANUAL_CEILINGS
+  ['inclusionai/ling-3.1-flash:free', 32768],
+  // 1 provider(s), unanimous
+  ['meituan/LongCat-2.0', 131072],
+  // meta
+  ['meta/muse-spark-1.1', 131072],
+  // meta
+  ['meta/muse-spark-1.2', 131072],
+  // meta
+  ['meta/muse-spark-1.2-contributor', 131072],
+  // meta
+  ['meta/muse-spark-1.3', 131072],
+  // meta
+  ['meta/muse-spark-1.3-contributor', 131072],
+  // minimax
+  ['MiniMaxAI/MiniMax-M2.5', 131072],
+  // minimax
+  ['MiniMaxAI/MiniMax-M2.7', 131072],
+  // minimax
+  ['MiniMaxAI/MiniMax-M3', 512000],
+  // moonshotai
+  ['moonshotai/Kimi-K2.6', 262144],
+  // moonshotai
+  ['moonshotai/Kimi-K2.7-Code', 262144],
+  // moonshotai
+  ['moonshotai/Kimi-K2.7-Code-Highspeed', 262144],
+  // moonshotai
+  ['moonshotai/Kimi-K3', 1048576],
+  // nvidia
+  ['nvidia/nemotron-3-ultra-550b-a55b', 65536],
+  // poolside
+  ['poolside/laguna-s-2.1-free', 32768],
+  // alibaba
+  ['Qwen/Qwen3.6-Max-Preview', 65536],
+  // alibaba
+  ['Qwen/Qwen3.6-Plus', 65536],
+  // alibaba
+  ['Qwen/Qwen3.7-Flash', 131072],
+  // alibaba
+  ['Qwen/Qwen3.7-Max', 131072],
+  // alibaba
+  ['Qwen/Qwen3.7-Plus', 131072],
+  // alibaba
+  ['Qwen/Qwen3.8-Flash', 131072],
+  // alibaba
+  ['Qwen/Qwen3.8-Max', 131072],
+  // alibaba
+  ['Qwen/Qwen3.8-Omni-Flash', 131072],
+  // sakana
+  ['sakana/fugu-ultra', 1000000],
+  // 1 provider(s), unanimous
+  ['stealth/pixel-canary', 131072],
+  // 3 provider(s), unanimous
+  ['stealth/space-bunny-alpha', 524288],
+  // stepfun
+  ['stepfun/Step-3.5-Flash', 256000],
+  // stepfun
+  ['stepfun/Step-3.7-Flash', 256000],
+  // stepfun
+  ['stepfun/Step-5-Preview', 65536],
+  // thinkingmachines
+  ['thinkingmachines/inkling', 65536],
+  // xai
+  ['xai/grok-4.5', 500000],
+  // xai
+  ['xai/grok-4.6', 500000],
+  // xai
+  ['xai/grok-4.7', 500000],
+  // xiaomi
+  ['xiaomi/mimo-v2.5', 131072],
+  // xiaomi
+  ['xiaomi/mimo-v2.5-pro', 131072],
+  // xiaomi
+  ['xiaomi/mimo-v2.6-flash', 131072],
+  // xiaomi
+  ['xiaomi/mimo-v2.6-pro', 131072],
+  // xiaomi
+  ['xiaomi/mimo-v2.6-pro-ultraspeed', 131072],
+  // zai
+  ['z-ai/glm-5.3-flash', 131072],
+  // zai
+  ['z-ai/glm-5.3-flashx', 131072],
+  // zai
+  ['zai-org/GLM-5', 131072],
+  // zai
+  ['zai-org/GLM-5.1', 131072],
+  // zai
+  ['zai-org/GLM-5.2', 131072],
+  // zai
+  ['zai-org/GLM-5.3', 131072],
+])
+
+/**
+ * Output ceiling for a Messages-route model that {@link MODEL_OUTPUT_TOKEN_LIMITS}
+ * does not carry — today only models no vendor publishes yet. Deliberately
+ * conservative: a 400 on `max_tokens` is a wasted round trip on every request,
+ * whereas a lower ceiling only shortens an answer, and the endpoint states the
+ * real one the first time it refuses, at which point the runtime overrides this
+ * anyway (issue #71).
+ *
+ * 64 000 is not arbitrary: it is `claude-haiku-4-5-20251001`'s actual ceiling,
+ * the lowest in the Claude family. A Claude model added to the catalog before
+ * its row exists here therefore answers at a size the family really supports,
+ * and is corrected upward on its first rejection rather than clamped here
+ * forever.
+ */
+export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
+
+/**
  * The minimum subscription plan a model is included in, per the official plan
  * pages (`/docs/plans/go`, `/docs/plans/goat`, `/docs/plans/pro`,
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.68.0 (2026-09-29): 84 catalog
+ * Provider-tier. Re-verified at command-code@1.72.1 (2026-09-30): 86 catalog
  * ids at 53/62/76/84 cumulative, a strict superset chain — every release since
  * 1.49.0 has been additive with no tier move, and per-entry tags below name the
  * release that added each row.
@@ -413,7 +637,7 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (53) ---
+  // --- Go (54) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -441,8 +665,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'deepseek/deepseek-v4-flash': 'go',
   'deepseek/deepseek-v4-flash-vision-exp': 'go',
   'deepseek/deepseek-v4-pro': 'go',
-  'gpt-5.6-luna': 'go',
-  // command-code@1.64.0; the opensource-category GPT-6, on every plan including
+  'gpt-5.6-luna': 'go',  // command-code@1.64.0; the opensource-category GPT-6, on every plan including
   // Go, unlike its premium-category siblings Sol (Pro) and Astra (Provider/Max).
   'gpt-6-luna': 'go',
   // command-code@1.42.0 added the free LongCat 2.0 on every plan; that promo
@@ -454,6 +677,11 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.52.0; free on every plan ("up to 100 requests a day"),
   // successor to the retired `inclusionai/ling-3.0-flash-free` promo.
   'inclusionai/ling-3.0-flash-sante:free': 'go',
+  // command-code@1.70.0; free on every plan including Go — the embedded
+  // availability is the "all":true shape (individual-go through teams-pro),
+  // same as its `ling-3.0-flash-sante:free` predecessor and unlike the
+  // Max-only `gpt-6.1-sol` below.
+  'inclusionai/ling-3.1-flash:free': 'go',
   // command-code@1.44.0; on every plan including Go, like its 1.2 Contributor
   // sibling.
   'meta/muse-spark-1.2-contributor': 'go',
@@ -533,7 +761,7 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.64.0; Pro and above (individual-go/goat false).
   'gpt-6-sol': 'pro',
   'meta/muse-spark-1.1': 'pro',
-  // --- Provider / Max (8) ---
+  // --- Provider (8) ---
   // command-code@1.40.0; Provider/Max exactly like its `claude-fable-5`
   // predecessor — individual-provider/max/ultra and teams-pro only.
   'claude-fable-5-1': 'provider',
@@ -549,6 +777,14 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.49.0; on Max.
   'gpt-6-astra': 'provider',
   'sakana/fugu-ultra': 'provider',
+  // --- Max (1) ---
+  // command-code@1.71.0; the FIRST Max-only model in this catalog and the only
+  // one whose minimum plan is `max`: the embedded availability sets every lower
+  // tier false (individual-go / go-v1 / goat / pro / pro-v1 / provider all
+  // false) and only individual-max, individual-ultra and teams-pro true.
+  // `PLAN_ORDER` already carries `max` above `provider`, so the picker sorts it
+  // last without a change there (plan-tiers.ts).
+  'gpt-6.1-sol': 'max',
 }
 
 /**
@@ -583,7 +819,7 @@ export function compareByPlan(
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
  * (located by the `"individual-go"` key in `dist/cli.mjs`, re-verified unchanged
- * through command-code@1.68.0): subscription `planId` prefix → display name and
+ * through command-code@1.72.1): subscription `planId` prefix → display name and
  * the plan's monthly credit total. This is the account's own subscription
  * (from `/alpha/billing/subscriptions`) — distinct from {@link KNOWN_PLANS},
  * which maps catalog models to their minimum tier.
@@ -594,6 +830,12 @@ export function compareByPlan(
  */
 export const KNOWN_SUBSCRIPTION_PLANS: Readonly<Record<string, { name: string; monthlyCredits: number; tierWeight: number }>> = {
   'individual-go': { name: 'Go', monthlyCredits: 10, tierWeight: 0 },
+  // command-code@1.69.0 ("Go plan moves to per-model credits") added this second
+  // Go row to the CLI's plan maps. Same display name and monthly total, so
+  // `tierWeight` stays 0 alongside `individual-go` — exactly how the pre-existing
+  // `individual-pro-v1` sits at Pro's weight 2. Resolution is longest-prefix
+  // match (see below), so the explicit `-v1` suffix still wins over the base.
+  'individual-go-v1': { name: 'Go', monthlyCredits: 10, tierWeight: 0 },
   'individual-goat': { name: 'GOAT', monthlyCredits: 70, tierWeight: 1 },
   'individual-pro': { name: 'Pro', monthlyCredits: 30, tierWeight: 2 },
   'individual-pro-v1': { name: 'Pro', monthlyCredits: 80, tierWeight: 2 },
@@ -708,15 +950,16 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
   'xiaomi/mimo-v2.5-pro': { label: '99% off' },
   'xiaomi/mimo-v2.5': { label: '98% off' },
-  // command-code@1.61.0; the expiry is stamped from the page's own `deal`
-  // record so the badge lapses by itself, while the vendored rate row keeps the
-  // discounted figures ($1.20 in / $3.60 out / $0.30 cache read, doubling past
-  // 200K) — exactly like the other percentage deals here.
-  'xai/grok-4.7': { label: '40% off', expiresAt: '2026-09-27T23:59:59.999Z' },
   'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
   // command-code@1.52.0; free "up to 100 requests a day" with no published end
   // date, so a permanent-style deal like the stealth previews below.
   'inclusionai/ling-3.0-flash-sante:free': { label: 'FREE', free: true },
+  // command-code@1.70.0; 100% off "Free while it lasts" with the same
+  // 100-requests-a-day cap as its `ling-3.0-flash-sante:free` predecessor and
+  // likewise no fixed end date, so no `expiresAt`. The pricing page publishes it
+  // at a literal zero, which `modelPriceTable()` serves from this deal, so it
+  // gets no row in the vendored price table either.
+  'inclusionai/ling-3.1-flash:free': { label: 'FREE', free: true },
   // command-code@1.65.0 added Space Bunny Alpha as a stealth-preview free model
   // ("Free while the stealth preview lasts", 100% off, auto-applied, no
   // published end date), and command-code@1.66.0 added Pixel Canary on
