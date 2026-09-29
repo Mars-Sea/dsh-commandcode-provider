@@ -35,6 +35,7 @@ import {
   capabilityDescription,
   isFreeModel,
 } from './capabilities.ts'
+import { PLAN_LABELS, PLAN_TIER_ORDER } from './plan-tiers.ts'
 
 /** Provider-owned translations for one title, label, or hint. */
 export interface TuiLocalizedText {
@@ -125,17 +126,8 @@ export const ACTIVE_ACCOUNT_AUTO = 'auto'
 /** The selector value meaning "no language override — follow the shell locale". */
 export const LANG_AUTO = 'auto'
 
-/** Tier display names, mirroring the web dropdown's headings (`model-select.ts`). */
-const TIER_TITLES: Readonly<Record<string, string>> = {
-  go: 'Go',
-  goat: 'GOAT',
-  pro: 'Pro',
-  provider: 'Provider',
-  max: 'Max',
-}
-
 /** Tiers in picker order; a model outside this set joins the "Other" group. */
-const TIER_ORDER: readonly string[] = ['go', 'goat', 'pro', 'provider', 'max']
+const TIER_ORDER: readonly string[] = PLAN_TIER_ORDER
 
 /** The group holding models this build's catalog does not know. */
 const OTHER_GROUP_ID = 'models-other'
@@ -257,8 +249,8 @@ export function buildCommandCodeTuiSection(
     .filter((tier) => choices.some((choice) => choice.tier === tier))
     .map((tier) => ({
       id: `models-${tier}`,
-      title: `${TIER_TITLES[tier] ?? tier} models`,
-      descriptions: { zh: `${TIER_TITLES[tier] ?? tier} 模型` },
+      title: `${PLAN_LABELS[tier] ?? tier} models`,
+      descriptions: { zh: `${PLAN_LABELS[tier] ?? tier} 模型` },
     }))
   // A tier this snapshot cannot place shares the "Other" group above.
   const unranked = choices.filter((choice) => tierRank(choice.tier) === TIER_ORDER.length)
@@ -353,6 +345,17 @@ export function buildCommandCodeTuiSection(
             + 'ZDR 通常按更高的透传价计费。默认关闭。',
         },
         // Off is the shipped default and the safe reading of an unset document.
+        format: (value) => (value === true ? 'true' : 'false'),
+        parse: (text) => ({ kind: 'set', value: text.trim() === 'true' }),
+      },
+      {
+        path: ['offloadSeenImagesForCache'],
+        group: 'advanced',
+        kind: 'boolean',
+        label: 'Stop replaying images already seen',
+        descriptions: { zh: '已看过的图片不再重复发送' },
+        hint: 'CLI transport only. After this model has answered, durably replace older images with text to keep later prompt text cacheable. Old pixels need a fresh file read or attachment to inspect again. Off by default.',
+        hintDescriptions: { zh: '仅 CLI 传输。模型看过图片并回复后，永久用文字替代旧图，以保留后续文本缓存；重看旧图需要重新读取文件或附加。默认关闭。' },
         format: (value) => (value === true ? 'true' : 'false'),
         parse: (text) => ({ kind: 'set', value: text.trim() === 'true' }),
       },

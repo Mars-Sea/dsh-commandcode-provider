@@ -33,15 +33,16 @@
 
 ## 安装
 
-本版本**只支持 dsh 0.1.7-rc.2**：插件的 peer 范围就是这一个版本，兼容性记录里也只列它。
+本版本**只支持 dsh 0.2.0-rc.1**：插件的 peer 范围就是这一个版本，兼容性记录里也只列它。
 
 ```sh
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
-- **更早的 dsh 版本。** 0.1.2–0.1.6 线已不再支持：那些引擎早于 0.1.7 的设置重写、`RequestMessage` 消息封装和持久化图片卸载契约，用来桥接两代引擎的兼容代码已经删除。覆盖它们的最后一个插件版本是 0.11.11；0.5.0 时代 Harness 线的最后一个版本是 0.9.1。两者都按精确版本安装，且都不再维护：
+- **更早的 dsh 版本。** 0.1.2–0.1.7 线已不再支持：那些引擎早于 0.1.7 的设置重写、`RequestMessage` 消息封装和持久化图片卸载契约，用来桥接两代引擎的兼容代码已经删除。覆盖 0.1.7 的最后一个插件版本是 0.11.17；0.1.2–0.1.6 线的最后一个版本是 0.11.11；0.5.0 时代 Harness 线的最后一个版本是 0.9.1。三者都按精确版本安装，且都不再维护：
 
   ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.17   # dsh 0.1.7
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11   # dsh 0.1.2–0.1.6
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1     # dsh 0.5.0 线
   ```
@@ -61,7 +62,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.15
 用与安装时相同的 tag 更新：
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.7-rc.2
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.1
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 更早的 dsh（0.5.0 线，不再维护）
 ```
 
@@ -135,7 +136,7 @@ cmd login                               # 写入 ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**引擎版本要求。** 插件只针对一个引擎维护：**dsh 0.1.7-rc.2**。它的 `@deepseek-ai/dsh-*` peer 范围是 `^0.1.7-rc.2`（按 semver，这只会解析到 0.1.7-rc.2），`dsh.compatibility.dshReleases` 也只记录这一个版本。在更早的引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
+**引擎版本要求。** 插件只针对一个引擎维护：**dsh 0.2.0-rc.1**。它的 `@deepseek-ai/dsh-*` peer 范围是 `^0.2.0-rc.1`（按 semver，这只会解析到 0.2.0-rc.1），`dsh.compatibility.dshReleases` 也只记录这一个版本。在更早的引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
 
 ## 用量面板
 
@@ -183,7 +184,7 @@ llm-commandcode:
 
 ## 配置
 
-**设置 → Command Code** 分为：**账户**（密钥、网页登录、实时额度、固定账户、专用模型）、**模型**（隐藏套餐外模型、可见模型）、**隐私与安全**（零数据保留 ZDR，默认关闭，见下）、**集成与显示**（用 Command Code 承载联网搜索、在侧边栏显示额度卡片，默认关闭），以及默认折叠的**高级设置**（API 地址、请求/流超时、传输重试次数）。工作目录已不在页面上显示，配置中的 `workingDir` 仍然有效。
+**设置 → Command Code** 分为：**账户**（密钥、网页登录、实时额度、固定账户、专用模型）、**模型**（隐藏套餐外模型、可见模型）、**隐私与安全**（零数据保留 ZDR，默认关闭，见下）、**集成与显示**（用 Command Code 承载联网搜索、在侧边栏显示额度卡片，默认关闭），以及默认折叠的**高级设置**（API 地址、请求/流超时、传输重试次数、历史图片缓存优化）。工作目录已不在页面上显示，配置中的 `workingDir` 仍然有效。
 
 同一组选项也位于 `$DSH_HOME/settings.yaml`（修改即刻生效，无需重启）：
 
@@ -193,11 +194,16 @@ llm-commandcode:
   apiBase: https://api.commandcode.ai
   workingDir: /path/to/project     # 可选
   modelsCachePath: ~/.commandcode/models-cache.json
-  requestTimeoutMs: 60000          # 默认 60s
+  requestTimeoutMs: 300000          # 默认 300s（与官方 CLI 一致）
   streamIdleTimeoutMs: 300000      # 默认 300s
+  # offloadSeenImagesForCache: true # 可选：模型回复后不再重发旧图片，默认关闭
   showSidebarQuota: true           # 可选：在侧边栏显示套餐与配额卡片（默认关闭）
   zdr: true                        # 可选：请求只经由零数据保留上游（默认关闭）
 ```
+
+### 连续图片导致的缓存回退
+
+在 CLI 传输（`/alpha/generate`）上，即使此前所有请求消息逐字节一致，新图片也可能让服务端报告的缓存命中量退回第一张历史图片处。可在「高级设置」打开「已看过的图片不再重复发送」（`offloadSeenImagesForCache`）：同一模型看过图片并回复后，插件通过 dsh 持久的 `image/offload` 事件把旧图替换成稳定文字占位；当前新图仍会送给模型，后续文本更容易保持缓存。**默认关闭**，因为模型如需重新查看已 offload 的图片，必须重新读取原文件或由用户再次附加。这是费用缓解方案，未修复 Command Code 服务端的多模态缓存行为。[实测证据与限制](docs/issue-64-cache-review.md)。
 
 ## 联网搜索
 
@@ -217,7 +223,7 @@ Command Code 可以让请求只经由「不留存提示词与回复、也不用�
 
 **默认关闭。** 在「隐私与安全」卡片里打开「零数据保留（ZDR）」（`zdr`），或写进 profile 配置。本插件的实现方式：
 
-- 开启后，**每次聊天请求**都会带上 ZDR 请求头。插件仍维护官方 CLI 的例外名单（`KNOWN_NON_ZDR_MODELS`，约 20 个模型，例如 `xai/grok-4.5`、`stepfun/Step-3.7-Flash`、`meta/muse-spark-1.3`）供查询。没有可用 ZDR 上游时，服务端返回 `422 cmd_zdr_no_providers`；插件不会去掉请求头重试。
+- 开启后，**每次聊天请求**都会带上 ZDR 请求头。插件仍维护官方 CLI 的例外名单（`KNOWN_NON_ZDR_MODELS`，截至 2026-09-29 共 23 个模型，例如 `xai/grok-4.5`、`stepfun/Step-3.7-Flash`、`meta/muse-spark-1.3`）供查询。没有可用 ZDR 上游时，服务端返回 `422 cmd_zdr_no_providers`；插件不会去掉请求头重试。
 - 万一仍被拒绝（名单过期，或那一刻没有空闲的 ZDR 上游容量），错误信息会说明原因并给出关闭 ZDR 的办法，而不是抛出一个光秃秃的 HTTP 422。
 - **ZDR 通常更贵**：容量有限，按各上游实价透传计费，且每次请求落在哪个上游可能不同。会话费用读数仍按常规目录价估算；真实单价见 Command Code Studio 的用量页。
 - 各套餐均可使用；ZDR 请求按套餐的默认额度（而非提升额度）计量。

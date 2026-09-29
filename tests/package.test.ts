@@ -32,8 +32,8 @@ test('every Harness peer and development package shares one supported release ra
     assert.equal(dev[name], range, `${name} development range`)
   }
   // Why an exact-version disjunction rather than a caret: semver admits a
-  // prerelease only inside the SAME major.minor.patch tuple, so `^0.1.7-rc.2`
-  // resolves to 0.1.7-rc.2 alone. This bundle supports ONE engine release, and a
+  // prerelease only inside the SAME major.minor.patch tuple, so `^0.2.0-rc.1`
+  // resolves to 0.2.0-rc.1 alone. This bundle supports ONE engine release, and a
   // range that quietly admitted a neighbour is how a broken pairing stayed
   // invisible (issue #43).
   assert.ok(!range.includes('x') && !range.includes('>='), 'no compact comparator form can express this')
@@ -51,8 +51,8 @@ test('per-release DSH compatibility names exactly the one supported release', ()
   // `unknown`. Exactly one record ships: a stale entry for an older engine would
   // advertise a pairing no test covers.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  assert.deepEqual(Object.keys(releases), ['0.1.7-rc.2'])
-  assert.equal(releases['0.1.7-rc.2'], 'compatible')
+  assert.deepEqual(Object.keys(releases), ['0.2.0-rc.1'])
+  assert.equal(releases['0.2.0-rc.1'], 'compatible')
 })
 
 test('the manifest declares the same engine range it supports', () => {

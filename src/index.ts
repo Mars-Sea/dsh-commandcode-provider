@@ -97,6 +97,7 @@ export {
   subscriptionPlanInfo,
   supportsZeroDataRetention,
 } from './capabilities.ts'
+import { modelAllowanceFor } from './model-prices.ts'
 export type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, CommandCodeUsageReport, ResolveAttachments } from './adapter.ts'
 export type { CommandCodeBillingAccess } from './capabilities.ts'
 export { applyCommands, commandDefinition } from './commands.ts'
@@ -181,6 +182,13 @@ export interface Config {
   requestTimeoutMs?: number
   /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 300s. */
   streamIdleTimeoutMs?: number
+  /**
+   * Opt-in cache mitigation for the CLI route: after this model has answered,
+   * durably offload its earlier images before later turns. Old pixels then
+   * require a fresh read/attachment if the model needs to inspect them again.
+   * Defaults to false to preserve full image history.
+   */
+  offloadSeenImagesForCache?: boolean
   /**
    * Transport failures one request absorbs before the failure is surfaced;
    * defaults to 5. The route's retry policy is near-unbounded on purpose
@@ -304,6 +312,7 @@ export const Config: z<Config> = z.object(markVolatileFields({
   modelsCachePath: z.string(),
   requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS),
+  offloadSeenImagesForCache: z.boolean().default(false),
   transportMaxRetries: z.number().min(0).max(MAX_TRANSPORT_MAX_RETRIES),
   filterModelsByPlan: z.boolean(),
   visibleModels: z.array(z.string()),
@@ -346,6 +355,7 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     modelsCachePath: config.modelsCachePath ?? DEFAULT_MODELS_CACHE_PATH,
     requestTimeoutMs: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    offloadSeenImagesForCache: config.offloadSeenImagesForCache === true,
     filterModelsByPlan: config.filterModelsByPlan ?? true,
     visibleModels: Array.isArray(config.visibleModels)
       ? config.visibleModels.filter((id) => typeof id === 'string' && id !== '')
@@ -683,13 +693,21 @@ export function apply(ctx: Context, config: Config): void {
   // headings without importing the Host's capability snapshot.
   const catalogForEditors = async (): Promise<CommandCodeCatalog> => {
     const models = await adapter.listModels(PROVIDER, { unfiltered: true })
+    // Per-model monthly allowance (how far this one model stretches the plan's
+    // credit pool). The page publishes one for GOAT and Pro only, so the POOL's
+    // bracket decides whether a figure exists at all — a Go/Max/Provider account
+    // gets none rather than a neighbouring tier's number. `listModels` above
+    // already consulted the same cached billing facts, so this costs one lookup.
+    const bracket = await adapter.allowanceTier()
     return {
       models: models.map((model) => {
         const tier = KNOWN_PLANS[model.id]
+        const allowance = bracket === undefined ? undefined : modelAllowanceFor(model.id)?.[bracket]
         return {
           id: model.id,
           name: model.name.replace(/\s*\(CC\)$/, ''),
           ...(tier === undefined ? {} : { tier }),
+          ...(allowance === undefined ? {} : { allowance }),
         }
       }),
     }

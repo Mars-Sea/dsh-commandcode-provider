@@ -228,6 +228,24 @@ test('models schema accepts an empty catalog', () => {
   assert.deepEqual(modelsSchema.parse({ models: [] }), { models: [] })
 })
 
+test('models schema round-trips the optional allowance field', () => {
+  const parsed = modelsSchema.parse({
+    models: [{ id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3', tier: 'go', allowance: 47 }],
+  })
+  assert.deepEqual(parsed, {
+    models: [{ id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3', tier: 'go', allowance: 47 }],
+  })
+  // Optional because an older Host predates it, so an absent key stays absent;
+  // a present non-number is a contract violation rather than a silent drop.
+  assert.deepEqual(modelsSchema.parse({ models: [{ id: 'a', name: 'b' }] }), {
+    models: [{ id: 'a', name: 'b' }],
+  })
+  assert.throws(
+    () => modelsSchema.parse({ models: [{ id: 'a', name: 'b', allowance: '47' }] }),
+    /model\.allowance/,
+  )
+})
+
 test('models schema rejects a malformed catalog', () => {
   assert.throws(() => modelsSchema.parse({}), /models/)
   assert.throws(() => modelsSchema.parse({ models: 'two' }), /models/)

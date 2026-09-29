@@ -7,16 +7,63 @@ import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.66.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.68.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
-declare const DEFAULT_GENERATE_MAX_TOKENS = 64000;
-declare const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
+/**
+ * The output budget this bundle asks for, and the ceiling it will never exceed.
+ *
+ * 131 072, chosen against a measured provider limit rather than a round guess.
+ * Probing `/alpha/generate` directly on 2026-09-28: 64 000 → 200, 131 072 → 200,
+ * 196 608 → 200, **200 000 → 200, 200 704 → 400**, 1 000 000 → 400. The server
+ * therefore caps `max_tokens` at 200 000, and it does so identically for a
+ * 262 144-window model (`stealth/pixel-canary`) and a 1 000 000-window one
+ * (`stealth/space-bunny-alpha`) — the cap is global, not per model. 131 072
+ * keeps a 35 % margin under it while covering the real output ceiling of the
+ * models that have one (Claude 64 K, Gemini 64 K, several at 128 K).
+ *
+ * The old 64 000 was never a provider requirement: it cost nothing in latency
+ * (a 64 000 request answered headers in 1.28 s against 1.57 s for 131 072) but
+ * it did cap what a model could ever say in one turn.
+ *
+ * This is only an UPPER bound. `requestContextBudget` lowers it per request
+ * from the prompt actually being sent, so raising the ceiling cannot push a
+ * large session over its window.
+ */
+declare const DEFAULT_GENERATE_MAX_TOKENS = 131072;
+/**
+ * The fallback when the catalog carries no output ceiling for a model.
+ *
+ * `/provider/v1/models` publishes only `context_length` — no output limit — so
+ * the catalog cannot learn one per model and derives a stand-in from the
+ * window instead. Kept equal to {@link DEFAULT_GENERATE_MAX_TOKENS} on purpose:
+ * a lower value here would silently re-cap every request through
+ * `Math.min(contextLength, this)` before the ceiling above is ever consulted.
+ */
+declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 /** How long the picker's plan-filter billing facts stay cached before refetching. */
 declare const BILLING_ACCESS_TTL_MS: number;
 /** Endpoint protocol selected for one generate call. */
 type CommandCodeProtocol = 'cli' | 'openai';
-/** Head-of-request timeout: how long to wait for the first response byte. */
-declare const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
+/**
+ * Head-of-request timeout: how long to wait for the first response byte.
+ *
+ * 300 s, and that number is the official CLI's, not a round choice. Decompiled
+ * from `command-code@1.66.0`: its `createNodeTransport` fetch passes only the
+ * caller's `signal` and sets no timeout at all, so the model request inherits
+ * Node/undici's own default — measured at 301.0 s against a local server that
+ * accepts the connection and never sends headers. The previous 60 s default was
+ * five times stricter than the CLI it emulates, and being stricter only ever
+ * costs legitimate requests: a slow upstream first token on the Provider API
+ * route can outlast 60 s, and the official CLI simply waits it out. Measured
+ * headers (2026-09-28, 26 250-token prompt, `max_tokens: 16` to separate the
+ * header from the generation): `/alpha/generate` 2.12 / 2.56 / 2.75 s,
+ * `/provider/v1/chat/completions` 5.52 / 2.98 / 3.70 s — a ~1.1 s median gap
+ * with the Provider API route varying over a 2.5 s span against the CLI route's
+ * 0.6 s. A gateway that is genuinely dead now takes longer to name itself,
+ * which is what the consecutive-timeout streak exists to bound (three
+ * attempts, then a diagnosis instead of another re-send).
+ */
+declare const DEFAULT_REQUEST_TIMEOUT_MS = 300000;
 /** Stream idle timeout: a generation that stalls this long is a dead connection. */
 declare const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000;
 declare function projectSlugFromPath(pathName: string): string;
@@ -46,13 +93,23 @@ interface CommandCodeConnectionOptions {
   /** Model catalog cache path. */
   modelsCachePath: string;
   /**
-   * Milliseconds to wait for generate response headers / first byte (default 60s).
+   * Milliseconds to wait for generate response headers / first byte (default
+   * 300s, the official CLI's own budget — see
+   * {@link DEFAULT_REQUEST_TIMEOUT_MS}).
    * Must not bound the subsequent body stream — long generations are gated by
    * {@link streamIdleTimeoutMs} and the caller AbortSignal instead.
    */
   requestTimeoutMs: number;
   /** Milliseconds a stream may stall before it is treated as a dead connection (default 300s). */
   streamIdleTimeoutMs: number;
+  /**
+   * Opt-in CLI cache mitigation: after this same model has answered with an
+   * image in its history, ask dsh's durable image-offload surface to replace
+   * that image before the next replay. This protects the growing text prefix
+   * when Command Code's multimodal cache retreats to the first image, but the
+   * model cannot inspect the old pixels again without a fresh tool/user image.
+   */
+  offloadSeenImagesForCache?: boolean;
   /**
    * Whether the picker hides models above the account's subscription tier
    * (default true). The filter fails open: unknown plan, billing-endpoint
@@ -279,7 +336,29 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   private readonly billingAccess;
   private readonly billingAccessInflight;
   private readonly protocolCache;
+  /**
+   * Consecutive header timeouts for the last request shape, counted ACROSS
+   * `stream()` calls: dsh-llm-retry re-invokes this same instance, so this is
+   * the only place a streak can live. One slot rather than a map is the point —
+   * the claim is "consecutive", and a single record cannot grow.
+   */
+  private headerTimeoutStreak;
   constructor(deps: CommandCodeAdapterDeps<C>);
+  /**
+   * Grade one failed attempt: a headers timeout that repeats on an unchanged
+   * payload eventually leaves the retryable whitelist.
+   *
+   * `providerRetryPolicy()` cannot express this itself — dsh-llm's
+   * `NormalRetryPolicyConfig` carries a single scalar `maxRetries` next to the
+   * code list, so there is no per-code limit to lower. Escalating from here is
+   * the only way to keep `RATE_LIMIT` / `SERVER` / `TRANSPORT` retryable (each
+   * carries a real "try again later" signal) while stopping the one code that,
+   * repeated unchanged, only burns the user's session.
+   *
+   * @returns the error to surface: unchanged for any other failure, the
+   * original timeout below the threshold, and a terminal one at it.
+   */
+  private gradeHeaderTimeout;
   /**
    * Display metadata for the picker's provider group header. The base class
    * returns the raw route id (`commandcode`, all lowercase) as the name, which
@@ -323,22 +402,35 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   listModels(provider: string, opts?: {
     unfiltered?: boolean;
   }): Promise<readonly LlmModelInfo[]>;
+  /**
+   * The per-model allowance bracket this account POOL falls into, or undefined
+   * when there is nothing honest to show.
+   *
+   * The pricing page publishes a per-model monthly allowance for GOAT and Pro
+   * only — its own words are "the boost is a per-model allowance, so it lives on
+   * the plans that have them" — so a pool whose highest plan is Go, Provider,
+   * Max or Ultra gets undefined rather than a neighbouring tier's figure. Taking
+   * the HIGHEST tier matches the question the picker already answers for a pool
+   * (see `modelVisibleForAnyAccount`): what the user can reach, not what the one
+   * account serving this request happens to be. The fail-open shape is the same
+   * too — an unreachable billing endpoint yields undefined, which hides the
+   * allowance instead of inventing one.
+   */
+  allowanceTier(): Promise<'goat' | 'pro' | undefined>;
   resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
   /** The headers every authenticated account endpoint shares. */
   private accountHeaders;
   /**
-   * Fetch one account endpoint and parse its JSON body. Returns the HTTP
-   * status alongside the parsed record so each caller applies its own failure
-   * accounting: the billing probe fails open silently, the usage report books
-   * failures per endpoint. Non-2xx and invalid JSON bodies come back without a
-   * record; only a fetch failure propagates to the caller.
+   * Fetch one JSON GET and return its HTTP status with a parsed record. The
+   * catalog, billing probe, and usage report each apply their own failure
+   * policy. Non-2xx and invalid JSON bodies come back without a record; only
+   * a fetch failure propagates to the caller.
    *
-   * `timeoutMs` is the caller's budget for this one request. The default is the
-   * CATALOG probe's short cap, which fits the picker's fail-open reads; the
-   * usage report deliberately passes the connection's own request budget so an
-   * account query is not held to a stricter (and invisible) limit than chat.
+   * `timeoutMs` is the caller's budget, unless it provides its own signal.
+   * The usage report passes the connection's request budget rather than the
+   * catalog/picker's shorter default.
    */
-  private fetchEndpointJson;
+  private fetchJson;
   /**
    * Every account's billing facts behind the picker's plan filter, in the
    * pool's rotation order and cached per key for {@link BILLING_ACCESS_TTL_MS}
@@ -705,22 +797,11 @@ declare class CommandCodeAccountPool {
   private pick;
 }
 //#endregion
+//#region src/plan-tiers.d.ts
+declare const PLAN_LABELS: Readonly<Record<string, string>>;
+declare const PLAN_ORDER: Readonly<Record<string, number>>;
+//#endregion
 //#region src/capabilities.d.ts
-/**
- * Static capability snapshot for the Command Code provider: model →
- * reasoning-effort levels, vision/thinking flags, model → minimum plan tier,
- * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
- *
- * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.66.0) and
- * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
- * for the extraction procedures. Keeping the snapshot in its own module
- * confines those frequent sync diffs here: src/adapter.ts holds only the stable
- * wire/runtime logic. The read helpers live here too, for the same reason.
- *
- * Ported from pi-commandcode-provider (MIT); originally part of src/adapter.ts
- * and split out so upstream syncs stay reviewable.
- */
 declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 /**
  * Models whose Capabilities include Vision, per the official Command Code
@@ -740,12 +821,13 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.66.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.68.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table would drop `meituan/
- * LongCat-2.0` and `stealth/pixel-canary`, which each appear in
- * `modelSupportsZdr` alone. The official docs (commandcode.ai/docs/resources/
+ * LongCat-2.0`, which appears in `modelSupportsZdr` alone (re-read from the
+ * 1.66.0 / 1.67.0 / 1.68.0 artifacts on 2026-09-29: the two stealth-preview
+ * rows sit in BOTH sets, so LongCat is the only divergence). The official docs (commandcode.ai/docs/resources/
  * zdr) put it in prose — "99% of our models have ZDR-capable upstreams … only
  * a small handful of models are affected" — so the CLI's exclusion list is
  * the only per-model evidence there is; a ZDR request naming one of these
@@ -767,8 +849,10 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * (its `zdr:{only:[…]}` provider routes and the per-provider `zdr`/`noTraining`
  * flags) is upstream-internal routing, not a per-model contract, so this table
  * is the snapshot of the exclusion set and nothing more. It is a rare change:
- * 20 members held across 1.62.0 → 1.64.0, and 1.65.0 and 1.66.0 each added
- * exactly one (the two stealth-preview models below).
+ * 20 members held across 1.62.0 → 1.64.0, 1.65.0 and 1.66.0 each added exactly
+ * one (the two stealth-preview models below), 1.67.0 added one
+ * (`deepseek/deepseek-v4.1-flash-fast`), and 1.68.0 changed nothing — 23
+ * members as of 2026-09-29.
  */
 declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
 /**
@@ -798,8 +882,8 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.66.0 (2026-09-27): 82 catalog
- * ids at 52/60/74/82 cumulative, a strict superset chain — every release since
+ * Provider-tier. Re-verified at command-code@1.68.0 (2026-09-29): 84 catalog
+ * ids at 53/62/76/84 cumulative, a strict superset chain — every release since
  * 1.49.0 has been additive with no tier move, and per-entry tags below name the
  * release that added each row.
  *
@@ -812,13 +896,6 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * dsh-commandcode-upstream skill).
  */
 declare const KNOWN_PLANS: Readonly<Record<string, string>>;
-/** Official display labels for each plan tier. */
-declare const PLAN_LABELS: Readonly<Record<string, string>>;
-/**
- * Plan-tier sort weights, low to high. Models outside the snapshot (unknown
- * plans) sort after every known tier, keeping known models predictable.
- */
-declare const PLAN_ORDER: Readonly<Record<string, number>>;
 /**
  * Comparator for the model picker: free models first (zero credit cost, usable
  * by every account), then by plan tier (lowest first), then by model name,
@@ -834,7 +911,7 @@ declare function compareByPlan(a: {
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
  * (located by the `"individual-go"` key in `dist/cli.mjs`, re-verified unchanged
- * through command-code@1.66.0): subscription `planId` prefix → display name and
+ * through command-code@1.68.0): subscription `planId` prefix → display name and
  * the plan's monthly credit total. This is the account's own subscription
  * (from `/alpha/billing/subscriptions`) — distinct from {@link KNOWN_PLANS},
  * which maps catalog models to their minimum tier.
@@ -919,7 +996,7 @@ declare const KNOWN_DEALS: Readonly<Record<string, KnownDeal>>;
  * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h per
  * weekday, full price) **Monday to Friday only**; the other 17 hours of a
  * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
- * Exactly four models carry the page's `timeOfDay` block (the four rows below).
+ * Exactly five models carry the page's `timeOfDay` block (the five rows below).
  * The picker shows the *current* state as a compact label (`Peak`/`Half`)
  * matching the English noun style of the other markers (`Image`, `FREE`), so a
  * developer can tell at a glance whether calling the model right now is cheap
@@ -1026,6 +1103,20 @@ interface CommandCodeCatalogModel {
    * capability snapshot, so the Host stamps it per entry.
    */
   tier?: string;
+  /**
+   * Per-model MONTHLY allowance in USD: how much of the plan's monthly credit
+   * pool this one model may draw, already resolved by the Host against the
+   * account pool's highest plan (the pricing page publishes an allowance for
+   * GOAT and Pro only). Undefined when that plan has no published allowance
+   * (Go, Provider, Max, Ultra) or when billing could not be read — the browser
+   * shows nothing rather than guessing a neighbouring tier's figure.
+   *
+   * Deliberately a plain number and not the `{ goat, pro }` pair: the bracket is
+   * a Host decision that already depends on facts the browser does not hold, and
+   * shipping both figures would invite a second, divergent rule here. Note this
+   * is dollars per MONTH, unlike every rate in `CommandCodePriceTable`.
+   */
+  allowance?: number;
 }
 /** The model-catalog Remote result: the full catalog, sorted for picking. */
 interface CommandCodeCatalog {
@@ -1698,6 +1789,13 @@ interface Config {
   requestTimeoutMs?: number;
   /** Milliseconds a stream may stall before being treated as a dead connection; defaults to 300s. */
   streamIdleTimeoutMs?: number;
+  /**
+   * Opt-in cache mitigation for the CLI route: after this model has answered,
+   * durably offload its earlier images before later turns. Old pixels then
+   * require a fresh read/attachment if the model needs to inspect them again.
+   * Defaults to false to preserve full image history.
+   */
+  offloadSeenImagesForCache?: boolean;
   /**
    * Transport failures one request absorbs before the failure is surfaced;
    * defaults to 5. The route's retry policy is near-unbounded on purpose

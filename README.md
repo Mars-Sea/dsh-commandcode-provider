@@ -35,21 +35,22 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-This release supports **dsh 0.1.7-rc.2 and nothing else** — the plugin's peer
+This release supports **dsh 0.2.0-rc.1 and nothing else** — the plugin's peer
 range is that one version, and its compatibility record names it alone:
 
 ```sh
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
-- **Older dsh releases.** The 0.1.2–0.1.6 line is no longer supported: those
+- **Older dsh releases.** The 0.1.2–0.1.7 line is no longer supported: those
   engines predate the 0.1.7 settings rewrite, the `RequestMessage` envelope, and
   the durable image-offload contract, and the compatibility code that bridged
-  the two was removed. The last plugin release covering them is 0.11.11; the
-  0.5.0-era Harness line's last release is 0.9.1. Both are installed by exact
-  version and neither is maintained:
+  the two was removed. The last plugin release covering 0.1.7 is 0.11.17; the
+  0.1.2–0.1.6 line's last release is 0.11.11; the 0.5.0-era Harness line's last
+  release is 0.9.1. All are installed by exact version and none is maintained:
 
   ```sh
+  dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.17   # dsh 0.1.7
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.11   # dsh 0.1.2–0.1.6
   dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.9.1     # dsh 0.5.0 line
   ```
@@ -69,7 +70,7 @@ Fresh pnpm 10 marketplace generations are supported directly. Do not add a separ
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.1.7-rc.2
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.1
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
@@ -143,7 +144,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.1.7-rc.2**. Its `@deepseek-ai/dsh-*` peer range is `^0.1.7-rc.2` (semver resolves that to 0.1.7-rc.2 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
+**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.2.0-rc.1**. Its `@deepseek-ai/dsh-*` peer range is `^0.2.0-rc.1` (semver resolves that to 0.2.0-rc.1 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
 
 ## Usage dashboard
 
@@ -191,7 +192,7 @@ llm-commandcode:
 
 ## Configure
 
-**Settings → Command Code** is organized as **Accounts** (keys, sign-in, live quota, pinning, dedicated models), **Models** (hide out-of-plan models, visible models), **Privacy & security** (zero data retention, off by default, see below), **Integrations & display** (serve web search with Command Code, show the quota card in the sidebar, off by default), and a collapsed **Advanced** section (API base URL, request/stream timeouts, transport retries). The working directory is no longer on the page; `workingDir` in config still works.
+**Settings → Command Code** is organized as **Accounts** (keys, sign-in, live quota, pinning, dedicated models), **Models** (hide out-of-plan models, visible models), **Privacy & security** (zero data retention, off by default, see below), **Integrations & display** (serve web search with Command Code, show the quota card in the sidebar, off by default), and a collapsed **Advanced** section (API base URL, request/stream timeouts, transport retries, cache-aware image offload). The working directory is no longer on the page; `workingDir` in config still works.
 
 The same options live in `$DSH_HOME/settings.yaml` (changes apply immediately, no restart):
 
@@ -201,11 +202,16 @@ llm-commandcode:
   apiBase: https://api.commandcode.ai
   workingDir: /path/to/project     # optional
   modelsCachePath: ~/.commandcode/models-cache.json
-  requestTimeoutMs: 60000          # default 60s
+  requestTimeoutMs: 300000          # default 300s (the official CLI's own budget)
   streamIdleTimeoutMs: 300000      # default 300s
+  # offloadSeenImagesForCache: true # opt in to CLI cache mitigation; later requests omit old pixels
   showSidebarQuota: true           # optional: show the plans & quota card in the sidebar (default off)
   zdr: true                        # optional: route requests only through zero-data-retention upstreams (default off)
 ```
+
+### Repeated image cache misses
+
+On the CLI transport (`/alpha/generate`), a new image can make Command Code's reported prompt cache retreat to the first historical image even when every previous request message is byte-identical. The opt-in **Stop replaying images already seen** setting (`offloadSeenImagesForCache`) asks dsh's durable `image/offload` surface to replace an older image with a stable text placeholder after this same model has answered with it. The next request keeps its new image; later text can be cached without replaying old pixels. The default is off because the model cannot inspect an offloaded image again unless it rereads the source file or the user reattaches it. This mitigates the observed cost spike; it does not repair Command Code's underlying multimodal cache behavior. [Live evidence and limits](docs/issue-64-cache-review.md).
 
 ## Web search
 
@@ -225,7 +231,7 @@ Command Code can serve a request only through upstreams that retain no prompts o
 
 **Off by default.** Turn it on with the *"Zero data retention (ZDR)"* toggle (`zdr`) in the Privacy & security card, or in your profile config. How this plugin implements it:
 
-- The header is sent on **every chat request** while ZDR is on. The plugin maintains an informational exception list (`KNOWN_NON_ZDR_MODELS`, synced from the official CLI — about 20 models, e.g. `xai/grok-4.5`, `stepfun/Step-3.7-Flash`, `meta/muse-spark-1.3`). A model without an available ZDR upstream fails with `422 cmd_zdr_no_providers`; the request is never retried without the header.
+- The header is sent on **every chat request** while ZDR is on. The plugin maintains an informational exception list (`KNOWN_NON_ZDR_MODELS`, synced from the official CLI — 23 models as of 2026-09-29, e.g. `xai/grok-4.5`, `stepfun/Step-3.7-Flash`, `meta/muse-spark-1.3`). A model without an available ZDR upstream fails with `422 cmd_zdr_no_providers`; the request is never retried without the header.
 - If a refusal still happens (coverage churn, or no ZDR upstream with spare capacity at that moment), the error names the cause and how to turn ZDR off, instead of surfacing as a bare HTTP 422.
 - **ZDR usually costs more**: capacity is limited and billed at each upstream's pass-through rates, and which upstream serves a request can change per request. The session-cost readout keeps quoting the ordinary catalog rates; the real per-request price shows in Command Code's Studio usage page.
 - Works on every plan; plan credits meter ZDR requests at the plan's default allowance.

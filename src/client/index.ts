@@ -48,33 +48,16 @@ import { PANEL_COPY_EN, PANEL_COPY_ZH, PANEL_LOCALE_NS } from './panel-copy.ts'
 
 
 
-/** Inject the page stylesheet once (idempotent per tag). */
-function injectPageCss(): void {
-  if (typeof document === 'undefined') return
-  if (document.querySelector(`style[data-plugin-css="${PAGE_CSS_ID}"]`) !== null) return
-  const tag = document.createElement('style')
-  tag.dataset.plugin = '@mars-sea/dsh-commandcode-provider'
-  tag.dataset.pluginCss = PAGE_CSS_ID
-  tag.textContent = PAGE_CSS
-  document.head.appendChild(tag)
-}
-
-/**
- * Install the plans & quota panel's stylesheet and return its disposer, for
- * `ctx.effect` to own. Keyed by its own `data-plugin-css` id, so a second
- * surface asking for it later is a no-op.
- */
-function injectPanelCss(): () => void {
+/** Install one stylesheet by id and return a disposer for its owning effect. */
+function injectCss(id: string, css: string): () => void {
   if (typeof document === 'undefined') return () => {}
-  if (document.querySelector(`style[data-plugin-css="${PANEL_CSS_ID}"]`) !== null) return () => {}
+  if (document.querySelector(`style[data-plugin-css="${id}"]`) !== null) return () => {}
   const tag = document.createElement('style')
   tag.dataset.plugin = '@mars-sea/dsh-commandcode-provider'
-  tag.dataset.pluginCss = PANEL_CSS_ID
-  tag.textContent = PANEL_CSS
+  tag.dataset.pluginCss = id
+  tag.textContent = css
   document.head.appendChild(tag)
-  return () => {
-    tag.remove()
-  }
+  return () => tag.remove()
 }
 
 /**
@@ -117,7 +100,7 @@ interface LayoutSelectionSeam {
  * list at the bottom of this file.
  */
 export function apply(ctx: Context): void {
-  injectPageCss()
+  injectCss(PAGE_CSS_ID, PAGE_CSS)
 
   // The "Command Code" settings page: register the section once the
   // `settings.section` declaration is on the ledger (ui-settings-general
@@ -507,7 +490,7 @@ function applyClientSurfaces(
     },
   })
 
-  ctx.effect(() => injectPanelCss(), 'dsh-commandcode-provider: panel styles')
+  ctx.effect(() => injectCss(PANEL_CSS_ID, PANEL_CSS), 'dsh-commandcode-provider: panel styles')
 
   try {
     ctx.slots.inject('main', () => ctx.slots.register(

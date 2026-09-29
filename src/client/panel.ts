@@ -19,12 +19,7 @@
 import type { CommandCodeUsageReport } from '../adapter.ts'
 import type { CommandCodeAccountUsage } from '../usage-wire.ts'
 import type { UsagePageState } from './usage.ts'
-import {
-  formatMoney,
-  formatMoneyExact,
-  formatSuccessRate,
-  formatTokensCompact,
-} from './usage.ts'
+import { formatMoney, formatMoneyExact, formatSuccessRate, formatTokensCompact, formatResetAt } from '../display-format.ts'
 import { PANEL_KEYS, panelTextEN } from './panel-copy.ts'
 import type { PanelKey, PanelTranslator } from './panel-copy.ts'
 
@@ -229,8 +224,7 @@ const UNREPORTED = '—'
 
 /** Local reset time; empty when the endpoint reported none. */
 function resetText(ms: number): string {
-  if (ms <= 0) return ''
-  return new Date(ms).toLocaleString()
+  return formatResetAt(ms)
 }
 
 /** Local short date; empty when unset. */

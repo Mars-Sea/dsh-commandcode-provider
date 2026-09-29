@@ -21,6 +21,7 @@ import {
   DEFAULT_API_BASE,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  headersTimeoutAdvice,
 } from '../src/adapter.ts'
 import {
   KNOWN_EFFORTS,
@@ -373,6 +374,21 @@ for (const protocol of ['cli', 'openai'] as const) {
     // The same attachment twice in one result is paid for once.
     assert.equal(JSON.stringify(messages[4]).split(Buffer.from(pngBytes).toString('base64')).length - 1, 1)
     assertToolGroupsAnswered(messages, protocol)
+  })
+
+  test(`${protocol} keeps earlier image-bearing messages identical when another image is appended`, async () => {
+    const firstRef = { ...imageRef(), attachmentId: AttachmentId('sha256:first-image') }
+    const secondRef = { ...imageRef(), attachmentId: AttachmentId('sha256:second-image') }
+    const images = { [firstRef.attachmentId]: pngBytes, [secondRef.attachmentId]: Uint8Array.from([...pngBytes, 1]) }
+    const history = [userMessage('inspect screenshots'), ...parallelTurn(['call-first'], [{ images: [firstRef] }])]
+    const before = await captureWire(protocol, history, images)
+    const after = await captureWire(protocol, [
+      ...history,
+      ...parallelTurn(['call-second'], [{ images: [secondRef] }]),
+    ], images)
+    assert.deepEqual(after.slice(0, before.length), before)
+    assert.equal(after.length, before.length + 3) // assistant call, tool result, image carrier
+    assertToolGroupsAnswered(after, protocol)
   })
 }
 
@@ -861,7 +877,8 @@ test('stream() carries tool-result images after the tool message (issue #30)', a
   // Official CLI image wire shape, byte-identical to a user attachment.
   assert.deepEqual(parts[1], {
     type: 'image',
-    source: { type: 'base64', media_type: 'image/png', data: Buffer.from(pngBytes).toString('base64') },
+    image: `data:image/png;base64,${Buffer.from(pngBytes).toString('base64')}`,
+    mimeType: 'image/png',
   })
 })
 
@@ -1401,7 +1418,8 @@ test('stream() sends images in the official Command Code wire format', async () 
   assert.deepEqual(parts[0], { type: 'text', text: 'what is in this image?' })
   assert.deepEqual(parts[1], {
     type: 'image',
-    source: { type: 'base64', media_type: 'image/png', data: Buffer.from(pngBytes).toString('base64') },
+    image: `data:image/png;base64,${Buffer.from(pngBytes).toString('base64')}`,
+    mimeType: 'image/png',
   })
 })
 
@@ -1420,6 +1438,7 @@ test('stream() sends images in the official Command Code wire format', async () 
 function versionedAttachments(
   images: Record<string, Uint8Array>,
   versionBytes: Uint8Array,
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' = 'image/png',
 ): { store: AttachmentStore; targets: { ref: ImageAttachmentRef; target: Record<string, number> }[] } {
   const targets: { ref: ImageAttachmentRef; target: Record<string, number> }[] = []
   const store = {
@@ -1429,7 +1448,7 @@ function versionedAttachments(
       return {
         ref,
         data: versionBytes,
-        mediaType: ref.mediaType,
+        mediaType,
         bytes: versionBytes.length,
         width: target.width,
         height: target.height,
@@ -1471,8 +1490,40 @@ test('stream() sends the request version of an image at the documented target (C
   }])
   const wire = (capturedBody!.params as { messages: Record<string, unknown>[] }).messages
   const part = (wire.find((m) => m.role === 'user')!.content as Record<string, unknown>[])[1]!
-  assert.equal((part.source as { data: string }).data, Buffer.from(version).toString('base64'))
+  assert.equal(part.image, `data:image/png;base64,${Buffer.from(version).toString('base64')}`)
+  assert.equal(part.mimeType, 'image/png')
 })
+
+for (const protocol of ['cli', 'openai'] as const) {
+  test(`${protocol} labels a transcoded request image with its actual media type`, async () => {
+    let capturedBody: Record<string, unknown> | undefined
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body))
+      return okStream(protocol)
+    }) as unknown as typeof fetch
+    const ref = imageRef() // Stored as PNG; the request version is JPEG.
+    const version = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9])
+    const { store } = versionedAttachments({ [ref.attachmentId]: pngBytes }, version, 'image/jpeg')
+    const adapter = makeAdapter({
+      fetchImpl,
+      resolveAttachments: () => store,
+      ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+    })
+    await collect(adapter.stream({
+      provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash',
+      messages: [{ id: messageId(), role: 'user', content: [{ type: 'image', attachment: ref }], source: { kind: 'user' } }],
+    }))
+    assert.ok(capturedBody)
+    const [part] = userParts(capturedBody, protocol)
+    assert.ok(part)
+    const expectedUrl = `data:image/jpeg;base64,${Buffer.from(version).toString('base64')}`
+    if (protocol === 'cli') {
+      assert.deepEqual(part, { type: 'image', image: expectedUrl, mimeType: 'image/jpeg' })
+    } else {
+      assert.deepEqual(part, { type: 'image_url', image_url: { url: expectedUrl } })
+    }
+  })
+}
 
 test('openai protocol sends the request version too (C2)', async () => {
   let capturedBody: Record<string, unknown> | undefined
@@ -1620,6 +1671,7 @@ async function runAttempts(
   images: Record<string, Uint8Array>,
   status: (attempt: number) => number = () => 200,
   imageOffload?: SurfaceImagePolicy,
+  offloadSeenImagesForCache = false,
 ): Promise<{ bodies: Record<string, unknown>[]; error?: unknown }> {
   const bodies: Record<string, unknown>[] = []
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1633,7 +1685,9 @@ async function runAttempts(
     fetchImpl,
     resolveAttachments: () => fakeAttachments(images),
     ...(imageOffload === undefined ? {} : { imageOffload }),
-    ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+    ...(protocol === 'openai' || offloadSeenImagesForCache
+      ? { options: () => ({ ...OPENAI_OPTIONS(), protocol, offloadSeenImagesForCache }) }
+      : {}),
   })
   let error: unknown
   try {
@@ -1647,6 +1701,95 @@ async function runAttempts(
   }
   return { bodies, error }
 }
+
+test('opt-in CLI cache mitigation durably offloads only images this model has already seen', async () => {
+  const first = sizedImageRef(0, pngBytes.length)
+  const second = sizedImageRef(1, pngBytes.length)
+  const images = { [first.attachmentId]: sizedImageBytes(0), [second.attachmentId]: sizedImageBytes(1) }
+  const makeHistory = (oldOffloaded: boolean): Message[] => [
+    { id: messageId(), role: 'user', content: [
+      { type: 'text', text: 'first image' },
+      { type: 'image', attachment: first, ...(oldOffloaded ? { offloaded: true as const } : {}) },
+    ], source: { kind: 'user' } },
+    { id: messageId(), role: 'assistant', content: [{ type: 'text', text: 'I saw it.' }],
+      source: { kind: 'model', provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' } },
+    { id: messageId(), role: 'user', content: [
+      { type: 'text', text: 'second image' }, { type: 'image', attachment: second },
+    ], source: { kind: 'user' } },
+  ]
+  const pending = await runAttempts('cli', makeHistory(false), images, undefined, undefined, true)
+  assert.equal(pending.bodies.length, 0, 'surface must commit the offload before any request is sent')
+  assert.equal((pending.error as { code?: string }).code, 'IMAGE_OFFLOAD_REQUIRED')
+  assert.match((pending.error as { message?: string }).message ?? '', /1 already-seen oldest image/)
+
+  const retried = await runAttempts('cli', makeHistory(true), images, undefined, undefined, true)
+  assert.equal(retried.error, undefined)
+  assert.deepEqual(survivingImageIndices(retried.bodies[0]!, 'cli'), [1])
+  assert.equal(placeholderTexts(retried.bodies[0]!, 'cli').length, 1)
+
+  const disabled = await runAttempts('cli', makeHistory(false), images)
+  assert.equal(disabled.error, undefined)
+  assert.deepEqual(survivingImageIndices(disabled.bodies[0]!, 'cli'), [0, 1])
+  const providerApi = await runAttempts('openai', makeHistory(false), images, undefined, undefined, true)
+  assert.equal(providerApi.error, undefined)
+  assert.deepEqual(survivingImageIndices(providerApi.bodies[0]!, 'openai'), [0, 1])
+})
+
+test('cache mitigation does not offload an image before the selected model has seen it', async () => {
+  const ref = sizedImageRef(0, pngBytes.length)
+  const image = { id: messageId(), role: 'user' as const,
+    content: [{ type: 'image' as const, attachment: ref }], source: { kind: 'user' as const } }
+  const otherModel = { id: messageId(), role: 'assistant' as const,
+    content: [{ type: 'text' as const, text: 'another model answered' }],
+    source: { kind: 'model' as const, provider: 'commandcode', model: 'another-model' } }
+  for (const messages of [[image], [image, otherModel]]) {
+    const result = await runAttempts('cli', messages, { [ref.attachmentId]: sizedImageBytes(0) }, undefined, undefined, true)
+    assert.equal(result.error, undefined)
+    assert.deepEqual(survivingImageIndices(result.bodies[0]!, 'cli'), [0])
+  }
+})
+
+test('cache mitigation does not count image blocks the engine cannot durably offload', async () => {
+  const ref = sizedImageRef(0, pngBytes.length)
+  const assistantWithImage: Message = {
+    id: messageId(), role: 'assistant',
+    content: [{ type: 'image', attachment: ref }],
+    source: { kind: 'model', provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' },
+  }
+  const answer: Message = {
+    id: messageId(), role: 'assistant', content: [{ type: 'text', text: 'Done.' }],
+    source: { kind: 'model', provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' },
+  }
+  const result = await runAttempts('cli', [assistantWithImage, answer, userMessage('Continue')],
+    { [ref.attachmentId]: sizedImageBytes(0) }, undefined, undefined, true)
+  assert.equal(result.error, undefined)
+  assert.equal(result.bodies.length, 1)
+})
+
+test('Go-plan Provider API fallback requests durable image offload before posting CLI history', async () => {
+  const ref = sizedImageRef(0, pngBytes.length)
+  const paths: string[] = []
+  const adapter = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), offloadSeenImagesForCache: true }),
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: sizedImageBytes(0) }),
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      paths.push(new URL(String(input)).pathname)
+      return new Response(JSON.stringify({ error: { code: 'upgrade_required', message: 'Go plan has no API access' } }), {
+        status: 403, headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof fetch,
+  })
+  const messages: Message[] = [
+    { id: messageId(), role: 'user', content: [{ type: 'image', attachment: ref }], source: { kind: 'user' } },
+    { id: messageId(), role: 'assistant', content: [{ type: 'text', text: 'I saw it.' }],
+      source: { kind: 'model', provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' } },
+    userMessage('Continue'),
+  ]
+  await assert.rejects(collect(adapter.stream({
+    provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages,
+  })), (error: unknown) => (error as { code?: string }).code === 'IMAGE_OFFLOAD_REQUIRED')
+  assert.deepEqual(paths, ['/provider/v1/chat/completions'])
+})
 
 /** The parts of every user message in one captured body, either transport. */
 function userParts(
@@ -1670,7 +1813,7 @@ function survivingImageIndices(
     .filter((p) => p.type === 'image' || p.type === 'image_url')
     .map((p) => {
       const data = p.type === 'image'
-        ? (p.source as { data: string }).data
+        ? (p.image as string).split(',')[1]!
         : (p.image_url as { url: string }).url.split(',')[1]!
       const bytes = Buffer.from(data, 'base64')
       return bytes[bytes.length - 1]!
@@ -2229,6 +2372,38 @@ test('listModels() keeps every model when the account holds on-demand credits', 
   const adapter = makeAdapter({ fetchImpl })
   const ids = (await adapter.listModels('commandcode')).map((m) => m.id)
   assert.equal(ids.length, PLAN_FILTER_CATALOG.data.length)
+})
+
+test('allowanceTier() answers the pool\'s highest allowance bracket', async () => {
+  // The pricing page publishes a per-model allowance for GOAT and Pro only, so
+  // the settings page needs to know which of the two brackets this pool is in —
+  // or that it is in neither.
+  const bracket = async (planId: string, status = 'active') => {
+    const { fetchImpl } = fetchRouting({
+      '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+      ...subscriptionStubs(planId, status),
+      '/alpha/billing/credits': { status: 200, body: billingBody(undefined, 0, 0) },
+    })
+    return makeAdapter({ fetchImpl }).allowanceTier()
+  }
+  assert.equal(await bracket('individual-goat'), 'goat')
+  assert.equal(await bracket('individual-pro'), 'pro')
+  // Pro v1 is the same bracket as Pro.
+  assert.equal(await bracket('individual-pro-v1'), 'pro')
+  // Plans with no published allowance must NOT fall back to a neighbour's
+  // figure: a Go account seeing "$20/mo" would be reading a GOAT number.
+  assert.equal(await bracket('individual-go'), undefined)
+  assert.equal(await bracket('individual-max'), undefined)
+  assert.equal(await bracket('individual-provider'), undefined)
+  // Fail-open shape, as everywhere else in this plugin: unreadable billing
+  // hides the allowance rather than inventing one.
+  const { fetchImpl } = fetchRouting({
+    '/provider/v1/models': { status: 200, body: PLAN_FILTER_CATALOG },
+    '/alpha/whoami': { status: 200, body: { success: true, user: { id: 'u1' }, org: { id: 'org1' } } },
+    '/alpha/billing/subscriptions': { status: 500, body: {} },
+    '/alpha/billing/credits': { status: 500, body: {} },
+  })
+  assert.equal(await makeAdapter({ fetchImpl }).allowanceTier(), undefined)
 })
 
 test('listModels() fails open when the billing endpoint fails', async () => {
@@ -3373,6 +3548,116 @@ test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_E
   )
 })
 
+test('stream() clamps a large output reservation against the known model window on both transports', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 262_144 }] })
+  const prompt = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor '.repeat(17_500)
+  for (const protocol of ['cli', 'openai'] as const) {
+    const sent: number[] = []
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/models')) return new Response(catalog, { status: 200 })
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      const params = protocol === 'cli' ? body.params as Record<string, unknown> : body
+      const output = params.max_tokens as number
+      sent.push(output)
+      // The real A/B had about 205k input tokens: a 64k reservation fails
+      // on a 262k model, whereas a reduced reservation succeeds.
+      if (output > 52_000) return new Response('{"error":{"message":"too large"}}', { status: 400 })
+      return new Response(protocol === 'cli'
+        ? 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+        : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
+    }) as typeof fetch
+    const adapter = makeAdapter({
+      fetchImpl,
+      options: () => ({ ...OPENAI_OPTIONS(), protocol }),
+    })
+    await adapter.listModels('commandcode', { unfiltered: true })
+    await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 1_024, messages: [userMessage(prompt)] }))
+    await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 64_000, messages: [userMessage(prompt)] }))
+    assert.equal(sent[0], 1_024)
+    assert.ok(sent[1]! > 1_024 && sent[1]! <= 52_000, `${protocol}: ${sent[1]}`)
+  }
+})
+
+test('stream() budgets Chinese text against the model window', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 100_000 }] })
+  const sent: number[] = []
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/models')) return new Response(catalog, { status: 200 })
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    sent.push(body.max_tokens as number)
+    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
+  }) as typeof fetch
+  const adapter = makeAdapter({ fetchImpl, options: OPENAI_OPTIONS })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 64_000, messages: [userMessage('中文对话历史'.repeat(12_000))] }))
+  assert.ok(sent[0]! < 64_000, `Chinese prompt must reduce output reservation: ${sent[0]}`)
+})
+
+test('stream() prices image content as vision tokens rather than inline base64', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 100_000 }] })
+  const ref = { ...imageRef(), attachmentId: AttachmentId('sha256:large-inline-image'), bytes: 500_000 }
+  const data = new Uint8Array(ref.bytes)
+  let output: number | undefined
+  const adapter = makeAdapter({
+    options: OPENAI_OPTIONS,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: data }),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/models')) return new Response(catalog, { status: 200 })
+      output = (JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
+    }) as typeof fetch,
+  })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 64_000, messages: [{
+    id: messageId(), role: 'user', content: [{ type: 'image', attachment: ref }], source: { kind: 'user' },
+  }] }))
+  assert.equal(output, 64_000)
+})
+
+test('stream() treats an ambiguous gateway 400 as overflow only with known size pressure', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 20_000 }] })
+  const generic = JSON.stringify({ error: {
+    message: JSON.stringify({ error: { message: 'The stealth model could not complete the request.', type: 'provider_error' } }),
+  } })
+  for (const protocol of ['cli', 'openai'] as const) {
+    let status = 400
+    const adapter = makeAdapter({
+      options: () => ({ ...OPENAI_OPTIONS(), protocol }),
+      fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
+        ? new Response(catalog, { status: 200 })
+        : new Response(generic, { status })) as typeof fetch,
+    })
+    await adapter.listModels('commandcode', { unfiltered: true })
+    const run = (text: string) => collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage(text)] }))
+    await assert.rejects(run('alpha '.repeat(12_000)), (error: unknown) =>
+      (error as { code?: string }).code === 'CONTEXT_WINDOW_EXCEEDED')
+    await assert.rejects(run('hi'), (error: unknown) =>
+      (error as { code?: string }).code === 'PROVIDER_HTTP_ERROR')
+    status = 503
+    await assert.rejects(run('alpha '.repeat(12_000)), (error: unknown) =>
+      (error as { code?: string }).code === 'SERVER')
+  }
+  const withoutWindow = makeAdapter({ fetchImpl: fetchReturning(400, generic) })
+  await assert.rejects(
+    collect(withoutWindow.stream({ provider: 'commandcode', model, messages: [userMessage('alpha '.repeat(12_000))] })),
+    (error: unknown) => (error as { code?: string }).code === 'PROVIDER_HTTP_ERROR',
+  )
+  const emptyStream = makeAdapter({
+    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
+      ? new Response(catalog, { status: 200 })
+      : new Response('data: {"type":"error","error":{"message":"Provider returned an empty response"}}\n\n', { status: 200 })) as typeof fetch,
+  })
+  await emptyStream.listModels('commandcode', { unfiltered: true })
+  await assert.rejects(
+    collect(emptyStream.stream({ provider: 'commandcode', model, messages: [userMessage('alpha '.repeat(12_000))] })),
+    (error: unknown) => (error as { code?: string }).code === 'SERVER',
+  )
+})
+
 test('stream() classifies an in-band error on the Provider API transport like the CLI transport', async () => {
   // The OpenAI-format SSE carries a failure as an `error` member of a chunk. Ignoring
   // it let the stream end with no finish event, so the real cause was reported as a
@@ -3721,7 +4006,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the command-code provider table; `src/capabilities.ts` owns the
-  // table and is currently synced to command-code@1.66.0.
+  // table and is currently synced to command-code@1.68.0.
   // Every model the CLI's provider table ships effort levels for must be present, and
   // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
   // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
@@ -3746,6 +4031,12 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // Pixel Canary's set offers `xhigh` INSTEAD of `high` — a distinct shape from its
   // Space Bunny Alpha sibling's, not a copy of it.
   assert.deepEqual(KNOWN_EFFORTS['stealth/pixel-canary'], ['low', 'medium', 'xhigh'])
+  // command-code@1.68.0 takes the Sonnet/Opus five-level set; 1.67.0's DeepSeek
+  // V4.1 Flash Fast keeps the three-level set its `deepseek-v4.1-flash` sibling ships.
+  assert.deepEqual(KNOWN_EFFORTS['claude-sonnet-5-5'], ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash-fast'], ['low', 'high', 'max'])
+  assert.ok(!KNOWN_THINKING_MODELS.has('claude-sonnet-5-5'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash-fast'))
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
@@ -3754,7 +4045,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
   // Retired models (the MiniMax free variants, stealth/ox-alpha) belong to neither set.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
-  // Same provenance: `src/capabilities.ts`, synced to the command-code@1.66.0
+  // Same provenance: `src/capabilities.ts`, synced to the command-code@1.68.0
   // provider table.
   // Every model that reasons automatically (reasoning:true, no selectable effort
   // levels) belongs in this set, and every model that gained selectable efforts has
@@ -3832,6 +4123,10 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash'))
+  // Both 1.67.0/1.68.0 additions declare inputModalities ["text","image"] and carry
+  // the registry's Vision label.
+  assert.ok(KNOWN_IMAGE_MODELS.has('claude-sonnet-5-5'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash-fast'))
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6-astra'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.7'))
   assert.ok(KNOWN_IMAGE_MODELS.has('stepfun/Step-5-Preview'))
@@ -3872,6 +4167,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['meituan/LongCat-2.0:free'], undefined)
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.0-flash-sante:free'], 'go')
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash'], 'go')
+  // command-code@1.67.0: the throughput variant is Go-tier like the rest of the family.
+  assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash-fast'], 'go')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3-contributor'], 'go')
   assert.equal(KNOWN_PLANS['stepfun/Step-5-Preview'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
@@ -3889,6 +4186,9 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro-ultraspeed'], 'goat')
   assert.equal(KNOWN_PLANS['google/gemini-3.8-flash'], 'goat')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3'], 'goat')
+  // command-code@1.68.0: Claude Sonnet 5.5 lands a tier ABOVE its `claude-sonnet-5`
+  // predecessor (Pro, below) — individual-go false, individual-goat true.
+  assert.equal(KNOWN_PLANS['claude-sonnet-5-5'], 'goat')
   // Pro adds Claude Sonnet/Haiku, GPT-5.x, Gemini 3.5/3.1.
   assert.equal(KNOWN_PLANS['claude-sonnet-5'], 'pro')
   assert.equal(KNOWN_PLANS['gpt-5.4'], 'pro')
@@ -4053,6 +4353,18 @@ test('peakPricingState/Label report the current UTC peak/off-peak window', () =>
   // Vision row above it. Same for tencent/hy4-preview, priced per token.
   assert.ok(!KNOWN_PEAK_PRICING.has('Qwen/Qwen3.8-Max'))
   assert.ok(!KNOWN_PEAK_PRICING.has('tencent/hy4-preview'))
+  // command-code@1.67.0's DeepSeek V4.1 Flash Fast carries its own `timeOfDay` block
+  // (off-peak $0.16/$0.58, peak $0.32/$1.16), so it joins the membership set and gets
+  // the same Peak/Half label as its siblings.
+  assert.ok(KNOWN_PEAK_PRICING.has('deepseek/deepseek-v4.1-flash-fast'))
+  assert.equal(
+    peakPricingLabel('deepseek/deepseek-v4.1-flash-fast', Date.parse('2026-08-17T02:30:00Z')),
+    'Peak',
+  )
+  assert.equal(
+    peakPricingLabel('deepseek/deepseek-v4.1-flash-fast', Date.parse('2026-08-17T17:30:00Z')),
+    'Half',
+  )
   assert.equal(peakPricingState('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
   assert.equal(peakPricingLabel('claude-sonnet-5', Date.parse('2026-08-17T17:00:00Z')), undefined)
 
@@ -4144,7 +4456,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.66.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.68.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -4219,6 +4531,7 @@ test('stream() classifies a 429 that NAMES a window as the window limit it is', 
   const resetSeconds = Math.floor(Date.now() / 1000) + 1800
   const cases: Array<readonly [string, number | undefined]> = [
     [JSON.stringify({ error: { code: 'RATE_LIMITED', rateLimit: { window: 'weekly', reset: resetSeconds } } }), resetSeconds * 1000],
+    [JSON.stringify({ code: 'RATE_LIMITED', rateLimit: { window: 'daily', reset: resetSeconds } }), resetSeconds * 1000],
     [JSON.stringify({ error: { message: 'You have reached the usage limit for your plan (weekly)' } }), undefined],
     [JSON.stringify({ error: { rateLimit: { window: 'fiveHour' } } }), undefined],
   ]
@@ -4971,4 +5284,164 @@ test('usage received before a transport error is retained without a success fini
   }, (error: unknown) => (error as { code: string }).code === 'TRANSPORT')
   assert.equal(seen.filter(chunk => chunk.type === 'usage').length, 1)
   assert.equal(seen.some(chunk => chunk.type === 'finish'), false)
+})
+
+// --- issue #67: header-timeout diagnosis and the streak that ends it ----------
+
+/**
+ * A fetch that never answers, honoring the abort signal the way a real one
+ * does: without that rejection the connect budget can fire but the promise
+ * never settles, and the test runner kills the file as a hung parent.
+ */
+function neverSettlingFetch(): typeof fetch {
+  return ((_url: unknown, init?: { signal?: AbortSignal }) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      reject(new DOMException('This operation was aborted', 'AbortError'))
+    }, { once: true })
+  })) as unknown as typeof fetch
+}
+
+/** Run one generate and return the failure it threw, as a coded error. */
+async function generateFailure(
+  adapter: CommandCodeAdapter,
+  options: Partial<Parameters<CommandCodeAdapter['stream']>[0]> = {},
+): Promise<{ code: string; message: string }> {
+  try {
+    for await (const _ of adapter.stream({
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      messages: [userMessage('hi')],
+      ...options,
+      // A stable session id matters: the CLI wire carries a thread id derived
+      // from it, so without one every call would build a DIFFERENT body and
+      // the streak could never match. A real host always supplies one, and it
+      // is pinned here so no per-test override can break that. Cast rather
+      // than imported: `SessionId` is a brand from dsh-session, which is not
+      // one of this bundle's peers. NonNullable because `exactOptionalPropertyTypes`
+      // forbids writing an explicit undefined into an optional property.
+      sessionId: 'streak-probe-session' as unknown as NonNullable<GenerateOptions['sessionId']>,
+    })) { /* drain */ }
+  } catch (error) {
+    const coded = error as { code?: string; message?: string }
+    return { code: String(coded.code), message: String(coded.message) }
+  }
+  throw new Error('expected the generate to fail')
+}
+
+test('a CLI-route header timeout blames the gateway, and says a bigger budget will not help', async () => {
+  // `/alpha/generate` answers headers itself (measured: 2.1 s for a 1.6 MB
+  // body), so silence there is the gateway never answering — not the size of
+  // the conversation. The old wording sent issue #67's reporter to their proxy.
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai', workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 30, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'cli' as const,
+    }),
+    fetchImpl: neverSettlingFetch(),
+  })
+  const failure = await generateFailure(adapter)
+  assert.equal(failure.code, 'TIMEOUT')
+  assert.match(failure.message, /网关完全没有返回响应头/, 'names the gateway as silent')
+  assert.match(failure.message, /调大超时不会有帮助/, 'rules out the timeout knob')
+  assert.match(failure.message, /体积不是原因/, 'rules out size on this route')
+})
+
+test('a large Provider-API prompt is diagnosed as a slow upstream, with a concrete value', async () => {
+  // The route decides, NOT the size: measured on one account, the same
+  // `/provider/v1/chat/completions` route took 117 s for a 200 k prompt and
+  // 30 s for a 1.2 M one. This test keeps a LARGE body to pin that the wording
+  // no longer blames size for the delay.
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai', workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 30, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'openai' as const,
+    }),
+    fetchImpl: neverSettlingFetch(),
+  })
+  const failure = await generateFailure(adapter, {
+    messages: [userMessage('x'.repeat(1_100_000))],
+  })
+  assert.equal(failure.code, 'TIMEOUT')
+  assert.match(failure.message, /上游模型吐出第一个 token/, 'names the mechanism')
+  assert.match(failure.message, /体积不是原因/, 'explicitly rules out size')
+  assert.match(failure.message, /调到 300000 毫秒/, 'suggests the doubled-and-floored budget')
+})
+
+test('the suggested budget doubles a long timeout instead of flooring it at 5 minutes', () => {
+  // Asserted on the pure helper: reproducing this through a real attempt would
+  // mean waiting out the 200 s budget it describes.
+  assert.equal(headersTimeoutAdvice('openai', 200_000).suggestionMs, 400_000)
+  assert.equal(headersTimeoutAdvice('openai', 30_000).suggestionMs, 300_000)
+  // Capped at the retry backoff's own ceiling, never past it.
+  assert.equal(headersTimeoutAdvice('openai', 10_000_000).suggestionMs, 900_000)
+  // The CLI route never gets the knob recommended: its headers come from the
+  // gateway, so a bigger budget cannot buy a response that never started.
+  assert.equal(headersTimeoutAdvice('cli', 30_000).cause, 'gateway')
+  assert.equal(headersTimeoutAdvice('cli', 30_000).suggestionMs, undefined)
+})
+
+test('three consecutive header timeouts on one payload stop the retry loop', async () => {
+  // `maxRetries: 1000` with a 500 ms → 15 min backoff is right for a provider
+  // that names its own reset, and wrong for a gateway that says nothing: the
+  // reporter's identical multi-megabyte body was re-sent for hours.
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai', workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 30, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'cli' as const,
+    }),
+    fetchImpl: neverSettlingFetch(),
+  })
+  const first = await generateFailure(adapter)
+  const second = await generateFailure(adapter)
+  const third = await generateFailure(adapter)
+  assert.equal(first.code, 'TIMEOUT', 'the first silence is still retried')
+  assert.equal(second.code, 'TIMEOUT', 'the second is still retried')
+  assert.equal(third.code, 'PROVIDER_HTTP_ERROR', 'the third leaves the whitelist')
+  assert.match(third.message, /已停止重试/)
+  assert.match(third.message, /连续 3 次/)
+  // The streak resets, so a later burst has to earn its own three attempts.
+  const fourth = await generateFailure(adapter)
+  assert.equal(fourth.code, 'TIMEOUT')
+})
+
+test('an answered request ends a header-timeout streak', async () => {
+  let silent = true
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: 'https://api.commandcode.ai', workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: 30, streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'cli' as const,
+    }),
+    fetchImpl: (async (_url: unknown, init?: { signal?: AbortSignal }) => {
+      if (silent) {
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('This operation was aborted', 'AbortError'))
+          }, { once: true })
+        })
+      }
+      return new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', {
+        status: 200, headers: { 'content-type': 'text/event-stream' },
+      })
+    }) as unknown as typeof fetch,
+  })
+  assert.equal((await generateFailure(adapter)).code, 'TIMEOUT')
+  assert.equal((await generateFailure(adapter)).code, 'TIMEOUT')
+  silent = false
+  // A streamed answer proves the gateway answered, whatever the status was.
+  for await (const _ of adapter.stream({
+    provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('hi')],
+  })) { /* drain */ }
+  silent = true
+  assert.equal((await generateFailure(adapter)).code, 'TIMEOUT', 'the streak restarted after the answer')
+  assert.equal((await generateFailure(adapter)).code, 'TIMEOUT')
+  const third = await generateFailure(adapter)
+  assert.equal(third.code, 'PROVIDER_HTTP_ERROR', 'and only then escalates again')
 })

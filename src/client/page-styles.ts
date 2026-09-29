@@ -28,10 +28,12 @@ export const PAGE_CSS_ID = '@mars-sea/dsh-commandcode-provider/CommandCodeSettin
  * The settings-page stylesheet.
  *
  * The metrics are the harness's own settings pages', read out of the 0.1.7
- * bundles so the page sits beside General and Models without looking foreign: a
- * row is 16px of padding over a 0.5px border-l2 hairline, its title 14/22
- * label-primary and its description 12/18 label-tertiary, the control on the
- * right. Selectors and buttons are capsules (36px / 28px compact), inputs are
+ * bundles so the page sits beside General and Models without looking foreign:
+ * a row is 12px of padding, its title 14/22 label-primary and its description
+ * 12/18 label-tertiary, the control on the right. The hairline rhythm is
+ * section-level: a 0.5px border-l2 rule separates the GROUPS (see
+ * `cc-groupDivided`), never the rows inside one, so a group's rows read as one
+ * list. Selectors and buttons are capsules (36px / 28px compact), inputs are
  * 32px with an 8px radius and a 0.5px border-l4 edge, a card is a 0.5px
  * border-l4 outline with a 16px radius, and a nested panel is a
  * bg-module-platform fill with a 12px radius. Errors use state-error-primary.
@@ -43,6 +45,7 @@ export const PAGE_CSS = `
 .cc-readOnly{margin:8px 0 0;color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-tertiary));font-size:12px;line-height:18px}
 .cc-spacer{flex:1}
 .cc-group{flex-direction:column;display:flex;margin-top:28px}
+.cc-groupDivided{margin-top:24px;padding-top:20px;border-top:.5px solid var(--dsw-alias-border-l2)}
 .cc-groupHead{align-items:center;gap:8px;display:flex;min-height:28px;padding-bottom:4px}
 .cc-groupTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:22px}
 .cc-groupDesc{margin:0 0 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
@@ -50,9 +53,8 @@ export const PAGE_CSS = `
 .cc-disclosure{width:100%;padding:0 0 4px;border:0;background:0 0;font:inherit;text-align:left;cursor:pointer;border-radius:6px}
 .cc-disclosure:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 .cc-rows{flex-direction:column;display:flex}
-.cc-row{align-items:center;gap:8px;display:flex;padding:16px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}
-.cc-rows>.cc-row:last-child{border-bottom:0}
-.cc-rowFlush{padding:0;border-bottom:0}
+.cc-row{align-items:center;gap:8px;display:flex;padding:12px 0}
+.cc-rowFlush{padding:0}
 .cc-rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:32px;display:flex}
 .cc-rowTitleLine{align-items:center;gap:8px;display:flex;min-width:0}
 .cc-rowTitle{min-width:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}
@@ -68,7 +70,7 @@ export const PAGE_CSS = `
 .cc-linkButton:disabled{cursor:default;opacity:.4}
 .cc-linkButton:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}
 .cc-badges{align-items:center;gap:8px;display:inline-flex}
-.cc-badge,.cc-badgeMuted{flex:none;align-items:center;display:inline-flex;white-space:nowrap;border-radius:999px;corner-shape:round;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
+.cc-badge,.cc-badgeMuted{flex:none;align-items:center;display:inline-flex;white-space:nowrap;border-radius:999px;corner-shape:round;padding:1px 8px;font-size:12px;font-weight:500;line-height:17px}
 .cc-badge{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary)}
 .cc-badgeMuted{border:.5px solid var(--dsw-alias-border-l4);color:var(--dsw-alias-label-tertiary)}
 .cc-badgeWarn{background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-module-platform));color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary))}
@@ -142,6 +144,7 @@ export const PAGE_CSS = `
 .cc-kebab{width:3px;height:3px;border-radius:50%;corner-shape:round;background:currentColor;box-shadow:0 -5px 0 currentColor,0 5px 0 currentColor}
 .cc-tabDot{flex-shrink:0;width:8px;height:8px;border-radius:50%;corner-shape:round}
 .cc-tabDotOk{background:var(--dsw-alias-state-success-primary)}
+.cc-tabDotBlank{background:0 0;border:0}
 .cc-tabDotWarn{background:var(--dsw-alias-state-warn-primary,#d97706)}
 .cc-tabDotError{background:var(--dsw-alias-state-error-primary)}
 .cc-accountMeters{flex-wrap:wrap;gap:6px 20px;display:flex;padding-left:16px}

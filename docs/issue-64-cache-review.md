@@ -1,6 +1,50 @@
 # Issue #64: cache regression review
 
-The current patch improves CLI request alignment and diagnostics. It does **not** establish that the intermittent cache misses reported in [issue #64](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/64) are fixed. The reporter's original requests and a comparable post-change session are unavailable here; local tests cannot measure the gateway's cache or prove its internal prompt layout.
+The current patch improves CLI request alignment and diagnostics. It does **not** establish that the intermittent cache misses reported in [issue #64](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/64) are fixed. A synthetic authenticated replay now reproduces the same first-image cache boundary on the real `/alpha/generate` service; the reporter's original requests and the gateway's internal prompt layout remain unavailable.
+
+## 2026-09-28 image-path follow-up
+
+The reporter's [0.11.17 follow-up](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/64#issuecomment-5854327366) narrows the symptom: all 15 misses in a 161-request session immediately followed a tool result that added an image, and the cached prefix repeatedly stopped near the first image boundary. This is a correlation, not yet a wire-level proof of the cause.
+
+An integrity-verified `command-code@1.66.0` CLI artifact exposed a protocol mismatch missed in the first review. The CLI accepts `{ type: 'image', source: { type: 'base64', media_type, data } }` internally, but its `toWireMessages()` posts `{ type: 'image', image: 'data:<mime>;base64,...', mimeType: '<mime>' }` to `/alpha/generate`. The plugin had been posting the internal shape. It also discarded `readImageRequest()`'s returned `mediaType`, labelling a JPEG/WebP request variant with the stored attachment's MIME on both transports. The attachment-local implementation gives request variants a deterministic identity and caches their encoded bytes, so byte instability is not established by code inspection alone.
+
+The working-tree repair sends the final CLI image shape and preserves request-version MIME. Focused tests exercise a tool-result image, a stored PNG whose request variant is JPEG, and append-only replay of earlier image-bearing messages. Existing trace fingerprints can compare the shared `messages.items` prefix around a miss. A synthetic authenticated image-heavy replay is reported below; it reproduces a cache boundary despite identical historical wire messages. This means the image wire correction alone does not close the issue.
+
+## 2026-09-28 authenticated service replay
+
+`node --import tsx scripts/probe-cache-live.mjs` used the current adapter build, the local Command Code credential, `/alpha/generate`, `deepseek/deepseek-v4.1-flash`, one stable CLI thread ID per run, 26 fixed tool declarations, about 54k initial prompt tokens, and three generated 1800×1200 images returned by synthetic tool calls. The request-image bytes came from the real dsh 0.1.7-rc.2 attachment projection. The second run inserted a text-only tool result as a control. A third run used `LIVE_IMAGE_NOTE_MODE=none` to remove the plugin's explanatory text from image-carrier user messages before sending, matching the official CLI's image-only carrier more closely. All 28 generation responses were HTTP 200. The report records only numeric usage, timings, and SHA-256 request fingerprints, never the credential or raw conversation.
+
+| Second-run request | Cache read | Uncached input | Observation |
+| --- | ---: | ---: | --- |
+| text after image 1 | 54,912 | 126 | Warm prefix including image 1 |
+| text-only tool result | 54,912 | 470 | No cache-read regression |
+| text after tool result | 55,296 | 103 | Prefix grows normally |
+| image 2 | 54,016 | 2,468 | Cache read falls by 1,280 tokens |
+| text after image 2 | 56,448 | 51 | Cache recovers |
+| image 3 | 54,016 | 3,568 | Cache read falls by 2,432 tokens |
+| text after image 3 | 57,472 | 127 | Cache recovers |
+
+The first run showed the same pattern: cache read was 54,912 after image 1, 54,016 when image 2 arrived, 56,064 in the next text request, 53,888 when image 3 arrived, and 57,216 in the next text request. In all three runs the fixed `config`, `system`, `tools`, and `threadId` had one hash; every prior serialized message hash stayed byte-identical as new messages were appended. The image request variants were deterministic and reused through the attachment service. Thus the measured retreat to the first-image boundary is not explained by a changed historical request prefix, changing tool declarations, protocol fallback, or local image re-encoding. It is observed in the service's returned cache counters; the exact gateway/model cache mechanism remains unknown.
+
+The image-only carrier did not remove the drop: the third run's cache read was 55,296 after the text-only control, 54,016 with image 2, 56,320 on the next text request, 54,016 with image 3, and 57,472 on the next text request. Its historical wire-message hashes also stayed identical. The explanatory line is therefore not the trigger in this fixture.
+
+This shorter replay proves the failure mode exists with the corrected image wire shape. It does not reproduce the reporter's 161-request/242k-token scale or its 30–39 second slow steps: re-prefill here was only 1.3–2.4k tokens, with first output around 5–7 seconds. The original issue also has an image-bearing session without cache drops, so image insertion is correlated with, but not a sufficient universal condition for, the failure. A provider-side cache-layout investigation or an explicitly chosen history tradeoff is still needed for a real fix.
+
+## 2026-09-28 cache mitigation experiments
+
+An image-part `cache_control: { type: 'ephemeral' }` appeared to help on a replay that reused the preceding fixture. A fresh-prefix A/B disproved that result: both marked and unmarked requests fell from 41,728 cached tokens to 40,448 when image 2 arrived, then from 42,752 to 40,448 with image 3. The earlier apparent benefit was compatible with cache warming from prior runs, so this marker is not sent by the adapter. A text cache marker appended after each image ended one run with `EMPTY_RESPONSE` on image 2 after a long HTTP-200 stream; it supplied no positive evidence of a fix.
+
+A separate four-request A/B grew the conversation by roughly 21k tokens after image 1, then appended image 2. With all images replayed, the `growth-text` request reported 23,296 cached / 20,820 uncached, while image 2 returned to 22,144 cached / 23,033 uncached: the newly grown text was re-prefilled. In the offload variant, image 1 was durably represented as a text placeholder after the model answered. The successful retry reported 43,136 cached / 70 uncached for `growth-text`, then **43,136 cached / 1,131 uncached** when image 2 arrived. The offload variant's first attempt timed out during `growth-text`; the retry reused the same fixture, so its growth text was already warm. The decisive observation is that image 2 retained that 43,136-token prefix rather than returning to 22,144. The first image still reached the model before being offloaded, and image 2 remained on the wire.
+
+The opt-in `offloadSeenImagesForCache` setting implements that mitigation through dsh's existing `IMAGE_OFFLOAD_REQUIRED` → durable `image/offload` → retry contract. It acts only on the CLI route and only on retained images followed by an assistant response from the same model. It is off by default: replacing old pixels with placeholders changes later model context, and a user image without a local file may need to be attached again. This is not a server-side fix. The longer 161-request case should still be tested with the option enabled before making a cost or latency claim for that scale.
+
+A further fresh-prefix run exercised the **implemented adapter option** rather than premarking the fixture. `LIVE_ADAPTER_OFFLOAD=1` caused the adapter to raise `IMAGE_OFFLOAD_REQUIRED`; the probe passed the requested count through dsh 0.1.7-rc.2's real `offloadOldestImages()` selector over synthetic session events, applied its `image/offload` targets, and retried. All four `/alpha/generate` requests returned HTTP 200. After image 1, the growth-text request offloaded one old image and reported 22,144 cached / 21,062 uncached tokens. Image 2 then reported **43,136 cached / 1,155 uncached** tokens, preserving the grown prefix. The probe's fake session reproduces the DSH selection contract but is not a full running Host; `npm run test:engine` separately verifies the staged plugin and offload failure shape against that engine. The result is stored in `/private/tmp/commandcode-issue64-adapter-offload-b.json` as counters and hashes only.
+
+## 2026-09-28 root-cause boundary
+
+A fresh-prefix, four-request control kept all images and changed several plugin-only wire details to the official CLI's shape: tool declarations omitted `type: 'function'`, top-level `permissionMode` was `standard`, `temperature` was omitted, and the tool-result image carrier contained no explanatory text. The fixed request fields and all preceding serialized messages remained byte-identical as the conversation grew. The growth-text request reported 23,296 cached / 20,820 uncached tokens; image 2 still retreated to **22,272 cached / 22,905 uncached** tokens. All four service responses were HTTP 200. The numeric/hash report is `/private/tmp/commandcode-issue64-cli-parity.json`.
+
+This excludes those particular client-side differences as a fix for this synthetic case. It does not prove the complete CLI and plugin requests are identical, nor reveal the gateway's rendered multimodal prompt, backend routing, or cache key. A fidelity-preserving repair would need the service to reuse the same cached prefix when a new image is appended, or a documented protocol mechanism that provides that behavior. Without such a mechanism, dropping old image pixels is a context tradeoff rather than a root-cause fix. A comparable image-heavy run through the official CLI, captured with sanitized request and response identifiers, would determine whether the failure is shared with the CLI before asking Command Code to inspect the gateway's prompt and cache decisions.
 
 ## Upstream evidence
 
@@ -32,9 +76,9 @@ Regression tests drive the actual adapter through both transports, verify that f
 
 Validation completed on the working tree:
 
-- `node --import tsx --test tests/adapter.test.ts tests/stream-trace.test.ts`: 205/205 passed.
+- `node --import tsx --test tests/adapter.test.ts`: 191/191 passed after the opt-in mitigation and its durable-node guard were added.
 - `npm run typecheck`: passed.
-- `npm test`: 678/678 passed when local loopback listening was permitted. The sandboxed first run had 22 login-test failures from denied local port binding; no login code was changed for this review.
+- `npm test`: 691/691 passed when local loopback listening was permitted. The sandboxed first run had 22 login-test failures from denied local port binding; no login code was changed for this review.
 - `npm run build`: passed; the generated `lib/` reflects the working tree, including its other ongoing changes.
 - `npm run test:engine -- --engine /Users/mars-sea/.npm/_npx/4f4f47d9854f3c73`: passed against an existing DSH 0.1.7-rc.2 engine.
 - `git diff --check`: passed.
@@ -50,4 +94,4 @@ Group records by `streamId`, then compare requests with the same session, model 
 
 If the shared input prefix changes, inspect the corresponding DSH system/context/tool/history update. If it remains identical while cache reads collapse, the trace narrows the investigation to gateway/provider behavior without proving which internal mechanism caused it. Use the recorded response IDs when present for upstream investigation. Separate cache hit rate from time to first output: the original report includes high-hit requests that were still slow.
 
-The trace includes raw **response** content, so review it before sharing. Request hashes do not make the entire file safe to publish. No paid generation or authenticated cache benchmark was performed during this review.
+The trace includes raw **response** content, so review it before sharing. Request hashes do not make the entire file safe to publish. The authenticated benchmark above uses a separate synthetic fixture and does not enable raw-response tracing.

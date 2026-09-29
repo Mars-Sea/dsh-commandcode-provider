@@ -7,26 +7,13 @@
  * detection, tier grouping — lives here, React-free, so node tests can drive
  * it directly.
  *
- * Dependency-free by design: the client bundle may only import platform/seed
- * modules, so the plan snapshot below is a deliberately small vendored copy
- * (tier key → heading label) rather than an import of src/capabilities.ts.
- * When upstream adds a plan tier, extend BOTH tables.
+ * The shared tier module is dependency-free and inlined into the client bundle;
+ * importing the Host's full capability snapshot here would bloat that bundle.
  *
  * @module dsh-commandcode-provider/model-select
  */
 
-/**
- * Minimum plan tier → dropdown section heading. Mirrors the Host-side
- * `KNOWN_PLANS` tiers + `PLAN_LABELS` in src/capabilities.ts; an unknown tier
- * key falls back to the raw key rather than vanishing the row.
- */
-const TIER_HEADINGS: Readonly<Record<string, string>> = {
-  go: 'Go',
-  goat: 'GOAT',
-  pro: 'Pro',
-  provider: 'Provider',
-  max: 'Max',
-}
+import { PLAN_LABELS } from '../plan-tiers.ts'
 
 /**
  * The dropdown section heading for a catalog model id, or undefined for
@@ -40,7 +27,7 @@ export function tierHeadingFor(
 ): string | undefined {
   const tier = knownPlans[modelId]
   if (tier === undefined) return undefined
-  return TIER_HEADINGS[tier] ?? tier
+  return PLAN_LABELS[tier] ?? tier
 }
 
 /** One selectable catalog model (mirrors `CatalogModelOption` in settings.ts). */
@@ -48,6 +35,11 @@ export interface SelectableModel {
   /** Catalog model id (e.g. `deepseek/deepseek-v4-pro`). */
   id: string
   name: string
+  /**
+   * Per-model monthly allowance in USD, already resolved by the Host. Passed
+   * through untouched: this module renders it, it does not interpret it.
+   */
+  allowance?: number
 }
 
 /** One dropdown row: a live catalog model or a stale selection. */
@@ -57,6 +49,11 @@ export interface ModelSelectOption {
   label: string
   /** True when the id is selected but the catalog no longer carries it. */
   stale: boolean
+  /**
+   * Per-model monthly allowance in USD. Only live catalog rows can carry one —
+   * a stale id is no longer priced by the page, so there is nothing to show.
+   */
+  allowance?: number
 }
 
 /** One dropdown section: a plan-tier heading plus its rows. */
@@ -96,7 +93,12 @@ export function buildModelSelectOptions(
   const catalogIds = new Set(catalog.map((model) => model.id))
   const options = catalog
     .filter((model) => matchesModelQuery(model, query))
-    .map((model) => ({ value: model.id, label: model.name, stale: false }))
+    .map((model) => ({
+      value: model.id,
+      label: model.name,
+      stale: false,
+      ...(model.allowance === undefined ? {} : { allowance: model.allowance }),
+    }))
   // Dedupe defensively (order-preserving): hand-edited settings can repeat
   // or blank an id, and duplicate Menu ids would confuse selection state.
   const seen = new Set(catalogIds)

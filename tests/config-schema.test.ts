@@ -63,3 +63,8 @@ test('a literal API key still configures the route from a composition config', (
   // A write lands on the next read without re-parsing.
   assert.equal(unwrapVolatileConfig(parsed).apiKeyEnv, 'COMMANDCODE_API_KEY')
 })
+
+test('cache-aware image offload is explicitly opt-in and resolves per config read', () => {
+  assert.equal(resolveAdapterOptions(unwrapVolatileConfig(Config({}))).offloadSeenImagesForCache, false)
+  assert.equal(resolveAdapterOptions(unwrapVolatileConfig(Config({ offloadSeenImagesForCache: true }))).offloadSeenImagesForCache, true)
+})

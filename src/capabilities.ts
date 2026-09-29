@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.66.0) and
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.68.0) and
  * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
  * for the extraction procedures. Keeping the snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
@@ -14,8 +14,12 @@
  * and split out so upstream syncs stay reviewable.
  */
 
+import { peakHour } from './cost-facts.ts'
+import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
+export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
+
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.66.0 bundled model
+  // Re-verified against the authoritative command-code@1.68.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -36,10 +40,16 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'claude-opus-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-sonnet-4-6': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-sonnet-5': ['low', 'medium', 'high', 'xhigh', 'max'],
+  // command-code@1.68.0; the five-level set shared with the rest of the Sonnet /
+  // Opus family. It takes the "recommended" slot from `claude-sonnet-5`.
+  'claude-sonnet-5-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   // command-code@1.39.1 dropped `medium`; the 1.39.2 table ships these three.
   'deepseek/deepseek-v4-flash-fast': ['low', 'high', 'max'],
   // command-code@1.53.0.
   'deepseek/deepseek-v4.1-flash': ['low', 'high', 'max'],
+  // command-code@1.67.0; the same three-level set as its `deepseek-v4.1-flash`
+  // sibling, whose throughput-focused variant this is.
+  'deepseek/deepseek-v4.1-flash-fast': ['low', 'high', 'max'],
   'deepseek/deepseek-v4-flash': ['high', 'max'],
   'deepseek/deepseek-v4-flash-vision-exp': ['high', 'max'],
   'deepseek/deepseek-v4-pro': ['high', 'max'],
@@ -140,9 +150,14 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'claude-opus-5',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
+  // command-code@1.68.0; Vision per the official registry and the CLI's
+  // inputModalities:["text","image"].
+  'claude-sonnet-5-5',
   'deepseek/deepseek-v4-flash-vision-exp',
   // command-code@1.53.0; Vision per the official registry and inputModalities.
   'deepseek/deepseek-v4.1-flash',
+  // command-code@1.67.0; Vision per the official registry and inputModalities.
+  'deepseek/deepseek-v4.1-flash-fast',
   'google/gemini-3.1-flash-lite',
   'google/gemini-3.5-flash',
   'google/gemini-3.5-flash-lite',
@@ -205,12 +220,13 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.66.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.68.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table would drop `meituan/
- * LongCat-2.0` and `stealth/pixel-canary`, which each appear in
- * `modelSupportsZdr` alone. The official docs (commandcode.ai/docs/resources/
+ * LongCat-2.0`, which appears in `modelSupportsZdr` alone (re-read from the
+ * 1.66.0 / 1.67.0 / 1.68.0 artifacts on 2026-09-29: the two stealth-preview
+ * rows sit in BOTH sets, so LongCat is the only divergence). The official docs (commandcode.ai/docs/resources/
  * zdr) put it in prose — "99% of our models have ZDR-capable upstreams … only
  * a small handful of models are affected" — so the CLI's exclusion list is
  * the only per-model evidence there is; a ZDR request naming one of these
@@ -232,12 +248,19 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * (its `zdr:{only:[…]}` provider routes and the per-provider `zdr`/`noTraining`
  * flags) is upstream-internal routing, not a per-model contract, so this table
  * is the snapshot of the exclusion set and nothing more. It is a rare change:
- * 20 members held across 1.62.0 → 1.64.0, and 1.65.0 and 1.66.0 each added
- * exactly one (the two stealth-preview models below).
+ * 20 members held across 1.62.0 → 1.64.0, 1.65.0 and 1.66.0 each added exactly
+ * one (the two stealth-preview models below), 1.67.0 added one
+ * (`deepseek/deepseek-v4.1-flash-fast`), and 1.68.0 changed nothing — 23
+ * members as of 2026-09-29.
  */
 export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'MiniMaxAI/MiniMax-M3',
   'Qwen/Qwen3.8-Max-0902',
+  // command-code@1.67.0. The 1.67.0 artifact lists it in BOTH anchor sets, so
+  // the CLI's own ZDR predicate excludes it. Unlike the stealth previews below,
+  // the pricing page carries no ZDR note for this row — the artifact is the
+  // evidence, and the sibling `deepseek-v4.1-flash` stays ZDR-covered.
+  'deepseek/deepseek-v4.1-flash-fast',
   'meituan/LongCat-2.0',
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
@@ -251,11 +274,11 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // "Free while the preview lasts. Not routed under ZDR."
   'stealth/space-bunny-alpha',
   // command-code@1.66.0 added `stealth/pixel-canary` — the second stealth-preview
-  // free model, and like its sibling it is not routed under ZDR. It joins
-  // through `modelSupportsZdr` alone (the 1.66.0 bundle's
-  // `knownModelSupportsZdr` set does not repeat it), so reading only the
-  // sibling route table would drop it; the pricing page's own tip says it:
-  // "Free while the preview lasts. Not routed under ZDR."
+  // free model, and like its sibling it is not routed under ZDR. Re-read from
+  // the 1.66.0 / 1.67.0 / 1.68.0 artifacts on 2026-09-29: it is listed in BOTH
+  // anchor sets in all three, so an earlier note here claiming it entered
+  // through `modelSupportsZdr` alone was wrong. The pricing page's own tip says
+  // it either way: "Free while the preview lasts. Not routed under ZDR."
   'stealth/pixel-canary',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
@@ -376,8 +399,8 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.66.0 (2026-09-27): 82 catalog
- * ids at 52/60/74/82 cumulative, a strict superset chain — every release since
+ * Provider-tier. Re-verified at command-code@1.68.0 (2026-09-29): 84 catalog
+ * ids at 53/62/76/84 cumulative, a strict superset chain — every release since
  * 1.49.0 has been additive with no tier move, and per-entry tags below name the
  * release that added each row.
  *
@@ -390,7 +413,7 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (52) ---
+  // --- Go (53) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -412,6 +435,9 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'deepseek/deepseek-v4-flash-fast': 'go',
   // command-code@1.53.0; every plan including Go.
   'deepseek/deepseek-v4.1-flash': 'go',
+  // command-code@1.67.0; individual-go true, so Go-tier like the rest of the
+  // DeepSeek V4 family.
+  'deepseek/deepseek-v4.1-flash-fast': 'go',
   'deepseek/deepseek-v4-flash': 'go',
   'deepseek/deepseek-v4-flash-vision-exp': 'go',
   'deepseek/deepseek-v4-pro': 'go',
@@ -472,7 +498,11 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'zai-org/GLM-5.2': 'go',
   'zai-org/GLM-5.2-Fast': 'go',
   'zai-org/GLM-5.3': 'go',
-  // --- GOAT (8 more) ---
+  // --- GOAT (9 more) ---
+  // command-code@1.68.0; individual-go false, individual-goat true — "Available
+  // on GOAT and above", one tier ABOVE its `claude-sonnet-5` predecessor, which
+  // sits in the Pro block below.
+  'claude-sonnet-5-5': 'goat',
   'google/gemini-3.7-flash': 'goat',
   // command-code@1.43.0; "Available on GOAT and above", like the rest of the
   // Gemini Flash family.
@@ -521,27 +551,6 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'sakana/fugu-ultra': 'provider',
 }
 
-/** Official display labels for each plan tier. */
-export const PLAN_LABELS: Readonly<Record<string, string>> = {
-  go: 'Go',
-  goat: 'GOAT',
-  pro: 'Pro',
-  provider: 'Provider',
-  max: 'Max',
-}
-
-/**
- * Plan-tier sort weights, low to high. Models outside the snapshot (unknown
- * plans) sort after every known tier, keeping known models predictable.
- */
-export const PLAN_ORDER: Readonly<Record<string, number>> = {
-  go: 0,
-  goat: 1,
-  pro: 2,
-  provider: 3,
-  max: 4,
-}
-
 /**
  * Whether a model is free (requests cost no credits), per the pricing page's
  * deals (`KNOWN_DEALS` `free: true`). Free models lead the picker regardless
@@ -574,7 +583,7 @@ export function compareByPlan(
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
  * (located by the `"individual-go"` key in `dist/cli.mjs`, re-verified unchanged
- * through command-code@1.66.0): subscription `planId` prefix → display name and
+ * through command-code@1.68.0): subscription `planId` prefix → display name and
  * the plan's monthly credit total. This is the account's own subscription
  * (from `/alpha/billing/subscriptions`) — distinct from {@link KNOWN_PLANS},
  * which maps catalog models to their minimum tier.
@@ -725,7 +734,7 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
  * charges by the hour: peak hours are 01:00–04:00 and 06:00–10:00 UTC (7h per
  * weekday, full price) **Monday to Friday only**; the other 17 hours of a
  * weekday and every hour of Saturday/Sunday (UTC) are off-peak at half price.
- * Exactly four models carry the page's `timeOfDay` block (the four rows below).
+ * Exactly five models carry the page's `timeOfDay` block (the five rows below).
  * The picker shows the *current* state as a compact label (`Peak`/`Half`)
  * matching the English noun style of the other markers (`Image`, `FREE`), so a
  * developer can tell at a glance whether calling the model right now is cheap
@@ -753,6 +762,11 @@ export const KNOWN_PEAK_PRICING: ReadonlySet<string> = new Set([
   // command-code@1.53.0; the same `timeOfDay` block as the other three
   // (off-peak $0.15/$0.60, peak $0.30/$1.20, 01–04 & 06–10 UTC Mon–Fri).
   'deepseek/deepseek-v4.1-flash',
+  // command-code@1.67.0; the same 01–04 & 06–10 UTC Mon–Fri windows and the same
+  // 2026-08-16T16:00Z effective date, at its own rates (off-peak
+  // $0.16/$0.58/$0.016, peak $0.32/$1.16/$0.032) — note these are NOT 2× the
+  // sibling's, so this row must come from its own `timeOfDay` block.
+  'deepseek/deepseek-v4.1-flash-fast',
 ])
 
 /**
@@ -780,11 +794,7 @@ export const PEAK_HOUR_RANGES: ReadonlyArray<readonly [number, number]> = [
  * the one in {@link KNOWN_PEAK_PRICING} still gets the right half of the day.
  */
 export function isPeakPricingHour(now: number = Date.now()): boolean {
-  const at = new Date(now)
-  const day = at.getUTCDay()
-  if (day === 0 || day === 6) return false
-  const hour = at.getUTCHours()
-  return PEAK_HOUR_RANGES.some(([start, end]) => hour >= start && hour < end)
+  return peakHour(now, PEAK_HOUR_RANGES)
 }
 
 /**

@@ -14,6 +14,7 @@
 import type { CommandCodeAccountsReport, CommandCodeCatalog, CommandCodePriceTable } from '../usage-wire.ts'
 import type { CommandCodeLoginStatus } from '../login-wire.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+export { formatMoney, formatMoneyExact, formatTokensCompact, formatSuccessRate, windowRatio, formatResetAt } from '../display-format.ts'
 
 /**
  * Merge the plugin's Remote endpoints into the harness's typed client Remote
@@ -162,49 +163,6 @@ export class CommandCodeUsageController {
     if (this.disposed) return
     for (const listener of this.listeners) listener()
   }
-}
-
-// ---------------------------------------------------------------------------
-// Display formatting (shared by the component, covered by node tests)
-// ---------------------------------------------------------------------------
-
-/** Format a dollar amount compactly (2 decimals). */
-export function formatMoney(value: number): string {
-  return `$${value.toFixed(2)}`
-}
-
-/** Format a dollar amount precisely (4 decimals) for small totals. */
-export function formatMoneyExact(value: number): string {
-  return `$${value.toFixed(4)}`
-}
-
-/** Format a large token count compactly (1.9M style). */
-export function formatTokensCompact(value: number): string {
-  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`
-  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`
-  return String(value)
-}
-
-/**
- * Success-rate percentage (already in percent units, e.g. 99.96): at most two
- * decimals, trailing zeros trimmed — `100` stays `100`, not `100.00`, and
- * `99.965552876334` becomes `99.97`. The `%` suffix is the caller's job.
- */
-export function formatSuccessRate(value: number): string {
-  return String(Number(value.toFixed(2)))
-}
-
-/** One window's fill ratio in [0, 1]; 0 when uncapped. */
-export function windowRatio(used: number, cap: number): number {
-  if (cap <= 0) return 0
-  return Math.max(0, Math.min(1, used / cap))
-}
-
-/** Format a millis timestamp as a local short date-time; empty when unset. */
-export function formatResetAt(ms: number): string {
-  if (ms <= 0) return ''
-  return new Date(ms).toLocaleString()
 }
 
 /** Host facts drive the usage card, including keys invisible to browser credentials. */

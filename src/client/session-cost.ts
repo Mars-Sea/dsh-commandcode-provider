@@ -28,7 +28,7 @@
 
 import { COST_TOKEN_KEYS, pricingKey, requestRates, peakHour, zeroCostTokens, type SessionCostFacts } from '../cost-facts.ts'
 import type { CommandCodeModelPrice, CommandCodeModelRates, CommandCodePriceTable } from '../usage-wire.ts'
-import { formatMoney, formatMoneyExact, formatTokensCompact } from './usage.ts'
+import { formatMoney, formatMoneyExact, formatTokensCompact } from '../display-format.ts'
 
 /** Tokens per published rate unit — the pricing page quotes USD per million. */
 const TOKENS_PER_RATE_UNIT = 1_000_000

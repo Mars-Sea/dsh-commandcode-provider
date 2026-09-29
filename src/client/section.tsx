@@ -30,7 +30,8 @@ import type { LoginPageState } from './login.ts'
 import { loginHint, loginStateForTarget } from './login.ts'
 import { buildModelSelectOptions, catalogIsReady, groupModelSelectOptions, staleModelIds, tierHeadingFor, toggleModelSelection } from './model-select.ts'
 import type { UsagePageState } from './usage.ts'
-import { usageCardState, formatMoney, formatMoneyExact, formatResetAt, formatSuccessRate, formatTokensCompact, windowRatio } from './usage.ts'
+import { usageCardState } from './usage.ts'
+import { formatMoney, formatMoneyExact, formatResetAt, formatSuccessRate, formatTokensCompact, windowRatio } from '../display-format.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
 import { checkForUpdate, localStorageUpdateStore } from './update.ts'
 
@@ -59,12 +60,13 @@ export interface CommandCodeSettingsProps {
 }
 
 /** The section fields folded into the collapsible Advanced card. */
-type AdvancedField = 'apiBase' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'transportMaxRetries'
+type AdvancedField = 'apiBase' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'transportMaxRetries' | 'offloadSeenImagesForCache'
 const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'apiBase',
   'requestTimeoutMs',
   'streamIdleTimeoutMs',
   'transportMaxRetries',
+  'offloadSeenImagesForCache',
 ]
 
 /** The "customized" tag and reset link a staged field shows once it differs from the default. */
@@ -463,6 +465,11 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
           />
           <span className="cc-checkName">{option.label}</span>
           {option.stale ? <span className="cc-badge">{t('modelStale')}</span> : null}
+          {option.allowance !== undefined ? (
+            <span className="cc-badgeMuted" title={t('modelAllowanceTitle')}>
+              {t('modelAllowance', { amount: option.allowance })}
+            </span>
+          ) : null}
           {!selected.includes(option.value) && ownerOf?.(option.value) !== undefined ? (
             <span className="cc-badgeMuted">{t('accountModelOwner', { name: ownerOf(option.value)! })}</span>
           ) : null}
@@ -589,11 +596,13 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
 
 /**
  * One titled group of rows. No card surface: like the harness's own settings
- * pages, a group is a heading over hairline-separated rows.
+ * pages, a group is a heading over its rows. The hairline between sections is
+ * `cc-groupDivided`, so it belongs to every group but the first one on the page
+ * (accounts opens it) and never to the rows inside a group.
  */
-function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+function SettingsGroup({ title, action, divided = false, children }: { title: string; action?: ReactNode; divided?: boolean; children: ReactNode }) {
   return (
-    <section className="cc-group" aria-label={title}>
+    <section className={divided ? 'cc-group cc-groupDivided' : 'cc-group'} aria-label={title}>
       <div className="cc-groupHead">
         <h3 className="cc-groupTitle">{title}</h3>
         {action}
@@ -621,7 +630,7 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear }: 
   onClear(): void
 }) {
   return (
-    <SettingsGroup title={t('modelsTitle')}>
+    <SettingsGroup title={t('modelsTitle')} divided>
       <ToggleField
         id="cc-filter-models-by-plan"
         label={t('filterModelsByPlan')}
@@ -644,7 +653,7 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear }: 
  */
 function PrivacyCard({ state, disabled, t, onEdit, onReset }: FormCardProps) {
   return (
-    <SettingsGroup title={t('privacyTitle')}>
+    <SettingsGroup title={t('privacyTitle')} divided>
       <ToggleField
         id="cc-zdr"
         label={t('zdr')}
@@ -663,7 +672,7 @@ function PrivacyCard({ state, disabled, t, onEdit, onReset }: FormCardProps) {
 /** Integrations & display: surfaces outside chat that reuse this provider. */
 function IntegrationsCard({ state, disabled, t, onEdit, onReset }: FormCardProps) {
   return (
-    <SettingsGroup title={t('integrationsTitle')}>
+    <SettingsGroup title={t('integrationsTitle')} divided>
       <ToggleField
         id="cc-web-search"
         label={t('webSearch')}
@@ -702,7 +711,7 @@ function AdvancedSection({ state, disabled, t, onEdit, onReset }: FormCardProps)
   const overridden = ADVANCED_FIELDS.filter((field) => state[field].overridden).length
   const invalid = ADVANCED_FIELDS.some((field) => state[field].invalid)
   return (
-    <section className="cc-group" aria-label={t('advancedSettings')}>
+    <section className="cc-group cc-groupDivided" aria-label={t('advancedSettings')}>
       <button
         type="button"
         className="cc-groupHead cc-disclosure"
@@ -767,6 +776,17 @@ function AdvancedSection({ state, disabled, t, onEdit, onReset }: FormCardProps)
             numeric
             onEdit={(text) => onEdit('transportMaxRetries', text)}
             onReset={() => onReset('transportMaxRetries')}
+            t={t}
+          />
+          <ToggleField
+            id="cc-offload-seen-images-for-cache"
+            label={t('offloadSeenImagesForCache')}
+            hint={t('offloadSeenImagesForCacheHint')}
+            state={state.offloadSeenImagesForCache}
+            disabled={disabled}
+            defaultChecked={false}
+            onEdit={(text) => onEdit('offloadSeenImagesForCache', text)}
+            onReset={() => onReset('offloadSeenImagesForCache')}
             t={t}
           />
         </div>
@@ -849,12 +869,34 @@ function accountRows(state: SettingsPageState, usage: UsagePageState, t: Transla
   return rows
 }
 
-/** The row's status dot: error for a rejected key, warning while cooling down. */
+/**
+ * The row's status dot. Read top-down, so a problem always outranks "serving":
+ * red for a key the Host rejected, amber while a rate limit is cooling down,
+ * green for the account that is actually serving requests. A standby (or not
+ * yet configured) account draws NOTHING — `cc-tabDotBlank` is an unfilled,
+ * borderless dot that only holds the column so the account names stay aligned
+ * with the rows that do have a verdict. Green therefore means "in use", not
+ * "healthy": a wall of green dots would say nothing.
+ */
 function statusDotClass(row: AccountRowModel): string {
   const entry = row.usage
-  if (!row.configured || entry?.mark === 'invalid-credential') return 'cc-tabDot cc-tabDotError'
+  if (entry?.mark === 'invalid-credential') return 'cc-tabDot cc-tabDotError'
   if (entry !== undefined && (entry.mark !== '' || entry.cooldownUntil > 0)) return 'cc-tabDot cc-tabDotWarn'
-  return 'cc-tabDot cc-tabDotOk'
+  if (row.configured && entry?.active === true) return 'cc-tabDot cc-tabDotOk'
+  return 'cc-tabDot cc-tabDotBlank'
+}
+
+/**
+ * The same verdict as a sentence, for the dot's tooltip. Undefined on a blank
+ * dot: there is no verdict to read out, and a hover hotspot on an invisible
+ * 8px mark would only invite the question it cannot usefully answer.
+ */
+function statusDotTitle(row: AccountRowModel, t: Translate<SettingsCommandCodeKey>): string | undefined {
+  const entry = row.usage
+  if (entry?.mark === 'invalid-credential') return t('usageInvalidKey')
+  if (entry !== undefined && (entry.mark !== '' || entry.cooldownUntil > 0)) return t('usageCooldown')
+  if (!row.configured) return t('apiKeyUnset')
+  return entry?.active === true ? t('usageActive') : undefined
 }
 
 /** One compact quota meter for a row's summary line. */
@@ -1047,7 +1089,7 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
           aria-controls={`cc-account-${row.id}-details`}
           onClick={() => setExpanded((value) => !value)}
         >
-          <span className={statusDotClass(row)} aria-hidden="true" />
+          <span className={statusDotClass(row)} title={statusDotTitle(row, t)} aria-hidden="true" />
           <span className="cc-accountName">{row.label}</span>
           {accountName !== '' && accountName !== row.label ? <span className="cc-usageAccount">{accountName}</span> : null}
           {planName !== '' ? <span className="cc-usagePlan">{planName}</span> : null}

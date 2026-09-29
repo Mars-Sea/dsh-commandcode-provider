@@ -254,6 +254,20 @@ export interface CommandCodeCatalogModel {
    * capability snapshot, so the Host stamps it per entry.
    */
   tier?: string
+  /**
+   * Per-model MONTHLY allowance in USD: how much of the plan's monthly credit
+   * pool this one model may draw, already resolved by the Host against the
+   * account pool's highest plan (the pricing page publishes an allowance for
+   * GOAT and Pro only). Undefined when that plan has no published allowance
+   * (Go, Provider, Max, Ultra) or when billing could not be read — the browser
+   * shows nothing rather than guessing a neighbouring tier's figure.
+   *
+   * Deliberately a plain number and not the `{ goat, pro }` pair: the bracket is
+   * a Host decision that already depends on facts the browser does not hold, and
+   * shipping both figures would invite a second, divergent rule here. Note this
+   * is dollars per MONTH, unlike every rate in `CommandCodePriceTable`.
+   */
+  allowance?: number
 }
 
 /** The model-catalog Remote result: the full catalog, sorted for picking. */
@@ -272,6 +286,7 @@ export const MODELS_ENDPOINT = 'commandcode/models'
 const {
   record: catalogRecord,
   stringField: catalogString,
+  numberField: catalogNumber,
 } = makeBoundaryValidator('commandcode/models result:')
 
 /** Parse one untrusted boundary value into a {@link CommandCodeCatalogModel}. */
@@ -285,6 +300,11 @@ function parseCatalogModel(value: unknown): CommandCodeCatalogModel {
   // non-string is a contract violation, not a silent drop.
   if (source.tier !== undefined) {
     model.tier = catalogString(source, 'tier', 'model.tier')
+  }
+  // Same rule for the allowance: an older Host simply omits it, but a Host that
+  // sends a non-number has broken the contract.
+  if (source.allowance !== undefined) {
+    model.allowance = catalogNumber(source, 'allowance', 'model.allowance')
   }
   return model
 }

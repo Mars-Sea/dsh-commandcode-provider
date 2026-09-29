@@ -21,6 +21,7 @@ import { CommandCodeAdapter } from './adapter.ts'
 import type { CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeAccountsReport } from './usage-wire.ts'
 import { commandCopy, type LocaleId } from './command-locales.ts'
+import { formatMoney, formatMoneyExact, formatSuccessRate, formatTokensCompact, formatResetAt, windowRatio } from './display-format.ts'
 
 /** Everything the command needs beyond the adapter itself. */
 export interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
@@ -45,36 +46,14 @@ export interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions =
 // the surrounding labels)
 // ---------------------------------------------------------------------------
 
-function money(value: number): string {
-  return `$${value.toFixed(4)}`
-}
-
-/** Compact dollar amount (2 decimals), for the summary and window rows. */
-function moneyShort(value: number): string {
-  return `$${value.toFixed(2)}`
-}
-
-/** Format a large token count compactly (1.9M style). */
-function tokensCompact(value: number): string {
-  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`
-  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`
-  return String(value)
-}
-
-/**
- * Success-rate percentage (already in percent units): at most two decimals,
- * trailing zeros trimmed — mirrors `formatSuccessRate` in
- * `./client/usage.ts`, which the settings card uses.
- */
-function successRateText(value: number): string {
-  return String(Number(value.toFixed(2)))
-}
+const money = formatMoneyExact
+const moneyShort = formatMoney
+const tokensCompact = formatTokensCompact
+const successRateText = formatSuccessRate
 
 /** A local date, or `n/a` when the provider published no reset time. */
 function resetLabel(ms: number): string {
-  if (ms <= 0) return 'n/a'
-  return new Date(ms).toLocaleString()
+  return formatResetAt(ms) || 'n/a'
 }
 
 /**
@@ -83,7 +62,7 @@ function resetLabel(ms: number): string {
  */
 function bar(used: number, cap: number): string {
   if (cap <= 0) return '—'
-  const ratio = Math.max(0, Math.min(1, used / cap))
+  const ratio = windowRatio(used, cap)
   const filled = Math.round(ratio * 10)
   return '█'.repeat(filled) + '░'.repeat(10 - filled)
 }

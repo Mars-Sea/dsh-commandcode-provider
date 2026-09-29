@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { modelPriceTable } from './model-prices.ts'
 import { COST_TOKEN_KEYS, costGroupKey, pricingKey, zeroCostTokens, type CostTokens, type CostUsageGroup, type SessionCostFacts } from './cost-facts.ts'
+import { isRecord } from './wire-guards.ts'
 
 interface CostState {
   selection: { provider: string; model: string } | null
@@ -10,7 +11,7 @@ interface CostState {
   facts: SessionCostFacts
 }
 interface LogEvent { type: string; time: number; data: unknown }
-const record = (v: unknown): Record<string, unknown> | undefined => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : undefined
+const record = (v: unknown): Record<string, unknown> | undefined => isRecord(v) ? v : undefined
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 
 function tokensOf(value: unknown): CostTokens | undefined {

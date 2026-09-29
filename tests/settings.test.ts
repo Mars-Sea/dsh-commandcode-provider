@@ -1,11 +1,16 @@
 /**
- * Settings-page controller tests (node:test, zero deps). Run with `npm test`.
+ * Settings-page controller tests (node:test, zero runtime deps). Run with
+ * `npm test`.
  *
  * The write path is the contract: the API key goes through the credentials
  * domain under the plugin's own reference (never the settings namespace, so
  * the literal cannot leak into a settings document), connection facts go
  * through the `llm-commandcode` scope, and the Host stays the single fact
  * source — every write is read back before the state is republished.
+ *
+ * It does import `../src/adapter.ts` for one constant: the timeout fields are
+ * edited in seconds while the Host stores milliseconds, and the only thing
+ * that keeps the settings copy honest is a test that reads the real default.
  */
 
 import { test } from 'node:test'
@@ -15,8 +20,11 @@ import {
   accountModelMap,
   CommandCodeSettingsController,
   DEFAULT_API_KEY_REF,
+  MAX_TIMEOUT_SECONDS,
   type SettingsPageApi,
 } from '../src/client/settings.ts'
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../src/adapter.ts'
+import { en, zh } from '../src/client/locales.ts'
 
 // Helpers
 
@@ -162,7 +170,8 @@ test('mirrors section values into the field drafts', () => {
   const state = controller.state()
   assert.equal(state.apiBase.text, 'https://example.com')
   assert.equal(state.apiBase.overridden, true)
-  assert.equal(state.requestTimeoutMs.text, '30000')
+  // Shown in whole seconds even though the stored unit is milliseconds.
+  assert.equal(state.requestTimeoutMs.text, '30')
   assert.equal(state.requestTimeoutMs.overridden, false)
 })
 
@@ -204,10 +213,61 @@ test('an out-of-range numeric draft names the violated bound', () => {
   state = controller.state()
   assert.equal(state.requestTimeoutMs.invalid, true)
   assert.equal(state.requestTimeoutMs.invalidReason, 'tooLarge')
-  controller.edit('requestTimeoutMs', '2147483647')
+  controller.edit('requestTimeoutMs', String(MAX_TIMEOUT_SECONDS))
   state = controller.state()
   assert.equal(state.requestTimeoutMs.invalid, false)
   assert.equal(state.requestTimeoutMs.invalidReason, undefined)
+  controller.edit('requestTimeoutMs', String(MAX_TIMEOUT_SECONDS + 1))
+  state = controller.state()
+  assert.equal(state.requestTimeoutMs.invalid, true)
+  assert.equal(state.requestTimeoutMs.invalidReason, 'tooLarge')
+})
+
+test('the timeout fields are edited in whole seconds and stored in milliseconds', () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  // Typing 45 seconds must persist 45 000 ms, never 45: the Host schema and
+  // every existing profile speak milliseconds, and a silent unit change here
+  // would turn a 45 s budget into a 45 ms one.
+  controller.edit('requestTimeoutMs', '45')
+  controller.edit('streamIdleTimeoutMs', '600')
+  const drafts = controller.state()
+  assert.equal(drafts.requestTimeoutMs.text, '45')
+  assert.equal(drafts.streamIdleTimeoutMs.text, '600')
+  assert.equal(drafts.requestTimeoutMs.invalid, false)
+  // Fractions are refused rather than rounded, so the box and the profile
+  // cannot quietly disagree.
+  controller.edit('requestTimeoutMs', '1.5')
+  assert.equal(controller.state().requestTimeoutMs.invalidReason, 'format')
+  controller.edit('requestTimeoutMs', 'abc')
+  assert.equal(controller.state().requestTimeoutMs.invalidReason, 'format')
+})
+
+test('a stored value outside the editable range still displays its true number', () => {
+  // A profile hand-edited to a wait longer than MAX_TIMEOUT_SECONDS must not be
+  // silently clamped on screen: the user has to see what the profile really
+  // says, even though re-typing it here is refused.
+  const scope = makeScope({ value: { requestTimeoutMs: 5_000_000 } })
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().requestTimeoutMs.text, '5000')
+})
+
+test('the settings copy states the shipped default, in seconds', () => {
+  // Guards the one drift this change invites: DEFAULT_REQUEST_TIMEOUT_MS is
+  // milliseconds, the hint is the user's unit, and nothing else connects them.
+  assert.equal(DEFAULT_REQUEST_TIMEOUT_MS % 1000, 0, 'the default must land on a whole second')
+  const seconds = String(DEFAULT_REQUEST_TIMEOUT_MS / 1000)
+  assert.ok(zh.requestTimeoutMsHint.includes(seconds), 'zh hint names the real default')
+  assert.ok(en.requestTimeoutMsHint.includes(`${seconds} s`), 'en hint names the real default')
+  for (const [name, text] of [
+    ['zh', zh.requestTimeoutMs],
+    ['en', en.requestTimeoutMs],
+  ] as const) {
+    assert.ok(text.includes('秒') || text.includes('second'), `${name} label names the unit as seconds`)
+    assert.equal(text.includes('毫秒') || text.includes('(ms)'), false, `${name} label drops milliseconds`)
+  }
+  assert.equal(zh.streamIdleTimeoutMsHint.includes(seconds), true)
+  assert.equal(en.streamIdleTimeoutMsHint.includes(`${seconds} s`), true)
 })
 
 test('an accepted save bumps savedCount for the footer flash', async () => {
@@ -272,7 +332,7 @@ test('save() writes connection fields through the settings scope', async () => {
   const scope = makeScope({})
   const { controller } = makeController({ scope })
   controller.edit('apiBase', 'https://new.example.com')
-  controller.edit('requestTimeoutMs', '45000')
+  controller.edit('requestTimeoutMs', '45')
   await controller.save()
   assert.equal(scope.state.value.apiBase, 'https://new.example.com')
   assert.equal(scope.state.value.requestTimeoutMs, 45_000)
@@ -391,6 +451,18 @@ test('resetField() on zdr clears it back to the inherited default', async () => 
   await controller.save()
   assert.equal(scope.state.user?.zdr, undefined)
   assert.equal(controller.state().zdr.text, '')
+})
+
+test('cache-aware image offload is staged, saved, and reset as an opt-in boolean', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().offloadSeenImagesForCache.text, '')
+  controller.edit('offloadSeenImagesForCache', 'true')
+  await controller.save()
+  assert.equal(scope.state.value.offloadSeenImagesForCache, true)
+  controller.resetField('offloadSeenImagesForCache')
+  await controller.save()
+  assert.equal(scope.state.user?.offloadSeenImagesForCache, undefined)
 })
 
 test('save() writes the sidebar quota toggle as a real boolean, off when unset', async () => {
@@ -891,4 +963,26 @@ test('discard clears a staged visible-model selection', () => {
   controller.discard()
   assert.deepEqual(controller.state().visibleModels, [])
   assert.equal(controller.state().dirty, false)
+})
+
+test('the request-timeout hint says when the Provider API route needs a bigger budget', () => {
+  // The knob has always been in the Advanced card, so the gap was never the
+  // field — it was that the hint only named the default. A user hitting issue
+  // #67's timeout had no way to learn that raising it is the documented remedy,
+  // because the error used to send them to their proxy instead. The default is
+  // the official CLI's own: its transport sets no timeout and inherits undici's
+  // 300 s, measured at 301.0 s.
+  for (const [name, text] of [
+    ['zh', zh.requestTimeoutMsHint],
+    ['en', en.requestTimeoutMsHint],
+  ] as const) {
+    assert.match(text, /300 s|300 秒/, `${name} hint states the default in seconds`)
+    assert.match(text, /Provider API/, `${name} hint names the route that withholds headers`)
+  }
+  assert.match(zh.requestTimeoutMsHint, /上游模型吐出第一个 token/, 'zh ties the knob to upstream speed')
+  assert.match(en.requestTimeoutMsHint, /slow upstream/, 'en ties the knob to upstream speed')
+  // The measured cause is upstream speed, never prompt size: on one account the
+  // same route took 117 s for a 200 k prompt and 30 s for a 1.2 M one.
+  assert.doesNotMatch(zh.requestTimeoutMsHint, /请求体很大|大上下文/, 'zh does not blame prompt size')
+  assert.doesNotMatch(en.requestTimeoutMsHint, /request body is large|large-context/, 'en does not blame prompt size')
 })

@@ -8,8 +8,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { modelPriceTable } from '../src/model-prices.ts'
-import { KNOWN_PLANS, PEAK_HOUR_RANGES, isFreeModel } from '../src/capabilities.ts'
+import { modelAllowanceFor, allowanceTierForWeight, modelPriceTable } from '../src/model-prices.ts'
+import { KNOWN_PLANS, PEAK_HOUR_RANGES, dealLabel, isFreeModel } from '../src/capabilities.ts'
 
 const table = modelPriceTable()
 const byId = new Map(table.models.map((price) => [price.id, price]))
@@ -103,4 +103,97 @@ test('a dated catalog id resolves to the page\'s undated slug', () => {
   assert.ok(haiku, 'the dated catalog id should reach the undated price row')
   assert.equal(haiku.slug, 'claude-haiku-4-5')
   assert.equal(haiku.inputCost, 1)
+})
+
+test('a lapsed deal reverts the row to its pre-discount listRates', () => {
+  // Grok 4.7's 40%-off launch promotion ran 2026-09-21 → 2026-09-27T23:59:59.999Z.
+  // The page still publishes the promotional rates as the row's own figures, so
+  // without the `listRates` fallback a session priced after that instant would
+  // under-report by 40% — and its context tiers by the same factor.
+  const during = modelPriceTable(Date.parse('2026-09-26T12:00:00Z')).models.find((m) => m.id === 'xai/grok-4.7')
+  const after = modelPriceTable(Date.parse('2026-09-28T00:00:00Z')).models.find((m) => m.id === 'xai/grok-4.7')
+  assert.ok(during && after)
+
+  assert.deepEqual(
+    [during.inputCost, during.outputCost, during.cacheReadCost],
+    [1.2, 3.6, 0.3],
+    'inside the promotion window the page rates are what is charged',
+  )
+  assert.deepEqual(
+    [after.inputCost, after.outputCost, after.cacheReadCost],
+    [2, 6, 0.5],
+    'past it the row reverts to the published list price',
+  )
+  // Both context bands switch together: a revert that only moved the base rates
+  // would price a >200K request off a mixed pair.
+  assert.deepEqual(during.contextTiers?.map((t) => t.inputCost), [1.2, 2.4])
+  assert.deepEqual(after.contextTiers?.map((t) => t.inputCost), [2, 4])
+  assert.deepEqual(after.contextTiers?.map((t) => t.cacheReadCost), [0.5, 1])
+})
+
+test('the badge and the price revert on the same instant', () => {
+  // The picker hides a lapsed deal through `dealLabel()`; the composer prices
+  // through this table. One clock, or a user sees "no discount" next to a
+  // discounted number. The boundary is inclusive on the expiry side.
+  const boundary = Date.parse('2026-09-27T23:59:59.999Z')
+  for (const [at, live] of [
+    [boundary - 1, true],
+    [boundary, false],
+    [boundary + 1, false],
+  ] as const) {
+    const price = modelPriceTable(at).models.find((m) => m.id === 'xai/grok-4.7')
+    assert.ok(price)
+    assert.equal(dealLabel('xai/grok-4.7', at) !== undefined, live, `badge at ${at}`)
+    assert.equal(price.inputCost, live ? 1.2 : 2, `rate at ${at}`)
+  }
+})
+
+test('a deal with no expiry never reverts', () => {
+  // MiMo V2.5 and MiniMax M3 carry percentage deals with no published end date.
+  // Their `listRates` are real data but must stay dormant: a permanent deal
+  // lapses never, so the promotional rates are still the charged ones.
+  const far = Date.parse('2030-01-01T00:00:00Z')
+  const promo = modelPriceTable(far).models.find((m) => m.id === 'xiaomi/mimo-v2.5')
+  assert.ok(promo)
+  assert.deepEqual([promo.inputCost, promo.outputCost, promo.cacheReadCost], [0.14, 0.28, 0.0028])
+})
+
+test('per-model allowances resolve by the same slug rules as prices', () => {
+  // MiniMax M3 is the row the pricing page documents in prose — "The deal is
+  // baked into MiniMax M3's boosted per-model allowance: $47 of monthly usage on
+  // GOAT, $57 on Pro" — so the snapshot and the page check each other.
+  assert.deepEqual(modelAllowanceFor('MiniMaxAI/MiniMax-M3'), { goat: 47, pro: 57 })
+  // Vendor-prefixed catalog id → the page's unprefixed slug.
+  assert.deepEqual(modelAllowanceFor('xai/grok-4.7'), { goat: 20, pro: 30 })
+  assert.deepEqual(modelAllowanceFor('claude-sonnet-5-5'), { goat: 10, pro: 20 })
+  // Unknown ids answer undefined rather than a neighbouring model's figure.
+  assert.equal(modelAllowanceFor('a-model-from-the-future'), undefined)
+  assert.equal(modelAllowanceFor(''), undefined)
+})
+
+test('every priced catalog model carries both allowance brackets', () => {
+  // The page publishes `planAllowanceUsd` on all 82 estimator records and
+  // nowhere for Go/Provider/Max, so a missing bracket means the sync dropped a
+  // row — the settings page would silently show no allowance for it.
+  const missing: string[] = []
+  for (const id of Object.keys(KNOWN_PLANS)) {
+    if (isFreeModel(id) || id.endsWith(':free')) continue
+    const allowance = modelAllowanceFor(id)
+    if (allowance === undefined || !Number.isFinite(allowance.goat) || !Number.isFinite(allowance.pro)) {
+      missing.push(id)
+    }
+  }
+  assert.deepEqual(missing, [])
+})
+
+test('only GOAT and Pro map to an allowance bracket', () => {
+  // Tier weights are the `KNOWN_SUBSCRIPTION_PLANS` scale (go 0 · goat 1 ·
+  // pro 2 · provider 3 · max/ultra 4). Answering for Go/Provider/Max would be a
+  // fabricated figure: the page has no allowance for those plans at all.
+  assert.equal(allowanceTierForWeight(1), 'goat')
+  assert.equal(allowanceTierForWeight(2), 'pro')
+  assert.equal(allowanceTierForWeight(0), undefined)
+  assert.equal(allowanceTierForWeight(3), undefined)
+  assert.equal(allowanceTierForWeight(4), undefined)
+  assert.equal(allowanceTierForWeight(undefined), undefined)
 })

@@ -113,6 +113,13 @@ export interface CatalogModelOption {
    * the editor dropdowns; absent tiers render unheaded.
    */
   tier?: string
+  /**
+   * Per-model MONTHLY allowance in USD, already resolved Host-side against the
+   * account pool's highest plan (only GOAT and Pro publish one). Undefined for
+   * plans without an allowance, for models the page has no row for, and for
+   * older Hosts — the row then shows no allowance instead of a guess.
+   */
+  allowance?: number
 }
 
 /** The page's full state face, projected from the scope + drafts + credential. */
@@ -144,6 +151,8 @@ export interface SettingsPageState {
    * timeout fields above rather than as a toggle with an implicit default.
    */
   transportMaxRetries: StagedField
+  /** Opt-in durable offload of images after this model has answered. */
+  offloadSeenImagesForCache: StagedField
   /** filterModelsByPlan draft; `''` = "inherit the default" (on). */
   filterModelsByPlan: StagedField
   /** webSearch draft; `''` = "inherit the default" (on — this route serves dsh's web_search). */
@@ -266,19 +275,54 @@ function booleanField(field: string): FieldSpec {
 }
 
 /**
- * Inclusive bounds for the millisecond timeout fields, mirroring the Host
- * Config schema (`z.number().min(1).max(MAX_TIMER_DELAY_MS)` in src/index.ts —
- * dsh-timeout's 2^31-1 timer ceiling). The client bundle cannot import the
- * node-side package, so the bound is pinned here; the Host stays the final gate.
+ * The second-based bounds the timeout fields are EDITED in.
+ *
+ * The stored unit stays milliseconds — that is the Host schema
+ * (`z.number().min(1).max(MAX_TIMER_DELAY_MS)` in src/index.ts, dsh-timeout's
+ * 2^31-1 timer ceiling), and switching it would break every existing profile —
+ * so this is presentation only: the field formats ms ÷ 1000 on the way in and
+ * multiplies by 1000 on the way out. 3600 rather than the Host's ceiling (~24.8
+ * days), because a header wait longer than an hour is a hung process, not a
+ * budget, and the input is the place to refuse it. A hand-written profile can
+ * still carry a larger value; `secondsField` displays that true number rather
+ * than silently clamping, it just cannot be re-typed here.
  */
-export const MIN_TIMEOUT_MS = 1
-export const MAX_TIMEOUT_MS = 2147483647
+export const MIN_TIMEOUT_SECONDS = 1
+export const MAX_TIMEOUT_SECONDS = 3600
+
+/**
+ * A duration field the user edits in WHOLE SECONDS.
+ *
+ * Milliseconds are the wrong unit to show: the defaults are 300000 and the
+ * ceiling is 2147483647, so the page asked users to do arithmetic to answer
+ * "how long is a reasonable wait". `format` divides, `parse` multiplies, and
+ * the stored value never leaves milliseconds.
+ *
+ * Decimals are refused rather than rounded. "1.5" is a format the control does
+ * not accept, and silently storing 1000 or 2000 for it would make the saved
+ * profile disagree with the box it was typed in.
+ */
+function secondsField(field: string, bounds: { min: number; max: number }): FieldSpec {
+  return {
+    field,
+    format: (value) => (typeof value === 'number' ? String(Math.round(value / 1000)) : ''),
+    parse: (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return { kind: 'clear' }
+      const parsed = Number(trimmed)
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return { kind: 'invalid', reason: 'format' }
+      if (parsed < bounds.min) return { kind: 'invalid', reason: 'tooSmall' }
+      if (parsed > bounds.max) return { kind: 'invalid', reason: 'tooLarge' }
+      return { kind: 'set', value: parsed * 1000 }
+    },
+  }
+}
 
 /** The fields this page edits inside the `llm-commandcode` namespace. */
 const SECTION_FIELDS: FieldSpec[] = [
   textField('apiBase'),
-  numberField('requestTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
-  numberField('streamIdleTimeoutMs', { min: MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS }),
+  secondsField('requestTimeoutMs', { min: MIN_TIMEOUT_SECONDS, max: MAX_TIMEOUT_SECONDS }),
+  secondsField('streamIdleTimeoutMs', { min: MIN_TIMEOUT_SECONDS, max: MAX_TIMEOUT_SECONDS }),
   // A COUNT of retries, not a millisecond wait: it shares the Host schema's
   // 0..50 bounds (`MAX_TRANSPORT_MAX_RETRIES` in src/transport-retry.ts, applied
   // to `transportMaxRetries` in src/index.ts) rather than the timer ceiling
@@ -287,6 +331,7 @@ const SECTION_FIELDS: FieldSpec[] = [
   // module — `tests/transport-retry.test.ts` pins the schema's bound against
   // the constant so this mirrored literal cannot drift unnoticed.
   numberField('transportMaxRetries', { min: 0, max: 50 }),
+  booleanField('offloadSeenImagesForCache'),
   booleanField('filterModelsByPlan'),
   booleanField('webSearch'),
   booleanField('showSidebarQuota'),
@@ -439,6 +484,7 @@ export class CommandCodeSettingsController {
       requestTimeoutMs: this.field('requestTimeoutMs'),
       streamIdleTimeoutMs: this.field('streamIdleTimeoutMs'),
       transportMaxRetries: this.field('transportMaxRetries'),
+      offloadSeenImagesForCache: this.field('offloadSeenImagesForCache'),
       filterModelsByPlan: this.field('filterModelsByPlan'),
       webSearch: this.field('webSearch'),
       showSidebarQuota: this.field('showSidebarQuota'),
@@ -874,6 +920,9 @@ export class CommandCodeSettingsController {
             id: entry.id,
             name: entry.name,
             ...(typeof entry.tier === 'string' ? { tier: entry.tier } : {}),
+            ...(typeof entry.allowance === 'number' && Number.isFinite(entry.allowance)
+              ? { allowance: entry.allowance }
+              : {}),
           })
         }
         this.catalogModels = shaped

@@ -32,10 +32,11 @@ import type {
   TuiSettingsSection,
   TuiSettingsSectionsService,
 } from '../src/tui-settings.ts'
-import { KNOWN_PLANS } from '../src/capabilities.ts'
+import { KNOWN_PLANS, PLAN_ORDER, planLabel } from '../src/capabilities.ts'
+import { tierHeadingFor } from '../src/client/model-select.ts'
+import { PLAN_LABELS, PLAN_TIER_ORDER } from '../src/plan-tiers.ts'
 
-/** Plan tiers in picker order, mirrored from the web dropdown's headings. */
-const TIER_ORDER: readonly string[] = ['go', 'goat', 'pro', 'provider', 'max']
+const TIER_ORDER: readonly string[] = PLAN_TIER_ORDER
 
 /** The plugin's default credential reference. */
 const DEFAULT_REF = 'COMMANDCODE_API_KEY'
@@ -239,6 +240,20 @@ test('every catalog model is its own checkbox in its plan tier group', () => {
   }
 })
 
+test('Host labels, web headings, and TUI groups agree for every populated tier', () => {
+  for (const [index, tier] of PLAN_TIER_ORDER.entries()) {
+    assert.equal(PLAN_ORDER[tier], index)
+    const id = Object.keys(KNOWN_PLANS).find((candidate) => KNOWN_PLANS[candidate] === tier)
+    if (id === undefined) continue
+    const choice: TuiModelChoice = { id, tier, free: false, hint: '' }
+    const { section } = build({ modelChoices: () => [choice] })
+    assert.equal(planLabel(id), PLAN_LABELS[tier])
+    assert.equal(tierHeadingFor(id, KNOWN_PLANS), PLAN_LABELS[tier])
+    assert.equal(checkbox(section, id).group, `models-${tier}`)
+    assert.equal(section.groups?.find((group) => group.id === `models-${tier}`)?.title, `${PLAN_LABELS[tier]} models`)
+  }
+})
+
 test('an unset allowlist renders every model checked', () => {
   const { section } = build()
   for (const box of section.fields.filter((entry) => entry.path[0] === 'modelVisibility')) {
@@ -382,6 +397,14 @@ test('the zdr field is a boolean toggle that renders its effective off default',
   assert.equal(zdr.format?.(false), 'false')
   assert.deepEqual(parse(zdr, ' true '), { kind: 'set', value: true })
   assert.deepEqual(parse(zdr, 'false'), { kind: 'set', value: false })
+})
+
+test('cache-aware image offload is an explicit off-by-default toggle', () => {
+  const option = field(build().section, 'offloadSeenImagesForCache')
+  assert.equal(option.kind, 'boolean')
+  assert.equal(option.format?.(undefined), 'false')
+  assert.deepEqual(parse(option, 'true'), { kind: 'set', value: true })
+  assert.deepEqual(parse(option, 'false'), { kind: 'set', value: false })
 })
 
 test('the language field maps unset to auto and stages a concrete locale', () => {

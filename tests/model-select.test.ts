@@ -54,8 +54,24 @@ test('builds one live row per catalog model in catalog order', () => {
   ])
 })
 
-test('appends selected ids the catalog no longer carries as stale', () => {
-  const options = buildModelSelectOptions(CATALOG, ['deepseek/deepseek-v4-pro', 'retired/model'])
+test('passes a per-model allowance through to the row', () => {
+  // The settings page renders the Host-resolved monthly allowance beside the
+  // name; this layer only carries it, so the assertion is that nothing is
+  // dropped and nothing is invented for a model that has none.
+  const catalog = [
+    { id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3', allowance: 47 },
+    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+  ]
+  assert.deepEqual(buildModelSelectOptions(catalog, []), [
+    { value: 'MiniMaxAI/MiniMax-M3', label: 'MiniMax M3', stale: false, allowance: 47 },
+    { value: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro', stale: false },
+  ])
+  // A stale id is no longer priced by the page, so it can never carry one.
+  const stale = buildModelSelectOptions(catalog, ['retired/model'])
+  assert.deepEqual(stale.at(-1), { value: 'retired/model', label: 'retired/model', stale: true })
+})
+
+test('appends selected ids the catalog no longer carries as stale', () => {  const options = buildModelSelectOptions(CATALOG, ['deepseek/deepseek-v4-pro', 'retired/model'])
   assert.deepEqual(options, [
     { value: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro', stale: false },
     { value: 'tencent/hy4-preview', label: 'Tencent Hy4 Preview', stale: false },

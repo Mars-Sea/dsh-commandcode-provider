@@ -30,6 +30,8 @@ export type SettingsCommandCodeKey =
   | 'streamIdleTimeoutMsHint'
   | 'transportMaxRetries'
   | 'transportMaxRetriesHint'
+  | 'offloadSeenImagesForCache'
+  | 'offloadSeenImagesForCacheHint'
   | 'advancedSettings'
   | 'advancedSettingsHint'
   | 'advancedOverriddenOne'
@@ -160,6 +162,8 @@ export type SettingsCommandCodeKey =
   | 'accountModelOwner'
   | 'modelPick'
   | 'modelCount'
+  | 'modelAllowance'
+  | 'modelAllowanceTitle'
   | 'modelCatalogFailed'
   | 'modelsTitle'
   | 'privacyTitle'
@@ -176,13 +180,15 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   apiKeyLocked: '密钥由只读来源提供',
   apiBase: 'API 地址',
   apiBaseHint: '默认 https://api.commandcode.ai，一般无需修改。',
-  requestTimeoutMs: '请求超时（毫秒）',
-  requestTimeoutMsHint: '等待响应首个字节的超时；默认 60000。',
-  streamIdleTimeoutMs: '流空闲超时（毫秒）',
-  streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300000（长思考模型可静默数分钟，默认值刻意放宽）。',
+  requestTimeoutMs: '请求超时（秒）',
+  requestTimeoutMsHint: '等待响应首个字节的超时；默认 300 秒（与官方 CLI 一致）。Provider API 路由要等上游模型吐出第一个 token 才返回响应头，上游慢时仍可能不够；报超时时可按提示调高。',
+  streamIdleTimeoutMs: '流空闲超时（秒）',
+  streamIdleTimeoutMsHint: '生成流停滞多久视为断连；默认 300 秒（长思考模型可静默数分钟，默认值刻意放宽）。',
   transportMaxRetries: '网络失败重试次数',
   transportMaxRetriesHint: '连接失败时自动重试几次，默认 5（各次等待 0.5+1+2+4+8 秒，合计约 15 秒）。'
     + '超过后直接报错，不再按指数退避长时间等待；填 0 表示不重试。限流、5xx 等由服务端要求重试的失败不受此项影响。',
+  offloadSeenImagesForCache: '已看过的图片不再重复发送',
+  offloadSeenImagesForCacheHint: '仅 CLI 传输。模型看过图片并回复后，永久用文字占位替代旧图片，以减少新增图片时的缓存回退。模型如需重看旧图，必须重新读取文件或让用户重新附加。默认关闭。',
   advancedSettings: '高级设置',
   advancedSettingsHint: 'API 地址和网络参数，一般无需修改。',
   advancedOverriddenOne: '已自定义 1 项',
@@ -203,6 +209,8 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   modelSearchPlaceholder: '搜索模型…',
   modelSearchEmpty: '没有匹配的模型。',
   modelStale: '已下架',
+  modelAllowance: '${amount}/月',
+  modelAllowanceTitle: '该模型每月可用的额度（美元）。套餐内所有模型共用同一个月度额度池，这不是额外赠送的额度。',
   visibleModelsTitle: '模型白名单',
   visibleModelsHint:
     '勾选要保留的模型，模型选择器就只列出这些；一个都不勾选时则显示全部模型。'
@@ -333,16 +341,18 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   apiKeyLocked: 'Key provided by a read-only source',
   apiBase: 'API base URL',
   apiBaseHint: 'Defaults to https://api.commandcode.ai; usually leave as-is.',
-  requestTimeoutMs: 'Request timeout (ms)',
-  requestTimeoutMsHint: 'Time to wait for the first response byte; default 60000.',
-  streamIdleTimeoutMs: 'Stream idle timeout (ms)',
-  streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 300000'
+  requestTimeoutMs: 'Request timeout (seconds)',
+  requestTimeoutMsHint: 'Time to wait for the first response byte; default 300 s (the official CLI’s). The Provider API route withholds headers until the upstream model emits its first token, so a slow upstream can still outlast the default; raise it when a timeout message suggests it.',
+  streamIdleTimeoutMs: 'Stream idle timeout (seconds)',
+  streamIdleTimeoutMsHint: 'How long a stalled stream is treated as dead; default 300 s'
     + ' (deliberately generous — long-thinking models can stay silent for minutes).',
   transportMaxRetries: 'Transport retries',
   transportMaxRetriesHint: 'How many times a failed connection is retried automatically; default 5'
     + ' (waits of 0.5+1+2+4+8s, ~15s in total). After that the failure is reported instead of waiting'
     + ' on the exponential backoff. 0 disables the retries. Rate limits and 5xx answers keep their'
     + ' own, longer retry window.',
+  offloadSeenImagesForCache: 'Stop replaying images already seen',
+  offloadSeenImagesForCacheHint: 'CLI transport only. After this model responds to an image, durably replace older pixels with text to avoid cache rollback when another image arrives. To inspect an old image again, the model must reread its file or the user must attach it again. Off by default.',
   advancedSettings: 'Advanced',
   advancedSettingsHint: 'API base URL and network limits; usually leave as-is.',
   advancedOverriddenOne: '1 customized',
@@ -363,6 +373,8 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   modelSearchPlaceholder: 'Search models…',
   modelSearchEmpty: 'No matching models.',
   modelStale: 'Retired',
+  modelAllowance: '${amount}/mo',
+  modelAllowanceTitle: 'Monthly usage this model can draw, in USD. Every model shares one monthly pool — this is not extra credit on top of the plan.',
   visibleModelsTitle: 'Model allowlist',
   visibleModelsHint:
     'Check the models you want to keep, and model pickers will list only those. '
