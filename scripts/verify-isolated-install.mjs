@@ -43,7 +43,14 @@ function verifyIsolatedInstall() {
       packDir,
     ], repositoryDir).stdout
     const packed = JSON.parse(packOutput)
-    const filename = packed[0]?.filename
+    // `npm pack --json` reports an array in every published npm, but the shape
+    // is not contractual: `logTar` keys the entry by index and the CLI merges
+    // numeric keys back into an array, so a change to either could hand back a
+    // keyed object instead. Accept both rather than pin one.
+    const entry = Array.isArray(packed)
+      ? packed[0]
+      : Object.values(packed)[0]
+    const filename = entry?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not report a tarball filename')
 
     writeFileSync(join(consumerDir, 'package.json'), `${JSON.stringify({

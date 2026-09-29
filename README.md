@@ -35,7 +35,7 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-This release supports **dsh 0.2.0-rc.1 and nothing else** — the plugin's peer
+This release supports **dsh 0.2.0-rc.2 and nothing else** — the plugin's peer
 range is that one version, and its compatibility record names it alone:
 
 ```sh
@@ -70,7 +70,7 @@ Fresh pnpm 10 marketplace generations are supported directly. Do not add a separ
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.1
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
@@ -144,7 +144,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.2.0-rc.1**. Its `@deepseek-ai/dsh-*` peer range is `^0.2.0-rc.1` (semver resolves that to 0.2.0-rc.1 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
+**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.2.0-rc.2**. Its `@deepseek-ai/dsh-*` peer range is `^0.2.0-rc.2` (semver resolves that to 0.2.0-rc.2 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
 
 ## Usage dashboard
 

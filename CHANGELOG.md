@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Updated the exact DeepSeek Harness pairing from `0.2.0-rc.1` to `0.2.0-rc.2`.** Every Harness peer and development range, `dsh.compatibility.dsh`, `engines.dsh`, and the single `dshReleases` record now name 0.2.0-rc.2 together, and no business code changed: a release audit over the full public source delta (1025 changed paths, 321 package manifests) found every package this plugin imports with **no breaking change** — `dsh-llm` (including the `GenerateOptions`/`RequestMessage`/`ContentBlock`/`LlmError` wire types), `dsh-settings`, `dsh-credentials`, `dsh-commands`, `dsh-web`, `dsh-typert-protocol`, `dsh-timeout`, `dsh-invariants` and `dsh-launch-environment` carry zero source changes, and the published `.d.ts` of the packages this plugin links against are byte-identical. The rc.2 deltas that do exist are additive and were checked one by one: `dsh-client-ui-primitives` gains `MenuGroup`/`observeStickyMenuGroups` and turns `Input` into a `forwardRef` (this plugin renders its own `InlineInput`, so it is unaffected), `dsh-api-remotes` mounts one more `userQuestionsRemote`, and `dsh-llm`/`dsh-commands` add a `'user-question-reply'` message source. All five slot ids this plugin registers (`settings.section`, `settings.models.provider-card`, `settings.models.footer`, `sidebar.footer.action`, `conversation.composer.dock`) survive in the new slot catalog, the Web shell's `staticModules` seed table (`seed.ts`, `platform.ts`) is byte-identical, and the `data-composer-stats` outlet the cost readout attaches to is still present at its original site. `npm run test:engine` passes against a real `@deepseek-ai/dsh@0.2.0-rc.2`. Deliberately not adopted: the new `user-question-reply` chat node, the `userQuestionPanels` service, the `sidebar.right.tab.files.actions` slot and `ui-commands`' optional `group`/`searchMode` — none of them is required by a surface this plugin owns.
+
+### Fixed
+
+- **Three Harness packages the cost-projection tests import are now declared directly.** `tests/cost-projection.test.ts` imports `@deepseek-ai/dsh-session` and `@deepseek-ai/dsh-session-projection` by name, but both arrived only as transitive peers of other Harness packages — and the lock file for 0.2.0-rc.2 initially dropped them entirely, which broke `npm ci` outright (`Missing: @deepseek-ai/dsh-session@0.2.0-rc.2 from lock file`, alongside 24 other packages). `dsh-session`, `dsh-scope` and `dsh-session-projection` are now explicit `devDependencies`, so the test tree no longer depends on another package happening to hoist them.
+- **`npm run test:install` no longer depends on one `npm pack --json` output shape.** The script read `packed[0].filename`, which assumes the array form. `npm pack --json` reports an array in every published npm (`logTar` keys each entry by index and the CLI merges numeric keys back into one), but that shape is not contractual, so a keyed object is now accepted too instead of failing with a confusing "did not report a tarball filename".
+
 ## [0.12.0] - 2026-09-29
 
 ### Added
