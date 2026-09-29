@@ -16,7 +16,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `react`, `react/jsx-runtime`, `react-dom`, `react-dom/client`,
   `@deepseek-ai/cordis`, `@deepseek-ai/dsh-client-store`,
   `@deepseek-ai/dsh-client-ui-slots`, `@deepseek-ai/dsh-client-ui-primitives`,
-  `@deepseek-ai/dsh-client-ui-dockkit` (read out of the 0.2.0-rc.1 engine, and
+  `@deepseek-ai/dsh-client-ui-dockkit` (read out of the 0.2.0-rc.2 engine, and
   re-read at every Harness peer bump: the list is unchanged from 0.1.7-rc.2) — so
   the three `require()` targets `lib/client.js` carries resolve in the webview
   with no installed copy, which is why `react`,
@@ -35,7 +35,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   NON-optional peers**, so each optional name must also be a `devDependency` or
   the authortime tree silently loses it — `tests/client-boot.test.ts` imports
   the React component tree, so an absent `react` is a red `npm test`, and
-  `dsh-client-ui-primitives@0.2.0-rc.1` declares NO dependencies at all, so
+  `dsh-client-ui-primitives@0.2.0-rc.2` declares NO dependencies at all, so
   nothing else would pull it in. Note that the same package's npm entry point
   imports `clsx`, `katex` and the shiki/mdast stack without declaring them
   (the ENGINE's own tree does not install them either): it is a seed module,
@@ -46,8 +46,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   development package.
 - **The Harness peer range names exactly ONE release, and that is
   load-bearing.** Semver admits a prerelease only inside the same
-  `major.minor.patch` tuple as the comparator, so `^0.2.0-rc.1` resolves to
-  `0.2.0-rc.1` and NOTHING else. That exactness is the point: this bundle is
+  `major.minor.patch` tuple as the comparator, so `^0.2.0-rc.2` resolves to
+  `0.2.0-rc.2` and NOTHING else. That exactness is the point: this bundle is
   maintained against one engine, and a range that quietly admitted a neighbour
   is how a broken pairing stayed invisible (issue #43). A caret once pinned every
   peer to an engine four releases old, so a fresh generation installed a second,

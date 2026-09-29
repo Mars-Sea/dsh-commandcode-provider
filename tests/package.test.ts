@@ -51,8 +51,8 @@ test('per-release DSH compatibility names exactly the one supported release', ()
   // `unknown`. Exactly one record ships: a stale entry for an older engine would
   // advertise a pairing no test covers.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  assert.deepEqual(Object.keys(releases), ['0.2.0-rc.1'])
-  assert.equal(releases['0.2.0-rc.1'], 'compatible')
+  assert.deepEqual(Object.keys(releases), ['0.2.0-rc.2'])
+  assert.equal(releases['0.2.0-rc.2'], 'compatible')
 })
 
 test('the manifest declares the same engine range it supports', () => {

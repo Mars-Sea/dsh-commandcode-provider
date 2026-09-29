@@ -43,7 +43,11 @@ function verifyIsolatedInstall() {
       packDir,
     ], repositoryDir).stdout
     const packed = JSON.parse(packOutput)
-    const filename = packed[0]?.filename
+    // npm ≤10 emits an array; npm 11+ emits a keyed object.
+    const entry = Array.isArray(packed)
+      ? packed[0]
+      : Object.values(packed)[0]
+    const filename = entry?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not report a tarball filename')
 
     writeFileSync(join(consumerDir, 'package.json'), `${JSON.stringify({
