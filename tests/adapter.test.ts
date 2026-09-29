@@ -3579,6 +3579,34 @@ test('stream() clamps a large output reservation against the known model window 
   }
 })
 
+test('stream() hands off the requested output budget without weakening the direct request clamp', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 262_144 }] })
+  for (const protocol of ['openai', 'cli'] as const) {
+    const sent: { budget: number; handoff: string | null }[] = []
+    const adapter = makeAdapter({
+      options: () => ({ ...OPENAI_OPTIONS(), protocol }),
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/models')) return new Response(catalog)
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        const params = protocol === 'cli' ? body.params as Record<string, unknown> : body
+        sent.push({ budget: params.max_tokens as number, handoff: new Headers(init?.headers).get('x-bili-output-budget') })
+        return new Response(protocol === 'cli'
+          ? 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
+          : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n')
+      }) as typeof fetch,
+    })
+    await adapter.listModels('commandcode', { unfiltered: true })
+    const messages = [userMessage('alpha '.repeat(300_000))]
+    await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 131_072, messages }))
+    await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 1_024, messages }))
+    assert.deepEqual(sent, [
+      { budget: 1_024, handoff: protocol === 'openai' ? '131072:1024' : null },
+      { budget: 1_024, handoff: protocol === 'openai' ? '1024:1024' : null },
+    ])
+  }
+})
+
 test('stream() budgets Chinese text against the model window', async () => {
   const model = 'stealth/pixel-canary'
   const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 100_000 }] })

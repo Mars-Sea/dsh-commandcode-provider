@@ -2032,6 +2032,8 @@ interface GenerateConnectDeps {
   options: GenerateOptions
   connection: CommandCodeConnectionOptions
   fetchImpl: typeof fetch
+  /** Requested ceiling before the raw-history clamp, for compression-aware forwarding. */
+  requestedMaxTokens: number
   /** Observe headers even on rejected attempts before rotation/fallback. */
   onResponse: (response: Response) => void
 }
@@ -2106,6 +2108,7 @@ async function connectGenerate(
         ...IDENTITY_ENCODING_HEADER,
         Authorization: `Bearer ${key}`,
         Accept: 'text/event-stream',
+        'x-bili-output-budget': `${deps.requestedMaxTokens}:${body.max_tokens}`,
         // Deliberately no x-command-code-version / x-cli-environment:
         // this is the documented OpenAI-format surface, not the CLI
         // transport — do not "fix" these in. ZDR is the one header both
@@ -3020,7 +3023,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     let attemptNumber = 0
     let responseMetadata: ResponseMetadata = { protocol, headers: {} }
     const connectDeps: GenerateConnectDeps = {
-      options, connection, fetchImpl: this.fetchImpl,
+      options, connection, fetchImpl: this.fetchImpl, requestedMaxTokens,
       onResponse: (response) => {
         // Any answer from the gateway ends a header-timeout streak, whatever
         // its status: the silence being measured is over.
