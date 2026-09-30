@@ -19,10 +19,9 @@
  * tier — the terminal counterpart of the web page's searchable dropdown. The
  * seam has no multi-select kind (`text | number | boolean | select`) and no
  * array element path a checkbox could own, so each model is its own `boolean`
- * field at `modelVisibility.<id>` whose `parse` writes the whole array. The
- * `parse` reads the allowlist LIVE (the screen stages several toggles into one
- * save, so a captured base would let two quick toggles resurrect each other's
- * stale list), and an empty allowlist means "show every model" to the adapter,
+ * field at `modelVisibility.<id>` whose `parse` writes its explicit boolean.
+ * The format reads the allowlist LIVE so web changes are reflected when the
+ * terminal renders. An empty allowlist means "show every model" to the adapter,
  * so the checkboxes render the EFFECTIVE set.
  *
  * @module dsh-commandcode-provider/tui-settings
@@ -266,9 +265,8 @@ export function buildCommandCodeTuiSection(
    * ONE draft: every one of them then parses that same draft on save, all N
    * write ops address the same path, and only the LAST field's op survives —
    * which silently rewrote the allowlist from the last catalog model instead
-   * of the one that was toggled. An override equal to what the array already
-   * says is written as a CLEAR, so toggling a model back to its inherited
-   * state leaves no residue.
+   * of the one that was toggled. 保存显式布尔值，不能因为与白名单相同就
+   * 清除用户层：清除后可能重新露出基础配置中的相反开关。
    */
   const modelField = (id: string, hint: string, group: string): TuiSettingsField => ({
     path: ['modelVisibility', id],
@@ -284,12 +282,7 @@ export function buildCommandCodeTuiSection(
       return String(listed.length === 0 || listed.includes(id))
     },
     parse: (text) => {
-      const on = text.trim() === 'true'
-      // Live, not captured at registration: the host stages a toggle and
-      // saves it later.
-      const listed = storedIds(deps.visibleModels())
-      const inherited = listed.length === 0 || listed.includes(id)
-      return on === inherited ? { kind: 'clear' } : { kind: 'set', value: on }
+      return { kind: 'set', value: text.trim() === 'true' }
     },
   })
 

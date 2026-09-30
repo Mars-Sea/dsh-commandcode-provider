@@ -136,7 +136,7 @@ cmd login                               # 写入 ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**引擎版本要求。** 插件只针对一个引擎维护：**dsh 0.2.0-rc.2**。它的 `@deepseek-ai/dsh-*` peer 范围是 `^0.2.0-rc.2`（按 semver，这只会解析到 0.2.0-rc.2），`dsh.compatibility.dshReleases` 也只记录这一个版本。在更早的引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
+**引擎版本要求。** 插件只针对一个引擎维护：**dsh 0.2.0-rc.2**。它的 `@deepseek-ai/dsh-*` 对等依赖使用精确版本 `0.2.0-rc.2`，`dsh.compatibility.dshReleases` 也只记录这一个版本。相邻预发布版与稳定补丁版尚未验证。在更早的引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
 
 ## 用量面板
 
@@ -292,3 +292,8 @@ MIT —— 见 [LICENSE](./LICENSE)。部分内容移植自 [pi-commandcode-prov
 **设置页** —— 带实时额度的账户列表、模型显示、隐私开关与连接参数：
 
 <img src="assets/screenshots/settings-page.png" alt="Command Code 设置页面（含账户用量卡片）" width="640">
+
+### 发布入口
+
+发布包提供插件根入口、`/client` 网页入口、`/locale/*.json` 语言包及 `/package.json` 元数据。
+源码只保存在仓库中；未发布的 `./src/*` 不再列入导出声明。`npm run test:pack` 根据实际打包文件核对入口。

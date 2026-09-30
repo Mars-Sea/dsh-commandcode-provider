@@ -45,9 +45,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   optional set, that every optional name is a declared peer, and that it stays a
   development package.
 - **The Harness peer range names exactly ONE release, and that is
-  load-bearing.** Semver admits a prerelease only inside the same
-  `major.minor.patch` tuple as the comparator, so `^0.2.0-rc.2` resolves to
-  `0.2.0-rc.2` and NOTHING else. That exactness is the point: this bundle is
+  load-bearing.** 使用精确版本 `0.2.0-rc.2`。原 `^0.2.0-rc.2` 会放行
+  相邻预发布版及稳定补丁版，并不等于只支持一个版本。That exactness is the point: this bundle is
   maintained against one engine, and a range that quietly admitted a neighbour
   is how a broken pairing stayed invisible (issue #43). A caret once pinned every
   peer to an engine four releases old, so a fresh generation installed a second,

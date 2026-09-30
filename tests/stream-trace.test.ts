@@ -234,7 +234,7 @@ test('a pre-stream failure records the request fingerprint and closes the trace'
   assert.deepEqual(written.map((r) => r.event), ['stream-open', 'request', 'response', 'connect-error', 'stream-close'])
   assert.equal(JSON.stringify(written[1]).includes('hi'), false)
   assert.equal(written[2]!.status, 503)
-  assert.match(String(written[3]!.message), /upstream unavailable/)
+  assert.match(String(written[3]!.message), /上游服务暂时无法完成请求/)
 })
 
 test('disabled tracing does not serialize request values for fingerprints', async () => {

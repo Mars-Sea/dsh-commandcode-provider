@@ -24,6 +24,9 @@ jobs:
       # engine smoke only proves the staged bundle LOADS. tsdown output is
       # byte-reproducible, so a diff after a fresh build means "stale bundle".
       - run: git diff --exit-code -- lib/
+      # 发布前要求的真实宿主加载与隔离安装提前成为每次合并的门槛。
+      - run: npm run test:engine
+      - run: npm run test:install
       # Publish-content check: the tarball must carry lib/, the bundle patch,
       # README, and LICENSE.
-      - run: npm pack --dry-run
+      - run: npm run test:pack

@@ -25,6 +25,8 @@ import {
 } from '../src/client/settings.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../src/adapter.ts'
 import { en, zh } from '../src/client/locales.ts'
+import type { SettingsPathOp } from '../src/client/settings-scope.ts'
+import { modelIsVisible } from '../src/model-visibility.ts'
 
 // Helpers
 
@@ -67,6 +69,20 @@ function makeScope(init: {
       const user = { ...(state.user ?? {}) }
       delete user[field]
       state.user = user
+      for (const fn of listeners) fn()
+    },
+    async mutate(ops: readonly SettingsPathOp[], revision?: number) {
+      if (revision !== undefined && revision !== state.revision) return
+      const value = { ...state.value }
+      const user = { ...(state.user ?? {}) }
+      for (const op of ops) {
+        const field = op.path[0]!
+        if (op.op === 'set') { value[field] = op.value; user[field] = op.value }
+        else { delete value[field]; delete user[field] }
+      }
+      state.value = value
+      state.user = user
+      state.revision += 1
       for (const fn of listeners) fn()
     },
   }
@@ -223,7 +239,7 @@ test('an out-of-range numeric draft names the violated bound', () => {
   assert.equal(state.requestTimeoutMs.invalidReason, 'tooLarge')
 })
 
-test('the timeout fields are edited in whole seconds and stored in milliseconds', () => {
+test('the timeout fields are edited in seconds with millisecond precision', () => {
   const scope = makeScope({})
   const { controller } = makeController({ scope })
   // Typing 45 seconds must persist 45 000 ms, never 45: the Host schema and
@@ -235,12 +251,25 @@ test('the timeout fields are edited in whole seconds and stored in milliseconds'
   assert.equal(drafts.requestTimeoutMs.text, '45')
   assert.equal(drafts.streamIdleTimeoutMs.text, '600')
   assert.equal(drafts.requestTimeoutMs.invalid, false)
-  // Fractions are refused rather than rounded, so the box and the profile
-  // cannot quietly disagree.
   controller.edit('requestTimeoutMs', '1.5')
+  assert.equal(controller.state().requestTimeoutMs.invalid, false)
+  controller.edit('requestTimeoutMs', '1.0001')
   assert.equal(controller.state().requestTimeoutMs.invalidReason, 'format')
   controller.edit('requestTimeoutMs', 'abc')
   assert.equal(controller.state().requestTimeoutMs.invalidReason, 'format')
+})
+
+test('已有小数秒精确显示与保存，毫秒单位不改变', async () => {
+  const scope = makeScope({ value: { requestTimeoutMs: 1500, streamIdleTimeoutMs: 1 } })
+  const { controller } = makeController({ scope })
+  assert.equal(controller.state().requestTimeoutMs.text, '1.5')
+  assert.equal(controller.state().streamIdleTimeoutMs.text, '0.001')
+  controller.edit('requestTimeoutMs', '1.001')
+  controller.edit('streamIdleTimeoutMs', '0.001')
+  await controller.save()
+  assert.equal(scope.state.value.requestTimeoutMs, 1001)
+  assert.equal(scope.state.value.streamIdleTimeoutMs, 1)
+  assert.equal(controller.state().requestTimeoutMs.text, '1.001')
 })
 
 test('a stored value outside the editable range still displays its true number', () => {
@@ -297,6 +326,48 @@ test('discard() drops every staged edit', () => {
   const state = controller.state()
   assert.equal(state.apiBase.text, 'https://example.com')
   assert.equal(state.dirty, false)
+})
+
+test('保存期间同字段及新增字段草稿保留，下一次保存才提交', async () => {
+  const scope = makeScope({})
+  const set = scope.set.bind(scope)
+  let release: () => void = () => undefined
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let first = true
+  scope.set = async (field, value) => { if (first) { first = false; await gate }; await set(field, value) }
+  const { controller } = makeController({ scope })
+  controller.edit('requestTimeoutMs', '10')
+  const save = controller.save()
+  controller.edit('requestTimeoutMs', '20')
+  controller.edit('streamIdleTimeoutMs', '25')
+  release()
+  await save
+  assert.equal(scope.state.value.requestTimeoutMs, 10_000)
+  assert.equal(controller.state().requestTimeoutMs.text, '20')
+  assert.equal(controller.state().streamIdleTimeoutMs.text, '25')
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.equal(scope.state.value.requestTimeoutMs, 20_000)
+  assert.equal(scope.state.value.streamIdleTimeoutMs, 25_000)
+  assert.equal(controller.state().dirty, false)
+})
+
+test('保存开始冻结模型选择，网络等待期间的新选择不会提前提交或被清除', async () => {
+  const scope = makeScope({})
+  const set = scope.set.bind(scope)
+  let release: () => void = () => undefined
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  scope.set = async (field, value) => { if (field === 'requestTimeoutMs') await gate; await set(field, value) }
+  const { controller } = makeController({ scope })
+  controller.edit('requestTimeoutMs', '10')
+  controller.editVisibleModels(['model-a'])
+  const save = controller.save()
+  controller.editVisibleModels(['model-b'])
+  release()
+  await save
+  assert.deepEqual(scope.state.value.visibleModels, ['model-a'])
+  assert.deepEqual(controller.state().visibleModels, ['model-b'])
+  assert.equal(controller.state().dirty, true)
 })
 
 // Save: API key via credentials domain
@@ -657,14 +728,77 @@ test('removeAccount drops the key, the row, its dedicated models and a pin namin
   assert.equal(controller.state().activeAccount, '')
 })
 
-test('a refused key removal keeps the row, so the stored key never outlives its account', async () => {
+test('a refused key removal preserves a durable cleanup task after removing the account', async () => {
   const scope = makeScope({ value: { accounts: TWO_ACCOUNTS } })
   const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'sk-second']]), failUnset: true })
   const { controller } = makeController({ scope, api })
   await flush()
   assert.equal(await controller.removeAccount('COMMANDCODE_API_KEY_2'), false)
-  assert.deepEqual(scope.state.value.accounts, TWO_ACCOUNTS)
+  assert.deepEqual(scope.state.value.accounts, [])
+  assert.deepEqual(controller.state().pendingCredentialCleanup, ['COMMANDCODE_API_KEY_2'])
+  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), true)
   assert.equal(controller.state().accountFailed, 'remove')
+})
+
+test('账户配置原子提交失败时保留账户绑定固定账户与密钥', async () => {
+  const value = { accounts: TWO_ACCOUNTS, activeAccount: 'COMMANDCODE_API_KEY_2', modelAccountRules: [{ models: ['m'], account: 'COMMANDCODE_API_KEY_2' }] }
+  const scope = makeScope({ value, user: value })
+  scope.mutate = async () => { throw new Error('测试版本冲突') }
+  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'test-key']]) })
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.equal(await controller.removeAccount('COMMANDCODE_API_KEY_2'), false)
+  assert.deepEqual(scope.state.value, value)
+  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), true)
+})
+
+test('凭据清理失败后刷新页面仍能重试，已移除配置不会再次删除', async () => {
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS } })
+  const options = { store: new Map([['COMMANDCODE_API_KEY_2', 'test-key']]), failUnset: true }
+  const api = makeApi(options)
+  const first = makeController({ scope, api }).controller
+  await flush()
+  assert.equal(await first.removeAccount('COMMANDCODE_API_KEY_2'), false)
+  first.dispose()
+  options.failUnset = false
+  const second = makeController({ scope, api }).controller
+  await flush()
+  assert.deepEqual(second.state().pendingCredentialCleanup, ['COMMANDCODE_API_KEY_2'])
+  assert.equal(await second.retryCredentialCleanup('COMMANDCODE_API_KEY_2'), true)
+  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), false)
+  assert.deepEqual(second.state().pendingCredentialCleanup, [])
+  second.dispose()
+})
+
+test('清理重试保护同名重建账户和继承账户的共享密钥', async () => {
+  for (const inherited of [false, true]) {
+    const scope = makeScope({
+      value: { accounts: inherited ? [] : TWO_ACCOUNTS, credentialCleanupRefs: ['COMMANDCODE_API_KEY_2'] },
+      ...(inherited ? { base: { accounts: TWO_ACCOUNTS } } : {}),
+    })
+    const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'test-key']]) })
+    const { controller } = makeController({ scope, api })
+    await flush()
+    assert.equal(await controller.retryCredentialCleanup('COMMANDCODE_API_KEY_2'), true)
+    assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), true)
+    assert.deepEqual(scope.state.value.accounts, inherited ? [] : TWO_ACCOUNTS)
+    assert.deepEqual(controller.state().pendingCredentialCleanup, [])
+    controller.dispose()
+  }
+})
+
+test('清理无法确认凭据状态时保留队列，不把未知当作已删除', async () => {
+  const scope = makeScope({ value: { accounts: [], credentialCleanupRefs: ['COMMANDCODE_API_KEY_2'] } })
+  const api = makeApi({ store: new Map([['COMMANDCODE_API_KEY_2', 'test-key']]) })
+  api.credentials.describe = async () => { throw new Error('测试连接失败') }
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.equal(await controller.retryCredentialCleanup('COMMANDCODE_API_KEY_2'), false)
+  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), true)
+  assert.deepEqual(controller.state().pendingCredentialCleanup, ['COMMANDCODE_API_KEY_2'])
+  api.credentials.describe = async () => ({ ok: true, value: {} })
+  assert.equal(await controller.retryCredentialCleanup('COMMANDCODE_API_KEY_2'), false)
+  assert.deepEqual(controller.state().pendingCredentialCleanup, ['COMMANDCODE_API_KEY_2'])
 })
 
 test('setAccountKey and clearAccountKey address the default slot through its reference', async () => {
@@ -901,6 +1035,70 @@ test('refreshCatalog recovers after the Remote mount lands', async () => {
 })
 
 // Visible-model allowlist
+
+test('网页读取终端覆盖后的有效选择，保存时以一次提交统一两个字段', async () => {
+  const scope = makeScope({ value: {
+    visibleModels: ['a', 'old'], modelVisibility: { a: false, b: true, hidden: false },
+  } })
+  const api = makeApi({ models: async () => ({ ok: true, value: { models: [
+    { id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' },
+  ] } }) })
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.deepEqual(controller.state().visibleModels, ['old', 'b'])
+  assert.equal(controller.state().visibleModelsAll, false)
+  let commits = 0
+  const mutate = scope.mutate.bind(scope)
+  scope.mutate = async (ops, revision) => { commits++; assert.equal(ops.length, 2); await mutate(ops, revision) }
+  controller.editVisibleModels(['a', 'c'])
+  await controller.save()
+  assert.equal(commits, 1)
+  assert.equal(controller.state().failed, false)
+  assert.deepEqual(controller.state().visibleModels, ['a', 'c'])
+  for (const id of ['a', 'b', 'c', 'old', 'hidden', 'future']) {
+    assert.equal(modelIsVisible(id, scope.state.value.visibleModels as string[], scope.state.value.modelVisibility), ['a', 'c'].includes(id))
+  }
+  await scope.set('modelVisibility', { ...(scope.state.value.modelVisibility as object), b: true })
+  assert.deepEqual(controller.state().visibleModels, ['a', 'c', 'b'])
+})
+
+test('显示全部覆盖继承的隐藏开关，目录失败保留旧模型且能识别全部隐藏', async () => {
+  const scope = makeScope({
+    base: { modelVisibility: { inherited: false } },
+    value: { modelVisibility: { inherited: false, old: true } },
+  })
+  const { controller } = makeController({ scope, api: makeApi({ models: async () => ({ ok: false }) }) })
+  await flush()
+  assert.deepEqual(controller.state().visibleModels, ['old'])
+  assert.equal(controller.state().visibleModelsAll, false)
+  controller.clearVisibleModels()
+  await controller.save()
+  assert.equal(controller.state().visibleModelsAll, true)
+  assert.deepEqual(scope.state.value.modelVisibility, { inherited: true, old: true })
+  assert.equal(modelIsVisible('future', [], scope.state.value.modelVisibility), true)
+  await scope.set('modelVisibility', { inherited: false, old: false })
+  assert.deepEqual(controller.state().visibleModels, [])
+  assert.equal(controller.state().visibleModelsAll, false)
+})
+
+test('目录加载后显示全部实际勾选全部，保存冲突保留模型草稿', async () => {
+  const scope = makeScope({})
+  const api = makeApi({ models: async () => ({ ok: true, value: { models: [
+    { id: 'a', name: 'A' }, { id: 'b', name: 'B' },
+  ] } }) })
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.equal(controller.state().visibleModelsAll, true)
+  assert.deepEqual(controller.state().visibleModels, ['a', 'b'])
+  scope.mutate = async () => { throw new Error('revision conflict') }
+  controller.editVisibleModels(['a'])
+  await controller.save()
+  assert.equal(controller.state().failed, true)
+  assert.equal(controller.state().dirty, true)
+  assert.deepEqual(controller.state().visibleModels, ['a'])
+  assert.equal(scope.state.value.visibleModels, undefined)
+  assert.equal(scope.state.value.modelVisibility, undefined)
+})
 
 test('starts with the stored visible models and stays clean', () => {
   const scope = makeScope({

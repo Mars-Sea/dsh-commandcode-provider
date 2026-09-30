@@ -355,7 +355,7 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
    * in directly — unless a newer write already superseded it, in which case
    * that answer's revision becomes the next write's fence.
    */
-  private mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void> {
+  mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void> {
     const ownedOps = structuredClone(ops)
     const generation = ++this.writeGeneration
     return this.enqueue(async () => {
@@ -514,6 +514,7 @@ export function createSettingsScope<T>(
     subscribe: (listener) => scope.subscribe(listener),
     set: (field, value) => scope.set(field, value),
     unset: (field) => scope.unset(field),
+    mutate: (ops, revision) => scope.mutate(ops, revision),
     refresh: () => { void mirror.load() },
     dispose: async () => {
       for (const dispose of disposers.splice(0)) dispose()

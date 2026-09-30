@@ -371,7 +371,12 @@ function applyClientSurfaces(
       return ref
     }),
     renameAccount: (ref: string, label: string) => controller.renameAccount(ref, label),
-    removeAccount: (ref: string) => controller.removeAccount(ref).then(refreshUsageOn),
+    removeAccount: (ref: string) => controller.removeAccount(ref).then((ok) => {
+      // 配置可能已移除、凭据清理仍失败；用量页也应立即跟随新的账户列表。
+      if (ok || !controller.state().accounts.some((account) => account.ref === ref)) void usageController.refresh()
+      return ok
+    }),
+    retryCredentialCleanup: (ref: string) => controller.retryCredentialCleanup(ref),
     setAccountKey: (target: string, key: string) => controller.setAccountKey(target, key).then(refreshUsageOn),
     clearAccountKey: (target: string) => controller.clearAccountKey(target).then(refreshUsageOn),
     setActiveAccount: (id: string) => controller.setActiveAccount(id).then(refreshUsageOn),

@@ -284,27 +284,25 @@ test('a stored allowlist decides which boxes are checked', () => {
   assert.equal(checkbox(listed, 'goat/beta').format?.(undefined), 'false')
 })
 
-test('a checkbox writes an override, and only when it disagrees with the array', () => {
+test('模型开关保存显式选择，不清除继承层的反向覆盖', () => {
   const { section } = build()
   // Unset means "all visible", so switching one off is a real override…
   assert.deepEqual(parse(checkbox(section, 'go/alpha'), 'false'), { kind: 'set', value: false })
-  // …while switching an already-visible model on is not, and must leave no
-  // residue: the clear re-inherits the composition layer.
-  assert.deepEqual(parse(checkbox(section, 'go/alpha'), 'true'), { kind: 'clear' })
+  // 即使白名单默认显示全部，也不能清除后重新继承基础配置中的 false。
+  assert.deepEqual(parse(checkbox(section, 'go/alpha'), 'true'), { kind: 'set', value: true })
 })
 
-test('the array allowlist stays the baseline an override is judged against', () => {
+test('白名单变化后，终端仍保存用户的显式模型选择', () => {
   const { section, setVisible } = build({ visible: ['go/alpha', 'pro/gamma'] })
   const beta = checkbox(section, 'goat/beta')
   // beta is hidden by the array, so checking it is an override…
   assert.deepEqual(parse(beta, 'true'), { kind: 'set', value: true })
-  // …and unchecking it again is not.
-  assert.deepEqual(parse(beta, 'false'), { kind: 'clear' })
-  // A write that landed after this declaration was built changes the baseline:
-  // the inherited state must be read when the save runs, not at registration.
+  // 取消勾选也显式写入，避免露出继承层的相反开关。
+  assert.deepEqual(parse(beta, 'false'), { kind: 'set', value: false })
+  // 白名单变化不会把用户选择变成清除操作。
   setVisible([])
   assert.deepEqual(parse(beta, 'false'), { kind: 'set', value: false })
-  assert.deepEqual(parse(beta, 'true'), { kind: 'clear' })
+  assert.deepEqual(parse(beta, 'true'), { kind: 'set', value: true })
 })
 
 test('an override decides its own model, whatever the array says', () => {

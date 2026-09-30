@@ -327,6 +327,8 @@ export const Config: z<Config> = z.object(markVolatileFields({
     apiKey: z.string().role('secret'),
   })),
   activeAccount: z.string(),
+  // 与账户移除原子提交的清理队列，仅存引用；凭据服务失败或页面中断后可重试。
+  credentialCleanupRefs: z.array(z.string().role('credential-ref')),
   modelAccountRules: z.array(z.object({
     models: z.array(z.string()),
     account: z.string(),
@@ -705,8 +707,8 @@ export function apply(ctx: Context, config: Config): void {
   const catalogForEditors = async (): Promise<CommandCodeCatalog> => {
     const models = await adapter.listModels(PROVIDER, { unfiltered: true })
     // Per-model monthly allowance (how far this one model stretches the plan's
-    // credit pool). The page publishes one for GOAT and Pro only, so the POOL's
-    // bracket decides whether a figure exists at all — a Go/Max/Provider account
+    // credit pool). The page publishes Go, GOAT and Pro figures, so the POOL's
+    // bracket decides whether a figure exists at all — a Max/Provider account
     // gets none rather than a neighbouring tier's number. `listModels` above
     // already consulted the same cached billing facts, so this costs one lookup.
     const bracket = await adapter.allowanceTier()

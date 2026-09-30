@@ -31,15 +31,11 @@ test('every Harness peer and development package shares one supported release ra
   for (const name of harnessPeers) {
     assert.equal(dev[name], range, `${name} development range`)
   }
-  // Why an exact-version disjunction rather than a caret: semver admits a
-  // prerelease only inside the SAME major.minor.patch tuple, so `^0.2.0-rc.2`
-  // resolves to 0.2.0-rc.2 alone. This bundle supports ONE engine release, and a
-  // range that quietly admitted a neighbour is how a broken pairing stayed
-  // invisible (issue #43).
-  assert.ok(!range.includes('x') && !range.includes('>='), 'no compact comparator form can express this')
+  // caret 会放行邻近预发布和稳定补丁版，不能表达只验证一个宿主的约定。
+  assert.equal(range, '0.2.0-rc.2', '精确版本才能阻止未验证的相邻引擎')
   for (const version of Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})) {
     assert.ok(
-      range.split(' || ').includes(`^${version}`),
+      range === version,
       `peer range must admit declared-compatible ${version}`,
     )
   }

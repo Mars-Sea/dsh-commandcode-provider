@@ -189,6 +189,136 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[
   return out
 }
 
+/** 每次 read 仅提供一个网络包，避免同包尾部事件掩盖提前停止读取的缺陷。 */
+function packetResponse(parts: string[]): Response {
+  let index = 0
+  return new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const part = parts[index++]
+      if (part === undefined) controller.close()
+      else controller.enqueue(new TextEncoder().encode(part))
+    },
+  }))
+}
+
+test('OpenAI 独立尾部用量包在结束原因之后仍被读取', async () => {
+  const sse = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol: 'openai', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async () => packetResponse([
+      sse({ choices: [{ delta: { content: 'ok' } }] }),
+      sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      sse({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 90 } } }),
+      'data: [DONE]\n\n',
+    ])) as typeof fetch,
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'review/model', messages: [userMessage('hi')] }))
+  assert.deepEqual(chunks.filter((chunk) => chunk.type === 'usage'), [
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 90 } },
+  ])
+  assert.equal(chunks.filter((chunk) => chunk.type === 'finish').length, 1)
+  assert.equal(chunks.at(-1)?.type, 'finish')
+})
+
+test('冷生成从同网关磁盘目录计算预算，切换网关不沿用旧目录且不额外联网', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const directory = mkdtempSync(join(tmpdir(), 'commandcode-cold-budget-'))
+  const cache = join(directory, 'models.json')
+  writeFileSync(cache, JSON.stringify({ version: 3, apiBase: DEFAULT_API_BASE, models: [
+    { id: 'review/cached-model', name: 'Cached', contextWindow: 262144, maxTokens: 131072, supportedEndpoints: ['/chat/completions'] },
+  ] }))
+  let apiBase = DEFAULT_API_BASE
+  const sent: number[] = []
+  const endpoints: string[] = []
+  const adapter = makeAdapter({
+    options: () => ({ apiBase, workingDir: '/tmp', protocol: 'openai', modelsCachePath: cache, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      endpoints.push(String(input))
+      sent.push(JSON.parse(String(init?.body)).max_tokens as number)
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+    }) as typeof fetch,
+  })
+  const request = { provider: 'commandcode', model: 'review/cached-model', messages: [userMessage('a'.repeat(700_000))] }
+  try {
+    await Promise.all([collect(adapter.stream(request)), collect(adapter.stream(request))])
+    assert.ok(sent[0]! < 131072)
+    assert.equal(sent[0], sent[1])
+    apiBase = 'https://other.example'
+    await collect(adapter.stream(request))
+    assert.equal(sent[2], 131072, '不同网关不能使用旧上下文窗口')
+    assert.equal(endpoints.length, 3)
+    assert.ok(endpoints.every((endpoint) => endpoint.endsWith('/provider/v1/chat/completions')))
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('Messages 多次部分用量增量保留输入缓存并等待消息终止', async () => {
+  const sse = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol: 'messages', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async () => packetResponse([
+      sse({ type: 'message_start', message: { usage: { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 900, cache_creation_input_tokens: 120 } } }),
+      sse({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+      sse({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } }),
+      sse({ type: 'content_block_stop', index: 0 }),
+      sse({ type: 'message_delta', delta: {}, usage: { output_tokens: 2 } }),
+      sse({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } }),
+      sse({ type: 'message_stop' }),
+    ])) as typeof fetch,
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'claude-sonnet-5-5', messages: [userMessage('hi')] }))
+  assert.deepEqual(chunks.filter((chunk) => chunk.type === 'usage'), [
+    { type: 'usage', usage: { inputTokens: 100, outputTokens: 5, cacheReadTokens: 900, cacheWriteTokens: 120 } },
+  ])
+  assert.equal(chunks.filter((chunk) => chunk.type === 'finish').length, 1)
+})
+
+for (const protocol of ['cli', 'openai', 'messages'] as const) {
+  test(`${protocol} 错误正文挂起时仍按原 HTTP 状态失败并清理`, async () => {
+    let cancelled = false
+    const adapter = makeAdapter({
+      options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol, modelsCachePath: '', requestTimeoutMs: 20, streamIdleTimeoutMs: 1000 }),
+      fetchImpl: (async () => new Response(new ReadableStream<Uint8Array>({
+        cancel() { cancelled = true },
+      }), { status: 500 })) as typeof fetch,
+    })
+    await assert.rejects(collect(adapter.stream({ provider: 'commandcode', model: 'review/model', messages: [userMessage('hi')] })),
+      (error: unknown) => (error as { code?: string }).code === 'SERVER')
+    assert.equal(cancelled, true)
+  })
+}
+
+test('错误正文读取有字节上限，持续数据不会无限积累', async () => {
+  let pulls = 0
+  let cancelled = false
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol: 'openai', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { pulls += 1; controller.enqueue(new Uint8Array(8192).fill(120)) },
+      cancel() { cancelled = true },
+    }), { status: 500 })) as typeof fetch,
+  })
+  await assert.rejects(collect(adapter.stream({ provider: 'commandcode', model: 'review/model', messages: [userMessage('hi')] })))
+  assert.ok(pulls <= 10)
+  assert.equal(cancelled, true)
+})
+
+test('错误正文读取期间取消传播调用者原因', async () => {
+  const abort = new AbortController()
+  let beginRead: () => void = () => undefined
+  const reading = new Promise<void>((resolve) => { beginRead = resolve })
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol: 'openai', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async () => new Response(new ReadableStream<Uint8Array>({ pull() { beginRead() } }), { status: 500 })) as typeof fetch,
+  })
+  const result = collect(adapter.stream({ provider: 'commandcode', model: 'review/model', messages: [userMessage('hi')], signal: abort.signal }))
+  await reading
+  const reason = new Error('测试取消')
+  abort.abort(reason)
+  await assert.rejects(result, (error: unknown) => error === reason)
+})
+
 // ---------------------------------------------------------------------------
 // Gateway wire invariants
 // ---------------------------------------------------------------------------
@@ -2397,8 +2527,8 @@ test('listModels() keeps every model when the account holds on-demand credits', 
 })
 
 test('allowanceTier() answers the pool\'s highest allowance bracket', async () => {
-  // The pricing page publishes a per-model allowance for GOAT and Pro only, so
-  // the settings page needs to know which of the two brackets this pool is in —
+  // The pricing page publishes per-model allowances for Go, GOAT and Pro, so
+  // the settings page needs to know which bracket this pool is in —
   // or that it is in neither.
   const bracket = async (planId: string, status = 'active') => {
     const { fetchImpl } = fetchRouting({
@@ -2413,8 +2543,9 @@ test('allowanceTier() answers the pool\'s highest allowance bracket', async () =
   // Pro v1 is the same bracket as Pro.
   assert.equal(await bracket('individual-pro-v1'), 'pro')
   // Plans with no published allowance must NOT fall back to a neighbour's
-  // figure: a Go account seeing "$20/mo" would be reading a GOAT number.
-  assert.equal(await bracket('individual-go'), undefined)
+  // figure: Go now has its own bracket; other plans must not borrow its number.
+  assert.equal(await bracket('individual-go'), 'go')
+  assert.equal(await bracket('individual-go-v1'), 'go')
   assert.equal(await bracket('individual-max'), undefined)
   assert.equal(await bracket('individual-provider'), undefined)
   // Fail-open shape, as everywhere else in this plugin: unreadable billing
@@ -4099,6 +4230,7 @@ test('the Messages stream assembles a tool call from input_json_delta fragments'
     sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: ':"/etc/hosts"}' } }),
     sse('content_block_stop', { type: 'content_block_stop', index: 0 }),
     sse('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 30, output_tokens: 20 } }),
+    sse('message_stop', { type: 'message_stop' }),
   ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
 
   const chunks = await collect(adapter.stream({
@@ -4125,6 +4257,7 @@ test('Messages usage maps cache and thinking tokens', async () => {
       input_tokens: 11, output_tokens: 40, cache_read_input_tokens: 900, cache_creation_input_tokens: 120,
       output_tokens_details: { thinking_tokens: 25 },
     } }),
+    sse('message_stop', { type: 'message_stop' }),
   ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
 
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'claude-opus-4-8', messages: [userMessage('hi')] }))
@@ -4149,6 +4282,7 @@ test('a Messages thinking signature is replayed on the next turn, and dropped wh
     sse('content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } }),
     sse('content_block_stop', { type: 'content_block_stop', index: 1 }),
     sse('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 20, output_tokens: 30 } }),
+    sse('message_stop', { type: 'message_stop' }),
   ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } })
 
   const { adapter, sent } = messagesAdapter(() => signatureStream())
@@ -4332,7 +4466,7 @@ test('stream() classifies a pre-stream 5xx as retryable SERVER and a 408 as TIME
         const e = err as { code?: string; message?: string; failure?: { status?: number } }
         return e.code === code
           && e.failure?.status === status
-          && /temporarily unavailable/.test(e.message ?? '')
+          && /上游服务暂时无法完成请求|服务端处理超时/.test(e.message ?? '')
       },
     )
   }
@@ -4533,6 +4667,28 @@ test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_E
   )
 })
 
+test('stream() prices image content as vision tokens rather than inline base64', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 100_000 }] })
+  const ref = { ...imageRef(), attachmentId: AttachmentId('sha256:large-inline-image'), bytes: 500_000 }
+  const data = new Uint8Array(ref.bytes)
+  let output: number | undefined
+  const adapter = makeAdapter({
+    options: OPENAI_OPTIONS,
+    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: data }),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/models')) return new Response(catalog, { status: 200 })
+      output = (JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
+    }) as typeof fetch,
+  })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 64_000, messages: [{
+    id: messageId(), role: 'user', content: [{ type: 'image', attachment: ref }], source: { kind: 'user' },
+  }] }))
+  assert.equal(output, 64_000)
+})
+
 test('stream() clamps a large output reservation against the known model window on both transports', async () => {
   const model = 'stealth/pixel-canary'
   const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 262_144 }] })
@@ -4626,7 +4782,10 @@ test('stream() treats an ambiguous gateway 400 as overflow only with known size 
     await assert.rejects(run('alpha '.repeat(12_000)), (error: unknown) =>
       (error as { code?: string }).code === 'SERVER')
   }
-  const withoutWindow = makeAdapter({ fetchImpl: fetchReturning(400, generic) })
+  const withoutWindow = makeAdapter({
+    options: () => ({ ...OPENAI_OPTIONS(), protocol: 'cli', modelsCachePath: '' }),
+    fetchImpl: fetchReturning(400, generic),
+  })
   await assert.rejects(
     collect(withoutWindow.stream({ provider: 'commandcode', model, messages: [userMessage('alpha '.repeat(12_000))] })),
     (error: unknown) => (error as { code?: string }).code === 'PROVIDER_HTTP_ERROR',
@@ -5759,6 +5918,27 @@ test('stream() rotates past a 5xx that carries a structured account code', async
   }
 })
 
+test('通用 HTTP 错误以中文说明和错误码展示，不回显上游正文', async () => {
+  const { fetchImpl } = fetchByKey({
+    'key-1': { status: 400, body: JSON.stringify({ error: {
+      code: 'validation_error', message: 'upstream reflected private prompt marker',
+    } }) },
+  })
+  const adapter = makeAdapter({ fetchImpl, resolveApiKey: async () => 'key-1' })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      const actual = error as { code?: string; message: string; failure?: { status?: number } }
+      assert.equal(actual.code, 'PROVIDER_HTTP_ERROR')
+      assert.equal(actual.failure?.status, 400)
+      assert.match(actual.message, /请求失败（HTTP 400）/)
+      assert.match(actual.message, /（validation_error）/)
+      assert.doesNotMatch(actual.message, /private prompt marker|upstream reflected/)
+      return true
+    },
+  )
+})
+
 test('stream() does not blame an account for a 5xx that carries no window-limit code', async () => {
   // The status guard's job: a provider outage keeps its retry cadence for EVERY
   // account instead of being remembered against one. (A 5xx that does carry the
@@ -6307,6 +6487,46 @@ test('a token-limited empty response does not invent reasoning usage', async () 
   })
 })
 
+test('stream() reports a floored length-empty response as CONTEXT_WINDOW_EXCEEDED, not fatal OUTPUT_TOKEN_LIMIT (issue #73)', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 20_000 }] })
+  const adapter = makeAdapter({
+    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
+      ? new Response(catalog, { status: 200 })
+      : new Response('data: {"type":"finish","finishReason":"length"}\n\n', { status: 200 })) as typeof fetch,
+  })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  // At this repeat count requestContextBudget() clamps the reservation all the
+  // way to its 1,024-token emergency floor (available <= floor): the request
+  // was starved by the window itself, not by a small requested max_tokens, so
+  // the empty length finish must recover through compaction, not fail dead.
+  const text = 'alpha '.repeat(20_000)
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage(text)] })),
+    (error: unknown) => (error as { code?: string }).code === 'CONTEXT_WINDOW_EXCEEDED',
+  )
+})
+
+test('stream() keeps a length-empty response fatal when size pressure has not reached the reservation floor', async () => {
+  const model = 'stealth/pixel-canary'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 20_000 }] })
+  const adapter = makeAdapter({
+    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
+      ? new Response(catalog, { status: 200 })
+      : new Response('data: {"type":"finish","finishReason":"length"}\n\n', { status: 200 })) as typeof fetch,
+  })
+  await adapter.listModels('commandcode', { unfiltered: true })
+  // A smaller repeat count still trips sizePressure (estimatedInput >=
+  // window/4) but leaves the reservation well above the 1,024 floor. A naive
+  // sizePressure-only check would misclassify this as a window overflow and
+  // trigger an unnecessary lossy compaction; only reaching the floor should.
+  const text = 'alpha '.repeat(15_000)
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage(text)] })),
+    (error: unknown) => (error as { code?: string }).code === 'OUTPUT_TOKEN_LIMIT',
+  )
+})
+
 test('an explicit content filter is not retried as an empty response', async () => {
   const adapter = makeAdapter({ options: OPENAI_OPTIONS, fetchImpl: fetchReturning(200,
     'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n') })
@@ -6423,8 +6643,10 @@ test('the suggested budget doubles a long timeout instead of flooring it at 5 mi
   // mean waiting out the 200 s budget it describes.
   assert.equal(headersTimeoutAdvice('openai', 200_000).suggestionMs, 400_000)
   assert.equal(headersTimeoutAdvice('openai', 30_000).suggestionMs, 300_000)
-  // Capped at the retry backoff's own ceiling, never past it.
-  assert.equal(headersTimeoutAdvice('openai', 10_000_000).suggestionMs, 900_000)
+  assert.equal(headersTimeoutAdvice('openai', 1_000_000).suggestionMs, 2_000_000)
+  assert.equal(headersTimeoutAdvice('openai', 2_000_000).suggestionMs, 3_600_000)
+  assert.equal(headersTimeoutAdvice('openai', 3_600_000).suggestionMs, undefined)
+  assert.equal(headersTimeoutAdvice('openai', 10_000_000).suggestionMs, undefined)
   // The CLI route never gets the knob recommended: its headers come from the
   // gateway, so a bigger budget cannot buy a response that never started.
   assert.equal(headersTimeoutAdvice('cli', 30_000).cause, 'gateway')

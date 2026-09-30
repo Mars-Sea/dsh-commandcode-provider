@@ -258,11 +258,11 @@ export interface CommandCodeCatalogModel {
    * Per-model MONTHLY allowance in USD: how much of the plan's monthly credit
    * pool this one model may draw, already resolved by the Host against the
    * account pool's highest plan (the pricing page publishes an allowance for
-   * GOAT and Pro only). Undefined when that plan has no published allowance
+   * Go, GOAT and Pro). Undefined when that plan has no published allowance
    * (Go, Provider, Max, Ultra) or when billing could not be read — the browser
    * shows nothing rather than guessing a neighbouring tier's figure.
    *
-   * Deliberately a plain number and not the `{ goat, pro }` pair: the bracket is
+   * Deliberately a plain number and not the `{ go, goat, pro }` map: the bracket is
    * a Host decision that already depends on facts the browser does not hold, and
    * shipping both figures would invite a second, divergent rule here. Note this
    * is dollars per MONTH, unlike every rate in `CommandCodePriceTable`.

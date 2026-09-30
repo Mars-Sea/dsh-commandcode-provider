@@ -58,8 +58,8 @@ export const PANEL_CSS = `
    bar into what is left beside them. Mirrors the dashboard's window block. */
 .ccp-footRow{flex-direction:column;gap:4px;min-width:0;display:flex}
 .ccp-footHead{align-items:baseline;gap:8px;min-width:0;display:flex}
-.ccp-footLabel{flex:1;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
-.ccp-footAmount{flex:none;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ccp-footLabel{flex:1;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
+.ccp-footAmount{flex:none;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* The card's markup must stay PHRASING content — it renders inside the shell's
    own button — so these bars are spans, which makes display:block load-bearing:
    an inline box ignores width outright, so the fill would collapse to 0x0 and
@@ -67,7 +67,7 @@ export const PANEL_CSS = `
 .ccp-footBar{display:block;background:var(--dsw-alias-bg-layer-2);border-radius:999px;height:5px;overflow:hidden}
 .ccp-footFill{display:block;background:var(--dsw-alias-brand-primary);border-radius:999px;height:100%;transition:width .3s ease}
 .ccp-footFillWarn{background:var(--dsw-alias-state-error-primary)}
-.ccp-footPct{flex:none;width:34px;color:var(--dsw-alias-label-secondary);text-align:right;font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.ccp-footPct{flex:none;width:34px;color:var(--dsw-alias-label-secondary);text-align:right;font-size:12px;line-height:16px;font-variant-numeric:tabular-nums}
 
 /* The 56px rail: one icon button on the shell's own 36px rail cell, so the
    collapsed column keeps a single 18px glyph like its siblings. */
@@ -87,7 +87,7 @@ export const PANEL_CSS = `
 .ccp-title{margin:0;font-size:18px;font-weight:600;line-height:1.4}
 .ccp-subtitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .ccp-spacer{flex:1}
-.ccp-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5;font-variant-numeric:tabular-nums}
+.ccp-meta{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
 /* The dashboard's exit: the primitive's own size="sm" geometry is kept; only the
    glyph is enlarged and optically centred, so it reads as a dismiss control. */
 .ccp-close{min-width:28px;justify-content:center;padding-left:0;padding-right:0}
@@ -99,16 +99,16 @@ export const PANEL_CSS = `
 .ccp-noticeTitle{margin:0;font-size:13px;font-weight:600;line-height:1.5}
 .ccp-noticeError .ccp-noticeTitle{color:var(--dsw-alias-state-error-primary)}
 .ccp-noticeHint{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.55}
-.ccp-noticeDetail{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5;word-break:break-word}
+.ccp-noticeDetail{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;word-break:break-word}
 
 .ccp-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:14px;padding:16px 18px;flex-direction:column;gap:16px;display:flex}
 .ccp-cardHead{align-items:center;gap:10px;display:flex;flex-wrap:wrap}
 .ccp-avatar{flex:none;width:28px;height:28px;color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-module-platform);border-radius:50%;justify-content:center;align-items:center;font-size:12px;font-weight:600;line-height:1;display:inline-flex}
 .ccp-cardIdentity{flex-direction:column;gap:1px;min-width:0;display:flex}
 .ccp-cardTitle{font-size:13px;font-weight:600;line-height:1.4}
-.ccp-cardOwner{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
+.ccp-cardOwner{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
 .ccp-block{flex-direction:column;gap:8px;display:flex}
-.ccp-blockTitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:600;line-height:1.5;text-transform:uppercase;letter-spacing:.04em}
+.ccp-blockTitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:1.5;text-transform:uppercase;letter-spacing:.04em}
 .ccp-planRow{align-items:center;gap:8px;display:flex;flex-wrap:wrap}
 .ccp-fieldLabel{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .ccp-planName{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:1.5}
@@ -116,9 +116,9 @@ export const PANEL_CSS = `
 /* The monthly credits and the usage totals share one grid. */
 .ccp-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
 .ccp-tile{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);border-radius:8px;padding:8px 10px;flex-direction:column;gap:2px;display:flex;min-width:0}
-.ccp-tileLabel{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5}
+.ccp-tileLabel{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .ccp-tileValue{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4;font-variant-numeric:tabular-nums}
-.ccp-tileSub{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ccp-tileSub{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Quota bars: the monthly bar and the two windows. */
 .ccp-windows{flex-direction:column;gap:14px;display:flex}
@@ -127,16 +127,16 @@ export const PANEL_CSS = `
 .ccp-windowLabel{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;line-height:1.5}
 .ccp-windowValue{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;white-space:nowrap}
 .ccp-windowPct{color:var(--dsw-alias-label-primary);min-width:38px;text-align:right;font-size:12px;font-weight:600;line-height:1.5;font-variant-numeric:tabular-nums}
-.ccp-warnTag{white-space:nowrap;background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-module-platform));color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-secondary));border-radius:999px;padding:0 8px;font-size:11px;font-weight:600;line-height:17px}
+.ccp-warnTag{white-space:nowrap;background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-module-platform));color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-secondary));border-radius:999px;padding:0 8px;font-size:12px;font-weight:600;line-height:17px}
 .ccp-bar{overflow:hidden;background:var(--dsw-alias-bg-layer-1);border-radius:999px;height:8px}
 .ccp-barFill{background:var(--dsw-alias-brand-primary);border-radius:999px;height:100%;transition:width .3s ease}
 .ccp-barFillWarn{background:var(--dsw-alias-state-error-primary)}
-.ccp-windowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:1.5}
+.ccp-windowReset{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
 
-.ccp-badge{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-brand-primary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600;line-height:17px}
+.ccp-badge{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-brand-primary);border-radius:999px;padding:1px 8px;font-size:12px;font-weight:600;line-height:17px}
 .ccp-badgeError{background:transparent;color:var(--dsw-alias-state-error-primary)}
 .ccp-badgeWarn{background:var(--dsw-alias-state-warn-tertiary,var(--dsw-alias-bg-module-platform));color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-secondary))}
-.ccp-badgeMuted{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.ccp-badgeMuted{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:1px 8px;font-size:12px;font-weight:500;line-height:17px;max-width:220px;overflow:hidden;text-overflow:ellipsis}
 
 /* Account switch: plain buttons, like the settings page's usage carousel. */
 .ccp-tabs{flex-wrap:wrap;gap:6px;display:flex}

@@ -162,37 +162,35 @@ test('per-model allowances resolve by the same slug rules as prices', () => {
   // MiniMax M3 is the row the pricing page documents in prose — "The deal is
   // baked into MiniMax M3's boosted per-model allowance: $47 of monthly usage on
   // GOAT, $57 on Pro" — so the snapshot and the page check each other.
-  assert.deepEqual(modelAllowanceFor('MiniMaxAI/MiniMax-M3'), { goat: 47, pro: 57 })
+  assert.deepEqual(modelAllowanceFor('MiniMaxAI/MiniMax-M3'), { go: 8, goat: 47, pro: 57 })
   // Vendor-prefixed catalog id → the page's unprefixed slug.
-  assert.deepEqual(modelAllowanceFor('xai/grok-4.7'), { goat: 20, pro: 30 })
-  assert.deepEqual(modelAllowanceFor('claude-sonnet-5-5'), { goat: 10, pro: 20 })
+  assert.deepEqual(modelAllowanceFor('xai/grok-4.7'), { go: 6, goat: 20, pro: 30 })
+  assert.deepEqual(modelAllowanceFor('claude-sonnet-5-5'), { go: 6, goat: 10, pro: 20 })
   // Unknown ids answer undefined rather than a neighbouring model's figure.
   assert.equal(modelAllowanceFor('a-model-from-the-future'), undefined)
   assert.equal(modelAllowanceFor(''), undefined)
 })
 
-test('every priced catalog model carries both allowance brackets', () => {
-  // The page publishes `planAllowanceUsd` on all 82 estimator records and
-  // nowhere for Go/Provider/Max, so a missing bracket means the sync dropped a
-  // row — the settings page would silently show no allowance for it.
+test('every priced catalog model carries the three published allowance brackets', () => {
+  // 本轮官网为三个套餐分别发布额度；缺项可能是同步丢失，不能以相邻档替代。
   const missing: string[] = []
   for (const id of Object.keys(KNOWN_PLANS)) {
     if (isFreeModel(id) || id.endsWith(':free')) continue
     const allowance = modelAllowanceFor(id)
-    if (allowance === undefined || !Number.isFinite(allowance.goat) || !Number.isFinite(allowance.pro)) {
+    if (allowance === undefined || !Number.isFinite(allowance.go) || !Number.isFinite(allowance.goat) || !Number.isFinite(allowance.pro)) {
       missing.push(id)
     }
   }
   assert.deepEqual(missing, [])
 })
 
-test('only GOAT and Pro map to an allowance bracket', () => {
+test('Go, GOAT and Pro map to their own allowance brackets', () => {
   // Tier weights are the `KNOWN_SUBSCRIPTION_PLANS` scale (go 0 · goat 1 ·
-  // pro 2 · provider 3 · max/ultra 4). Answering for Go/Provider/Max would be a
+  // pro 2 · provider 3 · max/ultra 4). Answering for Provider/Max would be a
   // fabricated figure: the page has no allowance for those plans at all.
   assert.equal(allowanceTierForWeight(1), 'goat')
   assert.equal(allowanceTierForWeight(2), 'pro')
-  assert.equal(allowanceTierForWeight(0), undefined)
+  assert.equal(allowanceTierForWeight(0), 'go')
   assert.equal(allowanceTierForWeight(3), undefined)
   assert.equal(allowanceTierForWeight(4), undefined)
   assert.equal(allowanceTierForWeight(undefined), undefined)

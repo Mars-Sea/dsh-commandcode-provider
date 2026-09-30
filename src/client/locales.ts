@@ -64,6 +64,9 @@ export type SettingsCommandCodeKey =
   | 'invalidNumber'
   | 'numberTooSmall'
   | 'numberTooLarge'
+  | 'durationTooSmall'
+  | 'durationTooLarge'
+  | 'durationInvalid'
   | 'readOnly'
   | 'save'
   | 'saving'
@@ -157,6 +160,8 @@ export type SettingsCommandCodeKey =
   | 'accountNameN'
   | 'accountKeyPlaceholder'
   | 'accountOpFailed'
+  | 'accountCleanupPending'
+  | 'accountCleanupRetry'
   | 'accountModels'
   | 'accountModelsHint'
   | 'accountModelOwner'
@@ -214,7 +219,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   visibleModelsTitle: '模型白名单',
   visibleModelsHint:
     '勾选要保留的模型，模型选择器就只列出这些；一个都不勾选时则显示全部模型。'
-    + '保存后，下次打开模型选择器生效。',
+    + '这里显示网页与终端合并后的有效选择；保存后两端一致，套餐权限仍独立过滤。',
   visibleModelsPick: '选择要保留的模型…',
   visibleModelsCount: '已选 {count} 个模型',
   visibleModelsShowAll: '显示全部',
@@ -223,8 +228,11 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   overridden: '已覆盖',
   reset: '重置',
   invalidNumber: '无效数字',
-  numberTooSmall: '不能小于 1（毫秒）',
-  numberTooLarge: '超出允许上限（2147483647 毫秒）',
+  numberTooSmall: '重试次数不能小于 0',
+  numberTooLarge: '重试次数不能大于 50',
+  durationTooSmall: '不能小于 0.001 秒（1 毫秒）',
+  durationTooLarge: '不能大于 3600 秒',
+  durationInvalid: '请输入秒数，最多保留三位小数',
   readOnly: '当前配置为只读。',
   save: '保存',
   saving: '保存中',
@@ -318,6 +326,8 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   accountNameN: '账户 {n}',
   accountKeyPlaceholder: '粘贴 API 密钥',
   accountOpFailed: '账户操作未能完成，请重试。',
+  accountCleanupPending: '账户已移除，但有密钥尚未清理。可重试，不影响其他账户。',
+  accountCleanupRetry: '重试清理密钥',
   accountModels: '专用模型',
   accountModelsHint: '选中的模型优先由此账户处理，此账户不可用时仍会自动切换。一个模型只属于一个账户，选中会把它从其他账户移过来。',
   accountModelOwner: '属于 {name}',
@@ -379,7 +389,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   visibleModelsHint:
     'Check the models you want to keep, and model pickers will list only those. '
     + 'If nothing is checked, every model is shown. After saving, the change '
-    + 'applies the next time you open a model picker.',
+    + 'applies in both web and terminal settings. This page shows their effective selection; plan access is filtered separately.',
   visibleModelsPick: 'Select models to keep…',
   visibleModelsCount: '{count} model(s) selected',
   visibleModelsShowAll: 'Show all',
@@ -389,8 +399,11 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   overridden: 'Overridden',
   reset: 'Reset',
   invalidNumber: 'Invalid number',
-  numberTooSmall: 'Must be at least 1 (ms)',
-  numberTooLarge: 'Above the allowed maximum (2147483647 ms)',
+  numberTooSmall: 'Retries must be at least 0',
+  numberTooLarge: 'Retries must not exceed 50',
+  durationTooSmall: 'Must be at least 0.001 seconds (1 ms)',
+  durationTooLarge: 'Must not exceed 3600 seconds',
+  durationInvalid: 'Enter seconds with at most three decimal places',
   readOnly: 'Settings are read-only.',
   save: 'Save',
   saving: 'Saving',
@@ -484,6 +497,8 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   accountNameN: 'Account {n}',
   accountKeyPlaceholder: 'Paste an API key',
   accountOpFailed: 'The account change did not complete. Try again.',
+  accountCleanupPending: 'The account was removed, but credential cleanup is still pending. Retry without affecting other accounts.',
+  accountCleanupRetry: 'Retry credential cleanup',
   accountModels: 'Dedicated models',
   accountModelsHint: 'These models prefer this account and still switch when it is unavailable. A model belongs to one account; selecting it here moves it from any other.',
   accountModelOwner: 'on {name}',

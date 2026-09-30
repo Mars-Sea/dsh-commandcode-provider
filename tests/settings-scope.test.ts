@@ -136,6 +136,24 @@ test('a Host-backed scope derives ready state from the directory row', async () 
   await scope.dispose()
 })
 
+test('多字段删除通过一次带版本的宿主变更提交，冲突后恢复真实快照', async () => {
+  const fake = fakeContext()
+  const before = { accounts: [{ label: 'A', apiKeyEnv: 'A_KEY' }], activeAccount: 'A_KEY' }
+  fake.answerDescribe({ writable: true, namespaces: [row({ value: before })] })
+  const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
+  await flush()
+  const ops: SettingsPathOp[] = [
+    { op: 'set', path: ['accounts'], value: [] },
+    { op: 'unset', path: ['activeAccount'] },
+    { op: 'set', path: ['credentialCleanupRefs'], value: ['A_KEY'] },
+  ]
+  fake.answerMutate({ error: 'SETTINGS_CONFLICT' })
+  await scope.mutate!(ops, 3)
+  assert.deepEqual(fake.mutateCalls(), [{ ns: 'llm-commandcode', ops, revision: 3 }])
+  assert.deepEqual(scope.getSnapshot().value, before)
+  await scope.dispose()
+})
+
 test('a namespace missing from the directory reads unavailable', async () => {
   const fake = fakeContext()
   fake.answerDescribe({ writable: true, namespaces: [row({ ns: 'someone-else' })] })

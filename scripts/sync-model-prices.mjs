@@ -31,8 +31,8 @@
  * Each row also carries the page's per-model monthly allowance
  * (`planAllowanceUsd`, identical to `planBudgetUsd` on all 82 rows), which is
  * what the settings page shows next to a model so the user can see how far
- * their plan's credits stretch on it. It exists ONLY for GOAT and Pro; the
- * script asserts that key set rather than trusting it.
+ * their plan's credits stretch on it. Go、GOAT、Pro 分别保留官方数值，
+ * Go 缺失时不猜测；未知套餐维度会阻止整次写入。
  *
  * Usage:
  *   node scripts/sync-model-prices.mjs           # rewrite the rows
@@ -49,7 +49,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 const PRICING_URL = 'https://commandcode.ai/docs/resources/pricing-limits'
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -289,7 +289,7 @@ function renderedRates(html) {
  * @param {Array<Record<string, unknown>>} records - model records from the page.
  * @param {Map<string, number[]>} rendered - the HTML cross-check.
  * @param {Map<string, Record<string, unknown>>} [dealRecords] - the pricing table's records.
- * @returns {Array<{ id: string, rates: number[], listRates?: number[], peak?: number[], allowance?: { goat: number, pro: number }, contextTiers?: unknown[] }>} the rows.
+ * @returns {Array<{ id: string, rates: number[], listRates?: number[], peak?: number[], allowance?: { go?: number, goat: number, pro: number }, contextTiers?: unknown[] }>} the rows.
  */
 function buildRows(records, rendered, dealRecords = new Map()) {
   const rows = []
@@ -336,24 +336,23 @@ function buildRows(records, rendered, dealRecords = new Map()) {
       row.peak = peakRates
     }
 
-    // Per-model monthly allowance, in USD. The page publishes it ONLY for GOAT
-    // and Pro — its own words are "the boost is a per-model allowance, so it
-    // lives on the plans that have them" — so the key set is asserted rather
-    // than trusted: a third tier means the product changed shape and a human
-    // has to decide how the settings page should show it.
+    // 额度与模型权限是独立事实。允许旧来源缺少 Go，但不能填邻档数字；
+    // 发现未知套餐或非法额度时整次失败，避免悄悄删除无法解释的数据。
     const allowance = record.planAllowanceUsd
     if (allowance !== undefined && allowance !== null) {
       if (typeof allowance !== 'object' || Array.isArray(allowance)) {
         problems.push(`  ! ${id}: planAllowanceUsd is not an object (${JSON.stringify(allowance)})`)
       } else {
         const keys = Object.keys(allowance).sort()
-        const expected = ['goat', 'pro']
-        if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
-          problems.push(`  ! ${id}: per-model allowance tiers are [${keys.join(', ')}], expected exactly [goat, pro]`)
-        } else if (keys.some((key) => typeof allowance[key] !== 'number')) {
+        if (!keys.includes('goat') || !keys.includes('pro') || keys.some((key) => !['go', 'goat', 'pro'].includes(key))) {
+          problems.push(`  ! ${id}: per-model allowance tiers are [${keys.join(', ')}], expected [go?, goat, pro]`)
+        } else if (keys.some((key) => typeof allowance[key] !== 'number' || !Number.isFinite(allowance[key]) || allowance[key] < 0)) {
           problems.push(`  ! ${id}: per-model allowance is not numeric (${JSON.stringify(allowance)})`)
         } else {
-          row.allowance = { goat: rate(allowance.goat), pro: rate(allowance.pro) }
+          row.allowance = {
+            ...(allowance.go === undefined ? {} : { go: rate(allowance.go) }),
+            goat: rate(allowance.goat), pro: rate(allowance.pro),
+          }
         }
       }
     }
@@ -461,7 +460,7 @@ function renderRows(rows) {
       const peak = row.peak === undefined ? '' : `, peak: [${row.peak.join(', ')}]`
       const allowance = row.allowance === undefined
         ? ''
-        : `, allowance: { goat: ${row.allowance.goat}, pro: ${row.allowance.pro} }`
+        : `, allowance: { ${row.allowance.go === undefined ? '' : `go: ${row.allowance.go}, `}goat: ${row.allowance.goat}, pro: ${row.allowance.pro} }`
       const tiers = row.contextTiers === undefined ? '' : `, contextTiers: ${JSON.stringify(row.contextTiers)}`
       return `  { id: '${row.id}', rates: [${rates}]${listRates}${peak}${allowance}${tiers} },`
     })
@@ -492,6 +491,15 @@ function replaceRows(source, body) {
   return `${source.slice(0, open + 1)}\n${body}\n]${source.slice(close + 2)}`
 }
 
+/** 未完成交叉校验的数据不能进入候选快照，更不能覆盖已发布的完整数据。 */
+export function buildPriceSnapshot(records, rendered, dealRecords, source) {
+  const { rows, problems } = buildRows(records, rendered, dealRecords)
+  if (problems.length > 0) {
+    throw new Error(`价格数据校验失败，拒绝生成或写入快照：\n${problems.join('\n')}`)
+  }
+  return { next: replaceRows(source, renderRows(rows)), rowCount: rows.length }
+}
+
 async function main() {
   const response = await fetch(PRICING_URL, { redirect: 'follow' })
   if (!response.ok) {
@@ -517,28 +525,26 @@ async function main() {
     )
     process.exit(2)
   }
-  const { rows, problems } = buildRows(records, rendered, extractDealRecords(html))
-  const body = renderRows(rows)
   const source = await readFile(TARGET, 'utf8')
-  const next = replaceRows(source, body)
-
-  if (problems.length > 0) {
-    console.warn('cross-checks that need a human look:')
-    for (const line of problems) console.warn(line)
-  }
+  const { next, rowCount } = buildPriceSnapshot(records, rendered, extractDealRecords(html), source)
 
   if (next === source) {
-    console.log(`model prices are up to date (${rows.length} rows)`)
+    console.log(`model prices are up to date (${rowCount} rows)`)
     return
   }
   if (CHECK_ONLY) {
-    console.error(`model prices are STALE: ${rows.length} rows fetched from the page differ`)
+    console.error(`model prices are STALE: ${rowCount} rows fetched from the page differ`)
     process.exit(1)
   }
   await writeFile(TARGET, next)
   const before = source.split('\n').length
   const after = next.split('\n').length
-  console.log(`rewrote ${rows.length} rows in src/model-prices.ts (${before} -> ${after} lines)`)
+  console.log(`rewrote ${rowCount} rows in src/model-prices.ts (${before} -> ${after} lines)`)
 }
 
-await main()
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exitCode = 2
+  })
+}

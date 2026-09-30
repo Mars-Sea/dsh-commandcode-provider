@@ -113,6 +113,63 @@ function credentials(state: string, apiKey = 'cc_sk_test_key'): CommandCodeLogin
   return { apiKey, state, userId: 'u1', userName: 'mars-sea', keyName: 'cli' }
 }
 
+test('回调后的验证仍受登录总期限约束并中止网络请求', async () => {
+  let signal: AbortSignal | null | undefined
+  let release: (response: Response) => void = () => undefined
+  const pending = new Promise<Response>((resolve) => { release = resolve })
+  let stored = false
+  const flow = new CommandCodeLoginFlow({
+    timeoutMs: 100,
+    fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal
+      return pending
+    }) as typeof fetch,
+    storeKey: async () => { stored = true },
+  })
+  try {
+    const waiting = await flow.begin()
+    const { callbackUrl, state } = parseAuthUrl(waiting.authUrl ?? '')
+    await fetch(callbackUrl, { method: 'POST', body: JSON.stringify(credentials(state)) })
+    const failed = await waitFor(flow, (status) => status.state === 'failed')
+    assert.equal(failed.reason, 'timeout')
+    assert.equal(signal?.aborted, true)
+    // 故意使用忽略取消的网络替身，验证迟到结果也不能落入凭据存储。
+    release(new Response('{}'))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(stored, false)
+    assert.equal(flow.status().reason, 'timeout')
+  } finally {
+    release(new Response('{}'))
+    flow.dispose()
+  }
+})
+
+test('取消回调后的验证会中止请求并保留取消状态', async () => {
+  let signal: AbortSignal | null | undefined
+  let stored = false
+  const flow = new CommandCodeLoginFlow({
+    fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal?.reason), { once: true })
+      })
+    }) as typeof fetch,
+    storeKey: async () => { stored = true },
+  })
+  try {
+    const waiting = await flow.begin()
+    const { callbackUrl, state } = parseAuthUrl(waiting.authUrl ?? '')
+    await fetch(callbackUrl, { method: 'POST', body: JSON.stringify(credentials(state)) })
+    flow.cancel()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(signal?.aborted, true)
+    assert.equal(stored, false)
+    assert.deepEqual(flow.status(), { state: 'failed', reason: 'cancelled' })
+  } finally {
+    flow.dispose()
+  }
+})
+
 test('studio base mapping pairs each API base with the CLI-matching studio', () => {
   assert.equal(studioBaseForApiBase('https://api.commandcode.ai'), 'https://commandcode.ai')
   assert.equal(studioBaseForApiBase('https://staging-api.commandcode.ai'), 'https://staging.commandcode.ai')

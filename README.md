@@ -144,7 +144,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.2.0-rc.2**. Its `@deepseek-ai/dsh-*` peer range is `^0.2.0-rc.2` (semver resolves that to 0.2.0-rc.2 alone), and `dsh.compatibility.dshReleases` records that single release. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
+**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.2.0-rc.2**. Its `@deepseek-ai/dsh-*` peers use the exact version `0.2.0-rc.2`, and `dsh.compatibility.dshReleases` records that single release. Adjacent prereleases and stable patch versions have not been verified. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
 
 ## Usage dashboard
 
@@ -301,3 +301,7 @@ MIT — see [LICENSE](./LICENSE). Portions ported from [pi-commandcode-provider]
 **Settings page** — the account list with live quota, model visibility, privacy switches and connection options:
 
 <img src="assets/screenshots/settings-page.png" alt="Command Code settings page with the account usage card" width="640">
+
+### Package entry points
+
+The package exports the plugin root, `/client`, `/locale/*.json`, and `/package.json`. Source remains in the repository; the unpackaged `./src/*` export was removed. `npm run test:pack` checks declared entry points against the actual packed file list.

@@ -23,6 +23,8 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
+import { MAX_TIMEOUT_SECONDS } from './timeout-limits.ts'
+import { modelIsVisible } from './model-visibility.ts'
 
 import type { AttachmentStore, ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 
@@ -570,10 +572,7 @@ function parseOutputCeiling(detail: string): number | undefined {
 /**
  * The advice floor for a Provider-API timeout: doubling a 60 s budget is still
  * short for a slow upstream first token, so the suggestion never goes below 5
- * minutes. Capped by `RETRY_MAX_DELAY_MS` rather than the schema's timer
- * ceiling on purpose — a single header wait that outlasts the whole retry
- * backoff is not a budget, and clamping to the engine constant would also pull
- * a runtime dependency into the bundle.
+ * minutes. 提示上限与页面可编辑范围相同，重试退避上限不约束单次请求。
  */
 const MIN_SUGGESTED_TIMEOUT_MS = 300_000
 
@@ -602,11 +601,12 @@ export function headersTimeoutAdvice(
   timeoutMs: number,
 ): { cause: 'gateway' | 'upstream-first-token'; suggestionMs?: number } {
   if (protocol === 'openai') {
+    const suggestionMs = Math.min(MAX_TIMEOUT_SECONDS * 1000, Math.max(timeoutMs * 2, MIN_SUGGESTED_TIMEOUT_MS))
     return {
       cause: 'upstream-first-token',
       // That route charges the upstream's time-to-first-token to this wait, so
       // a larger budget is the one thing that can help when it expires.
-      suggestionMs: Math.min(RETRY_MAX_DELAY_MS, Math.max(timeoutMs * 2, MIN_SUGGESTED_TIMEOUT_MS)),
+      ...(suggestionMs > timeoutMs ? { suggestionMs } : {}),
     }
   }
   return { cause: 'gateway' }
@@ -1078,7 +1078,7 @@ function parseCatalogResponse(value: unknown, apiBase: string): CommandCodeModel
   return models
 }
 
-async function readModelsCache(cachePath: string, apiBase: string): Promise<CommandCodeModel[]> {
+async function readModelsCache(cachePath: string, apiBase: string, restorePublished = true): Promise<CommandCodeModel[]> {
   const parsed: unknown = JSON.parse(await readFile(cachePath, 'utf-8'))
   // Earlier cache files did not identify their gateway. Even the default path
   // may have been written by a custom apiBase, so an unscoped file is unsafe.
@@ -1086,7 +1086,7 @@ async function readModelsCache(cachePath: string, apiBase: string): Promise<Comm
     || parsed.apiBase !== apiBase || !Array.isArray(parsed.models)) {
     throw new Error(`Invalid model cache at ${cachePath}`)
   }
-  publishedOutputLimits.set(apiBase, new Map())
+  if (restorePublished) publishedOutputLimits.set(apiBase, new Map())
   // Normalize rather than trust the file: a hand-edited or fixture cache may
   // omit `supported_endpoints`, and an absent list must degrade to the
   // `claude-*` prefix rule instead of routing Claude to the wrong transport.
@@ -1104,7 +1104,7 @@ async function readModelsCache(cachePath: string, apiBase: string): Promise<Comm
     // conclusion (issue #71).
     const id = stringValue(model.id)
     const published = numberValue(model.publishedMaxTokens)
-    if (id !== undefined && published !== undefined && published > 0) {
+    if (restorePublished && id !== undefined && published !== undefined && published > 0) {
       outputLimitsFor(publishedOutputLimits, apiBase).set(id, published)
     }
     const contextWindow = numberValue(model.contextWindow)
@@ -1113,7 +1113,7 @@ async function readModelsCache(cachePath: string, apiBase: string): Promise<Comm
       supportedEndpoints: endpoints,
       maxTokens: id === undefined || contextWindow === undefined
         ? numberValue(model.maxTokens) ?? DEFAULT_MAX_OUTPUT_TOKENS
-        : Math.min(contextWindow, modelOutputTokenLimit(apiBase, id)),
+        : Math.min(contextWindow, modelOutputTokenLimit(apiBase, id), published !== undefined && published > 0 ? published : Infinity),
     } as unknown as CommandCodeModel
   })
 }
@@ -2594,6 +2594,15 @@ interface RequestContextBudget {
   maxTokens: number
   /** The originally requested reservation would press against the known window. */
   sizePressure: boolean
+  /**
+   * The output reservation was clamped all the way down to the emergency
+   * floor (`available <= floor`), not merely trimmed below what was asked
+   * for. `sizePressure` alone is too coarse to gate a fatal-vs-recoverable
+   * classification on: it can be true while `maxTokens` still sits well
+   * above the floor, where a length finish is an ordinary verbose overrun,
+   * not proof the window pinned this request's budget to nothing.
+   */
+  floored: boolean
 }
 
 /**
@@ -2642,7 +2651,7 @@ function requestContextBudget(
   contextWindow: number | undefined,
   requestedMaxTokens: number,
 ): RequestContextBudget {
-  if (contextWindow === undefined) return { maxTokens: requestedMaxTokens, sizePressure: false }
+  if (contextWindow === undefined) return { maxTokens: requestedMaxTokens, sizePressure: false, floored: false }
   const estimatedInput = estimateWireInputTokens(protocol, body, messages, model)
   const headroom = Math.min(16_384, Math.max(2_048, Math.ceil(contextWindow * 0.02)))
   const available = Math.floor(contextWindow - estimatedInput - headroom)
@@ -2654,6 +2663,10 @@ function requestContextBudget(
     maxTokens: Math.min(requestedMaxTokens, Math.max(floor, available)),
     sizePressure: estimatedInput >= contextWindow / 4
       && estimatedInput + requestedMaxTokens + headroom >= contextWindow,
+    // `available <= floor` is exactly when the min/max above resolves to
+    // `floor`: the emergency reservation bound the request, not the caller's
+    // own smaller `requestedMaxTokens`.
+    floored: available <= floor,
   }
 }
 
@@ -2678,6 +2691,44 @@ interface GenerateConnectDeps {
   timing: RequestTiming
   /** Observe headers even on rejected attempts before rotation/fallback. */
   onResponse: (response: Response) => void
+}
+
+/** 错误正文只供诊断与分类使用，不能让坏网关占满内存或无限拖住重试。 */
+async function readGenerateErrorBody(response: Response, abort: AbortController, timeoutMs: number): Promise<string> {
+  if (response.body === null) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let bytes = 0
+  const limit = 64 * 1024
+  let removeAbort: () => void = () => undefined
+  const stopped = new Promise<undefined>((resolve) => {
+    if (abort.signal.aborted) resolve(undefined)
+    else abort.signal.addEventListener('abort', onAbort, { once: true })
+    function onAbort() { resolve(undefined) }
+    removeAbort = () => abort.signal.removeEventListener('abort', onAbort)
+  })
+  // 独立约束错误正文；正常长时间生成仍只受流空闲期限控制。
+  const timer = setTimeout(() => abort.abort(), Math.min(timeoutMs, 30_000))
+  try {
+    while (bytes < limit) {
+      const read = await Promise.race([reader.read(), stopped])
+      if (read === undefined || read.done) break
+      const remaining = limit - bytes
+      text += decoder.decode(read.value.subarray(0, remaining), { stream: true })
+      bytes += read.value.byteLength
+    }
+    return text + decoder.decode()
+  } catch {
+    // 已收到的片段仍可能带有账户拒绝或限流证据，读取失败不丢掉它。
+    return text + decoder.decode()
+  } finally {
+    clearTimeout(timer)
+    removeAbort()
+    // cancel 的底层实现也可能挂起，不能把资源清理变成另一处无限等待。
+    void reader.cancel().catch(() => undefined)
+    reader.releaseLock()
+  }
 }
 
 /**
@@ -2791,8 +2842,13 @@ async function connectGenerate(
 
   deps.onResponse(response)
   if (!response.ok) {
-    const errText = await response.text().catch(() => '')
-    cleanup()
+    let errText: string
+    try {
+      errText = await readGenerateErrorBody(response, connectAbort, connection.requestTimeoutMs)
+      if (options.signal?.aborted) throw options.signal.reason ?? new DOMException('已取消请求', 'AbortError')
+    } finally {
+      cleanup()
+    }
     const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
     // exactOptionalPropertyTypes: the key must be absent, not undefined.
     return retryAfterMs === undefined
@@ -2827,6 +2883,8 @@ interface BlockAssembler {
   openAiToolCalls: Array<{ index: number; id?: string; name: string; arguments: string }>
   /** Messages-transport block state, keyed by the wire `index`. */
   messagesBlocks: Map<number, MessagesBlockState>
+  /** Messages 的用量分散在开始与增量事件中，缺失字段保留此前累计值。 */
+  messagesUsage: TokenUsage | undefined
   /**
    * Per-emitted-block replay metadata, indexed by the harness chunk index.
    * Only the Messages transport records entries (the thinking `signature`);
@@ -2861,6 +2919,7 @@ function createBlockAssembler(): BlockAssembler {
     cliCacheWriteTokens: undefined,
     openAiToolCalls: [],
     messagesBlocks: new Map(),
+    messagesUsage: undefined,
     replayBlocks: [],
   }
 }
@@ -2907,7 +2966,12 @@ function* emitOpenAiToolCalls(asm: BlockAssembler): Generator<StreamChunk> {
 
 export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private catalog: CommandCodeModel[] = []
-  private catalogState: { source: string; expiresAt: number; inflight?: Promise<CommandCodeModel[]> } | undefined
+  private catalogState: {
+    source: string
+    expiresAt: number
+    inflight?: Promise<CommandCodeModel[]>
+    disk?: Promise<CommandCodeModel[]>
+  } | undefined
   private readonly fetchImpl: typeof fetch
   private readonly resolveAttachments: ResolveAttachments | undefined
   /**
@@ -3065,7 +3129,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   }
 
   /** 地址或缓存文件变化时丢弃旧目录，防止旧网关的路由声明影响新请求。 */
-  private currentCatalogState(connection = this.deps.options()) {
+  private currentCatalogState(connection: CommandCodeConnectionOptions = this.deps.options()) {
     const { apiBase, modelsCachePath } = connection
     const source = JSON.stringify([apiBase, modelsCachePath])
     if (this.catalogState?.source !== source) {
@@ -3073,6 +3137,19 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       this.catalogState = { source, expiresAt: 0 }
     }
     return this.catalogState
+  }
+
+  /** 直接生成也使用本地可信目录，不额外联网；并发冷请求共用一次文件读取。 */
+  private async catalogForGenerate(connection: CommandCodeConnectionOptions): Promise<CommandCodeModel[]> {
+    const state = this.currentCatalogState(connection)
+    if (this.catalog.length > 0 || state.expiresAt > 0) return this.catalog
+    // 本地读取不能覆盖并发联网刷新刚取得的全局输出上限。
+    state.disk ??= readModelsCache(connection.modelsCachePath, connection.apiBase, false).catch(() => [])
+    const cached = await state.disk
+    if (this.catalogState !== state) return cached
+    if (this.catalog.length > 0 || state.expiresAt > 0) return this.catalog
+    if (state.inflight === undefined) this.catalog = cached
+    return cached
   }
 
   /** 共享一次刷新；调用者取消只结束自己的等待，不取消其他调用者的请求。 */
@@ -3160,17 +3237,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // flag, which cannot express "this id is in the list"). Both are defined
     // on {@link CommandCodeConnectionOptions}.
     const visible = this.deps.options().visibleModels
-    const allow = Array.isArray(visible) && visible.length > 0
-      ? new Set(visible.filter((id) => typeof id === 'string' && id !== ''))
-      : undefined
+    const allow = Array.isArray(visible) ? visible.filter((id) => typeof id === 'string' && id !== '') : []
     const overrides = this.deps.options().modelVisibility
     return catalog
       .filter((model) => modelVisibleForAnyAccount(model.id, accesses))
-      .filter((model) => {
-        const override = overrides?.[model.id]
-        if (typeof override === 'boolean') return override
-        return allow === undefined || allow.has(model.id)
-      })
+      .filter((model) => modelIsVisible(model.id, allow, overrides))
       .map(toInfo)
       // The picker renders rows in the order returned: sort by plan tier
       // (Go first, … Provider last) so the models a Go-plan user can actually
@@ -3182,9 +3253,8 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * The per-model allowance bracket this account POOL falls into, or undefined
    * when there is nothing honest to show.
    *
-   * The pricing page publishes a per-model monthly allowance for GOAT and Pro
-   * only — its own words are "the boost is a per-model allowance, so it lives on
-   * the plans that have them" — so a pool whose highest plan is Go, Provider,
+   * The pricing page publishes per-model monthly allowances for Go, GOAT and
+   * Pro. A pool whose highest plan is Provider,
    * Max or Ultra gets undefined rather than a neighbouring tier's figure. Taking
    * the HIGHEST tier matches the question the picker already answers for a pool
    * (see `modelVisibleForAnyAccount`): what the user can reach, not what the one
@@ -3192,7 +3262,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * too — an unreachable billing endpoint yields undefined, which hides the
    * allowance instead of inventing one.
    */
-  async allowanceTier(): Promise<'goat' | 'pro' | undefined> {
+  async allowanceTier(): Promise<'go' | 'goat' | 'pro' | undefined> {
     const accesses = await this.loadPoolBillingAccess()
     if (accesses === undefined) return undefined
     let highest: number | undefined
@@ -3202,7 +3272,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       if (highest === undefined || weight > highest) highest = weight
     }
     // `allowanceTierForWeight` owns the weight → bracket mapping (and the
-    // decision that Go, Provider, Max and Ultra have no bracket at all), so this
+    // decision that Provider, Max and Ultra have no bracket at all), so this
     // method only has to answer "what is the highest plan in the pool?".
     return allowanceTierForWeight(highest)
   }
@@ -3752,10 +3822,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const finishCredentials = timing.phase('credentials')
     let apiKey: string
     try { apiKey = await this.deps.resolveApiKey(connection, options.model) } finally { finishCredentials() }
-    // Cap maxTokens from the in-memory catalog: it warms via listModels /
-    // resolveModel on picker paths, and a fresh-process catalog must not add
-    // a models fetch (and its failure modes) in front of every generate.
-    const modelEntry = this.catalog.find((m) => m.id === options.model)
+    // 内存未预热时使用同网关的版本化磁盘目录；缺失仍保持原来的直接
+    // 生成路径，不引入模型接口请求或新的联网失败点。
+    const catalog = await this.catalogForGenerate(connection)
+    options.signal?.throwIfAborted()
+    const modelEntry = catalog.find((m) => m.id === options.model)
     // A catalog that has not warmed yet must still respect the model's own
     // output ceiling: the Messages endpoint refuses a `max_tokens` above it by
     // name, and falling back to the global default here would fail every first
@@ -3775,7 +3846,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       DEFAULT_GENERATE_MAX_TOKENS,
     )
     let maxTokens = requestedMaxTokens
-    let contextBudget: RequestContextBudget = { maxTokens, sizePressure: false }
+    let contextBudget: RequestContextBudget = { maxTokens, sizePressure: false, floored: false }
 
     const effort = options.reasoningEffort as string | undefined
     const supported = KNOWN_EFFORTS[options.model]
@@ -4070,16 +4141,25 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     let usage: TokenUsage | undefined
     let usageEmitted = false
     let endRecorded = false
+    let protocolStopped = false
     // Do not publish success until the assembled answer has been checked.
     // DSH converts an adapter throw into an error finish; throwing AFTER a
     // success finish would violate its single-terminal-event contract.
     function* handle(event: unknown): Generator<StreamChunk> {
       captureResponseIdentifiers(responseMetadata, event)
+      if (protocol === 'messages' && isRecord(event) && event.type === 'message_stop') protocolStopped = true
       for (const chunk of handleEvent(asm, protocol, event)) {
         if (chunk.type === 'finish') finish = chunk
         else if (chunk.type === 'usage') usage = chunk.usage
         else yield chunk
       }
+    }
+    function* handleLine(line: string): Generator<StreamChunk> {
+      if (protocol === 'openai' && line.trim().replace(/^data:\s*/, '') === '[DONE]') {
+        protocolStopped = true
+        return
+      }
+      yield* handle(parseStreamEventLine(line))
     }
     try {
       for (;;) {
@@ -4131,7 +4211,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           if (buffer.trim()) {
             // The final line may lack its trailing newline; it uses the same
             // terminal validation as events parsed in the line loop.
-            yield* handle(parseStreamEventLine(buffer))
+            yield* handleLine(buffer)
           }
           break
         }
@@ -4149,9 +4229,12 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
         for (const line of lines) {
-          yield* handle(parseStreamEventLine(line))
+          yield* handleLine(line)
+          if (protocolStopped) break
         }
-        if (finish !== undefined) break
+        // OpenAI 的 finish_reason 之后还可能有独立用量包；Messages 在
+        // message_stop 才结束。CLI 的 finish 则本身就是协议终止事件。
+        if (protocolStopped || (protocol === 'cli' && finish !== undefined)) break
       }
       // Preserve the provider's usage even when this attempt fails. Usage is
       // cumulative, so only the latest sample is emitted, before the terminal.
@@ -4160,9 +4243,17 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         yield { type: 'usage', usage }
       }
       if (finish !== undefined) {
-        const failure = asm.sawContent ? undefined : emptyCompletionError(asm.finishReason, maxTokens, usage)
+        const failure = asm.sawContent
+          ? undefined
+          : emptyCompletionError(asm.finishReason, maxTokens, usage, contextBudget.floored)
         trace.record('end', {
-          outcome: failure === undefined ? 'finished' : failure.code === 'OUTPUT_TOKEN_LIMIT' ? 'output-token-limit' : 'empty',
+          outcome: failure === undefined
+            ? 'finished'
+            : failure.code === 'OUTPUT_TOKEN_LIMIT'
+              ? 'output-token-limit'
+              : failure.code === CONTEXT_WINDOW_EXCEEDED_CODE
+                ? 'context-window-exceeded'
+                : 'empty',
           finishReason: asm.finishReason,
           ...(failure === undefined ? {} : { code: failure.code }),
           maxTokens,
@@ -4463,8 +4554,17 @@ function generateHttpError(
       { status: 413 },
     )
   }
+  // 上游正文可能回显输入或返回整页英文错误；仅展示中文解释和有界错误码。
+  // 分类仍使用上面的原始正文，不能因为收敛展示文案改变重试与压缩行为。
+  const diagnosticCode = parsed.code ?? /^\s*(MODEL_NOT_IN_PLAN|INSUFFICIENT_CREDITS|USAGE_EXCEEDED|PREMIUM_CREDITS_EXHAUSTED)\b/i.exec(parsed.message ?? '')?.[1]
+  const diagnostic = diagnosticCode !== undefined && /^[A-Za-z0-9_.:-]{1,80}$/.test(diagnosticCode)
+    ? `（${diagnosticCode}）` : ''
   return new LlmError(
-    `Command Code API error ${status}${detail === `HTTP ${status}` ? '' : ` (${detail})`}: ${errText.slice(0, 500)}`,
+    `Command Code 请求失败（HTTP ${status}）${diagnostic}：`
+      + (status === 429 ? '请求受到用量或速率限制，请稍后重试并检查账户额度。'
+        : status === 408 ? '服务端处理超时，请稍后重试。'
+          : status >= 500 ? '上游服务暂时无法完成请求，请稍后重试。'
+          : '服务端拒绝了本次请求，请检查模型、套餐和请求设置。'),
     httpErrorCode(status),
     {
       status,
@@ -4714,14 +4814,14 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
  * cache_read_input_tokens, output_tokens, output_tokens_details:
  * { thinking_tokens } }`, plus gateway additions the meter ignores.
  */
-function mapMessagesUsage(raw: unknown): TokenUsage | undefined {
+function mapMessagesUsage(raw: unknown, previous?: TokenUsage): TokenUsage | undefined {
   if (!isRecord(raw)) return undefined
-  const inputTokens = numberValue(raw.input_tokens) ?? 0
-  const outputTokens = numberValue(raw.output_tokens) ?? 0
-  const cacheRead = numberValue(raw.cache_read_input_tokens) ?? 0
-  const cacheWrite = numberValue(raw.cache_creation_input_tokens) ?? 0
+  const inputTokens = numberValue(raw.input_tokens) ?? previous?.inputTokens ?? 0
+  const outputTokens = numberValue(raw.output_tokens) ?? previous?.outputTokens ?? 0
+  const cacheRead = numberValue(raw.cache_read_input_tokens) ?? previous?.cacheReadTokens ?? 0
+  const cacheWrite = numberValue(raw.cache_creation_input_tokens) ?? previous?.cacheWriteTokens ?? 0
   const details = isRecord(raw.output_tokens_details) ? raw.output_tokens_details : undefined
-  const reasoningTokens = numberValue(details?.thinking_tokens)
+  const reasoningTokens = numberValue(details?.thinking_tokens) ?? previous?.reasoningTokens
   const usage: TokenUsage = {
     inputTokens: Math.max(0, inputTokens),
     outputTokens,
@@ -4759,7 +4859,10 @@ function handleMessagesEvent(asm: BlockAssembler, event: unknown): StreamChunk[]
     case 'message_start': {
       const message = isRecord(event.message) ? event.message : undefined
       const usage = mapMessagesUsage(message?.usage)
-      if (usage) chunks.push({ type: 'usage', usage })
+      if (usage) {
+        asm.messagesUsage = usage
+        chunks.push({ type: 'usage', usage })
+      }
       break
     }
     case 'content_block_start': {
@@ -4853,12 +4956,16 @@ function handleMessagesEvent(asm: BlockAssembler, event: unknown): StreamChunk[]
       const delta = isRecord(event.delta) ? event.delta : undefined
       const reason = stringValue(delta?.stop_reason)
       if (reason !== undefined) asm.finishReason = reason
-      const usage = mapMessagesUsage(event.usage)
-      if (usage) chunks.push({ type: 'usage', usage })
-      chunks.push({ type: 'finish', reason: mapFinishReason(reason) })
+      const usage = mapMessagesUsage(event.usage, asm.messagesUsage)
+      if (usage) {
+        asm.messagesUsage = usage
+        chunks.push({ type: 'usage', usage })
+      }
       break
     }
     case 'message_stop':
+      chunks.push({ type: 'finish', reason: mapFinishReason(asm.finishReason) })
+      break
     case 'ping':
       break
     case 'error':
@@ -4917,9 +5024,28 @@ function mapFinishReason(reason: unknown): FinishReason {
 }
 
 /** A terminal marker without text or tools is a failed attempt, not a completed turn. */
-function emptyCompletionError(reason: string | undefined, maxTokens: number, usage: TokenUsage | undefined): LlmError {
+function emptyCompletionError(
+  reason: string | undefined, maxTokens: number, usage: TokenUsage | undefined, floored: boolean,
+): LlmError {
   const detail = `finish_reason=${reason ?? 'unknown'}, max_tokens=${maxTokens}, outputTokens=${usage?.outputTokens ?? 'unknown'}, reasoningTokens=${usage?.reasoningTokens ?? 'unknown'}`
   if (mapFinishReason(reason).kind === 'max-tokens') {
+    // `floored` means requestContextBudget() clamped this request's own
+    // reservation to its emergency floor because the estimated input already
+    // pressed against the model window (issue #73): telling the caller to
+    // "raise the output budget" is wrong advice when the window, not the
+    // configured max_tokens, pinned the reservation. Route it through the
+    // harness's compaction-and-retry recovery instead, the same as an
+    // explicit provider overflow signal (see generateHttpError's sizePressure
+    // branch) — shrinking the input on retry is what actually frees room.
+    if (floored) {
+      return bilingual(
+        CONTEXT_WINDOW_EXCEEDED_CODE,
+        `Command Code reached the output token limit while the request was pressed against the model`
+        + ` context window (${detail}) — the session is being compacted and the request retried`,
+        `Command Code 在贴近模型上下文窗口时达到输出 token 上限，未生成正文或工具调用（${detail}）`
+        + `——正在压缩上下文后重试；如仍失败，请新建会话或减少上下文`,
+      )
+    }
     // A length finish proves a generation limit, not how all tokens were spent.
     // Keep this outside the retry whitelist: replaying the identical budget
     // can repeatedly charge for reasoning without ever producing an answer.

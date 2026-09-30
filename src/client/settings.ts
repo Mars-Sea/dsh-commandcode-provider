@@ -17,6 +17,10 @@
  * accepted write.
  */
 
+import { MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS } from '../timeout-limits.ts'
+import { modelIsVisible, readVisibility } from '../model-visibility.ts'
+import type { SettingsPathOp } from './settings-scope.ts'
+
 /** The settings namespace the plugin registers (host half, src/index.ts). */
 export const COMMANDCODE_NS = 'llm-commandcode'
 /** Default credential reference the plugin resolves when none is named. */
@@ -39,6 +43,8 @@ export interface SettingsScope<T> {
   subscribe(listener: () => void): () => void
   set(field: string, value: unknown): Promise<void>
   unset(field: string): Promise<void>
+  /** 多字段共用一次宿主版本检查；缺少此能力时不能安全删除账户。 */
+  mutate?(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void>
 }
 
 /** Result envelope returned by one current Typert Remote call. */
@@ -115,7 +121,7 @@ export interface CatalogModelOption {
   tier?: string
   /**
    * Per-model MONTHLY allowance in USD, already resolved Host-side against the
-   * account pool's highest plan (only GOAT and Pro publish one). Undefined for
+   * account pool's highest plan (Go, GOAT and Pro publish one). Undefined for
    * plans without an allowance, for models the page has no row for, and for
    * older Hosts — the row then shows no allowance instead of a guess.
    */
@@ -183,8 +189,12 @@ export interface SettingsPageState {
   accountBusy: boolean
   /** The last immediate account operation that failed (cleared by the next one). */
   accountFailed: AccountOperation | undefined
+  /** 已移除账户的待清理凭据引用，来自持久化配置，刷新后仍能重试。 */
+  pendingCredentialCleanup: string[]
   /** Effective visible-model allowlist: staged draft or stored value. Empty = show all. */
   visibleModels: string[]
+  /** 区分不受限制与终端显式隐藏全部；不能用空数组推断显示全部。 */
+  visibleModelsAll: boolean
   /** The catalog the model editors offer (Host-side, empty until loaded). */
   catalogModels: CatalogModelOption[]
   /** Whether the catalog fetch failed (editors fall back to typing). */
@@ -287,33 +297,30 @@ function booleanField(field: string): FieldSpec {
  * still carry a larger value; `secondsField` displays that true number rather
  * than silently clamping, it just cannot be re-typed here.
  */
-export const MIN_TIMEOUT_SECONDS = 1
-export const MAX_TIMEOUT_SECONDS = 3600
+export { MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS } from '../timeout-limits.ts'
 
 /**
- * A duration field the user edits in WHOLE SECONDS.
+ * 秒制输入保留毫秒精度，兼容已有 1500ms、1ms 等配置。
  *
  * Milliseconds are the wrong unit to show: the defaults are 300000 and the
  * ceiling is 2147483647, so the page asked users to do arithmetic to answer
  * "how long is a reasonable wait". `format` divides, `parse` multiplies, and
  * the stored value never leaves milliseconds.
  *
- * Decimals are refused rather than rounded. "1.5" is a format the control does
- * not accept, and silently storing 1000 or 2000 for it would make the saved
- * profile disagree with the box it was typed in.
+ * 最多三位小数；不接受更多位数后悄悄取整，避免页面与存储不一致。
  */
 function secondsField(field: string, bounds: { min: number; max: number }): FieldSpec {
   return {
     field,
-    format: (value) => (typeof value === 'number' ? String(Math.round(value / 1000)) : ''),
+    format: (value) => (typeof value === 'number' ? String(value / 1000) : ''),
     parse: (text) => {
       const trimmed = text.trim()
       if (trimmed === '') return { kind: 'clear' }
       const parsed = Number(trimmed)
-      if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return { kind: 'invalid', reason: 'format' }
+      if (!Number.isFinite(parsed) || !/^-?(?:\d+(?:\.\d{1,3})?|\.\d{1,3})$/.test(trimmed)) return { kind: 'invalid', reason: 'format' }
       if (parsed < bounds.min) return { kind: 'invalid', reason: 'tooSmall' }
       if (parsed > bounds.max) return { kind: 'invalid', reason: 'tooLarge' }
-      return { kind: 'set', value: parsed * 1000 }
+      return { kind: 'set', value: Math.round(parsed * 1000) }
     },
   }
 }
@@ -495,7 +502,9 @@ export class CommandCodeSettingsController {
       accountModels: Object.fromEntries(accountModelMap(this.storedRules())),
       accountBusy: this.accountPending > 0,
       accountFailed: this.accountFailed,
+      pendingCredentialCleanup: this.cleanupRefs(),
       visibleModels: this.effectiveVisibleModels(),
+      visibleModelsAll: this.visibleModelsDraft === undefined ? this.storedShowsAll() : this.visibleModelsDraft.length === 0,
       catalogModels: this.catalogModels,
       catalogFailed: this.catalogFailed,
       dirty: plan.length > 0 || this.visibleModelsDirty(),
@@ -550,6 +559,10 @@ export class CommandCodeSettingsController {
 
   /** Write every staged edit, then re-read the Host's accepted state. */
   async save(): Promise<void> {
+    // 草稿对象每次编辑都会替换。保存完成只清理本次捕获的对象，
+    // 网络等待期间新增或重置的草稿仍由用户继续保存。
+    const submitted = new Map(this.staged)
+    const submittedVisible = this.visibleModelsDraft
     const plan = this.plan()
     const visibleRuns = this.visibleModelsPlan()
     if ((plan.length === 0 && visibleRuns.length === 0) || this.saving) return
@@ -581,8 +594,10 @@ export class CommandCodeSettingsController {
     this.failed = !landed
     if (landed) {
       this.savedCount += 1
-      this.staged.clear()
-      this.visibleModelsDraft = undefined
+      for (const [field, draft] of submitted) {
+        if (this.staged.get(field) === draft) this.staged.delete(field)
+      }
+      if (this.visibleModelsDraft === submittedVisible) this.visibleModelsDraft = undefined
     } else {
       this.reconcileStaging()
     }
@@ -645,22 +660,70 @@ export class CommandCodeSettingsController {
   }
 
   /**
-   * Remove one stored extra account now: its stored key, its dedicated
-   * models and a pin naming it go with it, so nothing orphaned remains.
+   * 账户、路由、固定账户与清理队列一起提交；随后才删密钥。
+   * 跨服务不能构造事务，持久化队列让中断或凭据失败后仍可重试。
    */
   removeAccount(ref: string): Promise<boolean> {
     return this.runAccountOp('remove', async () => {
-      if (this.credentialStates.get(ref)?.configured === true && !(await this.unsetKey(ref))) return false
+      if (this.scope.mutate === undefined) return false
+      const existing = this.rawStoredAccounts().some((entry) => entry.apiKeyEnv === ref)
+      if (!existing && !this.cleanupRefs().includes(ref)) return false
+      const snapshot = this.scope.getSnapshot()
       const list = this.rawStoredAccounts().filter((entry) => entry.apiKeyEnv !== ref).map((entry) => ({ ...entry }))
-      if (!(await this.writeAccountList(list))) return false
-      const map = accountModelMap(this.storedRules())
-      if (map.has(ref)) {
-        map.delete(ref)
-        if (!(await this.writeRules(rulesFromMap(map)))) return false
+      const rules = this.storedRules().filter((rule) => rule.account !== ref)
+      const cleanup = [...new Set([...this.cleanupRefs(), ref])]
+      const ops: SettingsPathOp[] = [
+        { op: 'set', path: ['accounts'], value: list },
+        { op: 'set', path: ['modelAccountRules'], value: rules },
+        { op: 'set', path: ['credentialCleanupRefs'], value: cleanup },
+      ]
+      const pinned = this.sectionValue('activeAccount') === ref
+      if (pinned) {
+        // 清除用户层不能重新露出同名继承固定账户；空串明确恢复自动轮换。
+        ops.push(this.baseValue('activeAccount') === ref
+          ? { op: 'set', path: ['activeAccount'], value: '' }
+          : { op: 'unset', path: ['activeAccount'] })
       }
-      if (this.sectionValue('activeAccount') === ref) return this.clear('activeAccount')
-      return true
+      await this.scope.mutate(ops, snapshot.revision)
+      if (this.rawStoredAccounts().some((entry) => entry.apiKeyEnv === ref)
+        || this.storedRules().some((rule) => rule.account === ref)
+        || (pinned && this.sectionValue('activeAccount') === ref)
+        || !this.cleanupRefs().includes(ref)) return false
+
+      return this.cleanRemovedCredential(ref)
     })
+  }
+
+  /** 清理重试不能再次删除同名新账户，配置移除与凭据清理分开调用。 */
+  retryCredentialCleanup(ref: string): Promise<boolean> {
+    return this.runAccountOp('remove', () => this.cleanRemovedCredential(ref))
+  }
+
+  private async cleanRemovedCredential(ref: string): Promise<boolean> {
+    if (!this.cleanupRefs().includes(ref) || this.scope.mutate === undefined) return false
+    if (!(await this.describeAll([ref]))) return false
+    // 重新读取引用事实；继承配置也必须保护，重置用户层后它可能重新生效。
+    const baseAccounts = this.baseValue('accounts')
+    const inherited = Array.isArray(baseAccounts) && baseAccounts.some((entry) =>
+      typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).apiKeyEnv === ref)
+    const referenced = ref === this.credentialRef || inherited
+      || this.rawStoredAccounts().some((entry) => entry.apiKeyEnv === ref)
+      || this.storedRules().some((rule) => rule.account === ref)
+      || this.sectionValue('activeAccount') === ref
+    if (!referenced && this.credentialStates.get(ref)?.configured === true && !(await this.unsetKey(ref))) return false
+    return this.finishCleanup(ref)
+  }
+
+  private cleanupRefs(): string[] {
+    const raw = this.sectionValue('credentialCleanupRefs')
+    return Array.isArray(raw) ? [...new Set(raw.filter((ref): ref is string => typeof ref === 'string' && ref !== ''))] : []
+  }
+
+  private async finishCleanup(ref: string): Promise<boolean> {
+    const snapshot = this.scope.getSnapshot()
+    const refs = this.cleanupRefs().filter((entry) => entry !== ref)
+    await this.scope.mutate?.([{ op: 'set', path: ['credentialCleanupRefs'], value: refs }], snapshot.revision)
+    return !this.cleanupRefs().includes(ref)
   }
 
   /** Store a replacement key now; `target` is `'default'` or an extra account's reference. */
@@ -825,7 +888,7 @@ export class CommandCodeSettingsController {
       if (field === 'apiKey' || staged.clear) continue
       if (staged.text === this.spec(field).format(this.sectionValue(field))) this.staged.delete(field)
     }
-    if (this.visibleModelsDraft !== undefined && sameModels(this.visibleModelsDraft, this.storedVisibleModels())) {
+    if (this.visibleModelsDraft !== undefined && !this.visibleModelsDirty()) {
       this.visibleModelsDraft = undefined
     }
   }
@@ -869,15 +932,17 @@ export class CommandCodeSettingsController {
    * Ask the credentials domain about every reference this page writes, plus
    * `extra` — a key written for an account whose row is not stored yet.
    */
-  private async describeAll(extra: readonly string[] = []): Promise<void> {
+  private async describeAll(extra: readonly string[] = []): Promise<boolean> {
     const refs = [...new Set([this.credentialRef, ...this.storedExtras().map((account) => account.ref), ...extra])]
     let response: Awaited<ReturnType<SettingsPageApi['credentials']['describe']>>
     try {
       response = await this.api.credentials.describe(refs)
     } catch {
-      return
+      return false
     }
-    if (!response.ok) return
+    if (!response.ok) return false
+    // 清理凭据必须取得明确事实，缺少引用项不能解释为“密钥已不存在”。
+    if (extra.some((ref) => typeof response.value?.[ref]?.configured !== 'boolean')) return false
     let changed = false
     for (const ref of refs) {
       const view = response.value?.[ref]
@@ -892,6 +957,7 @@ export class CommandCodeSettingsController {
       }
     }
     if (changed) this.publish()
+    return true
   }
 
   /**
@@ -1016,28 +1082,60 @@ export class CommandCodeSettingsController {
         && after[index].account === item.account)
   }
 
-  /** The stored visible-model allowlist (`visibleModels`); empty = show all. */
-  private storedVisibleModels(): string[] {
+  /** 原始白名单；空列表延续现有的显示全部语义。 */
+  private storedAllowlist(): string[] {
     const raw = this.scope.getSnapshot().value?.visibleModels
     if (!Array.isArray(raw)) return []
     return raw.filter((m): m is string => typeof m === 'string' && m !== '')
   }
 
+  private storedShowsAll(): boolean {
+    return this.storedAllowlist().length === 0
+      && !Object.values(readVisibility(this.scope.getSnapshot().value?.modelVisibility)).includes(false)
+  }
+
+  /** 目录、白名单与显式显示的旧模型一起投影，目录失败不删除旧选择。 */
+  private storedVisibleModels(): string[] {
+    const list = this.storedAllowlist()
+    const flags = readVisibility(this.scope.getSnapshot().value?.modelVisibility)
+    const ids = [...new Set([...list, ...this.catalogModels.map((model) => model.id), ...Object.keys(flags)])]
+    return ids.filter((id) => modelIsVisible(id, list, flags))
+  }
+
   private effectiveVisibleModels(): string[] {
-    return this.visibleModelsDraft ?? this.storedVisibleModels()
+    if (this.visibleModelsDraft === undefined) return this.storedVisibleModels()
+    return this.visibleModelsDraft.length === 0
+      ? this.catalogModels.map((model) => model.id)
+      : this.visibleModelsDraft
   }
 
   private visibleModelsDirty(): boolean {
-    return this.visibleModelsDraft !== undefined
-      && !sameModels(this.visibleModelsDraft, this.storedVisibleModels())
+    if (this.visibleModelsDraft === undefined) return false
+    if (this.visibleModelsDraft.length === 0) return !this.storedShowsAll()
+    return this.storedShowsAll() || !sameModels(this.visibleModelsDraft, this.storedVisibleModels())
   }
 
   private visibleModelsPlan(): Array<() => Promise<boolean>> {
     if (!this.visibleModelsDirty()) return []
+    // 与普通字段一样，在保存开始时冻结提交值，不能延迟读取新草稿。
+    const list = [...(this.visibleModelsDraft ?? [])]
     return [async () => {
-      const list = this.visibleModelsDraft ?? []
-      await this.scope.set('visibleModels', list)
-      return sameModels(this.storedVisibleModels(), list)
+      // 两个配置字段共用一次宿主版本检查。覆盖继承层的全部已知开关，
+      // 不能简单删掉用户字典，否则基础配置里的隐藏项会重新生效。
+      if (this.scope.mutate === undefined) return false
+      const snapshot = this.scope.getSnapshot()
+      const layers = [snapshot.base, snapshot.user, snapshot.value]
+      const keys = new Set<string>()
+      for (const layer of layers) {
+        if (layer === null || typeof layer !== 'object') continue
+        for (const id of Object.keys(readVisibility((layer as Record<string, unknown>).modelVisibility))) keys.add(id)
+      }
+      const flags = Object.fromEntries([...keys].map((id) => [id, list.length === 0 || list.includes(id)]))
+      await this.scope.mutate([
+        { op: 'set', path: ['visibleModels'], value: list },
+        { op: 'set', path: ['modelVisibility'], value: flags },
+      ], snapshot.revision)
+      return list.length === 0 ? this.storedShowsAll() : sameModels(this.storedVisibleModels(), list)
     }]
   }
 

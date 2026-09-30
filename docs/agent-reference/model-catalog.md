@@ -80,11 +80,12 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     (minified variable names change per release — locate them by the `"individual-go"` key; `tierWeight` is
     plugin-added for the picker filter). `subscriptionPlanInfo()` mirrors the CLI's `getPlanInfo`
     longest-prefix matching. Distinct from `KNOWN_PLANS` (model → minimum tier).
-  - Per-model monthly allowance — catalog ID → `{ goat, pro }` USD per MONTH, from the pricing page's
+  - Per-model monthly allowance — catalog ID → `{ go?, goat, pro }` USD per MONTH, from the pricing page's
     `planAllowanceUsd`. It lives in `src/model-prices.ts` beside the price rows (same JSON record, same
-    slug resolution) and is read through `modelAllowanceFor()`; the page publishes it for **GOAT and Pro
-    only**, so `allowanceTierForWeight()` answers `undefined` for Go / Provider / Max / Ultra instead of a
-    neighbouring tier's figure. See [usage and cost](usage-and-cost.md) for how the settings page picks the
+    slug resolution) and is read through `modelAllowanceFor()`; 2026-09-30 已按官网支持 Go、GOAT、Pro。
+    零值展示为零，旧来源缺少 Go 时不猜测；额度与 Provider API 权限独立。
+    同步入口遇到未知维度、无效额度或交叉校验失败会阻止生成与写入，保留旧快照。
+    See [usage and cost](usage-and-cost.md) for how the settings page picks the
     bracket from the account pool.
   - `KNOWN_DEALS` — catalog ID → `{ label, expiresAt?, free? }` from the pricing page's `#deals`.
     **Expiry-aware, badge AND dollars**: `dealLabel()` hides a deal once `Date.now()` passes its
@@ -168,8 +169,10 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     page's Visible models card): a non-empty list narrows `listModels()` to those catalog ids AFTER the plan
     filter; empty/unset shows everything. It never gates named requests (`resolveModel` still serves every
     model). The allowlist is staged through `visibleModelsDraft` in `src/client/settings.ts` (its own
-    draft/dirty/plan/write/reconcile path, one `visibleModels` write) and cleaned of non-strings/blanks at
-    both ends (`storedVisibleModels()` + `resolveAdapterOptions`). `listModels(provider, { unfiltered: true
+    draft/dirty/plan/write/reconcile path, one atomic `visibleModels` + `modelVisibility` mutation) and cleaned of non-strings/blanks at
+    both ends (`storedAllowlist()` + `resolveAdapterOptions`). 网页按目录、白名单与逐模型开关
+    投影实际选择，保存覆盖当前、用户层与基础层的已知开关；显示全部不保留旧隐藏项。
+    目录缺失或失败保留旧选择；版本冲突保留草稿。 `listModels(provider, { unfiltered: true
     })` skips BOTH filters so the `commandcode/models` Remote always serves the full catalog to the page
     editors; the adapter override stays signature-compatible with the base (`_provider` only) via the
     optional second param. `tests/adapter.test.ts` pins the narrowing + unfiltered paths;
@@ -183,8 +186,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     them parses it in `save()`, all N write ops address the same path, and **only the last field's op
     survives**. That silently rewrote the allowlist from the last catalog model instead of the row the user
     toggled (found by driving the real `SettingsForm` over the section). A map gives every checkbox a path
-    of its own. The TUI stages an override only when it DISAGREES with the array (otherwise a `clear`), so
-    toggling back to the inherited state leaves no residue; `readModelVisibility()` drops non-boolean
+    of its own. 终端保存显式布尔值，避免清除用户层后重新继承相反开关；
+    网页和适配器共用 `modelIsVisible()`，终端保留每个模型的独立路径。`readModelVisibility()` drops non-boolean
     entries, so a hand-edited document falls back to the array instead of hiding a model.
     `tests/tui-settings.test.ts` pins the unique-path invariant (a regression test for that bug) and the
     override semantics; `tests/adapter.test.ts` pins the resolution order.

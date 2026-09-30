@@ -152,13 +152,14 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `status === 'idle'`, so a failed fetch never becomes an automatic request
   loop, and the button stays enabled for a manual retry.
 - **Per-model allowance (same rows, different unit)**: each price row also
-  carries the page's `planAllowanceUsd` as `allowance: { goat, pro }` — dollars
+  carries the page's `planAllowanceUsd` as `allowance: { go?, goat, pro }` — dollars
   per MONTH, not per million tokens, so it never enters the price table.
   `modelAllowanceFor(catalogId)` resolves it through the same slug rules the
-  prices use. The page publishes it for **GOAT and Pro only** ("the boost is a
-  per-model allowance, so it lives on the plans that have them"), and the script
-  asserts that key set; `allowanceTierForWeight()` maps a subscription tier
-  weight onto those two brackets and answers `undefined` for Go / Provider / Max
+  prices use. 2026-09-30 已同步官网 Go、GOAT、Pro 额度；原有 83 行价格及 GOAT／Pro 数值无变化。
+  零额度仍显示零；缺失额度不补邻档数字，套餐额度不授予 Provider API 权限。
+  同步脚本遇到未知字段、无效额度或双来源不一致时拒绝生成和写入。
+  `allowanceTierForWeight()` maps a subscription tier
+  weight onto those three brackets and answers `undefined` for Provider / Max
   / Ultra rather than a neighbouring tier's figure. The Host picks the bracket
   from the POOL's highest plan (`adapter.allowanceTier()`, matching what
   `modelVisibleForAnyAccount` already answers) and the settings page's model

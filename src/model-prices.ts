@@ -72,13 +72,14 @@ interface ModelPriceContextTier {
  *
  * This is the page's `planAllowanceUsd`: how much of the plan's monthly credit
  * pool this ONE model may draw. It is not extra money — every allowance draws
- * on the same pool — and the page publishes it for GOAT and Pro only ("the
- * boost is a per-model allowance, so it lives on the plans that have them"), so
- * there is no `go`, `max` or `provider` figure to read. Deals are baked in:
+ * on the same pool. Go、GOAT、Pro 按官网各自的数字展示；旧来源缺少 Go
+ * 时保留缺失状态，零额度也不等于接口权限。
+ * Max／Provider 不借用相邻套餐的额度。Deals are baked in:
  * `MiniMaxAI/MiniMax-M3` carries `$47 / $57` precisely because its 2× promotion
  * is already folded into the allowance.
  */
 export interface ModelAllowance {
+  readonly go?: number
   readonly goat: number
   readonly pro: number
 }
@@ -89,7 +90,7 @@ export interface ModelAllowance {
  * rather than against hard-coded numbers, so this table and the subscription
  * table cannot drift apart silently.
  */
-const ALLOWANCE_TIERS = ['goat', 'pro'] as const
+const ALLOWANCE_TIERS = ['go', 'goat', 'pro'] as const
 
 /**
  * Which allowance bracket a plan-tier weight belongs to, or undefined when that
@@ -97,9 +98,8 @@ const ALLOWANCE_TIERS = ['goat', 'pro'] as const
  *
  * Weights come from `KNOWN_SUBSCRIPTION_PLANS` (go 0 · goat 1 · pro 2 ·
  * provider 3 · max/ultra 4) and {@link PLAN_ORDER} is the same scale, which is
- * what makes the lookup exact: Go, Provider, Max and Ultra have no published
- * allowance, and answering with a neighbouring tier's figure would be a
- * fabricated number rather than a missing one.
+ * what makes the lookup exact: Provider、Max、Ultra
+ * 没有本地额度；缺项时不能用相邻套餐的数字代替。
  */
 export function allowanceTierForWeight(
   tierWeight: number | undefined,
@@ -147,96 +147,89 @@ interface ModelPriceRow {
  * discrepancy is recorded in AGENTS.md rather than papered over here.
  */
 const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
-  { id: 'claude-fable-5', rates: [10, 50, 1, 12.5], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-fable-5-1', rates: [10, 50, 0.25, 12.5], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-haiku-4-5', rates: [1, 5, 0.1, 1.25], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-opus-4-6', rates: [5, 25, 0.5, 6.25], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-opus-4-7', rates: [5, 25, 0.5, 6.25], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-opus-4-8', rates: [5, 25, 0.5, 6.25], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-opus-5', rates: [5, 25, 0.5, 6.25], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-opus-5-5', rates: [4, 20, 0.2, 5], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-sonnet-4-6', rates: [3, 15, 0.3, 3.75], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-sonnet-5', rates: [2, 10, 0.2, 2.5], allowance: { goat: 20, pro: 20 } },
-  { id: 'claude-sonnet-5-5', rates: [2, 10, 0.2, 2.5], allowance: { goat: 10, pro: 20 } },
-  { id: 'deepseek-v4-flash', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006], allowance: { goat: 60, pro: 70 } },
-  { id: 'deepseek-v4-flash-fast', rates: [0.28, 0.56, 0.07], allowance: { goat: 20, pro: 30 } },
-  { id: 'deepseek-v4-flash-vision-exp', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006], allowance: { goat: 20, pro: 30 } },
-  { id: 'deepseek-v4-pro', rates: [0.66, 1.98, 0.022], peak: [1.32, 3.96, 0.044], allowance: { goat: 20, pro: 30 } },
-  { id: 'deepseek-v4.1-flash', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006], allowance: { goat: 60, pro: 70 } },
-  { id: 'deepseek-v4.1-flash-fast', rates: [0.16, 0.58, 0.016], peak: [0.32, 1.16, 0.032], allowance: { goat: 60, pro: 70 } },
-  { id: 'fugu-ultra', rates: [5, 30, 0.5], allowance: { goat: 20, pro: 20 } },
-  { id: 'gemini-3.1-flash-lite', rates: [0.25, 1.5, 0.03], allowance: { goat: 20, pro: 20 } },
-  { id: 'gemini-3.5-flash', rates: [1.5, 9, 0.15], allowance: { goat: 20, pro: 20 } },
-  { id: 'gemini-3.5-flash-lite', rates: [0.3, 2.5, 0.03], allowance: { goat: 20, pro: 20 } },
-  { id: 'gemini-3.6-flash', rates: [1.5, 7.5, 0.15], allowance: { goat: 20, pro: 20 } },
-  { id: 'gemini-3.7-flash', rates: [1.5, 7.5, 0.15, 0.08334], allowance: { goat: 40, pro: 50 } },
-  { id: 'gemini-3.8-flash', rates: [1.5, 7.5, 0.15], allowance: { goat: 40, pro: 50 } },
-  { id: 'glm-5', rates: [1, 3.2, 0.2], allowance: { goat: 20, pro: 30 } },
-  { id: 'glm-5.1', rates: [1.4, 4.4, 0.26], allowance: { goat: 20, pro: 30 } },
-  { id: 'glm-5.2', rates: [1.4, 4.4, 0.26], allowance: { goat: 70, pro: 80 } },
-  { id: 'glm-5.2-fast', rates: [3, 10.25, 0.5], allowance: { goat: 20, pro: 30 } },
-  { id: 'glm-5.3', rates: [1.4, 4.4, 0.26], allowance: { goat: 20, pro: 30 } },
-  { id: 'glm-5.3-flash', rates: [0.15, 0.5, 0.03], allowance: { goat: 40, pro: 50 } },
-  { id: 'glm-5.3-flashx', rates: [0.37, 1.25, 0.075], allowance: { goat: 20, pro: 30 } },
-  { id: 'gpt-5.3-codex', rates: [2, 8, 0.5, 0], allowance: { goat: 20, pro: 20 } },
-  { id: 'gpt-5.4', rates: [2.5, 15, 0.25, 0], allowance: { goat: 20, pro: 20 } },
-  { id: 'gpt-5.4-mini', rates: [0.75, 4.5, 0.075, 0], allowance: { goat: 20, pro: 20 } },
-  { id: 'gpt-5.5', rates: [5, 30, 0.5, 0], allowance: { goat: 20, pro: 20 } },
-  { id: 'gpt-5.6-luna', rates: [0.2, 1.2, 0.02, 0.25], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":272000,"rates":[0.2,1.2,0.02,0.25]},{"rates":[0.4,1.8,0.04,0.5]}] },
-  { id: 'gpt-5.6-sol', rates: [5, 30, 0.5, 6.25], allowance: { goat: 70, pro: 80 }, contextTiers: [{"maxContext":272000,"rates":[5,30,0.5,6.25]},{"rates":[10,45,1,12.5]}] },
-  { id: 'gpt-5.6-terra', rates: [2, 12, 0.2, 2.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,12,0.2,2.5]},{"rates":[4,18,0.4,5]}] },
-  { id: 'gpt-6-astra', rates: [10, 50, 1, 12.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[10,50,1,12.5]},{"rates":[20,75,2,25]}] },
-  // command-code@1.71.0; Max-and-above (see KNOWN_PLANS). Same list rates as its
-  // `gpt-6-sol` predecessor but HALF the cache-read price ($0.10 vs $0.20 per
-  // 1M inside 272K, $0.20 vs $0.40 above it), and no introductory deal.
-  { id: 'gpt-6.1-sol', rates: [2, 10, 0.1, 2.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,10,0.1,2.5]},{"rates":[4,15,0.2,5]}] },
-  { id: 'gpt-6-luna', rates: [0.1, 0.5, 0.01, 0.125], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":272000,"rates":[0.1,0.5,0.01,0.125]},{"rates":[0.2,0.75,0.02,0.25]}] },
-  { id: 'gpt-6-sol', rates: [2, 10, 0.2, 2.5], allowance: { goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,10,0.2,2.5]},{"rates":[4,15,0.4,5]}] },
-  { id: 'grok-4.5', rates: [2, 6, 0.5], allowance: { goat: 20, pro: 30 } },
-  { id: 'grok-4.6', rates: [2, 6, 0.5], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":200000,"rates":[2,6,0.5]},{"rates":[4,12,1]}] },
-  // command-code@1.72.1: the 40%-off launch deal that ran to
-  // 2026-09-27T23:59:59.999Z is gone from the pricing page, which now publishes
-  // this model at its list price directly — so the row carries plain `rates`
-  // with no `listRates` to fall back to, exactly like `grok-4.6` above.
-  { id: 'grok-4.7', rates: [2, 6, 0.5], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":200000,"rates":[2,6,0.5]},{"rates":[4,12,1]}] },
-  { id: 'inkling', rates: [1, 4.05, 0.17], allowance: { goat: 20, pro: 30 } },
-  { id: 'inkling-small', rates: [0.5, 1.2, 0.1], allowance: { goat: 20, pro: 30 } },
-  { id: 'kimi-k2.5', rates: [0.6, 3, 0.1], allowance: { goat: 20, pro: 30 } },
-  { id: 'kimi-k2.6', rates: [0.95, 4, 0.16], allowance: { goat: 20, pro: 30 } },
-  { id: 'kimi-k2.7-code', rates: [0.95, 4, 0.19], allowance: { goat: 60, pro: 70 } },
-  { id: 'kimi-k2.7-code-highspeed', rates: [1.9, 8, 0.38], allowance: { goat: 20, pro: 30 } },
-  { id: 'kimi-k3', rates: [3, 15, 0.3], allowance: { goat: 20, pro: 30 } },
-  { id: 'longcat-2.0', rates: [0.3, 1.2, 0.006], allowance: { goat: 50, pro: 60 } },
-  { id: 'mimo-v2.5', rates: [0.14, 0.28, 0.0028], listRates: [0.8, 4, 0.16], allowance: { goat: 30, pro: 40 } },
-  { id: 'mimo-v2.5-pro', rates: [0.435, 0.87, 0.0036], listRates: [2, 6, 0.4], allowance: { goat: 20, pro: 30 } },
-  { id: 'mimo-v2.6-flash', rates: [0.14, 0.28, 0.0028], allowance: { goat: 20, pro: 30 } },
-  { id: 'mimo-v2.6-pro', rates: [0.435, 0.87, 0.0036], allowance: { goat: 20, pro: 30 } },
-  { id: 'mimo-v2.6-pro-ultraspeed', rates: [4.35, 8.7, 0.036], allowance: { goat: 10, pro: 20 } },
-  { id: 'minimax-m2.5', rates: [0.3, 1.2, 0.03], allowance: { goat: 20, pro: 30 } },
-  { id: 'minimax-m2.7', rates: [0.3, 1.2, 0.06], allowance: { goat: 20, pro: 30 } },
-  { id: 'minimax-m3', rates: [0.3, 1.2, 0.06], listRates: [0.6, 2.4, 0.12], allowance: { goat: 47, pro: 57 } },
-  { id: 'muse-spark-1.1', rates: [1.25, 4.25, 0.15], allowance: { goat: 20, pro: 20 } },
-  { id: 'muse-spark-1.2', rates: [1.25, 4.25, 0.15], allowance: { goat: 20, pro: 30 } },
-  { id: 'muse-spark-1.2-contributor', rates: [0.1, 0.2, 0.002], allowance: { goat: 20, pro: 30 } },
-  { id: 'muse-spark-1.3', rates: [1.25, 4.25, 0.15], allowance: { goat: 20, pro: 30 } },
-  { id: 'muse-spark-1.3-contributor', rates: [0.1, 0.2, 0.002], allowance: { goat: 20, pro: 30 } },
-  { id: 'nemotron-3-ultra', rates: [0.6, 2.4, 0.12], allowance: { goat: 20, pro: 30 } },
-  { id: 'qwen-3.6-max', rates: [1.3, 7.8, 0.26, 1.63], allowance: { goat: 20, pro: 30 } },
-  { id: 'qwen-3.6-plus', rates: [0.5, 3, 0.1], allowance: { goat: 33, pro: 43 }, contextTiers: [{"maxContext":256000,"rates":[0.5,3,0.1]},{"rates":[2,6,0.2]}] },
-  { id: 'qwen-3.7-flash', rates: [0.03, 0.13, 0.006, 0.038], allowance: { goat: 20, pro: 30 }, contextTiers: [{"maxContext":32000,"rates":[0.03,0.13,0.006,0.038]},{"maxContext":256000,"rates":[0.1,0.4,0.02,0.125]},{"rates":[0.2,0.8,0.04,0.25]}] },
-  { id: 'qwen-3.7-max', rates: [2.5, 7.5, 0.5, 3.13], allowance: { goat: 33, pro: 43 } },
-  { id: 'qwen-3.7-plus', rates: [0.4, 1.6, 0.08, 0.5], allowance: { goat: 33, pro: 43 }, contextTiers: [{"maxContext":256000,"rates":[0.4,1.6,0.08,0.5]},{"rates":[1.2,4.8,0.24,1.5]}] },
-  { id: 'qwen-3.8-27b', rates: [0.4, 3, 0.04], allowance: { goat: 70, pro: 80 } },
-  { id: 'qwen-3.8-flash', rates: [0.16, 0.47, 0.016], allowance: { goat: 20, pro: 30 } },
-  { id: 'qwen-3.8-max', rates: [2, 6, 0.25, 2.5], allowance: { goat: 20, pro: 30 } },
-  { id: 'qwen-3.8-max-0902', rates: [2, 6, 0.25], allowance: { goat: 20, pro: 30 } },
-  { id: 'qwen-3.8-omni-flash', rates: [0.15, 0.47, 0.016], allowance: { goat: 20, pro: 30 } },
-  { id: 'step-3.5-flash', rates: [0.09, 0.3, 0.02], allowance: { goat: 20, pro: 30 } },
-  { id: 'step-3.7-flash', rates: [0.2, 1.15, 0.04], allowance: { goat: 20, pro: 30 } },
-  { id: 'step-5-preview', rates: [1, 2.7, 0.05], allowance: { goat: 20, pro: 30 } },
-  { id: 'tencent/hy3-paid', rates: [0.14, 0.58, 0.035], allowance: { goat: 70, pro: 80 } },
-  { id: 'tencent/hy4-preview', rates: [0.834, 2.501, 0.042], allowance: { goat: 20, pro: 30 } },
-  { id: 'typesafe/jev', rates: [0.042, 0, 0], allowance: { goat: 20, pro: 30 } },
+  { id: 'claude-fable-5', rates: [10, 50, 1, 12.5], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-fable-5-1', rates: [10, 50, 0.25, 12.5], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-haiku-4-5', rates: [1, 5, 0.1, 1.25], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-opus-4-6', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-opus-4-7', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-opus-4-8', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-opus-5', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-opus-5-5', rates: [4, 20, 0.2, 5], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-sonnet-4-6', rates: [3, 15, 0.3, 3.75], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-sonnet-5', rates: [2, 10, 0.2, 2.5], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-sonnet-5-5', rates: [2, 10, 0.2, 2.5], allowance: { go: 6, goat: 10, pro: 20 } },
+  { id: 'deepseek-v4-flash', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006], allowance: { go: 6, goat: 60, pro: 70 } },
+  { id: 'deepseek-v4-flash-fast', rates: [0.28, 0.56, 0.07], allowance: { go: 8, goat: 20, pro: 30 } },
+  { id: 'deepseek-v4-flash-vision-exp', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'deepseek-v4-pro', rates: [0.66, 1.98, 0.022], peak: [1.32, 3.96, 0.044], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'deepseek-v4.1-flash', rates: [0.15, 0.6, 0.003], peak: [0.3, 1.2, 0.006], allowance: { go: 10, goat: 60, pro: 70 } },
+  { id: 'deepseek-v4.1-flash-fast', rates: [0.16, 0.58, 0.016], peak: [0.32, 1.16, 0.032], allowance: { go: 6, goat: 60, pro: 70 } },
+  { id: 'fugu-ultra', rates: [5, 30, 0.5], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gemini-3.1-flash-lite', rates: [0.25, 1.5, 0.03], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gemini-3.5-flash', rates: [1.5, 9, 0.15], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gemini-3.5-flash-lite', rates: [0.3, 2.5, 0.03], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gemini-3.6-flash', rates: [1.5, 7.5, 0.15], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gemini-3.7-flash', rates: [1.5, 7.5, 0.15, 0.08334], allowance: { go: 6, goat: 40, pro: 50 } },
+  { id: 'gemini-3.8-flash', rates: [1.5, 7.5, 0.15], allowance: { go: 6, goat: 40, pro: 50 } },
+  { id: 'glm-5', rates: [1, 3.2, 0.2], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'glm-5.1', rates: [1.4, 4.4, 0.26], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'glm-5.2', rates: [1.4, 4.4, 0.26], allowance: { go: 10, goat: 70, pro: 80 } },
+  { id: 'glm-5.2-fast', rates: [3, 10.25, 0.5], allowance: { go: 9, goat: 20, pro: 30 } },
+  { id: 'glm-5.3', rates: [1.4, 4.4, 0.26], allowance: { go: 10, goat: 20, pro: 30 } },
+  { id: 'glm-5.3-flash', rates: [0.15, 0.5, 0.03], allowance: { go: 10, goat: 40, pro: 50 } },
+  { id: 'glm-5.3-flashx', rates: [0.37, 1.25, 0.075], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'gpt-5.3-codex', rates: [2, 8, 0.5, 0], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gpt-5.4', rates: [2.5, 15, 0.25, 0], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gpt-5.4-mini', rates: [0.75, 4.5, 0.075, 0], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gpt-5.5', rates: [5, 30, 0.5, 0], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'gpt-5.6-luna', rates: [0.2, 1.2, 0.02, 0.25], allowance: { go: 6, goat: 20, pro: 30 }, contextTiers: [{"maxContext":272000,"rates":[0.2,1.2,0.02,0.25]},{"rates":[0.4,1.8,0.04,0.5]}] },
+  { id: 'gpt-5.6-sol', rates: [5, 30, 0.5, 6.25], allowance: { go: 6, goat: 70, pro: 80 }, contextTiers: [{"maxContext":272000,"rates":[5,30,0.5,6.25]},{"rates":[10,45,1,12.5]}] },
+  { id: 'gpt-5.6-terra', rates: [2, 12, 0.2, 2.5], allowance: { go: 6, goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,12,0.2,2.5]},{"rates":[4,18,0.4,5]}] },
+  { id: 'gpt-6-astra', rates: [10, 50, 1, 12.5], allowance: { go: 6, goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[10,50,1,12.5]},{"rates":[20,75,2,25]}] },
+  { id: 'gpt-6-luna', rates: [0.1, 0.5, 0.01, 0.125], allowance: { go: 6, goat: 20, pro: 30 }, contextTiers: [{"maxContext":272000,"rates":[0.1,0.5,0.01,0.125]},{"rates":[0.2,0.75,0.02,0.25]}] },
+  { id: 'gpt-6-sol', rates: [2, 10, 0.2, 2.5], allowance: { go: 6, goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,10,0.2,2.5]},{"rates":[4,15,0.4,5]}] },
+  { id: 'gpt-6.1-sol', rates: [2, 10, 0.1, 2.5], allowance: { go: 6, goat: 20, pro: 20 }, contextTiers: [{"maxContext":272000,"rates":[2,10,0.1,2.5]},{"rates":[4,15,0.2,5]}] },
+  { id: 'grok-4.5', rates: [2, 6, 0.5], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'grok-4.6', rates: [2, 6, 0.5], allowance: { go: 6, goat: 20, pro: 30 }, contextTiers: [{"maxContext":200000,"rates":[2,6,0.5]},{"rates":[4,12,1]}] },
+  { id: 'grok-4.7', rates: [2, 6, 0.5], allowance: { go: 6, goat: 20, pro: 30 }, contextTiers: [{"maxContext":200000,"rates":[2,6,0.5]},{"rates":[4,12,1]}] },
+  { id: 'inkling', rates: [1, 4.05, 0.17], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'inkling-small', rates: [0.5, 1.2, 0.1], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'kimi-k2.5', rates: [0.6, 3, 0.1], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'kimi-k2.6', rates: [0.95, 4, 0.16], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'kimi-k2.7-code', rates: [0.95, 4, 0.19], allowance: { go: 9, goat: 60, pro: 70 } },
+  { id: 'kimi-k2.7-code-highspeed', rates: [1.9, 8, 0.38], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'kimi-k3', rates: [3, 15, 0.3], allowance: { go: 8, goat: 20, pro: 30 } },
+  { id: 'longcat-2.0', rates: [0.3, 1.2, 0.006], allowance: { go: 10, goat: 50, pro: 60 } },
+  { id: 'mimo-v2.5', rates: [0.14, 0.28, 0.0028], listRates: [0.8, 4, 0.16], allowance: { go: 6, goat: 30, pro: 40 } },
+  { id: 'mimo-v2.5-pro', rates: [0.435, 0.87, 0.0036], listRates: [2, 6, 0.4], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'mimo-v2.6-flash', rates: [0.14, 0.28, 0.0028], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'mimo-v2.6-pro', rates: [0.435, 0.87, 0.0036], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'mimo-v2.6-pro-ultraspeed', rates: [4.35, 8.7, 0.036], allowance: { go: 6, goat: 10, pro: 20 } },
+  { id: 'minimax-m2.5', rates: [0.3, 1.2, 0.03], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'minimax-m2.7', rates: [0.3, 1.2, 0.06], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'minimax-m3', rates: [0.3, 1.2, 0.06], listRates: [0.6, 2.4, 0.12], allowance: { go: 8, goat: 47, pro: 57 } },
+  { id: 'muse-spark-1.1', rates: [1.25, 4.25, 0.15], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'muse-spark-1.2', rates: [1.25, 4.25, 0.15], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'muse-spark-1.2-contributor', rates: [0.1, 0.2, 0.002], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'muse-spark-1.3', rates: [1.25, 4.25, 0.15], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'muse-spark-1.3-contributor', rates: [0.1, 0.2, 0.002], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'nemotron-3-ultra', rates: [0.6, 2.4, 0.12], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'qwen-3.6-max', rates: [1.3, 7.8, 0.26, 1.63], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'qwen-3.6-plus', rates: [0.5, 3, 0.1], allowance: { go: 10, goat: 33, pro: 43 }, contextTiers: [{"maxContext":256000,"rates":[0.5,3,0.1]},{"rates":[2,6,0.2]}] },
+  { id: 'qwen-3.7-flash', rates: [0.03, 0.13, 0.006, 0.038], allowance: { go: 6, goat: 20, pro: 30 }, contextTiers: [{"maxContext":32000,"rates":[0.03,0.13,0.006,0.038]},{"maxContext":256000,"rates":[0.1,0.4,0.02,0.125]},{"rates":[0.2,0.8,0.04,0.25]}] },
+  { id: 'qwen-3.7-max', rates: [2.5, 7.5, 0.5, 3.13], allowance: { go: 10, goat: 33, pro: 43 } },
+  { id: 'qwen-3.7-plus', rates: [0.4, 1.6, 0.08, 0.5], allowance: { go: 10, goat: 33, pro: 43 }, contextTiers: [{"maxContext":256000,"rates":[0.4,1.6,0.08,0.5]},{"rates":[1.2,4.8,0.24,1.5]}] },
+  { id: 'qwen-3.8-27b', rates: [0.4, 3, 0.04], allowance: { go: 10, goat: 70, pro: 80 } },
+  { id: 'qwen-3.8-flash', rates: [0.16, 0.47, 0.016], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'qwen-3.8-max', rates: [2, 6, 0.25, 2.5], allowance: { go: 7, goat: 20, pro: 30 } },
+  { id: 'qwen-3.8-max-0902', rates: [2, 6, 0.25], allowance: { go: 7, goat: 20, pro: 30 } },
+  { id: 'qwen-3.8-omni-flash', rates: [0.15, 0.47, 0.016], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'step-3.5-flash', rates: [0.09, 0.3, 0.02], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'step-3.7-flash', rates: [0.2, 1.15, 0.04], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'step-5-preview', rates: [1, 2.7, 0.05], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'tencent/hy3-paid', rates: [0.14, 0.58, 0.035], allowance: { go: 10, goat: 70, pro: 80 } },
+  { id: 'tencent/hy4-preview', rates: [0.834, 2.501, 0.042], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'typesafe/jev', rates: [0.042, 0, 0], allowance: { go: 6, goat: 20, pro: 30 } },
 ]
 
 /**
@@ -396,4 +389,3 @@ export function modelAllowanceFor(modelId: string): ModelAllowance | undefined {
   if (slug === undefined) return undefined
   return ROWS_BY_SLUG.get(slug)?.allowance
 }
-

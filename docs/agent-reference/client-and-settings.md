@@ -2,6 +2,11 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
+- **登录总期限**：浏览器回调成功只关闭监听，不撤销登录计时器。身份验证带取消信号；超时、取消、替换尝试或销毁会中止验证，迟到结果不能开始存储或覆盖状态。期限同样约束等待存储的状态；宿主已发出的凭据写入不能凭空撤销，不能声称提供跨服务事务。
+- **秒制设置保留毫秒精度**：显示与输入最多三位小数，范围 0.001–3600 秒，存储仍为整数毫秒；已有范围外配置照实显示，不静默截断。超时字段使用小数键盘和秒制错误说明，重试次数仍为整数。
+- **并发保存保留新草稿**：普通字段按草稿对象版本清理，可见模型在保存开始冻结提交值；等待期间的新输入继续保留为未保存。
+- **账户移除与清理**：`accounts`、`modelAccountRules`、固定账户及 `credentialCleanupRefs` 在一次带版本检查的 `remote.settings.mutate` 中提交，再清理凭据。失败队列持久化，页面刷新后仍显示重试；重新引用、继承配置和默认密钥受保护。无法确认凭据事实时保留队列。宿主配置与凭据服务并无共同事务，不能承诺任意外部并发重建与凭据删除跨服务原子化。
+
 - **Client bundle**: the package's `dsh.client` declaration (`platform: web`,
   `inject: [...]`) makes the host serve `lib/client.js` as a client module.
   The bundle may only `require` platform/seed modules (`react`,
@@ -217,20 +222,18 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   would churn the screen's section list. A rejecting host is contained with a
   warning (a shadow-mode capability policy, a future contract change) and stays
   retryable, never fatal. Pinned by `tests/tui-settings.test.ts`.
-- **Client-side staging survives a failed save** (`src/client/settings.ts`):
-  writes run in order and stop at the first failure, so reconcile must keep
-  every draft the failed write did not land. A label draft is dropped only when
-  the stored label proves it landed; a rule draft only when the stored rules
-  fingerprint changed (the rules write landed, positional ids shifted, and a
-  kept draft would land on the wrong row) — `ruleFingerprint()`. Treating
-  "absent from the stored section" as "already applied" silently reverted typed
-  labels and rule edits with `dirty` false, i.e. no retry. `writeAccounts()`
-  additionally rebuilds the stored list rather than the page's rows: the
-  settings layer replaces the whole `accounts` array, so a rebuilt list deletes
-  every composition entry the page cannot name (literal-key entries have no
-  row) and strips their literal keys.
+- **Client-side staging survives failed and concurrent saves** (`src/client/settings.ts`):
+  writes run in order and stop at the first failure. Ordinary drafts already accepted by the Host may
+  be reconciled; unaccepted drafts remain. Successful saves clear only the captured draft versions,
+  including a frozen visible-model selection. Account lists are rebuilt from raw stored entries so
+  literal-key or unknown entries the page cannot name survive unrelated account edits.
 - **`catalogIsReady` gates the stale-model cleanup** (`src/client/model-select.ts`):
   an empty catalog — before the first fetch lands, or after a failure — makes
   every selected id look retired, so the one-click cleanup would empty the
   allowlist. Require a non-empty catalog and no failure; the explicit "show
   all" action stays available without one.
+
+- **2026-09-30 模型选择一致性**：网页显示终端覆盖后的有效选择；白名单与逐模型开关一次提交，
+  包含基础层隐藏项的显式覆盖。保存冲突或缺少原子写入能力时保留草稿。
+  显示全部会选中已加载的目录模型；目录失败不清空已存选择。
+- **字号与校验说明**：页面及面板辅助文字至少 12px；重试次数提示与实际 0～50 次限制一致。

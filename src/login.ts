@@ -35,7 +35,7 @@ import { DEFAULT_API_BASE } from './adapter.ts'
 import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
 import type { CommandCodeLoginFailureReason, CommandCodeLoginStatus } from './login-wire.ts'
 
-/** Give up on the browser after this long without a callback (mirrors the CLI). */
+/** 登录总期限包含浏览器回调、密钥验证与存储，不能在收到回调后撤掉保护。 */
 export const LOGIN_TIMEOUT_MS = 120_000
 
 /** First local port the flow tries (mirrors the CLI). */
@@ -132,12 +132,16 @@ export async function validateCommandApiKey(
   fetchImpl: typeof fetch,
   apiBase: string,
   apiKey: string,
+  signal?: AbortSignal,
 ): Promise<ApiKeyValidation> {
   try {
     const response = await fetchImpl(`${apiBase}/alpha/whoami`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json', ...IDENTITY_ENCODING_HEADER, Authorization: `Bearer ${apiKey}` },
+      ...(signal === undefined ? {} : { signal }),
     })
+    // 身份验证只用状态码，及时释放不再使用的正文连接。
+    void response.body?.cancel().catch(() => undefined)
     if (response.status === 401) return { valid: false, error: 'invalid_key' }
     if (response.ok) return { valid: true }
     return { valid: false, error: 'server_error' }
@@ -182,6 +186,7 @@ export class CommandCodeLoginFlow {
   private statusValue: CommandCodeLoginStatus = { state: 'idle' }
   private server: Server | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
+  private attemptAbort: AbortController | undefined
   /** Settle hooks of the live attempt's callback promise. */
   private settle: {
     resolve(credentials: CommandCodeLoginCredentials): void
@@ -265,6 +270,7 @@ export class CommandCodeLoginFlow {
   private async startAttempt(targetRef: string | undefined): Promise<CommandCodeLoginStatus> {
     this.teardown()
     const attempt = ++this.attemptSeq
+    this.attemptAbort = new AbortController()
 
     const port = await this.findPort()
     const expectedState = this.deps.randomToken?.(32) ?? randomBytes(32).toString('base64url')
@@ -295,13 +301,14 @@ export class CommandCodeLoginFlow {
       authUrl: buildCommandAuthUrl({ studioBase: studioBaseForApiBase(apiBase), port, state: expectedState }),
     })
 
-    // Watchdog mirrors the CLI's 2-minute window.
+    // 回调成功只关闭监听服务，验证期间继续使用同一总期限。
     this.timer = setTimeout(() => {
+      if (!this.ownsAttempt(attempt)) return
       this.teardown()
       this.setStatus({
         state: 'failed',
         reason: 'timeout',
-        message: 'No browser callback arrived within the login window.',
+        message: '登录未在规定时间内完成，请重试。',
       })
     }, this.deps.timeoutMs ?? LOGIN_TIMEOUT_MS)
     this.timer.unref?.()
@@ -495,7 +502,8 @@ export class CommandCodeLoginFlow {
     json(code, body)
     // Capture the settle hooks BEFORE teardown clears them.
     const settle = this.settle
-    this.teardown()
+    if (failure !== undefined) this.teardown()
+    else this.closeCallback()
     if (settle === undefined) return
     if (failure !== undefined) settle.reject(failure)
     else if (credentials !== undefined) settle.resolve(credentials)
@@ -517,12 +525,14 @@ export class CommandCodeLoginFlow {
       this.deps.fetchImpl ?? fetch,
       this.readApiBase(),
       credentials.apiKey,
+      this.attemptAbort?.signal,
     )
     if (!this.ownsAttempt(attempt)) return
     if (!validation.valid) {
       const reason: CommandCodeLoginFailureReason = validation.error === 'invalid_key'
         ? 'invalid-key'
         : validation.error === 'network_error' ? 'network' : 'error'
+      this.teardown()
       this.setStatus({
         state: 'failed',
         reason,
@@ -538,6 +548,7 @@ export class CommandCodeLoginFlow {
       await this.deps.storeKey(credentials, targetRef)
     } catch (error: unknown) {
       if (!this.ownsAttempt(attempt)) return
+      this.teardown()
       this.setStatus({
         state: 'failed',
         reason: 'unavailable',
@@ -546,7 +557,7 @@ export class CommandCodeLoginFlow {
       return
     }
     if (!this.ownsAttempt(attempt)) return
-    this.clearTimer()
+    this.teardown()
     this.setStatus({ state: 'success', userName: credentials.userName, keyName: credentials.keyName })
   }
 
@@ -559,6 +570,7 @@ export class CommandCodeLoginFlow {
   private failFrom(attempt: number, failure: unknown): void {
     if (!(failure instanceof LoginSettleError)) return
     if (!this.ownsAttempt(attempt)) return
+    this.teardown()
     this.setStatus({ state: 'failed', reason: failure.reason, message: failure.message })
   }
 
@@ -569,12 +581,19 @@ export class CommandCodeLoginFlow {
     }
   }
 
-  /** Close the server and watchdog without touching the published status. */
-  private teardown(): void {
-    this.clearTimer()
+  /** 消费一次回调后关闭监听；保留总期限以约束后续验证。 */
+  private closeCallback(): void {
     closeServer(this.server)
     this.server = undefined
     this.settle = undefined
+  }
+
+  /** 结束整个尝试，同时中止验证请求，迟到结果由所有权检查拦截。 */
+  private teardown(): void {
+    this.clearTimer()
+    this.attemptAbort?.abort()
+    this.attemptAbort = undefined
+    this.closeCallback()
   }
 }
 

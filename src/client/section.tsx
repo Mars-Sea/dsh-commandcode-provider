@@ -51,6 +51,7 @@ export interface CommandCodeSettingsProps {
   createAccount(input: { label: string; key?: string }): Promise<string | undefined>
   renameAccount(ref: string, label: string): Promise<boolean>
   removeAccount(ref: string): Promise<boolean>
+  retryCredentialCleanup(ref: string): Promise<boolean>
   setAccountKey(target: string, key: string): Promise<boolean>
   clearAccountKey(target: string): Promise<boolean>
   setActiveAccount(id: string): Promise<boolean>
@@ -132,6 +133,7 @@ function Field({
   state,
   disabled,
   numeric,
+  decimal,
   wide,
   placeholder,
   onEdit,
@@ -144,6 +146,7 @@ function Field({
   state: StagedField
   disabled: boolean
   numeric?: boolean
+  decimal?: boolean
   wide?: boolean
   placeholder?: string | undefined
   onEdit(text: string): void
@@ -156,7 +159,7 @@ function Field({
       titleFor={id}
       tag={<OverrideTag state={state} t={t} />}
       description={hint}
-      error={state.invalid ? invalidCopy(state.invalidReason, t) : undefined}
+      error={state.invalid ? invalidCopy(state.invalidReason, t, decimal) : undefined}
       control={
         <>
           <FieldOverride label={label} state={state} disabled={disabled} t={t} onReset={onReset} />
@@ -164,7 +167,7 @@ function Field({
             id={id}
             className={`cc-input ${wide ? 'cc-rowInputWide' : 'cc-rowInput'}${state.invalid ? ' cc-inputInvalid' : ''}`}
             type="text"
-            inputMode={numeric ? 'numeric' : undefined}
+            inputMode={decimal ? 'decimal' : numeric ? 'numeric' : undefined}
             aria-invalid={state.invalid || undefined}
             value={state.text}
             placeholder={placeholder}
@@ -178,7 +181,12 @@ function Field({
 }
 
 /** The per-field error copy for a staged draft's failure reason. */
-function invalidCopy(reason: StagedField['invalidReason'], t: Translate<SettingsCommandCodeKey>): string {
+function invalidCopy(reason: StagedField['invalidReason'], t: Translate<SettingsCommandCodeKey>, duration = false): string {
+  if (duration) {
+    if (reason === 'tooSmall') return t('durationTooSmall')
+    if (reason === 'tooLarge') return t('durationTooLarge')
+    return t('durationInvalid')
+  }
   if (reason === 'tooSmall') return t('numberTooSmall')
   if (reason === 'tooLarge') return t('numberTooLarge')
   return t('invalidNumber')
@@ -540,8 +548,9 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
 }) {
   const count = state.visibleModels.length
   const pickT: Translate<SettingsCommandCodeKey> = (key, params) => {
-    if (key === 'modelPick') return t('visibleModelsPick')
-    if (key === 'modelCount') return t('visibleModelsCount', params)
+    if (key === 'modelPick' || key === 'modelCount') {
+      return state.visibleModelsAll ? t('visibleModelsShowAll') : t('visibleModelsCount', { count })
+    }
     return t(key, params)
   }
   // Selected ids the live catalog no longer carries (retired upstream): kept,
@@ -575,7 +584,7 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
               {t('visibleModelsCleanStale', { count: staleIds.length })}
             </button>
           ) : null}
-          {count > 0 ? (
+          {!state.visibleModelsAll ? (
             <button type="button" className="cc-linkButton" disabled={disabled} onClick={onClear}>
               {t('visibleModelsShowAll')}
             </button>
@@ -752,6 +761,7 @@ function AdvancedSection({ state, disabled, t, onEdit, onReset }: FormCardProps)
             state={state.requestTimeoutMs}
             disabled={disabled}
             numeric
+            decimal
             onEdit={(text) => onEdit('requestTimeoutMs', text)}
             onReset={() => onReset('requestTimeoutMs')}
             t={t}
@@ -763,6 +773,7 @@ function AdvancedSection({ state, disabled, t, onEdit, onReset }: FormCardProps)
             state={state.streamIdleTimeoutMs}
             disabled={disabled}
             numeric
+            decimal
             onEdit={(text) => onEdit('streamIdleTimeoutMs', text)}
             onReset={() => onReset('streamIdleTimeoutMs')}
             t={t}
@@ -1273,6 +1284,7 @@ function LoginStatus({ state, t, onCancel }: {
 
 /** The immediate account operations the list and its rows call. */
 interface AccountActions {
+  cleanup(ref: string): Promise<boolean>
   create(input: { label: string; key?: string }): Promise<string | undefined>
   rename(ref: string, label: string): Promise<boolean>
   remove(ref: string): Promise<boolean>
@@ -1435,6 +1447,15 @@ function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: 
         </p>
       ) : null}
       {state.accountFailed !== undefined ? <p className="cc-rowError" role="status">{t('accountOpFailed')}</p> : null}
+      {state.pendingCredentialCleanup.length > 0 ? (
+        <div className="cc-rowError" role="status">
+          <p>{t('accountCleanupPending')}</p>
+          <button type="button" className="cc-btn cc-btnSm" disabled={disabled || state.accountBusy}
+            onClick={() => { for (const ref of state.pendingCredentialCleanup) void actions.cleanup(ref) }}>
+            {t('accountCleanupRetry')}
+          </button>
+        </div>
+      ) : null}
       <div className="cc-accountList">
         {rows.map((row) => (
           <AccountItem
@@ -1624,20 +1645,21 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   // One stable object: the add panel's effect depends on it, and a fresh
   // object per render would re-run that effect on every store notification.
   const {
-    createAccount, renameAccount, removeAccount, setAccountKey, clearAccountKey,
+    createAccount, renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey,
     setActiveAccount, setAccountModels, beginLogin, cancelLogin,
   } = props
   const actions = useMemo<AccountActions>(() => ({
     create: createAccount,
     rename: renameAccount,
     remove: removeAccount,
+    cleanup: retryCredentialCleanup,
     setKey: setAccountKey,
     clearKey: clearAccountKey,
     setActive: setActiveAccount,
     setModels: setAccountModels,
     beginLogin,
     cancelLogin,
-  }), [createAccount, renameAccount, removeAccount, setAccountKey, clearAccountKey, setActiveAccount, setAccountModels, beginLogin, cancelLogin])
+  }), [createAccount, renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey, setActiveAccount, setAccountModels, beginLogin, cancelLogin])
   const bar = saveBarView(state, savedVisible, t)
   const form = { state, disabled, t, onEdit: props.edit, onReset: props.resetField }
   return (

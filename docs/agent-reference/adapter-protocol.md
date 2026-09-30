@@ -2,6 +2,11 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
+- **错误正文读取有界**：收到非成功 HTTP 状态后，正文最多读取 64 KiB，期限为请求超时与 30 秒中的较小值；超时或截断保留原状态和已收片段，用于分类与重试。调用者取消传播原取消原因。成功生成流仍受独立的流空闲期限控制。
+- **流式终止与用量**：OpenAI 的 `finish_reason` 后继续读取独立用量，直到 `[DONE]` 或正文结束；Messages 的 `message_delta` 更新累计字段，在 `message_stop` 结束。缺失用量字段保留先前值，不能当作零覆盖，也不能把累计值相加。历史实测的完整末尾用量仍兼容。此边界已用分包模拟回归，本轮没有重新发送付费请求。
+- **超时建议与设置范围一致**：OpenAI 请求超时建议使用页面 3600 秒上限，并且只在高于当前值时提供；重试退避上限不用于限制单次请求期限。
+- **冷生成预算**：内存目录未预热时合并一次同网关、版本 3 的磁盘目录读取；不额外联网，缺失或来源不符时保持未知窗口行为。文件读取不覆盖并发联网刷新得到的全局输出上限；切换地址或文件会换缓存状态。
+
 - **Lone UTF-16 surrogate halves are stripped from every outgoing request body.** The strip runs as the
   `JSON.stringify` replacer at the single serialization point in `streamRequest()`, so all three transports
   and every field are covered without enumerating text-bearing fields. `sanitizeSurrogates()` returns any
@@ -314,9 +319,16 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   are not an answer. Hold the success `finish` until validation; DSH 0.1.7 converts an adapter throw into an
   error finish, so throwing after publishing success creates two terminal events. A terminal response with
   no text/tools maps to retryable `EMPTY_RESPONSE`, except a length/max-token finish maps to non-retryable
-  `OUTPUT_TOKEN_LIMIT` and explicit content filtering remains non-retryable. Preserve received usage on
-  failures; report the actual finish reason, request budget, output tokens and reasoning tokens (unknown
-  when absent). A length finish proves a limit, not that every token was spent reasoning. Without any
+  `OUTPUT_TOKEN_LIMIT` and explicit content filtering remains non-retryable. **Unless `requestContextBudget()`
+  had already clamped this request's own reservation to its emergency floor** (`RequestContextBudget.floored`,
+  `available <= floor`): a length finish with no content then means the window, not the caller's
+  `max_tokens`, starved the reservation, and `emptyCompletionError()` reports `CONTEXT_WINDOW_EXCEEDED`
+  instead so `dsh-compaction-basic` compacts and retries, the same recovery `generateHttpError()`'s
+  `sizePressure` branch already gives an ambiguous 400 near the window. Gated on `floored`, not the coarser
+  `sizePressure`, because `sizePressure` can be true while the reservation still sits well above the floor —
+  an ordinary verbose overrun, not proof the window pinned the budget to nothing (issue #73). Preserve
+  received usage on failures; report the actual finish reason, request budget, output tokens and reasoning
+  tokens (unknown when absent). A length finish proves a limit, not that every token was spent reasoning. Without any
   terminal event, preserve `EMPTY_RESPONSE` when no content arrived and `STREAM_CLOSED` after text/tool
   fragments; never execute a buffered tool call from a cut stream. `STREAM_CLOSED` and `OUTPUT_TOKEN_LIMIT`
   stay outside the retry whitelist. Thus an old silent stop cannot be attributed to a particular branch
