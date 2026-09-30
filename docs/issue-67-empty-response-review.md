@@ -104,8 +104,25 @@ So the default is now 300 s. The 60 s that preceded it was five times stricter t
 
 ## 7. Shipped in this working tree (was: proposed repair)
 
-1. **Clamp the output reservation to the remaining window** — IMPLEMENTED as `requestContextBudget()` in `src/adapter.ts`. It estimates the prompt from the body it just built and takes `maxTokens = min(requested, max(floor, window − estimate − headroom))`, and its `sizePressure` flag gates the 400 reclassification below. Verified on a real over-window request: a 6 M-char prompt returned the reclassified `CONTEXT_WINDOW_EXCEEDED` in 11.3 s.
-2. **Recognise the size-driven wordings** — IMPLEMENTED as `readWindowLimitEvidence()` / `generateHttpError(…, sizePressure)`, which map the nested gateway `provider_error` to `CONTEXT_WINDOW_EXCEEDED` only when this request's own arithmetic says it is near the window. Left deliberately alone: an in-band empty response and a headers timeout are NOT mapped to it, because measurement (§5) shows neither is caused by size.
+> **2026-09-30 update (issue #74): item 1 below was REVERTED.** `requestContextBudget()` pre-shrank every
+> request's `max_tokens` from an estimate of the prompt just built, and that shrink grew more aggressive as a
+> conversation grew — which is exactly the "output gets cut short as the session gets longer" symptom issue
+> #74 reported, on ordinary conversations nowhere near actually overflowing the window. Before reverting, a
+> live A/B probe (2026-09-30, `stealth/space-bunny-alpha`, free, 1,000,000-token window) sent a genuinely
+> over-window request — ~19.6% over, the same relative overshoot as the ambiguous-400 case measured below —
+> with the client-side shrink skipped entirely (`contextWindow` left `undefined`, so `requestContextBudget()`
+> took its early-return branch and sent `max_tokens` unshrunk). The endpoint answered with an unambiguous
+> `400 … exceeds the model's context window`, which `isContextOverflowDetail()` (item 2 below, still in place
+> and NOT reverted) classified as `CONTEXT_WINDOW_EXCEEDED` on its own — no client-side estimate needed. The
+> original ambiguous-400 wording quoted just below was measured specifically on `stealth/pixel-canary`, which
+> was itself unavailable (503/404) at probe time, so that exact model/wording combination could not be
+> re-verified live; item 1 is being kept reverted on the strength of the `space-bunny-alpha` evidence, with
+> that gap recorded rather than hidden. See [决策记录](决策记录.md) §一.5 for the fuller record and what would
+> justify reinstating some form of client-side clamp.
+>
+> Items 2–4 are UNCHANGED and still shipped.
+1. ~~**Clamp the output reservation to the remaining window**~~ — REVERTED 2026-09-30 (issue #74); was `requestContextBudget()` in `src/adapter.ts`. It estimated the prompt from the body it just built and took `maxTokens = min(requested, max(floor, window − estimate − headroom))`, and its `sizePressure` flag gated the 400 reclassification below. Verified on a real over-window request: a 6 M-char prompt returned the reclassified `CONTEXT_WINDOW_EXCEEDED` in 11.3 s. See the update note above for why it was removed.
+2. **Recognise the size-driven wordings** — IMPLEMENTED as `readWindowLimitEvidence()` / `generateHttpError()`'s `isContextOverflowDetail` branch, which maps the nested gateway `provider_error` to `CONTEXT_WINDOW_EXCEEDED` from the wording alone (item 1's `sizePressure` gate on the SEPARATE ambiguous-`provider_error` branch was removed together with item 1; this wording-based branch is untouched). Left deliberately alone: an in-band empty response and a headers timeout are NOT mapped to it, because measurement (§5) shows neither is caused by size.
 3. **Bound the identical-payload loop** — IMPLEMENTED as a header-timeout streak on the adapter instance. dsh-llm's `NormalRetryPolicyConfig` carries one scalar `maxRetries` beside the code list, so there is no per-code limit to lower; the third consecutive headers timeout on one unchanged payload instead leaves the whitelist as `PROVIDER_HTTP_ERROR` and says why. `RATE_LIMIT` / `SERVER` / `TRANSPORT` keep retrying, because each carries a real "come back later" signal. The streak lives across `stream()` calls because dsh-llm-retry re-invokes the same instance, and any answer from the gateway ends it.
 4. **Word the timeout for the cause it has** — the message no longer sends everyone to their proxy. On `/alpha/generate` it names provider queueing, Go-plan capacity, or a network/proxy path and says a longer budget will not help; on `/provider/v1/chat/completions` it names the upstream first token and suggests a concrete `requestTimeoutMs`. Both say outright that prompt size is not the cause, which §5's table is the evidence for.
 5. **Upstream (DSH) follow-up:** still open. The meter's fixed 4-chars/token fallback is what lets a Chinese-heavy history slip past compaction; `bytes / 4` would be conservative for CJK as well. The adapter-side clamp is the safety net until that lands.

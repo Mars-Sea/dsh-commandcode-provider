@@ -17,6 +17,7 @@
 
 import type { SettingsScope, SettingsScopeSnapshot } from './settings.ts'
 import { createSnapshotStore, type SnapshotStore } from './snapshot-store.ts'
+import { readableErrorText } from './error-text.ts'
 
 /** Result envelope of one current Typert Remote call. */
 type Envelope<T> = { ok: true; value: T } | { ok: false; error?: { message?: string } | undefined }
@@ -240,7 +241,7 @@ class SettingsDescribeMirror {
             outcome = { failure: response.error?.message ?? 'settings describe failed' }
           }
         } catch (error: unknown) {
-          outcome = { failure: error instanceof Error ? error.message : String(error) }
+          outcome = { failure: readableErrorText(error) }
         }
         if (generation !== this.generation) continue
         if ('view' in outcome) {
@@ -387,7 +388,7 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
       }
       return await namespace.mutate(this.namespace, ops, revision)
     } catch (error: unknown) {
-      return { ok: false, error: { message: error instanceof Error ? error.message : String(error) } }
+      return { ok: false, error: { message: readableErrorText(error) } }
     }
   }
 

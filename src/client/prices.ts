@@ -11,6 +11,7 @@
  */
 
 import type { CommandCodePriceTable } from '../usage-wire.ts'
+import { readableErrorText } from './error-text.ts'
 
 /** The narrow slice of the mounted Remote this controller calls. */
 export interface PricesRemote {
@@ -146,7 +147,7 @@ export class CommandCodePricesController {
       this.publish({
         status: 'error',
         table: undefined,
-        error: error instanceof Error ? error.message : String(error),
+        error: readableErrorText(error),
       })
       this.scheduleRetry()
     })

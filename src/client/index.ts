@@ -15,6 +15,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createSnapshotStore } from './snapshot-store.ts'
+import { readableErrorText } from './error-text.ts'
 // Type-only: the client-service augmentations (`slots`/`remote`/`locale` on
 // Context) and the `settings.section` SlotMap entry.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
@@ -255,7 +256,7 @@ function applyClientSurfaces(
     }, (error: unknown) => {
       // A mount failure (e.g. a harness without the Remote mount) leaves the
       // namespace unset; keep the reason so the card can surface it.
-      usageMountError = error instanceof Error ? error.message : String(error)
+      usageMountError = readableErrorText(error)
     })
     return () => {
       cancelled = true

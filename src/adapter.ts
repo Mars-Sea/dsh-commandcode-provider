@@ -208,9 +208,16 @@ export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
  * (a 64 000 request answered headers in 1.28 s against 1.57 s for 131 072) but
  * it did cap what a model could ever say in one turn.
  *
- * This is only an UPPER bound. `requestContextBudget` lowers it per request
- * from the prompt actually being sent, so raising the ceiling cannot push a
- * large session over its window.
+ * No client-side clamp is applied on top of this: an earlier version pre-shrank
+ * `max_tokens` from an estimate of the prompt already sent (`requestContextBudget()`,
+ * issue #67), but that estimate over-corrected on ordinary long conversations —
+ * exactly the "output gets cut short as the conversation grows" symptom issue #74
+ * reported — while a live A/B probe (2026-09-30, `stealth/space-bunny-alpha`,
+ * ~19.6% over its 1,000,000-token window with no client-side shrink) showed the
+ * endpoint answers a genuine overflow with an unambiguous `400 … exceeds the
+ * model's context window`, which `isContextOverflowDetail()` below already
+ * classifies as `CONTEXT_WINDOW_EXCEEDED` independently of this constant. See
+ * [决策记录](../docs/决策记录.md).
  */
 export const DEFAULT_GENERATE_MAX_TOKENS = 131_072
 
@@ -224,8 +231,6 @@ export const DEFAULT_GENERATE_MAX_TOKENS = 131_072
  * `Math.min(contextLength, this)` before the ceiling above is ever consulted.
  */
 export const DEFAULT_MAX_OUTPUT_TOKENS = 131_072
-/** Preserve a small usable answer budget when the heuristic overshoots. */
-const MIN_CONTEXT_OUTPUT_TOKENS = 1_024
 export const MODELS_TIMEOUT_MS = 10_000
 /** 目录短期复用；刷新失败只短暂退避，避免反复阻塞模型选择器。 */
 export const MODEL_CATALOG_TTL_MS = 5 * 60_000
@@ -534,9 +539,6 @@ const CLI_CONTEXT_OVERFLOW_PATTERN = /prompt is too long|context.*(length|window
 function isContextOverflowDetail(detail: string): boolean {
   return isContextWindowExceededError(detail) || CLI_CONTEXT_OVERFLOW_PATTERN.test(detail)
 }
-
-/** A gateway refusal observed for an over-reserved request, but not unique to that cause. */
-const AMBIGUOUS_SIZE_REJECTION = /\bmodel could not complete the request\b/i
 
 /**
  * A request-side `max_tokens` refusal, told apart from a context overflow that
@@ -2590,85 +2592,6 @@ async function buildMessagesBody(
   return body
 }
 
-interface RequestContextBudget {
-  maxTokens: number
-  /** The originally requested reservation would press against the known window. */
-  sizePressure: boolean
-  /**
-   * The output reservation was clamped all the way down to the emergency
-   * floor (`available <= floor`), not merely trimmed below what was asked
-   * for. `sizePressure` alone is too coarse to gate a fatal-vs-recoverable
-   * classification on: it can be true while `maxTokens` still sits well
-   * above the floor, where a length finish is an ordinary verbose overrun,
-   * not proof the window pinned this request's budget to nothing.
-   */
-  floored: boolean
-}
-
-/**
- * Estimate the text the selected transport actually sends. JSON framing and
- * punctuation each get a token; ordinary ASCII words get one, with an extra
- * allowance for long identifiers. UTF-8 bytes / 4 tracks the measured CJK
- * case better than the engine's UTF-16 characters / 4. This is a heuristic,
- * never proof that a prompt cannot fit: a valid long English prompt can still
- * be larger under this estimate than under the provider's tokenizer.
- */
-function estimateWireInputTokens(
-  protocol: CommandCodeProtocol,
-  body: Record<string, unknown>,
-  messages: readonly RequestMessage[],
-  model: string,
-): number {
-  const params = protocol === 'cli' ? recordOrEmpty(body.params) : body
-  // Inline image data is transfer encoding, not model-visible text. Count
-  // those occurrences using the same per-model visual prices as the meter.
-  const wire = JSON.stringify(params, (_key, value: unknown) =>
-    typeof value === 'string' && /^data:[^,]*;base64,/.test(value) ? '[image]' : value)
-  let tokens = 0
-  for (const match of wire.matchAll(/[A-Za-z0-9_]+|[^\x00-\x7f]+|[^\s]/gu)) {
-    const part = match[0]!
-    if (/^[A-Za-z0-9_]+$/.test(part)) {
-      tokens += 1 + Math.ceil(Math.max(0, part.length - 12) / 4)
-    } else if (part.charCodeAt(0) > 127) {
-      tokens += Math.ceil(Buffer.byteLength(part) / 4)
-    } else {
-      tokens += 1
-    }
-  }
-  for (const message of messages) {
-    for (const block of message.content) {
-      if (block.type === 'image') tokens += priceRequestImage(block, model, true).visualTokens
-    }
-  }
-  return tokens
-}
-
-function requestContextBudget(
-  protocol: CommandCodeProtocol,
-  body: Record<string, unknown>,
-  messages: readonly RequestMessage[],
-  model: string,
-  contextWindow: number | undefined,
-  requestedMaxTokens: number,
-): RequestContextBudget {
-  if (contextWindow === undefined) return { maxTokens: requestedMaxTokens, sizePressure: false, floored: false }
-  const estimatedInput = estimateWireInputTokens(protocol, body, messages, model)
-  const headroom = Math.min(16_384, Math.max(2_048, Math.ceil(contextWindow * 0.02)))
-  const available = Math.floor(contextWindow - estimatedInput - headroom)
-  // A heuristic overestimate must not reject a request that could succeed.
-  // Send a small output reservation and let a provider's explicit overflow
-  // signal invoke the harness's compaction path if the prompt truly is too big.
-  const floor = Math.min(requestedMaxTokens, MIN_CONTEXT_OUTPUT_TOKENS, Math.max(1, Math.floor(contextWindow / 8)))
-  return {
-    maxTokens: Math.min(requestedMaxTokens, Math.max(floor, available)),
-    sizePressure: estimatedInput >= contextWindow / 4
-      && estimatedInput + requestedMaxTokens + headroom >= contextWindow,
-    // `available <= floor` is exactly when the min/max above resolves to
-    // `floor`: the emergency reservation bound the request, not the caller's
-    // own smaller `requestedMaxTokens`.
-    floored: available <= floor,
-  }
-}
 
 /**
  * One connect attempt's inputs: everything `connectGenerate` needs beyond
@@ -3845,8 +3768,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       modelMax,
       DEFAULT_GENERATE_MAX_TOKENS,
     )
-    let maxTokens = requestedMaxTokens
-    let contextBudget: RequestContextBudget = { maxTokens, sizePressure: false, floored: false }
+    const maxTokens = requestedMaxTokens
 
     const effort = options.reasoningEffort as string | undefined
     const supported = KNOWN_EFFORTS[options.model]
@@ -3892,10 +3814,6 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         : target === 'messages'
           ? await buildMessagesBody(requestOptions, facts)
           : await buildOpenAIBody(requestOptions, facts)
-      contextBudget = requestContextBudget(
-        target, built, requestOptions.messages, options.model, modelEntry?.contextWindow, requestedMaxTokens,
-      )
-      maxTokens = contextBudget.maxTokens
       if (target === 'cli') recordOrEmpty(built.params).max_tokens = maxTokens
       else built.max_tokens = maxTokens
       return built
@@ -4075,7 +3993,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
             { status: attempt.status, ...(wait > 0 && wait <= RETRY_MAX_DELAY_MS ? { providerRetryAfterMs: wait } : {}) },
           )
         }
-        throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs, providerError, contextBudget.sizePressure)
+        throw generateHttpError(attempt.status, attempt.errText, attempt.retryAfterMs, providerError)
       }
     } catch (error) {
       trace.record('connect-error', { message: boundTraceText(errorChain(error)), responseMetadata })
@@ -4245,15 +4163,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       if (finish !== undefined) {
         const failure = asm.sawContent
           ? undefined
-          : emptyCompletionError(asm.finishReason, maxTokens, usage, contextBudget.floored)
+          : emptyCompletionError(asm.finishReason, maxTokens, usage)
         trace.record('end', {
           outcome: failure === undefined
             ? 'finished'
             : failure.code === 'OUTPUT_TOKEN_LIMIT'
               ? 'output-token-limit'
-              : failure.code === CONTEXT_WINDOW_EXCEEDED_CODE
-                ? 'context-window-exceeded'
-                : 'empty',
+              : 'empty',
           finishReason: asm.finishReason,
           ...(failure === undefined ? {} : { code: failure.code }),
           maxTokens,
@@ -4438,7 +4354,6 @@ function generateHttpError(
   errText: string,
   retryAfterMs?: number,
   parsed: ParsedProviderError = parseProviderError(errText),
-  sizePressure = false,
 ): LlmError {
   // Historically this diagnosis reads only a nested `error` envelope; root
   // fields still feed account rotation and the Go-plan fallback below.
@@ -4491,21 +4406,6 @@ function generateHttpError(
       `Command Code API error ${status}: the request exceeds the model's context window`
       + ' — this session is being compacted and the request retried',
       `Command Code API 返回 ${status}：请求内容超出模型上下文窗口——正在压缩上下文后重试；如仍失败，请新建会话或减少上下文`,
-      { status },
-    )
-  }
-  // The gateway can wrap an over-reserved request in a generic provider_error
-  // 400 with no context wording. That phrase alone also covers unrelated
-  // upstream failures, so use the known model window and THIS request's size
-  // pressure before asking the harness to compact. Do not turn an ordinary
-  // empty stream, timeout, or small provider_error into a false overflow.
-  if (status === 400 && sizePressure && AMBIGUOUS_SIZE_REJECTION.test(providerDetail)
-    && /\bprovider_error\b/i.test(providerDetail)) {
-    return bilingual(
-      CONTEXT_WINDOW_EXCEEDED_CODE,
-      'Command Code API error 400: the provider could not complete a request near the model context limit'
-      + ' — compacting the session and retrying',
-      'Command Code API 返回 400：请求接近模型上下文上限，服务商无法完成——正在压缩上下文后重试',
       { status },
     )
   }
@@ -5025,30 +4925,19 @@ function mapFinishReason(reason: unknown): FinishReason {
 
 /** A terminal marker without text or tools is a failed attempt, not a completed turn. */
 function emptyCompletionError(
-  reason: string | undefined, maxTokens: number, usage: TokenUsage | undefined, floored: boolean,
+  reason: string | undefined, maxTokens: number, usage: TokenUsage | undefined,
 ): LlmError {
   const detail = `finish_reason=${reason ?? 'unknown'}, max_tokens=${maxTokens}, outputTokens=${usage?.outputTokens ?? 'unknown'}, reasoningTokens=${usage?.reasoningTokens ?? 'unknown'}`
   if (mapFinishReason(reason).kind === 'max-tokens') {
-    // `floored` means requestContextBudget() clamped this request's own
-    // reservation to its emergency floor because the estimated input already
-    // pressed against the model window (issue #73): telling the caller to
-    // "raise the output budget" is wrong advice when the window, not the
-    // configured max_tokens, pinned the reservation. Route it through the
-    // harness's compaction-and-retry recovery instead, the same as an
-    // explicit provider overflow signal (see generateHttpError's sizePressure
-    // branch) — shrinking the input on retry is what actually frees room.
-    if (floored) {
-      return bilingual(
-        CONTEXT_WINDOW_EXCEEDED_CODE,
-        `Command Code reached the output token limit while the request was pressed against the model`
-        + ` context window (${detail}) — the session is being compacted and the request retried`,
-        `Command Code 在贴近模型上下文窗口时达到输出 token 上限，未生成正文或工具调用（${detail}）`
-        + `——正在压缩上下文后重试；如仍失败，请新建会话或减少上下文`,
-      )
-    }
     // A length finish proves a generation limit, not how all tokens were spent.
     // Keep this outside the retry whitelist: replaying the identical budget
-    // can repeatedly charge for reasoning without ever producing an answer.
+    // can repeatedly charge for reasoning without ever producing an answer. A
+    // genuine context-window rejection has its own upstream wording and is
+    // classified separately by `generateHttpError()`'s `isContextOverflowDetail`
+    // branch / `streamErrorToLlmError()`'s in-band equivalent — not inferred
+    // here from a client-side estimate (see 决策记录 for why the estimate-based
+    // `requestContextBudget()`/`floored` signal this branch used to read was
+    // removed, issue #74).
     return bilingual(
       'OUTPUT_TOKEN_LIMIT',
       `Command Code reached the output token limit without producing answer text or a tool call (${detail})`,

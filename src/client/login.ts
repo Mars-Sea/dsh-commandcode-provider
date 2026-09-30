@@ -14,6 +14,7 @@
  */
 
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+import { readableErrorText } from './error-text.ts'
 import type { CommandCodeLoginFailureReason, CommandCodeLoginStatus } from '../login-wire.ts'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsCommandCodeKey } from './locales.ts'
@@ -136,7 +137,7 @@ export class CommandCodeLoginController {
       result = await remote.loginBegin(targetRef)
     } catch (error: unknown) {
       // A transport throw (gateway hiccup) reads the same as a rejected call.
-      result = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } }
+      result = { ok: false, error: { message: readableErrorText(error) } }
     }
     if (this.superseded(generation)) return
     if (!result.ok) {

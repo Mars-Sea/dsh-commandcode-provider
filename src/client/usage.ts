@@ -14,6 +14,7 @@
 import type { CommandCodeAccountsReport, CommandCodeCatalog, CommandCodePriceTable } from '../usage-wire.ts'
 import type { CommandCodeLoginStatus } from '../login-wire.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+import { readableErrorText } from './error-text.ts'
 export { formatMoney, formatMoneyExact, formatTokensCompact, formatSuccessRate, windowRatio, formatResetAt } from '../display-format.ts'
 
 /**
@@ -151,7 +152,7 @@ export class CommandCodeUsageController {
       this.current = {
         ...this.current,
         status: 'error',
-        error: error instanceof Error ? error.message : String(error),
+        error: readableErrorText(error),
       }
     } finally {
       if (generation === this.generation) this.inFlight = false

@@ -318,15 +318,23 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   is necessary but not sufficient for success: reasoning alone, empty text, whitespace, and `tool_calls: []`
   are not an answer. Hold the success `finish` until validation; DSH 0.1.7 converts an adapter throw into an
   error finish, so throwing after publishing success creates two terminal events. A terminal response with
-  no text/tools maps to retryable `EMPTY_RESPONSE`, except a length/max-token finish maps to non-retryable
-  `OUTPUT_TOKEN_LIMIT` and explicit content filtering remains non-retryable. **Unless `requestContextBudget()`
-  had already clamped this request's own reservation to its emergency floor** (`RequestContextBudget.floored`,
-  `available <= floor`): a length finish with no content then means the window, not the caller's
-  `max_tokens`, starved the reservation, and `emptyCompletionError()` reports `CONTEXT_WINDOW_EXCEEDED`
-  instead so `dsh-compaction-basic` compacts and retries, the same recovery `generateHttpError()`'s
-  `sizePressure` branch already gives an ambiguous 400 near the window. Gated on `floored`, not the coarser
-  `sizePressure`, because `sizePressure` can be true while the reservation still sits well above the floor —
-  an ordinary verbose overrun, not proof the window pinned the budget to nothing (issue #73). Preserve
+  no text/tools maps to retryable `EMPTY_RESPONSE`; a length/max-token finish maps to non-retryable
+  `OUTPUT_TOKEN_LIMIT` unconditionally, and explicit content filtering remains non-retryable. **No
+  client-side estimate of the prompt's share of the context window feeds this decision** — an earlier
+  version pre-shrank the request's own `max_tokens` from such an estimate (`requestContextBudget()`,
+  issue #67) and used whether that shrink had reached an emergency floor to route an empty length finish to
+  `CONTEXT_WINDOW_EXCEEDED` instead (issue #73). Removed (issue #74): the estimate over-corrected on
+  ordinary long conversations — cutting output short as a session grew, independently of whether the window
+  was actually in danger — and a live A/B probe (2026-09-30, `stealth/space-bunny-alpha`, ~19.6% over its
+  1,000,000-token window with `max_tokens` sent unshrunk) showed the endpoint already answers a genuine
+  overflow with an unambiguous `400 … exceeds the model's context window`, which the `isContextOverflowDetail`
+  branch below classifies as `CONTEXT_WINDOW_EXCEEDED` on its own wording — no client-side estimate needed.
+  A length finish with no content is therefore always `OUTPUT_TOKEN_LIMIT`; a genuine window overflow is
+  classified separately, from the provider's own rejection, by `generateHttpError()`'s
+  `isContextOverflowDetail` branch or `streamErrorToLlmError()`'s in-band equivalent. See
+  [决策记录](../决策记录.md) for the fuller record, including the one case (the original ambiguous-400
+  wording last measured on `stealth/pixel-canary`) the live probe could not re-verify because that model was
+  itself unavailable at test time. Preserve
   received usage on failures; report the actual finish reason, request budget, output tokens and reasoning
   tokens (unknown when absent). A length finish proves a limit, not that every token was spent reasoning. Without any
   terminal event, preserve `EMPTY_RESPONSE` when no content arrived and `STREAM_CLOSED` after text/tool

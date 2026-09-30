@@ -224,8 +224,13 @@ test('冷生成从同网关磁盘目录计算预算，切换网关不沿用旧�
   const { mkdtempSync, writeFileSync } = await import('node:fs')
   const directory = mkdtempSync(join(tmpdir(), 'commandcode-cold-budget-'))
   const cache = join(directory, 'models.json')
+  // `readModelsCache()` derives `maxTokens` from `contextWindow`, not from the
+  // file's own `maxTokens` field (see its normalization comment) — so a
+  // `contextWindow` below every fallback ceiling (DEFAULT_GENERATE_MAX_TOKENS
+  // and the model-output-limit default are both 131072) is the only way to tell
+  // "the disk cache was actually read" apart from "the request used the default".
   writeFileSync(cache, JSON.stringify({ version: 3, apiBase: DEFAULT_API_BASE, models: [
-    { id: 'review/cached-model', name: 'Cached', contextWindow: 262144, maxTokens: 131072, supportedEndpoints: ['/chat/completions'] },
+    { id: 'review/cached-model', name: 'Cached', contextWindow: 40000, maxTokens: 40000, supportedEndpoints: ['/chat/completions'] },
   ] }))
   let apiBase = DEFAULT_API_BASE
   const sent: number[] = []
@@ -241,11 +246,11 @@ test('冷生成从同网关磁盘目录计算预算，切换网关不沿用旧�
   const request = { provider: 'commandcode', model: 'review/cached-model', messages: [userMessage('a'.repeat(700_000))] }
   try {
     await Promise.all([collect(adapter.stream(request)), collect(adapter.stream(request))])
-    assert.ok(sent[0]! < 131072)
+    assert.equal(sent[0], 40000, '并发冷请求应共用同一次磁盘目录读取得到的模型上限')
     assert.equal(sent[0], sent[1])
     apiBase = 'https://other.example'
     await collect(adapter.stream(request))
-    assert.equal(sent[2], 131072, '不同网关不能使用旧上下文窗口')
+    assert.equal(sent[2], 131072, '不同网关不能使用旧目录里的模型上限')
     assert.equal(endpoints.length, 3)
     assert.ok(endpoints.every((endpoint) => endpoint.endsWith('/provider/v1/chat/completions')))
   } finally {
@@ -4689,119 +4694,6 @@ test('stream() prices image content as vision tokens rather than inline base64',
   assert.equal(output, 64_000)
 })
 
-test('stream() clamps a large output reservation against the known model window on both transports', async () => {
-  const model = 'stealth/pixel-canary'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 262_144 }] })
-  const prompt = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor '.repeat(17_500)
-  for (const protocol of ['cli', 'openai'] as const) {
-    const sent: number[] = []
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).endsWith('/models')) return new Response(catalog, { status: 200 })
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-      const params = protocol === 'cli' ? body.params as Record<string, unknown> : body
-      const output = params.max_tokens as number
-      sent.push(output)
-      // The real A/B had about 205k input tokens: a 64k reservation fails
-      // on a 262k model, whereas a reduced reservation succeeds.
-      if (output > 52_000) return new Response('{"error":{"message":"too large"}}', { status: 400 })
-      return new Response(protocol === 'cli'
-        ? 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n'
-        : 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
-    }) as typeof fetch
-    const adapter = makeAdapter({
-      fetchImpl,
-      options: () => ({ ...OPENAI_OPTIONS(), protocol }),
-    })
-    await adapter.listModels('commandcode', { unfiltered: true })
-    await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 1_024, messages: [userMessage(prompt)] }))
-    await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 64_000, messages: [userMessage(prompt)] }))
-    assert.equal(sent[0], 1_024)
-    assert.ok(sent[1]! > 1_024 && sent[1]! <= 52_000, `${protocol}: ${sent[1]}`)
-  }
-})
-
-test('stream() budgets Chinese text against the model window', async () => {
-  const model = 'stealth/pixel-canary'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 100_000 }] })
-  const sent: number[] = []
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input).endsWith('/models')) return new Response(catalog, { status: 200 })
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-    sent.push(body.max_tokens as number)
-    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
-  }) as typeof fetch
-  const adapter = makeAdapter({ fetchImpl, options: OPENAI_OPTIONS })
-  await adapter.listModels('commandcode', { unfiltered: true })
-  await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 64_000, messages: [userMessage('中文对话历史'.repeat(12_000))] }))
-  assert.ok(sent[0]! < 64_000, `Chinese prompt must reduce output reservation: ${sent[0]}`)
-})
-
-test('stream() prices image content as vision tokens rather than inline base64', async () => {
-  const model = 'stealth/pixel-canary'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 100_000 }] })
-  const ref = { ...imageRef(), attachmentId: AttachmentId('sha256:large-inline-image'), bytes: 500_000 }
-  const data = new Uint8Array(ref.bytes)
-  let output: number | undefined
-  const adapter = makeAdapter({
-    options: OPENAI_OPTIONS,
-    resolveAttachments: () => fakeAttachments({ [ref.attachmentId]: data }),
-    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).endsWith('/models')) return new Response(catalog, { status: 200 })
-      output = (JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens
-      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
-    }) as typeof fetch,
-  })
-  await adapter.listModels('commandcode', { unfiltered: true })
-  await collect(adapter.stream({ provider: 'commandcode', model, maxTokens: 64_000, messages: [{
-    id: messageId(), role: 'user', content: [{ type: 'image', attachment: ref }], source: { kind: 'user' },
-  }] }))
-  assert.equal(output, 64_000)
-})
-
-test('stream() treats an ambiguous gateway 400 as overflow only with known size pressure', async () => {
-  const model = 'stealth/pixel-canary'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 20_000 }] })
-  const generic = JSON.stringify({ error: {
-    message: JSON.stringify({ error: { message: 'The stealth model could not complete the request.', type: 'provider_error' } }),
-  } })
-  for (const protocol of ['cli', 'openai'] as const) {
-    let status = 400
-    const adapter = makeAdapter({
-      options: () => ({ ...OPENAI_OPTIONS(), protocol }),
-      fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
-        ? new Response(catalog, { status: 200 })
-        : new Response(generic, { status })) as typeof fetch,
-    })
-    await adapter.listModels('commandcode', { unfiltered: true })
-    const run = (text: string) => collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage(text)] }))
-    await assert.rejects(run('alpha '.repeat(12_000)), (error: unknown) =>
-      (error as { code?: string }).code === 'CONTEXT_WINDOW_EXCEEDED')
-    await assert.rejects(run('hi'), (error: unknown) =>
-      (error as { code?: string }).code === 'PROVIDER_HTTP_ERROR')
-    status = 503
-    await assert.rejects(run('alpha '.repeat(12_000)), (error: unknown) =>
-      (error as { code?: string }).code === 'SERVER')
-  }
-  const withoutWindow = makeAdapter({
-    options: () => ({ ...OPENAI_OPTIONS(), protocol: 'cli', modelsCachePath: '' }),
-    fetchImpl: fetchReturning(400, generic),
-  })
-  await assert.rejects(
-    collect(withoutWindow.stream({ provider: 'commandcode', model, messages: [userMessage('alpha '.repeat(12_000))] })),
-    (error: unknown) => (error as { code?: string }).code === 'PROVIDER_HTTP_ERROR',
-  )
-  const emptyStream = makeAdapter({
-    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
-      ? new Response(catalog, { status: 200 })
-      : new Response('data: {"type":"error","error":{"message":"Provider returned an empty response"}}\n\n', { status: 200 })) as typeof fetch,
-  })
-  await emptyStream.listModels('commandcode', { unfiltered: true })
-  await assert.rejects(
-    collect(emptyStream.stream({ provider: 'commandcode', model, messages: [userMessage('alpha '.repeat(12_000))] })),
-    (error: unknown) => (error as { code?: string }).code === 'SERVER',
-  )
-})
-
 test('stream() classifies an in-band error on the Provider API transport like the CLI transport', async () => {
   // The OpenAI-format SSE carries a failure as an `error` member of a chunk. Ignoring
   // it let the stream end with no finish event, so the real cause was reported as a
@@ -6485,46 +6377,6 @@ test('a token-limited empty response does not invent reasoning usage', async () 
     assert.doesNotMatch(e.message, /全部|\ball\b.*reasoning/)
     return true
   })
-})
-
-test('stream() reports a floored length-empty response as CONTEXT_WINDOW_EXCEEDED, not fatal OUTPUT_TOKEN_LIMIT (issue #73)', async () => {
-  const model = 'stealth/pixel-canary'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 20_000 }] })
-  const adapter = makeAdapter({
-    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
-      ? new Response(catalog, { status: 200 })
-      : new Response('data: {"type":"finish","finishReason":"length"}\n\n', { status: 200 })) as typeof fetch,
-  })
-  await adapter.listModels('commandcode', { unfiltered: true })
-  // At this repeat count requestContextBudget() clamps the reservation all the
-  // way to its 1,024-token emergency floor (available <= floor): the request
-  // was starved by the window itself, not by a small requested max_tokens, so
-  // the empty length finish must recover through compaction, not fail dead.
-  const text = 'alpha '.repeat(20_000)
-  await assert.rejects(
-    collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage(text)] })),
-    (error: unknown) => (error as { code?: string }).code === 'CONTEXT_WINDOW_EXCEEDED',
-  )
-})
-
-test('stream() keeps a length-empty response fatal when size pressure has not reached the reservation floor', async () => {
-  const model = 'stealth/pixel-canary'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 20_000 }] })
-  const adapter = makeAdapter({
-    fetchImpl: (async (input: RequestInfo | URL) => String(input).endsWith('/models')
-      ? new Response(catalog, { status: 200 })
-      : new Response('data: {"type":"finish","finishReason":"length"}\n\n', { status: 200 })) as typeof fetch,
-  })
-  await adapter.listModels('commandcode', { unfiltered: true })
-  // A smaller repeat count still trips sizePressure (estimatedInput >=
-  // window/4) but leaves the reservation well above the 1,024 floor. A naive
-  // sizePressure-only check would misclassify this as a window overflow and
-  // trigger an unnecessary lossy compaction; only reaching the floor should.
-  const text = 'alpha '.repeat(15_000)
-  await assert.rejects(
-    collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage(text)] })),
-    (error: unknown) => (error as { code?: string }).code === 'OUTPUT_TOKEN_LIMIT',
-  )
 })
 
 test('an explicit content filter is not retried as an empty response', async () => {
