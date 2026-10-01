@@ -9,7 +9,7 @@
  * `/provider/v1/messages`),
  * message conversion, SSE/JSONL parsing, the catalog + its on-disk cache, and
  * the pre-stream account rotation loop. The wire protocol is
- * reverse-engineered (command-code@1.28.4, re-verified through 1.72.1);
+ * reverse-engineered (command-code@1.28.4, re-verified through 1.73.0);
  * docs/agent-reference/adapter-protocol.md holds the full protocol record.
  *
  * The adapter is deliberately free of cordis/schemastery: it receives a
@@ -189,7 +189,7 @@ function bilingual(code: string, en: string, zh: string, options?: LlmErrorOptio
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.72.1'
+export const COMMAND_CODE_CLI_VERSION = '1.73.0'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**
@@ -2470,6 +2470,16 @@ async function buildCliBody(
     memory: null,
     taste: null,
     skills: null,
+    // The official CLI's `toWirePermissionMode()` normalizes an absent/default
+    // permission mode to "standard" before it reaches the wire (confirmed by a
+    // live-service probe: both "standard" and "default" are accepted enum
+    // members, and the CLI's own internal default is "default", not
+    // "standard" — the normalization step is what turns it into this). Sent
+    // for request-shape parity with the real client; not a cache fix (see
+    // docs/issue-64-cache-review.md's "root-cause boundary" section, which
+    // already tested this exact value on this transport and excluded it as
+    // the cause).
+    permissionMode: 'standard',
     params: {
       model: options.model,
       messages: await messagesToCC(options.messages, facts.readImage),
@@ -2717,7 +2727,7 @@ async function connectGenerate(
         'x-command-code-version': COMMAND_CODE_CLI_VERSION,
         'x-cli-environment': 'production',
         'x-project-slug': projectSlugFromPath(connection.workingDir),
-        'x-taste-learning': 'true',
+        'x-taste-learning': 'false',
         'x-co-flag': 'false',
       }
     : {

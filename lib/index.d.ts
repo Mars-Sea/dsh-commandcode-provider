@@ -29,7 +29,7 @@ interface RequestTimingSummary {
 type RequestTimingSink = (summary: RequestTimingSummary) => void | Promise<void>;
 //#endregion
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.72.1";
+declare const COMMAND_CODE_CLI_VERSION = "1.73.0";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.
@@ -47,9 +47,16 @@ declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
  * (a 64 000 request answered headers in 1.28 s against 1.57 s for 131 072) but
  * it did cap what a model could ever say in one turn.
  *
- * This is only an UPPER bound. `requestContextBudget` lowers it per request
- * from the prompt actually being sent, so raising the ceiling cannot push a
- * large session over its window.
+ * No client-side clamp is applied on top of this: an earlier version pre-shrank
+ * `max_tokens` from an estimate of the prompt already sent (`requestContextBudget()`,
+ * issue #67), but that estimate over-corrected on ordinary long conversations —
+ * exactly the "output gets cut short as the conversation grows" symptom issue #74
+ * reported — while a live A/B probe (2026-09-30, `stealth/space-bunny-alpha`,
+ * ~19.6% over its 1,000,000-token window with no client-side shrink) showed the
+ * endpoint answers a genuine overflow with an unambiguous `400 … exceeds the
+ * model's context window`, which `isContextOverflowDetail()` below already
+ * classifies as `CONTEXT_WINDOW_EXCEEDED` independently of this constant. See
+ * [决策记录](../docs/决策记录.md).
  */
 declare const DEFAULT_GENERATE_MAX_TOKENS = 131072;
 /**
@@ -441,6 +448,8 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   imageRequestPricing(_provider: string, model: string): LlmImageRequestPricing | undefined;
   /** 地址或缓存文件变化时丢弃旧目录，防止旧网关的路由声明影响新请求。 */
   private currentCatalogState;
+  /** 直接生成也使用本地可信目录，不额外联网；并发冷请求共用一次文件读取。 */
+  private catalogForGenerate;
   /** 共享一次刷新；调用者取消只结束自己的等待，不取消其他调用者的请求。 */
   private loadCatalog;
   listModels(provider: string, opts?: {
@@ -450,9 +459,8 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * The per-model allowance bracket this account POOL falls into, or undefined
    * when there is nothing honest to show.
    *
-   * The pricing page publishes a per-model monthly allowance for GOAT and Pro
-   * only — its own words are "the boost is a per-model allowance, so it lives on
-   * the plans that have them" — so a pool whose highest plan is Go, Provider,
+   * The pricing page publishes per-model monthly allowances for Go, GOAT and
+   * Pro. A pool whose highest plan is Provider,
    * Max or Ultra gets undefined rather than a neighbouring tier's figure. Taking
    * the HIGHEST tier matches the question the picker already answers for a pool
    * (see `modelVisibleForAnyAccount`): what the user can reach, not what the one
@@ -460,7 +468,7 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * too — an unreachable billing endpoint yields undefined, which hides the
    * allowance instead of inventing one.
    */
-  allowanceTier(): Promise<'goat' | 'pro' | undefined>;
+  allowanceTier(): Promise<'go' | 'goat' | 'pro' | undefined>;
   resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
   /** The headers every authenticated account endpoint shares. */
   private accountHeaders;
@@ -804,6 +812,26 @@ declare class CommandCodeAccountPool {
     slot: CommandCodeAccountSlot;
   } | undefined>;
   /**
+   * Which account is serving right now, for display (the settings page's
+   * account card, the sidebar usage stats) — without consuming a request's
+   * `tried` budget and without throwing when nothing can serve.
+   *
+   * Reads and self-heals exactly like {@link resolveKey} would: an `unknown`
+   * mark on the pinned account is re-probed (throttled the same way, sharing
+   * the same per-key timestamp), and a pool where nothing currently resolves
+   * gets one batch probe pass too. Without this, the badge read a possibly
+   * stale mark forever — nothing but an actual generate request ever cleared
+   * an `unknown` mark, so a page left open with no chat activity kept
+   * showing "switched to the fallback account" long after a real request
+   * would have quietly recovered (issue #51's follow-up report: the account
+   * card and the sidebar stats both stuck on the wrong account).
+   *
+   * No `model` parameter: the badge describes the pool as a whole, not one
+   * request, so model-routing rules are deliberately not consulted here —
+   * matching what the direct `selectActiveAccount` call this replaces did.
+   */
+  activeAccount(): Promise<ResolvedAccount | undefined>;
+  /**
    * Record a rejection against one key. A `throttled` rejection (the plain 429
    * that named no window) marks the key with the `throttle` cause, leaving
    * rotation exactly like a window mark but keeping the pool's own diagnosis at
@@ -868,6 +896,26 @@ declare class CommandCodeAccountPool {
    * read as "never usable again" to {@link accountUsable}, so `unknown` it is.
    */
   private stampWindowMark;
+  /**
+   * The explicit-account fallback re-check: when `chosen` (what rotation
+   * would currently serve) is not the account the user actually asked for,
+   * re-probe that explicit account's mark before accepting the fallback —
+   * so a rate-limit mark never demotes the user's own selection for good
+   * (issue #51). Returns the revived account, or `undefined` when there is
+   * nothing to revive (explicit account already serving, not due for a
+   * probe, or the probe found it still exceeded). Shared by {@link resolveKey}
+   * (the request path) and {@link activeAccount} (the display path), so both
+   * agree on what "currently usable" means instead of drifting apart.
+   */
+  private reviveExplicit;
+  /**
+   * Probe every marked account's real usage window when nothing currently
+   * resolves. Disabled (401) keys are not probed — an invalid key stays
+   * invalid. A throwing probe counts as "unknown" (like a failed one): it
+   * must not turn the all-exhausted path into a raw rejection instead of
+   * RATE_LIMIT. Shared by {@link resolveKey} and {@link activeAccount}.
+   */
+  private probeAllMarked;
   /** Hand out the chosen account's key. */
   private pick;
 }
@@ -896,7 +944,7 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.72.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.73.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table would drop `meituan/
@@ -957,7 +1005,7 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.72.1 (2026-09-30): 86 catalog
+ * Provider-tier. Re-verified at command-code@1.73.0 (2026-10-01): 86 catalog
  * ids at 53/62/76/84 cumulative, a strict superset chain — every release since
  * 1.49.0 has been additive with no tier move, and per-entry tags below name the
  * release that added each row.
@@ -986,7 +1034,7 @@ declare function compareByPlan(a: {
 /**
  * Subscription plan table, synced from the official CLI bundle's plan maps
  * (located by the `"individual-go"` key in `dist/cli.mjs`, re-verified unchanged
- * through command-code@1.72.1): subscription `planId` prefix → display name and
+ * through command-code@1.73.0): subscription `planId` prefix → display name and
  * the plan's monthly credit total. This is the account's own subscription
  * (from `/alpha/billing/subscriptions`) — distinct from {@link KNOWN_PLANS},
  * which maps catalog models to their minimum tier.
@@ -1182,11 +1230,11 @@ interface CommandCodeCatalogModel {
    * Per-model MONTHLY allowance in USD: how much of the plan's monthly credit
    * pool this one model may draw, already resolved by the Host against the
    * account pool's highest plan (the pricing page publishes an allowance for
-   * GOAT and Pro only). Undefined when that plan has no published allowance
+   * Go, GOAT and Pro). Undefined when that plan has no published allowance
    * (Go, Provider, Max, Ultra) or when billing could not be read — the browser
    * shows nothing rather than guessing a neighbouring tier's figure.
    *
-   * Deliberately a plain number and not the `{ goat, pro }` pair: the bracket is
+   * Deliberately a plain number and not the `{ go, goat, pro }` map: the bracket is
    * a Host decision that already depends on facts the browser does not hold, and
    * shipping both figures would invite a second, divergent rule here. Note this
    * is dollars per MONTH, unlike every rate in `CommandCodePriceTable`.
@@ -1440,7 +1488,7 @@ declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = C
 declare function applyUsageRemote<C extends CommandCodeConnectionOptions>(ctx: Context, deps: CommandCodeUsageDeps<C>): void;
 //#endregion
 //#region src/login.d.ts
-/** Give up on the browser after this long without a callback (mirrors the CLI). */
+/** 登录总期限包含浏览器回调、密钥验证与存储，不能在收到回调后撤掉保护。 */
 declare const LOGIN_TIMEOUT_MS = 120000;
 /** First local port the flow tries (mirrors the CLI). */
 declare const LOGIN_START_PORT = 5959;
@@ -1503,7 +1551,7 @@ declare function studioBaseForApiBase(apiBase: string): string;
  * tests). Mirrors the CLI's verdicts: 401 → invalid_key, other non-OK →
  * server_error, transport failure → network_error.
  */
-declare function validateCommandApiKey(fetchImpl: typeof fetch, apiBase: string, apiKey: string): Promise<ApiKeyValidation>;
+declare function validateCommandApiKey(fetchImpl: typeof fetch, apiBase: string, apiKey: string, signal?: AbortSignal): Promise<ApiKeyValidation>;
 /**
  * One browser-login attempt machine. Single-flight by design: `begin()` while
  * waiting returns the live attempt's status instead of starting a second one;
@@ -1518,6 +1566,7 @@ declare class CommandCodeLoginFlow {
   private statusValue;
   private server;
   private timer;
+  private attemptAbort;
   /** Settle hooks of the live attempt's callback promise. */
   private settle;
   /**
@@ -1597,7 +1646,9 @@ declare class CommandCodeLoginFlow {
   /** Map a tagged settle rejection onto the status face. */
   private failFrom;
   private clearTimer;
-  /** Close the server and watchdog without touching the published status. */
+  /** 消费一次回调后关闭监听；保留总期限以约束后续验证。 */
+  private closeCallback;
+  /** 结束整个尝试，同时中止验证请求，迟到结果由所有权检查拦截。 */
   private teardown;
 }
 //#endregion

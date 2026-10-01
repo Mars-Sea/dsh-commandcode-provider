@@ -19,7 +19,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     themselves are NOT a reliable source since the 2026-09-30 reformat**: `/docs/plans/go|goat|pro` now emit
     a rendered `minPlanName` instead of an availability map, `/docs/plans/max` dropped its table entirely,
     and `/docs/plans/provider` became the Provider API reference. Strict superset chain; every catalog ID
-    covered exactly once (re-verified at command-code@1.72.1, 2026-09-30 — the public catalog serves 86
+    covered exactly once (re-verified at command-code@1.73.0, 2026-10-01 — the public catalog serves 86
     models. `gpt-6.1-sol` (1.71.0) is the first **`max`** member: every lower tier false, only
     `individual-max`/`individual-ultra`/`teams-pro` true. `inclusionai/ling-3.1-flash:free` (1.70.0) is `go`.
     No existing tier moved, taking the map to 54/63/77/85/86 — additions only, so the chain still holds.

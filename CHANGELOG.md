@@ -4,11 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.2] - 2026-10-01
 
 ### Added
 
 - 支持 Go 套餐官方每模型月度额度；零值保留为零，缺失值不推算，额度不改变接口访问权限。
+
+### Changed
+
+- **上游同步：command-code@1.72.1 → 1.73.0。** 已按 npm `latest` tarball（提取前做 sha512 校验）、`/provider/v1/models`、定价页内嵌 availability、CLI 注册表的 effort/ZDR/套餐表与渲染后 changelog 重新核对。**本次只有版本常量变化**：目录仍是同样 86 个模型，`KNOWN_EFFORTS`、`KNOWN_PLANS`、`KNOWN_IMAGE_MODELS`、`KNOWN_THINKING_MODELS`、`KNOWN_PEAK_PRICING`、`KNOWN_NON_ZDR_MODELS`（23 项）与 `KNOWN_SUBSCRIPTION_PLANS` 全部零差异，因此没有任何快照被改动。1.73.0 实际带来的是云沙箱 RPC 层——新增 `/alpha/sandbox/input`、`/alpha/sandbox/transcript` 两个 alpha 端点，以及 `--experimental --rpc` 下的一个 JSON-RPC dispatcher（`turn/start`、`turn/steer`、`turn/interrupt`、`modelAndEffort`），本插件从不调用。适配器真正使用的通道与 1.72.1 完全一致：`/alpha/generate` 调用点、`/provider/v1/*` 端点全集、以及所有请求头（`x-command-code-version`、`x-cmd-zdr` 等）均无增删。其前的 1.72.2 → 1.72.4 是 `IMP` 修复串；1.72.0 的用户可见新增是 `cmd mods enable|disable <name>` 与 `/rc`（从 Telegram/Discord 远程控制会话）。注意官方 changelog 页当时最新仍为 1.72.4——npm 先于网页发布，该版本自身条目尚未渲染。
+
+- **`/alpha/generate` 补齐官方客户端的两个请求字段。** `permissionMode` 现在发送 `"standard"`（CLI 内部默认值是 `"default"`，但其 `toWirePermissionMode()` 会在上线前把缺省/默认归一化为 `"standard"`，且该值经真实服务探测确认为合法枚举成员），`x-taste-learning` 由 `"true"` 改为 `"false"`（取自一个独立第三方 Command Code 集成的观测值，未对真实服务做过效果验证）。两者都只是请求形状对齐：`permissionMode` 已在 issue #64 评审的"根因边界"一节用同一传输测过并排除为缓存回归的成因；`x-taste-learning` 的新值同样未经实测确认会改变任何响应。未改变运行时行为。
+
+- **账号卡片与侧边栏统计的"当前使用"徽章，现在与实际请求路由共用同一套自愈判断。** `resolveKey()`（真实请求路径）对显式选中的账号有专门的复活探测：一次 429 留下的 `unknown` 标记，会在下一次真实请求时按 60 秒节流主动探测其真实窗口，发现没超限就立刻恢复。但展示路径此前直接调用裸 `selectActiveAccount()`——一个纯同步过滤函数，从不探测——而清除 `unknown` 标记的唯一途径就是 `resolveKey()` 内部的探测。结果是：只要用户没有实际发消息，一个早已可复活的标记会一直显示"已切换"。现在把两段探测逻辑抽成共享私有方法 `reviveExplicit()` / `probeAllMarked()`，并新增 `pool.activeAccount()` 供展示层复用（issue #51 的后续报告）。`activeAccount()` 与 `resolveKey()` 的刻意差异：不消耗 `tried` 预算、不区分具体模型、全部账号不可用时返回 `undefined` 而非抛错。反馈中另一半"选的是有额度账号却突然 400、会话中断"是否同一根因仍待真实零余额账号复现，不在本次修复范围。
 
 ### Fixed
 

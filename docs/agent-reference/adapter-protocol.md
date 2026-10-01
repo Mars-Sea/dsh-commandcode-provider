@@ -26,17 +26,31 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   snapshot in `src/capabilities.ts` is informational and may lag provider coverage or capacity.
   `tests/adapter.test.ts` checks the chat transports, off by default, unsupported models retaining the header,
   and 422 diagnosis.
-- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.68.0):
-  - `POST {apiBase}/alpha/generate` — CLI transport body `{ config, memory, taste, skills, params: { model,
-    messages, tools, system, max_tokens, temperature, stream, reasoning_effort? }, threadId }`. Used for
-    Go-plan accounts (the only plan without Provider API access) and as the fallback when
+- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.73.0):
+  - `POST {apiBase}/alpha/generate` — CLI transport body `{ config, memory, taste, skills, permissionMode,
+    params: { model, messages, tools, system, max_tokens, temperature, stream, reasoning_effort? },
+    threadId }`. The real CLI's request also carries `mode` (server-validated against a fixed enum —
+    `agent | learning | custom-agent | custom-agent-create | title-gen | tool-desc | compact | vision | …` —
+    but omission is accepted, no error) and `promptCache` (the normal agent-loop turn never sets it either;
+    only isolated side calls — image description, compaction, title generation — send it, always `"off"`).
+    Neither is sent by this adapter: a 2026-09-30 live probe on a free model, repeated with a realistic
+    `max_tokens` budget, found no response-shape difference with or without either field, so this is a known
+    but harmless protocol gap, not a bug. `permissionMode` IS sent (`"standard"`) — the CLI's own internal
+    default is the string `"default"`, but its `toWirePermissionMode()` normalizes an absent/default value to
+    `"standard"` before it reaches the wire (also enum-validated: `default | standard | auto-accept | plan |
+    bypass`), so `"standard"` is the real wire value for an ordinary session. This is sent for request-shape
+    parity only — see `docs/issue-64-cache-review.md`'s "root-cause boundary" section, which already tested
+    this exact value on this transport and excluded it as a fix for the image cache-boundary regression.
+    Used for Go-plan accounts (the only plan without Provider API access) and as the fallback when
     `/provider/v1/chat/completions` returns `upgrade_required`. Historical reasoning IS replayed here as a
     `{ type: 'reasoning', text }` part of the assistant content array, in content order — the official CLI's
     `toWireMessages` converts every `thinking` block that way (command-code@1.54.0), and the provider
     rejects a DeepSeek thinking-mode tool loop whose assistant tool calls arrive without their reasoning
     (`The reasoning_content in the thinking mode must be passed back to the API.`, issue #34). Do not
     "restore" the old drop-reasoning behavior: it was ported from the pi plugin and is no longer upstream's
-    shape.
+    shape. `x-taste-learning` is sent as `"false"` (was `"true"`); this matches an independent third-party
+    Command-Code integration's (magpie's) observed value and is unverified beyond that — not measured against
+    the real service to confirm it changes anything.
   - `POST {apiBase}/provider/v1/chat/completions` — documented OpenAI-format transport with a flat body `{
     model, messages, tools?, max_tokens, temperature, stream, reasoning_effort? }`. Used for every account
     with Provider API access whose model the catalog does not route to `/messages`; historical reasoning is

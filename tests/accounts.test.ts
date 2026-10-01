@@ -376,6 +376,80 @@ test('a revived preferred account serves again', async () => {
   assert.equal(resolved?.slot.id, 'account-2')
 })
 
+// activeAccount(): the display badge (settings page card, sidebar stats)
+// must self-heal the same way resolveKey() does, or a page left open with
+// no chat activity keeps showing the wrong account long after a real
+// request would have quietly recovered (issue #51's follow-up report).
+
+test('activeAccount revives a rejected pin the same way resolveKey does', async () => {
+  const { pool, probeCalls } = makePool({
+    ...TWO_ACCOUNTS,
+    preferredId: 'account-2',
+    probes: { 'key-2': { exceeded: false, resetAt: 0 } },
+  })
+  pool.markRejected('key-2', 'rate-limit')
+  const active = await pool.activeAccount()
+  assert.equal(active?.key, 'key-2')
+  assert.equal(active?.slot.id, 'account-2')
+  assert.deepEqual(probeCalls, ['key-2'])
+})
+
+test('activeAccount reflects a genuine fallback when the probe confirms exhaustion', async () => {
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    preferredId: 'account-2',
+    probes: { 'key-2': { exceeded: true, resetAt: Date.now() + 3_600_000 } },
+  })
+  pool.markRejected('key-2', 'rate-limit')
+  const active = await pool.activeAccount()
+  assert.equal(active?.key, 'key-1')
+  assert.equal(active?.slot.id, 'default')
+})
+
+test('activeAccount shares the explicit-probe throttle with resolveKey', async () => {
+  const { pool, probeCalls } = makePool({
+    ...TWO_ACCOUNTS,
+    preferredId: 'account-2',
+    probes: { 'key-2': { exceeded: true, resetAt: Date.now() + 3_600_000 } },
+  })
+  pool.markRejected('key-2', 'rate-limit')
+  await pool.resolveKey()
+  probeCalls.length = 0
+  const active = await pool.activeAccount()
+  assert.equal(active?.key, 'key-1')
+  assert.deepEqual(probeCalls, [], 'the badge read must not buy a second probe within the interval')
+})
+
+test('activeAccount batch-revives when nothing currently resolves', async () => {
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    probes: { 'key-1': { exceeded: false, resetAt: 0 }, 'key-2': { exceeded: true, resetAt: Date.now() + 3_600_000 } },
+  })
+  pool.markRejected('key-1', 'rate-limit')
+  pool.markRejected('key-2', 'rate-limit')
+  const active = await pool.activeAccount()
+  assert.equal(active?.key, 'key-1')
+})
+
+test('activeAccount neither throws nor picks anything when every account is truly exhausted', async () => {
+  const { pool } = makePool({
+    ...TWO_ACCOUNTS,
+    probes: {
+      'key-1': { exceeded: true, resetAt: Date.now() + 3_600_000 },
+      'key-2': { exceeded: true, resetAt: Date.now() + 3_600_000 },
+    },
+  })
+  pool.markRejected('key-1', 'rate-limit')
+  pool.markRejected('key-2', 'rate-limit')
+  const active = await pool.activeAccount()
+  assert.equal(active, undefined)
+})
+
+test('activeAccount on an empty pool resolves to undefined', async () => {
+  const { pool } = makePool({ slots: [] })
+  assert.equal(await pool.activeAccount(), undefined)
+})
+
 test('an unknown preferred id falls back to rotation order', async () => {
   const { pool } = makePool({ ...TWO_ACCOUNTS, preferredId: 'no-such-account' })
   assert.equal((await pool.resolveKey())?.key, 'key-1')

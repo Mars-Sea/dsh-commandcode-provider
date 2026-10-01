@@ -218,3 +218,22 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   自动回收，改为容量上限 200 条 + 先进先出淘汰。无 `sessionId` 的一次性调用退回旧的单槽全局行为。
   `tests/adapter.test.ts` 新增并发会话独立累计、无会话回退两个用例。参见
   [《决策记录》第一章第 3 条](../决策记录.md#一请求失败恢复)。
+- **设置页账号卡片 / 侧边栏统计的"当前使用"徽章必须和真实请求路由共用同一套自愈逻辑，否则它显示的是过期标记**
+  (`CommandCodeAccountPool.activeAccount()` in `src/accounts.ts`; issue #51 的后续报告：账号卡片和侧边栏
+  统计一起被"切到另一个账号"，且比真实请求恢复得慢得多)。`resolveKey()`（真实请求路径）对**显式选中**
+  的账号（手动 pin 或模型路由命中）有专门的复活探测：一次 429 留下的 `unknown` 标记，会在下一次真实请求
+  时主动探测其真实窗口（`EXPLICIT_ACCOUNT_PROBE_INTERVAL_MS`=60 秒节流），发现其实没超限就立刻恢复。但
+  `src/index.ts` 的 `usageReports()` 此前直接调用裸 `selectActiveAccount()`——一个纯同步过滤函数，
+  从不探测——而清除 `unknown` 标记的唯一途径就是 `resolveKey()` 内部的探测；`accountUsable()` 对
+  `unknown` 状态永远返回不可用。结果是：只要用户没有实际发消息（只是打开设置页看看），一个早已可以被
+  探测复活的标记会一直显示"已切换"，哪怕下一条真实消息本该立刻自动切回来。**修复**：把 `resolveKey()`
+  里"显式账号回退前先探测复活"（原 317-329 行内联逻辑）和"全员被标记时批量探测"（原 338-352 行内联逻辑）
+  分别抽成私有方法 `reviveExplicit()` / `probeAllMarked()`，新增公开方法 `activeAccount()` 复用这两个
+  方法，`resolveKey()` 与 `activeAccount()` 现在共用同一套判断，不会再各自演化出不一致的行为。
+  `activeAccount()` 与 `resolveKey()` 的唯一有意差异：不消耗 `tried` 预算、不区分具体模型（展示的是整个
+  账号池的状态，不是某次请求）、且全部账号都不可用时返回 `undefined` 而不是抛错——展示场景不该因为
+  "现在没有可用账号"而抛异常。探测节流状态（`explicitProbes`）与 `resolveKey()` 共享，所以刷新设置页
+  不会导致探测接口被打两次。`tests/accounts.test.ts` 新增六个 `activeAccount` 用例：复活、真实耗尽时的
+  正确回退、与 `resolveKey()` 共享节流、全员标记时的批量复活、真正全部耗尽时返回 `undefined`、空账号池。
+  这个改动只覆盖"展示的账号与实际会用的账号不同步"这一半；反馈者截图里另一半"选的是还有额度的账号却
+  突然报 400、会话中断"是否是同一根因、是不是需要真实零余额账号复现，仍待验证，未在本条修复范围内。

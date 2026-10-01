@@ -17,8 +17,8 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.72.1)', () => {
-  // Verbatim from `dist/cli.mjs` 1.72.1: `modelSupportsZdr(id) = !wD.has(id)`
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.73.0)', () => {
+  // Verbatim from `dist/cli.mjs` 1.73.0: `modelSupportsZdr(id) = !wD.has(id)`
   // unioned with the sibling route table's `br` set, cross-checked against the
   // public catalog. A sync that moves membership must be a deliberate diff.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [

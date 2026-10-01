@@ -18,7 +18,18 @@ The evidence is a 10-turn `claude-sonnet-5-5` session's own billed rows. Reprici
 
 The adapter now sets the same three. The last user turn is what makes it pay: DSH resends the entire history each request, so a marker there is a rolling boundary, whereas the `system`-only marker the CLI uses would leave everything after the first turn uncached. The session reprices to $0.1869, a 66.9% reduction, with no other field changed.
 
-**What this does not prove.** That the gateway honours `cache_control` on this endpoint is inferred, not measured: the official pi provider depends on the field for its own cost display, so a gateway stripping it would misprice every Claude session visibly. The exposure is bounded in both directions — a gateway that ignored the field would change nothing, and one that honoured it without a hit would bill only the first turn's write at $2.5/M against $2/M, with later turns hitting inside the 5-minute window. A live A/B remains the acceptance check once quota exists: post the same history twice, with and without the markers, and compare `cache_creation_input_tokens` / `cache_read_input_tokens`.
+**What this does not prove.** That the gateway honours `cache_control` on this endpoint was inferred, not measured, at the time this was written — see the 2026-09-30 confirmation below.
+
+## 2026-09-30 live A/B confirmation: the gateway does honor `cache_control`
+
+The acceptance check above (post the same history twice, compare `cache_creation_input_tokens` / `cache_read_input_tokens`) was run for real against `claude-sonnet-5-5` on `/provider/v1/messages`, using a fresh ~3.9k-token static `system` block (well above Anthropic's minimum cacheable prefix) marked `cache_control: { type: 'ephemeral' }`, `max_tokens: 8`, no `thinking` field, two calls 1.5s apart:
+
+| Call | `input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` |
+| --- | ---: | ---: | ---: |
+| 1st (fresh prefix) | 4 | 0 | 3,921 |
+| 2nd (same prefix, 1.5s later) | 4 | 3,910 | 11 (the new user turn's own marked block) |
+
+The second call read back 99.7% of the first call's write. This closes the open question: **the gateway does honor `cache_control` on `/provider/v1/messages` for `claude-sonnet-5-5`**, at least for a stable `system` block under ordinary conditions (no images, no tool loop, single account). It does not extend this confirmation to the CLI transport (`/alpha/generate`), which has no `cache_control` concept and is where the still-unresolved image-triggered regression documented below lives — that is a different transport, a different (implicit, prefix-based) caching mechanism, and remains open. Total cost of this confirmation was on the order of one U.S. cent.
 
 ## 2026-09-28 image-path follow-up
 

@@ -5073,7 +5073,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the command-code provider table; `src/capabilities.ts` owns the
-  // table and is currently synced to command-code@1.72.1.
+  // table and is currently synced to command-code@1.73.0.
   // Every model the CLI's provider table ships effort levels for must be present, and
   // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
   // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
@@ -5112,7 +5112,7 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.ok(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling'))
   // Retired models (the MiniMax free variants, stealth/ox-alpha) belong to neither set.
   assert.ok(!KNOWN_THINKING_MODELS.has('stealth/ox-alpha'))
-  // Same provenance: `src/capabilities.ts`, synced to the command-code@1.72.1
+  // Same provenance: `src/capabilities.ts`, synced to the command-code@1.73.0
   // provider table.
   // Every model that reasons automatically (reasoning:true, no selectable effort
   // levels) belongs in this set, and every model that gained selectable efforts has
@@ -5554,7 +5554,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.72.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.73.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -5778,6 +5778,42 @@ test('stream() rotates on a code-only account-scoped body, with no wording to re
   })
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
 
+  assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
+  assert.deepEqual(reasons, ['unavailable'])
+  assert.ok(chunks.some((chunk) => chunk.type === 'finish'))
+})
+
+test('stream() rotates past a zero-balance Messages-route rejection with no code, only the Anthropic envelope', async () => {
+  // A real zero-balance account's own 400, captured live from
+  // /provider/v1/messages (issue #51 follow-up investigation, 2026-09-30):
+  // the Anthropic error envelope, no `code` member at all — only `error.type`
+  // ("invalid_request_error", not an account-fact code) and prose. Neither
+  // existing "insufficient credits" fixture above carries this shape (both
+  // have a `code`); this one only survives on the prose scan
+  // (`lower.includes('insufficient credits')`), which must keep matching it.
+  const { fetchImpl, calls } = fetchByKey({
+    'key-1': {
+      status: 400,
+      body: JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: 'You have insufficient credits to make this request. Please purchase more credits to continue using the service.',
+        },
+      }),
+    },
+    'key-2': { status: 200, body: FINISH_STREAM },
+  })
+  const reasons: string[] = []
+  const adapter = makeAdapter({
+    fetchImpl,
+    resolveApiKey: async () => 'key-1',
+    rotateApiKey: async (_rejected, reason) => {
+      reasons.push(reason)
+      return 'key-2'
+    },
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))
   assert.deepEqual(calls.map((call) => call.key), ['key-1', 'key-2'])
   assert.deepEqual(reasons, ['unavailable'])
   assert.ok(chunks.some((chunk) => chunk.type === 'finish'))

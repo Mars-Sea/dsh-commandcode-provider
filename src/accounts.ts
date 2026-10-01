@@ -315,41 +315,13 @@ export class CommandCodeAccountPool {
     if (routed !== undefined) return this.pick(routed)
     const chosen = selectActiveAccount(available, preferred)
     if (chosen !== undefined) {
-      // The explicit account is unusable while another one can serve — the
-      // fallback path. Its mark is re-checked against the real window before
-      // the user's own selection is demoted for good (issue #51).
-      const explicit = this.explicitAccount(available, options?.model ?? '', preferred)
-      if (
-        explicit !== undefined
-        && explicit.key !== chosen.key
-        && this.canProbeExplicit(explicit)
-      ) {
-        const revived = await this.probeExplicit(explicit)
-        if (revived !== undefined) return this.pick(revived)
-      }
-      return this.pick(chosen)
+      const revived = await this.reviveExplicit(available, options?.model ?? '', preferred, chosen)
+      return this.pick(revived ?? chosen)
     }
 
     // Every account still in play is marked: probe the real windows before
-    // giving up. Disabled (401) keys are not probed — an invalid key stays
-    // invalid. A throwing probe counts as "unknown" (like a failed one): it must
-    // not turn the all-exhausted path into a raw rejection instead of
-    // RATE_LIMIT.
-    await Promise.all(available.map(async (account) => {
-      if (account.state?.kind === 'disabled') return
-      let probe: AccountWindowProbe | undefined
-      try {
-        probe = await this.deps.probeWindow(account.key)
-      } catch {
-        return
-      }
-      if (probe === undefined) return
-      if (!probe.exceeded) {
-        this.states.delete(account.key)
-        return
-      }
-      this.stampWindowMark(account, probe)
-    }))
+    // giving up.
+    await this.probeAllMarked(available)
 
     // Re-resolve once: the probe pass above may have revived keys, and both the
     // revival check and the error classification read the same post-probe
@@ -377,6 +349,38 @@ export class CommandCodeAccountPool {
     // change — would otherwise report "every configured account (0) was
     // rejected with 401", naming neither an account nor a real cause.
     throw allAccountsUnusable(latestAccounts.length > 0 ? latestAccounts : accounts)
+  }
+
+  /**
+   * Which account is serving right now, for display (the settings page's
+   * account card, the sidebar usage stats) — without consuming a request's
+   * `tried` budget and without throwing when nothing can serve.
+   *
+   * Reads and self-heals exactly like {@link resolveKey} would: an `unknown`
+   * mark on the pinned account is re-probed (throttled the same way, sharing
+   * the same per-key timestamp), and a pool where nothing currently resolves
+   * gets one batch probe pass too. Without this, the badge read a possibly
+   * stale mark forever — nothing but an actual generate request ever cleared
+   * an `unknown` mark, so a page left open with no chat activity kept
+   * showing "switched to the fallback account" long after a real request
+   * would have quietly recovered (issue #51's follow-up report: the account
+   * card and the sidebar stats both stuck on the wrong account).
+   *
+   * No `model` parameter: the badge describes the pool as a whole, not one
+   * request, so model-routing rules are deliberately not consulted here —
+   * matching what the direct `selectActiveAccount` call this replaces did.
+   */
+  async activeAccount(): Promise<ResolvedAccount | undefined> {
+    const accounts = await this.resolvedAccounts()
+    if (accounts.length === 0) return undefined
+    const preferred = this.deps.preferredId?.()
+    const chosen = selectActiveAccount(accounts, preferred)
+    if (chosen !== undefined) {
+      const revived = await this.reviveExplicit(accounts, '', preferred, chosen)
+      return revived ?? chosen
+    }
+    await this.probeAllMarked(accounts)
+    return selectActiveAccount(await this.resolvedAccounts(), preferred)
   }
 
   /**
@@ -540,6 +544,55 @@ export class CommandCodeAccountPool {
         until: 0,
       })
     }
+  }
+
+  /**
+   * The explicit-account fallback re-check: when `chosen` (what rotation
+   * would currently serve) is not the account the user actually asked for,
+   * re-probe that explicit account's mark before accepting the fallback —
+   * so a rate-limit mark never demotes the user's own selection for good
+   * (issue #51). Returns the revived account, or `undefined` when there is
+   * nothing to revive (explicit account already serving, not due for a
+   * probe, or the probe found it still exceeded). Shared by {@link resolveKey}
+   * (the request path) and {@link activeAccount} (the display path), so both
+   * agree on what "currently usable" means instead of drifting apart.
+   */
+  private async reviveExplicit(
+    accounts: readonly ResolvedAccount[],
+    model: string,
+    preferred: string | undefined,
+    chosen: ResolvedAccount,
+  ): Promise<ResolvedAccount | undefined> {
+    const explicit = this.explicitAccount(accounts, model, preferred)
+    if (explicit === undefined || explicit.key === chosen.key || !this.canProbeExplicit(explicit)) {
+      return undefined
+    }
+    return this.probeExplicit(explicit)
+  }
+
+  /**
+   * Probe every marked account's real usage window when nothing currently
+   * resolves. Disabled (401) keys are not probed — an invalid key stays
+   * invalid. A throwing probe counts as "unknown" (like a failed one): it
+   * must not turn the all-exhausted path into a raw rejection instead of
+   * RATE_LIMIT. Shared by {@link resolveKey} and {@link activeAccount}.
+   */
+  private async probeAllMarked(accounts: readonly ResolvedAccount[]): Promise<void> {
+    await Promise.all(accounts.map(async (account) => {
+      if (account.state?.kind === 'disabled') return
+      let probe: AccountWindowProbe | undefined
+      try {
+        probe = await this.deps.probeWindow(account.key)
+      } catch {
+        return
+      }
+      if (probe === undefined) return
+      if (!probe.exceeded) {
+        this.states.delete(account.key)
+        return
+      }
+      this.stampWindowMark(account, probe)
+    }))
   }
 
   /** Hand out the chosen account's key. */

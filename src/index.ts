@@ -42,7 +42,7 @@ import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './a
 import { absorbTransientFailure, resetTransientFailures, transientBudgetMessage } from './transient-retry.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { AccountRotationReason, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
-import { CommandCodeAccountPool, accountUsable, selectActiveAccount } from './accounts.ts'
+import { CommandCodeAccountPool, accountUsable } from './accounts.ts'
 import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModelAccountRule } from './accounts.ts'
 import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
@@ -634,7 +634,11 @@ export function apply(ctx: Context, config: Config): void {
     // serving selection.
     const described = await pool.describeAccounts()
     const byId = new Map(described.map((account) => [account.slot.id, account]))
-    const active = selectActiveAccount(await pool.resolvedAccounts(), preferredId())
+    // activeAccount() (not the bare selectActiveAccount import) so a stale
+    // `unknown` mark on the pinned account self-heals the same way a real
+    // request would, instead of the badge reading it forever until the next
+    // chat message happens to clear it (issue #51's follow-up report).
+    const active = await pool.activeAccount()
     const entries = await Promise.all(slots().map(async (slot) => {
       const account = byId.get(slot.id)
       let report: CommandCodeUsageReport
