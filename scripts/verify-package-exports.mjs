@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { packedEntry } from './npm-pack-json.mjs'
 
 /** 条件入口递归展开；通配目标必须至少对应一个发布文件。 */
 export function verifyPackedExports(manifest, files) {
@@ -29,8 +30,10 @@ function main() {
   })
   if (packed.error !== undefined) throw packed.error
   if (packed.status !== 0) throw new Error(packed.stderr || `打包检查退出 ${packed.status}`)
-  const entries = JSON.parse(packed.stdout)
-  const entry = Array.isArray(entries) ? entries[0] : Object.values(entries)[0]
+  // npm 10 runs this project's `prepare` (tsdown) even with --ignore-scripts,
+  // and its banners land on STDOUT ahead of the JSON — `packedEntry` skips
+  // them. See ./npm-pack-json.mjs.
+  const entry = packedEntry(packed.stdout)
   if (!Array.isArray(entry?.files) || entry.files.length === 0) throw new Error('打包没有提供发布文件列表')
   const problems = verifyPackedExports(manifest, entry.files.map((file) => file.path))
   if (problems.length > 0) throw new Error(problems.join('\n'))

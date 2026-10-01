@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { packedEntry } from './npm-pack-json.mjs'
 
 const PNPM_VERSION = '10.34.5'
 const repositoryDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -42,14 +43,10 @@ function verifyIsolatedInstall() {
       '--pack-destination',
       packDir,
     ], repositoryDir).stdout
-    const packed = JSON.parse(packOutput)
-    // `npm pack --json` reports an array in every published npm, but the shape
-    // is not contractual: `logTar` keys the entry by index and the CLI merges
-    // numeric keys back into an array, so a change to either could hand back a
-    // keyed object instead. Accept both rather than pin one.
-    const entry = Array.isArray(packed)
-      ? packed[0]
-      : Object.values(packed)[0]
+    // npm 10 runs this project's `prepare` (tsdown) even with
+    // --ignore-scripts, and its banners land on STDOUT ahead of the JSON —
+    // `packedEntry` skips them. See ./npm-pack-json.mjs.
+    const entry = packedEntry(packOutput)
     const filename = entry?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not report a tarball filename')
 

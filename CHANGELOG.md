@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- 修复持续集成里"隔离安装"检查在 npm 10 下必然失败：`npm pack --json` 在 npm 10 仍会触发本项目的 `prepare`（`tsdown`），其彩色横幅打在 stdout 上、排在 JSON 之前，脚本直接 `JSON.parse(stdout)` 就抛 `Unexpected token 'ℹ'` 并中断该步骤。改为跳过 JSON 之前的噪声再解析，并接受数组与键值对象两种形状；两个打包校验脚本共用同一套解析，新增 6 条用例（含噪声中的方括号、无 JSON 时报错、噪声超上限停止扫描）。本地 npm 11 不触发 `prepare`，所以只在持续集成暴露。
+
 ## [0.12.2] - 2026-10-01
 
 ### Added
