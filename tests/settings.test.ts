@@ -6,7 +6,7 @@
  * domain under the plugin's own reference (never the settings namespace, so
  * the literal cannot leak into a settings document), connection facts go
  * through the `llm-commandcode` scope, and the Host stays the single fact
- * source — every write is read back before the state is republished.
+ * source：配置与凭据分别确认，描述只刷新存在性，不能验证密钥内容。
  *
  * It does import `../src/adapter.ts` for one constant: the timeout fields are
  * edited in seconds while the Host stores milliseconds, and the only thing
@@ -24,7 +24,7 @@ import {
   type SettingsPageApi,
 } from '../src/client/settings.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../src/adapter.ts'
-import { en, zh } from '../src/client/locales.ts'
+import { en, zh, settingsWriteNotice } from '../src/client/locales.ts'
 import type { SettingsPathOp } from '../src/client/settings-scope.ts'
 import { modelIsVisible } from '../src/model-visibility.ts'
 
@@ -72,18 +72,19 @@ function makeScope(init: {
       for (const fn of listeners) fn()
     },
     async mutate(ops: readonly SettingsPathOp[], revision?: number) {
-      if (revision !== undefined && revision !== state.revision) return
+      if (revision !== undefined && revision !== state.revision) return 'conflict' as const
       const value = { ...state.value }
       const user = { ...(state.user ?? {}) }
       for (const op of ops) {
         const field = op.path[0]!
         if (op.op === 'set') { value[field] = op.value; user[field] = op.value }
-        else { delete value[field]; delete user[field] }
+        else { delete user[field]; if (init.base && Object.hasOwn(init.base, field)) value[field] = init.base[field]; else delete value[field] }
       }
       state.value = value
       state.user = user
       state.revision += 1
       for (const fn of listeners) fn()
+      return 'accepted' as const
     },
   }
 }
@@ -330,11 +331,11 @@ test('discard() drops every staged edit', () => {
 
 test('保存期间同字段及新增字段草稿保留，下一次保存才提交', async () => {
   const scope = makeScope({})
-  const set = scope.set.bind(scope)
+  const mutate = scope.mutate.bind(scope)
   let release: () => void = () => undefined
   const gate = new Promise<void>((resolve) => { release = resolve })
   let first = true
-  scope.set = async (field, value) => { if (first) { first = false; await gate }; await set(field, value) }
+  scope.mutate = async (ops, revision) => { if (first) { first = false; await gate }; return mutate(ops, revision) }
   const { controller } = makeController({ scope })
   controller.edit('requestTimeoutMs', '10')
   const save = controller.save()
@@ -354,10 +355,10 @@ test('保存期间同字段及新增字段草稿保留，下一次保存才提�
 
 test('保存开始冻结模型选择，网络等待期间的新选择不会提前提交或被清除', async () => {
   const scope = makeScope({})
-  const set = scope.set.bind(scope)
+  const mutate = scope.mutate.bind(scope)
   let release: () => void = () => undefined
   const gate = new Promise<void>((resolve) => { release = resolve })
-  scope.set = async (field, value) => { if (field === 'requestTimeoutMs') await gate; await set(field, value) }
+  scope.mutate = async (ops, revision) => { await gate; return mutate(ops, revision) }
   const { controller } = makeController({ scope })
   controller.edit('requestTimeoutMs', '10')
   controller.editVisibleModels(['model-a'])
@@ -434,7 +435,7 @@ test('resetField() stages a clear back to the inherited value', async () => {
   assert.equal(state.apiBase.text, 'https://api.commandcode.ai')
   assert.equal(state.dirty, true)
   await controller.save()
-  assert.equal(scope.state.value.apiBase, undefined)
+  assert.equal(scope.state.value.apiBase, 'https://api.commandcode.ai')
   assert.equal(scope.state.user?.apiBase, undefined)
 })
 
@@ -640,63 +641,6 @@ test('starts with no extra accounts and stays clean', () => {
   assert.equal(controller.state().dirty, false)
 })
 
-test('createAccount with a key stores the key, then the row, without a page save', async () => {
-  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS }, user: { accounts: TWO_ACCOUNTS } })
-  const api = makeApi({})
-  const { controller } = makeController({ scope, api })
-  const ref = await controller.createAccount({ label: 'Go #3', key: ' sk-third ' })
-
-  assert.equal(ref, 'COMMANDCODE_API_KEY_3')
-  assert.equal(api.store.get('COMMANDCODE_API_KEY_3'), 'sk-third')
-  assert.deepEqual(scope.state.value.accounts, [...TWO_ACCOUNTS, { label: 'Go #3', apiKeyEnv: 'COMMANDCODE_API_KEY_3' }])
-  await flush()
-  const account = controller.state().accounts[1]
-  assert.equal(account?.configured, true)
-  assert.equal(controller.state().dirty, false, 'account operations never stage')
-  assert.equal(controller.state().accountFailed, undefined)
-})
-
-test('createAccount without a key stores a keyless row a browser sign-in can target', async () => {
-  const scope = makeScope({})
-  const api = makeApi({})
-  const { controller } = makeController({ scope, api })
-  const ref = await controller.createAccount({ label: 'Pending' })
-  assert.equal(ref, 'COMMANDCODE_API_KEY_2')
-  assert.equal(api.store.size, 0)
-  assert.deepEqual(scope.state.value.accounts, [{ label: 'Pending', apiKeyEnv: 'COMMANDCODE_API_KEY_2' }])
-  await flush()
-  assert.equal(controller.state().accounts[0]?.configured, false)
-})
-
-test('createAccount derives new refs from a renamed apiKeyEnv prefix', async () => {
-  const scope = makeScope({ value: { apiKeyEnv: 'MY_CUSTOM_REF' } })
-  const { controller } = makeController({ scope })
-  assert.equal(await controller.createAccount({ label: 'x' }), 'MY_CUSTOM_REF_2')
-})
-
-test('a refused key write stores no row', async () => {
-  const scope = makeScope({})
-  const api = makeApi({ failSet: true })
-  const { controller } = makeController({ scope, api })
-  const ref = await controller.createAccount({ label: 'Go #2', key: 'sk-second' })
-  assert.equal(ref, undefined)
-  assert.equal('accounts' in scope.state.value, false)
-  assert.equal(controller.state().accountFailed, 'create')
-})
-
-test('a refused list write rolls the new key back', async () => {
-  const scope = makeScope({})
-  scope.set = async (field: string) => {
-    throw new Error(`${field} write refused`)
-  }
-  const api = makeApi({})
-  const { controller } = makeController({ scope, api })
-  const ref = await controller.createAccount({ label: 'Go #2', key: 'sk-second' })
-  assert.equal(ref, undefined)
-  assert.equal(api.store.has('COMMANDCODE_API_KEY_2'), false, 'no orphaned key under the unused ref')
-  assert.equal(controller.state().accountFailed, 'create')
-})
-
 test('renameAccount rewrites only that entry', async () => {
   const accounts = [...TWO_ACCOUNTS, { label: 'third', apiKeyEnv: 'COMMANDCODE_API_KEY_3' }]
   const scope = makeScope({ value: { accounts }, user: { accounts } })
@@ -853,20 +797,20 @@ test('setActiveAccount pins and unpins immediately', async () => {
 })
 
 test('account operations run one at a time, in call order', async () => {
-  const scope = makeScope({})
-  const realSet = scope.set.bind(scope)
+  const scope = makeScope({ value: { accounts: TWO_ACCOUNTS } })
+  const realMutate = scope.mutate.bind(scope)
   const order: string[] = []
-  scope.set = async (field: string, value: unknown) => {
+  scope.mutate = async (ops, revision) => {
     await new Promise((resolve) => setTimeout(resolve, 5))
-    order.push(field)
-    return realSet(field, value)
+    order.push(ops[0]!.path[0]!)
+    return realMutate(ops, revision)
   }
   const { controller } = makeController({ scope })
-  const first = controller.createAccount({ label: 'one' })
+  const first = controller.renameAccount('COMMANDCODE_API_KEY_2', 'one')
   assert.equal(controller.state().accountBusy, true)
-  const second = controller.createAccount({ label: 'two' })
-  assert.deepEqual(await Promise.all([first, second]), ['COMMANDCODE_API_KEY_2', 'COMMANDCODE_API_KEY_3'])
-  assert.deepEqual((scope.state.value.accounts as Array<{ label: string }>).map((entry) => entry.label), ['one', 'two'])
+  const second = controller.renameAccount('COMMANDCODE_API_KEY_2', 'two')
+  assert.deepEqual(await Promise.all([first, second]), [true, true])
+  assert.deepEqual((scope.state.value.accounts as Array<{ label: string }>).map((entry) => entry.label), ['two'])
   assert.deepEqual(order, ['accounts', 'accounts'])
   assert.equal(controller.state().accountBusy, false)
 })
@@ -874,7 +818,7 @@ test('account operations run one at a time, in call order', async () => {
 test('account operations refuse a read-only scope', async () => {
   const scope = makeScope({ writable: false })
   const { controller } = makeController({ scope })
-  assert.equal(await controller.createAccount({ label: 'x' }), undefined)
+  assert.equal(await controller.renameAccount('COMMANDCODE_API_KEY_2', 'x'), false)
   assert.equal(await controller.setActiveAccount('default'), false)
   assert.equal('accounts' in scope.state.value, false)
 })
@@ -895,12 +839,11 @@ test('a landed accounts write preserves entries the page cannot name', async () 
   // The literal entry has no row, but an unrelated write that rewrites the
   // accounts list must not drop it.
   assert.deepEqual(controller.state().accounts.map((account) => account.label), ['env-account'])
-  const added = await controller.createAccount({ label: 'third', key: 'sk-third' })
+  assert.equal(await controller.renameAccount('COMMANDCODE_API_KEY_2', 'renamed'), true)
   const stored = scope.state.value.accounts as Array<Record<string, unknown>>
-  assert.deepEqual(stored.map((entry) => entry.label), ['env-account', 'literal-account', 'third'])
+  assert.deepEqual(stored.map((entry) => entry.label), ['renamed', 'literal-account'])
   assert.equal(stored[1]!.apiKey, 'sk-literal-compose')
   assert.equal(stored[1]!.apiKeyEnv, undefined)
-  assert.equal(stored[2]!.apiKeyEnv, added)
 })
 
 test('the stored working directory is no longer a page field, and survives saves', async () => {
@@ -1049,7 +992,7 @@ test('网页读取终端覆盖后的有效选择，保存时以一次提交统�
   assert.equal(controller.state().visibleModelsAll, false)
   let commits = 0
   const mutate = scope.mutate.bind(scope)
-  scope.mutate = async (ops, revision) => { commits++; assert.equal(ops.length, 2); await mutate(ops, revision) }
+  scope.mutate = async (ops, revision) => { commits++; assert.equal(ops.length, 2); return mutate(ops, revision) }
   controller.editVisibleModels(['a', 'c'])
   await controller.save()
   assert.equal(commits, 1)
@@ -1183,4 +1126,382 @@ test('the request-timeout hint says when the Provider API route needs a bigger b
   // same route took 117 s for a 200 k prompt and 30 s for a 1.2 M one.
   assert.doesNotMatch(zh.requestTimeoutMsHint, /请求体很大|大上下文/, 'zh does not blame prompt size')
   assert.doesNotMatch(en.requestTimeoutMsHint, /request body is large|large-context/, 'en does not blame prompt size')
+})
+
+/** 可控异步门：在真实控制器入口制造竞争，不依赖固定等待时长。 */
+function writeGate() {
+  let release!: () => void
+  let markStarted!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const started = new Promise<void>(resolve => { markStarted = resolve })
+  return { gate, started, release, markStarted }
+}
+
+test('一次保存的普通字段与模型选择仅提交一次配置变更', async () => {
+  const scope = makeScope({})
+  const mutate = scope.mutate.bind(scope)
+  const calls: SettingsPathOp[][] = []
+  scope.mutate = async (ops, revision) => { calls.push([...ops]); return mutate(ops, revision) }
+  const { controller } = makeController({ scope })
+  controller.edit('requestTimeoutMs', '2')
+  controller.edit('webSearch', 'false')
+  controller.editVisibleModels(['m'])
+  await controller.save()
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0]?.map(op => op.path[0]), ['requestTimeoutMs', 'webSearch', 'visibleModels', 'modelVisibility'])
+  controller.dispose()
+})
+
+test('保存与清除共用队列，清除成功后较早保存不能再写回密钥', async () => {
+  const api = makeApi({})
+  const set = api.credentials.set
+  const barrier = writeGate()
+  api.credentials.set = async (ref, value) => { barrier.markStarted(); await barrier.gate; return set(ref, value) }
+  let cleared = false
+  const unset = api.credentials.unset
+  api.credentials.unset = async ref => { cleared = true; return unset(ref) }
+  const { controller } = makeController({ api })
+  controller.edit('apiKey', 'synthetic-key')
+  const save = controller.save()
+  await barrier.started
+  const clear = controller.clearAccountKey('default')
+  try { await flush(); assert.equal(cleared, false, '清除应等待之前的保存') }
+  finally { barrier.release(); await save; await clear; controller.dispose() }
+  assert.equal(api.store.has(DEFAULT_API_KEY_REF), false)
+})
+
+test('取消继承固定账号必须实际恢复自动轮换', async () => {
+  const scope = makeScope({ base: { activeAccount: 'inherited' }, value: { activeAccount: 'inherited' } })
+  const { controller } = makeController({ scope })
+  assert.equal(await controller.setActiveAccount(''), true)
+  assert.equal(controller.state().activeAccount, '')
+  assert.equal(scope.state.user?.activeAccount, '')
+  controller.dispose()
+})
+
+test('配置整批拒绝时不写密钥、不清理任何提交草稿', async () => {
+  const scope = makeScope({})
+  scope.mutate = async () => { throw new Error('配置版本冲突') }
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  controller.edit('requestTimeoutMs', '2')
+  controller.edit('apiKey', 'synthetic-key')
+  await controller.save()
+  assert.equal(scope.state.value.requestTimeoutMs, undefined)
+  assert.equal(api.store.has(DEFAULT_API_KEY_REF), false)
+  assert.equal(controller.state().dirty, true)
+  controller.dispose()
+})
+
+test('插件销毁后不接受新的凭据修改', async () => {
+  const api = makeApi({})
+  const { controller } = makeController({ api })
+  controller.dispose()
+  assert.equal(await controller.setAccountKey('default', 'synthetic-key'), false)
+  assert.equal(api.store.size, 0)
+})
+
+test('写入已确认但状态刷新失败时不误报写入失败、不保留旧密钥草稿', async () => {
+  const api = makeApi({})
+  const { controller } = makeController({ api })
+  await flush()
+  api.credentials.describe = async () => { throw new Error('合成读取失败') }
+  controller.edit('apiKey', 'synthetic-key')
+  await controller.save()
+  assert.equal(api.store.has(DEFAULT_API_KEY_REF), true)
+  assert.equal(controller.state().failed, false)
+  assert.equal(controller.state().apiKey.text, '')
+  assert.equal(controller.state().savedCount, 1)
+  controller.dispose()
+})
+
+test('密钥失败仅保留密钥与等待期间的新草稿，配置确认不回滚', async () => {
+  const scope = makeScope({ user: { requestTimeoutMs: 1_000 }, value: { requestTimeoutMs: 1_000 } })
+  const api = makeApi({})
+  const barrier = writeGate()
+  api.credentials.set = async () => { barrier.markStarted(); await barrier.gate; return { ok: false, error: { message: '合成拒绝' } } }
+  const { controller } = makeController({ scope, api })
+  controller.edit('requestTimeoutMs', '2')
+  controller.editVisibleModels(['m'])
+  controller.edit('apiKey', 'synthetic-key')
+  const save = controller.save()
+  await barrier.started
+  controller.resetField('requestTimeoutMs')
+  controller.edit('webSearch', 'false')
+  controller.editVisibleModels(['new'])
+  barrier.release()
+  await save
+  const state = controller.state()
+  assert.equal(state.saveResult?.config, 'confirmed')
+  assert.equal(state.saveResult?.credential, 'unconfirmed')
+  assert.equal(scope.state.value.requestTimeoutMs, 2_000)
+  assert.deepEqual(scope.state.value.visibleModels, ['m'])
+  assert.equal(state.requestTimeoutMs.clear, true)
+  assert.equal(state.webSearch.text, 'false')
+  assert.deepEqual(state.visibleModels, ['new'])
+  assert.equal(state.apiKey.text, 'synthetic-key')
+  assert.equal(state.savedCount, 0)
+  assert.match(settingsWriteNotice(state.saveResult, key => zh[key]), /配置已保存.*密钥操作未获确认/)
+  controller.dispose()
+})
+
+test('部分失败只清理提交时已确认的配置草稿，放弃后新密钥不被迟到完成清除', async () => {
+  const scope = makeScope({})
+  const api = makeApi({})
+  const barrier = writeGate()
+  api.credentials.set = async () => { barrier.markStarted(); await barrier.gate; return { ok: false, error: { message: '合成拒绝' } } }
+  const { controller } = makeController({ scope, api })
+  controller.edit('requestTimeoutMs', '2')
+  controller.edit('apiKey', 'old-synthetic')
+  const save = controller.save()
+  await barrier.started
+  barrier.release()
+  await save
+  assert.equal(controller.state().requestTimeoutMs.overridden, true)
+  assert.equal(controller.state().requestTimeoutMs.clear, false)
+  controller.resetField('requestTimeoutMs')
+  assert.equal(controller.state().requestTimeoutMs.clear, true)
+  // 若旧草稿仍留在内部，第二次保存会错误地重放它；重置必须正常取消覆盖。
+  controller.resetField('apiKey')
+  await controller.save()
+  assert.equal(scope.state.user?.requestTimeoutMs, undefined)
+  const set = makeApi({}).credentials.set
+  api.credentials.set = async (ref, value) => { await barrier.gate; return set(ref, value) }
+  controller.edit('apiKey', 'submitted-synthetic')
+  const next = controller.save()
+  controller.discard()
+  controller.edit('apiKey', 'new-synthetic')
+  await next
+  assert.equal(controller.state().apiKey.text, 'new-synthetic')
+  controller.dispose()
+})
+
+test('排队保存拒绝相关字段外部改动，整批保留且不写密钥', async () => {
+  const scope = makeScope({})
+  const api = makeApi({})
+  const barrier = writeGate()
+  const set = api.credentials.set
+  api.credentials.set = async (ref, value) => { barrier.markStarted(); await barrier.gate; return set(ref, value) }
+  const { controller } = makeController({ scope, api })
+  const first = controller.setAccountKey('extra', 'synthetic-extra')
+  await barrier.started
+  controller.edit('requestTimeoutMs', '2')
+  controller.edit('webSearch', 'false')
+  controller.edit('apiKey', 'synthetic-default')
+  const save = controller.save()
+  await scope.set('requestTimeoutMs', 3_000)
+  barrier.release()
+  await first
+  await save
+  assert.equal(controller.state().saveResult?.config, 'conflict')
+  assert.equal(controller.state().saveResult?.credential, 'not-issued')
+  assert.equal(scope.state.value.requestTimeoutMs, 3_000)
+  assert.equal(scope.state.value.webSearch, undefined)
+  assert.equal(api.store.has(DEFAULT_API_KEY_REF), false)
+  assert.equal(controller.state().requestTimeoutMs.text, '2')
+  assert.equal(controller.state().webSearch.text, 'false')
+  controller.dispose()
+})
+
+test('排队保存允许无关字段变更，使用最新版本保留外部值与点击时输入', async () => {
+  const scope = makeScope({})
+  const api = makeApi({})
+  const barrier = writeGate()
+  const set = api.credentials.set
+  api.credentials.set = async (ref, value) => { barrier.markStarted(); await barrier.gate; return set(ref, value) }
+  const { controller } = makeController({ scope, api })
+  const first = controller.setAccountKey('extra', 'synthetic-extra')
+  await barrier.started
+  controller.edit('requestTimeoutMs', '2')
+  const save = controller.save()
+  controller.edit('requestTimeoutMs', '4')
+  await scope.mutate([{ op: 'set', path: ['webSearch'], value: false }], 1)
+  barrier.release()
+  await first
+  await save
+  assert.equal(controller.state().saveResult?.config, 'confirmed')
+  assert.equal(scope.state.value.requestTimeoutMs, 2_000)
+  assert.equal(scope.state.value.webSearch, false)
+  assert.equal(controller.state().requestTimeoutMs.text, '4')
+  controller.dispose()
+})
+
+for (const operation of ['save', 'replace', 'clear'] as const) {
+  test(`默认密钥${operation}发出前引用改变，停止而不自动改写新引用`, async () => {
+    const scope = makeScope({ value: { apiKeyEnv: 'OLD' } })
+    const api = makeApi({ store: new Map([['OLD', 'existing-synthetic']]) })
+    const barrier = writeGate()
+    const set = api.credentials.set
+    const issued: string[] = []
+    api.credentials.set = async (ref, value) => { issued.push(ref); barrier.markStarted(); await barrier.gate; return set(ref, value) }
+    const unset = api.credentials.unset
+    api.credentials.unset = async ref => { issued.push(ref); return unset(ref) }
+    const { controller } = makeController({ scope, api })
+    const first = controller.setAccountKey('extra', 'synthetic-extra')
+    await barrier.started
+    controller.edit('apiKey', 'synthetic-new')
+    controller.edit('requestTimeoutMs', '2')
+    const next = operation === 'save' ? controller.save() : operation === 'replace'
+      ? controller.setAccountKey('default', 'synthetic-new') : controller.clearAccountKey('default')
+    await scope.set('apiKeyEnv', 'NEW')
+    barrier.release()
+    await first
+    await next
+    const outcome = operation === 'save' ? controller.state().saveResult : controller.state().accountResult
+    assert.equal(outcome?.issue, 'target-changed')
+    assert.equal(outcome?.credential, 'not-issued')
+    assert.deepEqual(issued, ['extra'])
+    assert.equal(api.store.get('OLD'), 'existing-synthetic')
+    assert.equal(api.store.has('NEW'), false)
+    assert.equal(controller.state().apiKey.text, 'synthetic-new')
+    if (operation === 'save') assert.equal(outcome?.config, 'confirmed')
+    controller.dispose()
+  })
+}
+
+test('密钥已发出后引用改变，保留原引用确认与草稿，不补偿或重写', async () => {
+  const scope = makeScope({ value: { apiKeyEnv: 'OLD' } })
+  const api = makeApi({})
+  const barrier = writeGate()
+  const set = api.credentials.set
+  const issued: string[] = []
+  api.credentials.set = async (ref, value) => { issued.push(ref); barrier.markStarted(); await barrier.gate; return set(ref, value) }
+  const { controller } = makeController({ scope, api })
+  controller.edit('apiKey', 'synthetic-key')
+  const save = controller.save()
+  await barrier.started
+  await scope.set('apiKeyEnv', 'NEW')
+  barrier.release()
+  await save
+  const state = controller.state()
+  assert.equal(state.saveResult?.credential, 'confirmed')
+  assert.equal(state.saveResult?.credentialRef, 'OLD')
+  assert.equal(state.saveResult?.issue, 'target-changed')
+  assert.equal(state.apiKey.text, 'synthetic-key')
+  assert.equal(state.apiKeyConfigured, false)
+  assert.equal(state.savedCount, 0)
+  assert.deepEqual(issued, ['OLD'])
+  assert.equal(api.store.get('OLD'), 'synthetic-key')
+  assert.equal(api.store.has('NEW'), false)
+  assert.match(settingsWriteNotice(state.saveResult, key => zh[key]), /原引用：OLD/)
+  controller.dispose()
+})
+
+test('销毁立即停止排队任务，已发凭据自然确认而不开始后续配置', async () => {
+  const scope = makeScope({})
+  const api = makeApi({})
+  const barrier = writeGate()
+  const set = api.credentials.set
+  api.credentials.set = async (ref, value) => { barrier.markStarted(); await barrier.gate; return set(ref, value) }
+  const { controller } = makeController({ scope, api })
+  const first = controller.setAccountKey('extra', 'synthetic-extra')
+  await barrier.started
+  controller.edit('requestTimeoutMs', '2')
+  const save = controller.save()
+  const clear = controller.clearAccountKey('extra')
+  controller.dispose()
+  assert.equal((await save)?.issue, 'closed', '未开始任务不等待正在执行的网络请求')
+  assert.equal(await clear, false)
+  assert.equal(api.store.size, 0)
+  barrier.release()
+  assert.equal(await first, false)
+  assert.equal(api.store.has('extra'), true, '不能声称已经撤回已发调用')
+  assert.equal(scope.state.value.requestTimeoutMs, undefined)
+})
+
+test('配置已发后销毁，保留已确认配置但不进入密钥阶段', async () => {
+  const scope = makeScope({})
+  const mutate = scope.mutate.bind(scope)
+  const barrier = writeGate()
+  scope.mutate = async (ops, revision) => { barrier.markStarted(); await barrier.gate; return mutate(ops, revision) }
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  controller.edit('requestTimeoutMs', '2')
+  controller.edit('apiKey', 'synthetic-key')
+  const save = controller.save()
+  await barrier.started
+  controller.dispose()
+  barrier.release()
+  const outcome = await save
+  assert.equal(outcome?.config, 'confirmed')
+  assert.equal(outcome?.issue, 'closed')
+  assert.equal(outcome?.credential, 'not-issued')
+  assert.equal(scope.state.value.requestTimeoutMs, 2_000)
+  assert.equal(api.store.size, 0)
+})
+
+test('确认后刷新失败的重试只读事实，不重复写密钥，保留等待期间的新草稿', async () => {
+  const api = makeApi({})
+  const { controller } = makeController({ api })
+  await flush()
+  const describe = api.credentials.describe
+  const set = api.credentials.set
+  let writes = 0
+  api.credentials.set = async (ref, value) => { writes++; return set(ref, value) }
+  api.credentials.describe = async () => { throw new Error('合成断连') }
+  controller.edit('apiKey', 'synthetic-key')
+  await controller.save()
+  assert.equal(controller.state().apiKeyConfigured, true)
+  assert.equal(controller.state().saveResult?.refreshFailed, true)
+  controller.edit('apiKey', 'new-synthetic-key')
+  api.credentials.describe = describe
+  await controller.refreshCredentials()
+  assert.equal(writes, 1)
+  assert.equal(controller.state().apiKey.text, 'new-synthetic-key')
+  assert.equal(controller.state().credentialRefreshFailed, false)
+  controller.dispose()
+})
+
+test('旧描述迟到不能覆盖随后已确认的密钥存在性', async () => {
+  const api = makeApi({})
+  const { controller } = makeController({ api })
+  await flush()
+  const describe = api.credentials.describe
+  const barrier = writeGate()
+  let first = true
+  api.credentials.describe = async refs => {
+    const facts = await describe(refs)
+    if (first) { first = false; barrier.markStarted(); await barrier.gate }
+    return facts
+  }
+  const oldRead = controller.refreshCredentials()
+  await barrier.started
+  assert.equal(await controller.setAccountKey('default', 'synthetic-key'), true)
+  assert.equal(controller.state().apiKeyConfigured, true)
+  barrier.release()
+  await oldRead
+  assert.equal(controller.state().apiKeyConfigured, true)
+  assert.equal(controller.state().credentialRefreshFailed, false)
+  controller.dispose()
+})
+
+test('描述缺少引用不能当成不存在或覆盖最后已确认状态', async () => {
+  const api = makeApi({})
+  const { controller } = makeController({ api })
+  await flush()
+  assert.equal(await controller.setAccountKey('default', 'synthetic-key'), true)
+  api.credentials.describe = async () => ({ ok: true, value: {} })
+  await controller.refreshCredentials()
+  assert.equal(controller.state().apiKeyConfigured, true)
+  assert.equal(controller.state().credentialRefreshFailed, true)
+  controller.dispose()
+})
+
+
+test('首次事实读取失败显示未知，明确确认后才解释配置存在性', async () => {
+  const scope = makeScope({ value: { accounts: [{ apiKeyEnv: 'extra', label: '合成账号' }] } })
+  const api = makeApi({})
+  const describe = api.credentials.describe
+  api.credentials.describe = async () => { throw new Error('合成首次读取失败') }
+  const { controller } = makeController({ scope, api })
+  await flush()
+  assert.equal(controller.state().apiKeyKnown, false)
+  assert.equal(controller.state().accounts[0]?.credentialKnown, false)
+  assert.equal(controller.state().credentialRefreshFailed, true)
+  api.credentials.describe = describe
+  await controller.refreshCredentials()
+  assert.equal(controller.state().apiKeyKnown, true)
+  assert.equal(controller.state().apiKeyConfigured, false)
+  assert.equal(controller.state().accounts[0]?.credentialKnown, true)
+  controller.dispose()
 })

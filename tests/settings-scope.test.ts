@@ -14,7 +14,7 @@ import {
   type SettingsRetryTimer,
   type SettingsScopeContext,
 } from '../src/client/settings-scope.ts'
-import type { SettingsScopeSnapshot } from '../src/client/settings.ts'
+import { CommandCodeSettingsController, type SettingsScopeSnapshot } from '../src/client/settings.ts'
 
 /** Drain every pending microtask and zero-delay timer (the fake remote's own answer delay is two nested hops, ≤2ms). */
 const flush = async (): Promise<void> => {
@@ -67,7 +67,7 @@ function fakeContext(options?: { mountSettings?: boolean }): FakeRemote {
     async mutate(ns: string, ops: readonly SettingsPathOp[], revision?: number) {
       mutates.push({ ns, ops, revision })
       await Promise.resolve()
-      const answer: Row | { error: string } = mutateAnswer ?? { ns, revision: 7 }
+      const answer: Row | { error: string } = mutateAnswer ?? { ...row({ revision: 7 }), ns }
       return 'error' in answer && typeof answer.error === 'string'
         ? { ok: false, error: { message: answer.error } }
         : { ok: true, value: answer as Row }
@@ -467,4 +467,64 @@ test('dispose cancels a pending describe retry', async () => {
   timer.fire()
   await flush()
   assert.equal(fake.describeCalls(), describes, 'a disposed scope never re-reads')
+})
+
+
+test('宿主拒绝后重读值恰好相同，仍不能冒充本次写入确认', async () => {
+  const fake = fakeContext()
+  fake.answerDescribe({ writable: true, namespaces: [row()] })
+  const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
+  await flush()
+  let keyWrites = 0
+  const controller = new CommandCodeSettingsController(scope, {
+    credentials: {
+      async describe(refs) { return { ok: true, value: Object.fromEntries(refs.map(ref => [ref, { configured: false, writable: true }])) } },
+      async set() { keyWrites++; return { ok: true } },
+      async unset() { return { ok: true } },
+    },
+  })
+  controller.edit('apiBase', 'https://same.example')
+  controller.edit('apiKey', 'synthetic-key')
+  fake.answerDescribe({ writable: true, namespaces: [row({ value: { apiBase: 'https://same.example' }, user: { apiBase: 'https://same.example' }, revision: 9 })] })
+  fake.answerMutate({ error: 'SETTINGS_CONFLICT: synthetic conflict' })
+  const outcome = await controller.save()
+  assert.equal(outcome?.config, 'conflict')
+  assert.equal(keyWrites, 0)
+  assert.equal(controller.state().savedCount, 0)
+  assert.equal(controller.state().apiKey.text, 'synthetic-key')
+  assert.equal(scope.getSnapshot().value?.apiBase, 'https://same.example')
+  controller.dispose()
+  await scope.dispose()
+})
+
+test('变更返回缺失配置行不是确认，且不能污染最后有效镜像', async () => {
+  const fake = fakeContext()
+  fake.answerDescribe({ writable: true, namespaces: [row()] })
+  const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
+  await flush()
+  fake.answerMutate({ ns: 'llm-commandcode', revision: 7 })
+  assert.equal(await scope.mutate([{ op: 'set', path: ['apiBase'], value: 'https://synthetic.example' }]), 'failed')
+  assert.equal(scope.getSnapshot().revision, 3)
+  await scope.dispose()
+  assert.equal(await scope.mutate([{ op: 'unset', path: ['apiBase'] }]), 'cancelled')
+})
+
+test('销毁后已发配置的接受结果保留，未发任务明确取消', async () => {
+  const fake = fakeContext()
+  fake.answerDescribe({ writable: true, namespaces: [row()] })
+  const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
+  await flush()
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const mutate = fake.settingsNamespace.mutate
+  fake.settingsNamespace.mutate = async (...args) => { const result = mutate(...args); await gate; return result }
+  const first = scope.mutate([{ op: 'set', path: ['apiBase'], value: 'https://synthetic.example' }])
+  const next = scope.mutate([{ op: 'unset', path: ['apiBase'] }])
+  await flush()
+  const closing = scope.dispose()
+  release()
+  assert.equal(await first, 'accepted')
+  assert.equal(await next, 'cancelled')
+  await closing
+  assert.equal(fake.mutateCalls().length, 1)
 })

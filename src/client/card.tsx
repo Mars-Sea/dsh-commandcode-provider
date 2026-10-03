@@ -25,7 +25,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsCommandCodeKey } from './locales.ts'
+import { settingsWriteNotice, type SettingsCommandCodeKey } from './locales.ts'
 import type { SettingsPageState, StagedField } from './settings.ts'
 import type { LoginPageState } from './login.ts'
 import { LoginRow } from './login-row.tsx'
@@ -122,6 +122,7 @@ export interface CommandCodeCardProps {
   edit(field: string, text: string): void
   save(): void
   discard(): void
+  refreshCredentials(): void
   beginLogin(): void
   cancelLogin(): void
 }
@@ -214,7 +215,7 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
   const dirty = state?.dirty ?? false
   const saving = state?.saving ?? false
   const invalid = state?.invalid ?? false
-  const failed = state?.failed ?? false
+  const notice = settingsWriteNotice(state?.saveResult, t) || (state?.failed ? t('saveFailed') : '')
   const savingBlocked = !dirty || invalid
   const configured = mode.kind === 'live' && mode.ready ? mode.controllerConfigured : props.keyConfigured
   const disabled = mode.kind === 'live' && (!mode.writable || (state !== undefined && !mode.apiKeyWritable))
@@ -270,7 +271,7 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
             <div className="cc-fieldHead">
               <span className="cc-label">{t('cardTitle')}</span>
               <span className="cc-badges">
-                <StatusBadge ok={configured} okLabel={t('apiKeySet')} pendingLabel={t('apiKeyUnset')} />
+                <StatusBadge ok={configured} okLabel={t('apiKeySet')} pendingLabel={t(state.apiKeyKnown ? 'apiKeyUnset' : 'writeStateUnknown')} />
                 {props.provider.active ? <span className="cc-badge">{t('cardRouteActive')}</span> : null}
               </span>
             </div>
@@ -291,11 +292,12 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
             />
           ) : null}
           <div className="cc-footer">
-            {failed ? <p className="cc-failed" role="status">{t('saveFailed')}</p> : null}
+            {notice ? <p className="cc-failed" role="status">{notice}</p> : null}
+            {state?.credentialRefreshFailed || state?.saveResult?.refreshFailed ? <button type="button" className="cc-reset" onClick={props.refreshCredentials}>{t('writeRefreshRetry')}</button> : null}
             <button
               type="button"
               className="cc-reset"
-              disabled={!dirty || saving}
+              disabled={(!dirty && !state?.failed) || saving}
               onClick={props.discard}
             >
               {t('discard')}

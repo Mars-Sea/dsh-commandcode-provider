@@ -42,13 +42,15 @@ import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey } from './a
 import { absorbTransientFailure, resetTransientFailures, transientBudgetMessage } from './transient-retry.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 import type { AccountRotationReason, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
-import { CommandCodeAccountPool, accountUsable } from './accounts.ts'
+import { CommandCodeAccountPool, accountUsable, captureAccountSelection, type CommandCodeAccountSelection } from './accounts.ts'
 import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModelAccountRule } from './accounts.ts'
 import { applyCommands } from './commands.ts'
 import { applyUsageRemote } from './usage-remote.ts'
 import type { CommandCodeAccountsReport, CommandCodeCatalog } from './usage-wire.ts'
 import { CommandCodeLoginFlow, loginCredentialRef } from './login.ts'
 import type { CommandCodeLoginCredentials } from './login.ts'
+import { AccountEnrollmentManager, type EnrollmentSettings } from './enrollment.ts'
+import type { EnrollmentRecord } from './enrollment-wire.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
 import { applyCommandCodeTuiSettings } from './tui-settings.ts'
@@ -227,6 +229,8 @@ export interface Config {
    * the key and the next account's key is retried transparently.
    */
   accounts?: CommandCodeAccountConfig[]
+  /** 账号开通恢复日志，只保留引用与阶段。 */
+  accountEnrollmentTasks?: EnrollmentRecord[]
   /**
    * Manually selected active account: a slot id — `default`, or an extra
    * account's credential reference (e.g. `COMMANDCODE_API_KEY_2`). It serves
@@ -329,6 +333,10 @@ export const Config: z<Config> = z.object(markVolatileFields({
   activeAccount: z.string(),
   // 与账户移除原子提交的清理队列，仅存引用；凭据服务失败或页面中断后可重试。
   credentialCleanupRefs: z.array(z.string().role('credential-ref')),
+  accountEnrollmentTasks: z.array(z.object({
+    id: z.string(), ref: z.string().role('credential-ref'),
+    phase: z.union(['pending', 'naming', 'cleanup']), label: z.string(),
+  })),
   modelAccountRules: z.array(z.object({
     models: z.array(z.string()),
     account: z.string(),
@@ -342,7 +350,12 @@ export const Config: z<Config> = z.object(markVolatileFields({
 /** One resolution's complete request facts: connection plus credential reference. */
 export interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
   apiKeyEnv: CredentialRef
+  /** 本次调用的账号定义，与连接从同一次易变配置读取。 */
+  accountSelection?: CommandCodeAccountSelection
 }
+
+/** 宿主入口总是携带账号定义；程序化连接解析仍兼容既有返回形状。 */
+type HostCommandCodeOptions = ResolvedCommandCodeOptions & { accountSelection: CommandCodeAccountSelection }
 
 /**
  * The one explicit resolve step from raw config to validated connection
@@ -394,12 +407,15 @@ export function apply(ctx: Context, config: Config): void {
   // — the loader commits a settings write IN PLACE on the reference, so a
   // cached plain snapshot would go stale on the very next write.
   const current = (): Config => unwrapVolatileConfig(config)
-  const options = (): ResolvedCommandCodeOptions => resolveAdapterOptions(current())
-
-  // The account slots, rebuilt from the live config on every resolution so a
-  // settings-page accounts change reaches the very next request.
-  const slots = (): CommandCodeAccountSlot[] => {
+  const options = (): HostCommandCodeOptions => {
     const raw = current()
+    return { ...resolveAdapterOptions(raw), accountSelection: captureAccountSelection({
+      slots: slots(raw), preferredId: preferredId(raw), modelAccountRules: raw.modelAccountRules ?? [],
+    }) }
+  }
+
+  // 账号定义与连接同步捕获；本次内部轮换固定定义，新调用读取新配置。
+  const slots = (raw: Config = current()): CommandCodeAccountSlot[] => {
     const list: CommandCodeAccountSlot[] = [{
       id: 'default',
       label: 'Default',
@@ -412,6 +428,8 @@ export function apply(ctx: Context, config: Config): void {
         ? account.apiKeyEnv.trim()
         : undefined
       const literal = typeof account.apiKey === 'string' && account.apiKey !== '' ? account.apiKey : undefined
+      // 临时账号即使已写入密钥，也不能在开通完成前进入轮转池。
+      if (raw.accountEnrollmentTasks?.some((task) => task.ref === refName && task.phase !== 'naming')) continue
       if (refName === undefined && literal === undefined) continue
       list.push({
         // Slot ids must survive account-list edits: an extra's id is its
@@ -430,10 +448,9 @@ export function apply(ctx: Context, config: Config): void {
     return list
   }
 
-  // The manually selected account, re-read per resolution like every other
-  // settings-backed fact.
-  const preferredId = (): string | undefined => {
-    const raw = current().activeAccount
+  // 固定账号与账号列表来自同一次配置读取，避免等待后拼接不同版本。
+  const preferredId = (config: Config = current()): string | undefined => {
+    const raw = config.activeAccount
     return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
   }
 
@@ -467,8 +484,15 @@ export function apply(ctx: Context, config: Config): void {
     modelAccountRules: (): readonly CommandCodeModelAccountRule[] => current().modelAccountRules ?? [],
   })
 
-  const resolveApiKey = async (connection: ResolvedCommandCodeOptions, model?: string): Promise<string> => {
-    const resolved = await pool.resolveKey(model === undefined ? {} : { model })
+  // 所有调用者显式持有连接；恢复探测与健康状态不能使用等待后才读取的新网关。
+  const scopedPool = (connection: HostCommandCodeOptions): CommandCodeAccountPool => pool.scope({
+    apiBase: connection.apiBase,
+    ...connection.accountSelection,
+    probeWindow: (key) => adapter.probeWindowLimits(key, connection),
+  })
+
+  const resolveApiKey = async (connection: HostCommandCodeOptions, model?: string): Promise<string> => {
+    const resolved = await scopedPool(connection).resolveKey(model === undefined ? {} : { model })
     if (resolved !== undefined) {
       return assertUsableApiKey(resolved.key, 'llm-commandcode', resolved.slot.ref ?? `${resolved.slot.label} (config.apiKey)`)
     }
@@ -482,7 +506,7 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  const adapter: CommandCodeAdapter<ResolvedCommandCodeOptions> = new CommandCodeAdapter({
+  const adapter: CommandCodeAdapter<HostCommandCodeOptions> = new CommandCodeAdapter({
     options,
     resolveApiKey,
     // Pre-stream account-scoped rejection: mark the rejected key when the
@@ -492,7 +516,7 @@ export function apply(ctx: Context, config: Config): void {
     rotateApiKey: async (
       rejectedKey: string,
       rejection: AccountRotationReason,
-      _connection: ResolvedCommandCodeOptions,
+      connection: HostCommandCodeOptions,
       model?: string,
       rotation?: { tried: readonly string[]; resetAtMs?: number },
     ): Promise<string | undefined> => {
@@ -502,7 +526,8 @@ export function apply(ctx: Context, config: Config): void {
       // credits-empty account. `rate-limit` and `throttled` both mark but with
       // different causes, so the pool's own diagnosis never reports a plain
       // throttle as an exhausted usage window (issue #54).
-      if (rejection !== 'unavailable') pool.markRejected(rejectedKey, rejection, rotation?.resetAtMs)
+      const accounts = scopedPool(connection)
+      if (rejection !== 'unavailable') accounts.markRejected(rejectedKey, rejection, rotation?.resetAtMs)
       // The whole tried set, not just the rejected key, reaches the pool: a
       // rejection that does not mark the key would otherwise be re-offered on
       // every attempt and a four-account pool could never reach the accounts
@@ -511,7 +536,7 @@ export function apply(ctx: Context, config: Config): void {
       // pool reads it as "nothing was tried" and drops the filter this set
       // exists for.
       const tried = rotation?.tried?.length ? rotation.tried : [rejectedKey]
-      const resolved = await pool.resolveKey(
+      const resolved = await accounts.resolveKey(
         model === undefined ? { tried } : { tried, model },
       )
       // Normalize like the initial resolution does: the pool keys its state
@@ -531,8 +556,8 @@ export function apply(ctx: Context, config: Config): void {
     // that would serve right now: with several accounts on different plans,
     // keying the list on the serving one made models appear and vanish as
     // rotation moved between them.
-    resolveAccountKeys: async (): Promise<readonly string[]> => {
-      const accounts = await pool.resolvedAccounts()
+    resolveAccountKeys: async (connection): Promise<readonly string[]> => {
+      const accounts = await scopedPool(connection).resolvedAccounts()
       return accounts.map((account) => account.key)
     },
   })
@@ -629,24 +654,27 @@ export function apply(ctx: Context, config: Config): void {
   // page's account card: every pool account (configured or not) gets one
   // entry, each fetched with its own key so plan/credit facts never mix.
   const usageReports = async (): Promise<CommandCodeAccountsReport> => {
+    const connection = options()
+    const accounts = scopedPool(connection)
     // describeAccounts (not deduped) so two slots sharing one credential are
     // both reported as configured; the active badge follows the deduped
     // serving selection.
-    const described = await pool.describeAccounts()
-    const byId = new Map(described.map((account) => [account.slot.id, account]))
     // activeAccount() (not the bare selectActiveAccount import) so a stale
     // `unknown` mark on the pinned account self-heals the same way a real
     // request would, instead of the badge reading it forever until the next
     // chat message happens to clear it (issue #51's follow-up report).
-    const active = await pool.activeAccount()
-    const entries = await Promise.all(slots().map(async (slot) => {
+    const active = await accounts.activeAccount()
+    // 先完成共享恢复，再读健康事实；不能用探测前的标记展示已恢复账号。
+    const described = await accounts.describeAccounts()
+    const byId = new Map(described.map((account) => [account.slot.id, account]))
+    const entries = await Promise.all(connection.accountSelection.slots.map(async (slot) => {
       const account = byId.get(slot.id)
       let report: CommandCodeUsageReport
       if (account === undefined) {
         report = { failures: [] }
       } else {
         try {
-          report = await adapter.getUsage(account.key)
+          report = await adapter.getUsage(account.key, connection)
         } catch (error: unknown) {
           report = { failures: [error instanceof Error ? error.message : String(error)] }
         }
@@ -729,7 +757,28 @@ export function apply(ctx: Context, config: Config): void {
       }),
     }
   }
-  applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow, listModels: catalogForEditors })
+  let enrollmentSettings: EnrollmentSettings | undefined
+  const enrollment = new AccountEnrollmentManager({
+    settings: () => enrollmentSettings,
+    describe: async (ref) => {
+      const credentials = ctx.get('credentials')
+      if (!credentials) throw new Error('凭据服务不可用')
+      return credentials.describe(credentialRef(ref))
+    },
+    set: async (ref, key) => {
+      const credentials = ctx.get('credentials')
+      if (!credentials) throw new Error('凭据服务不可用')
+      await credentials.set(credentialRef(ref), key)
+    },
+    unset: async (ref) => {
+      const credentials = ctx.get('credentials')
+      if (!credentials) throw new Error('凭据服务不可用')
+      await credentials.unset(credentialRef(ref))
+    },
+    login: (storeKey) => new CommandCodeLoginFlow({ apiBase: () => options().apiBase, storeKey }),
+  })
+  ctx.effect(() => () => enrollment.dispose(), 'dsh-commandcode-provider: account enrollment')
+  applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow, enrollment, listModels: catalogForEditors })
 
   // Web search over the Command Code Provider API, exposed through the web
   // capability seam (`ctx.web`). Rides the optional `web` service: a child
@@ -756,8 +805,10 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['web'], (webCtx) => {
     webRuntime = webCtx.web
     webCtx.web.registerSearchProvider(new CommandCodeSearchProvider({
-      resolveKey: async () => {
-        const resolved = await pool.resolveKey()
+      resolveKey: async (apiBase) => {
+        const connection = options()
+        if (apiBase !== undefined) connection.apiBase = apiBase
+        const resolved = await scopedPool(connection).resolveKey()
         return resolved === undefined ? undefined : resolved.key
       },
       apiBase: () => options().apiBase,
@@ -812,6 +863,18 @@ export function apply(ctx: Context, config: Config): void {
   // (`llm-commandcode`) — never rename one without the other, or a mismatch
   // strands existing users' non-secret settings in `settings.yaml.imported`.
   ctx.inject(['settings'], (settingsCtx) => {
+    const settings = settingsCtx.settings
+    enrollmentSettings = {
+      get writable() { return settings.writable },
+      read: () => {
+        // 宿主读取完整值，再按字段修改，避免把被遮蔽的组合配置密钥覆盖掉。
+        const descriptor = settings.describe().find((item) => item.ns === NS)
+        if (!descriptor) throw new Error('账号设置不存在')
+        return { value: descriptor.value as Config, revision: descriptor.revision, ...(descriptor.base ? { base: descriptor.base as Config } : {}) }
+      },
+      mutate: (ops, revision) => settings.mutate(NS, ops, revision),
+    }
+    settingsCtx.effect(() => () => { enrollmentSettings = undefined }, 'dsh-commandcode-provider: enrollment settings')
     settingsCtx.effect(() => {
       const dispose = settingsCtx.settings.configure({ auto: false }, ctx.fiber)
       return () => {

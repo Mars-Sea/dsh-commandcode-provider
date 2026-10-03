@@ -77,6 +77,50 @@ test('hands out the default account key', async () => {
   assert.equal(resolved?.slot.id, 'default')
 })
 
+test('同网关同密钥共享禁用状态，不同网关互不污染', async () => {
+  const fixture: PoolFixture = { keys: { COMMANDCODE_API_KEY: 'synthetic-shared' } }
+  const { pool } = makePool(fixture)
+  const selection = { slots: [defaultSlot()], modelAccountRules: [], probeWindow: async () => undefined }
+  const a = pool.scope({ ...selection, apiBase: 'https://account-a.invalid' })
+  const b = pool.scope({ ...selection, apiBase: 'https://account-b.invalid' })
+  a.markRejected('synthetic-shared', 'invalid-credential')
+  await assert.rejects(a.resolveKey(), { code: 'INVALID_CREDENTIAL' })
+  assert.equal((await b.resolveKey())?.key, 'synthetic-shared')
+  await assert.rejects(pool.scope({ ...selection, apiBase: 'https://account-a.invalid' }).resolveKey(), { code: 'INVALID_CREDENTIAL' })
+})
+
+test('作用域固定账号规则与列表，但后续解析读取新凭据', async () => {
+  const fixture: PoolFixture = { keys: { COMMANDCODE_API_KEY: 'synthetic-default', COMMANDCODE_API_KEY_2: 'synthetic-old' } }
+  const { pool } = makePool(fixture)
+  const slots = [defaultSlot(), extraSlot(2)]
+  const rules = [{ models: ['synthetic/model'], account: 'account-2' }]
+  const scoped = pool.scope({ apiBase: 'https://account-config.invalid', slots, modelAccountRules: rules, probeWindow: async () => undefined })
+  slots.pop()
+  rules[0]!.models.length = 0
+  assert.equal((await scoped.resolveKey({ model: 'synthetic/model' }))?.key, 'synthetic-old')
+  fixture.keys!.COMMANDCODE_API_KEY_2 = 'synthetic-new'
+  assert.equal((await scoped.resolveKey({ model: 'synthetic/model' }))?.key, 'synthetic-new')
+  delete fixture.keys!.COMMANDCODE_API_KEY_2
+  assert.equal((await scoped.resolveKey({ model: 'synthetic/model' }))?.key, 'synthetic-default')
+})
+
+test('显式恢复探测与节流按网关隔离，旧作用域探测结果只清旧网关', async () => {
+  const fixture: PoolFixture = { keys: { COMMANDCODE_API_KEY: 'synthetic-default', COMMANDCODE_API_KEY_2: 'synthetic-extra' }, now: () => 1000 }
+  const { pool } = makePool(fixture)
+  const calls: string[] = []
+  const selection = { slots: [defaultSlot(), extraSlot(2)], preferredId: 'account-2', modelAccountRules: [] }
+  const scope = (apiBase: string) => pool.scope({ ...selection, apiBase, probeWindow: async () => { calls.push(apiBase); return { exceeded: false, resetAt: 0 } } })
+  const a = scope('https://probe-a.invalid'), b = scope('https://probe-b.invalid')
+  a.markRejected('synthetic-extra', 'rate-limit')
+  b.markRejected('synthetic-extra', 'rate-limit')
+  assert.equal((await a.resolveKey())?.key, 'synthetic-extra')
+  assert.equal((await b.activeAccount())?.key, 'synthetic-extra')
+  a.markRejected('synthetic-extra', 'rate-limit')
+  assert.equal((await scope('https://probe-a.invalid').resolveKey())?.key, 'synthetic-default')
+  assert.deepEqual(calls, ['https://probe-a.invalid', 'https://probe-b.invalid'])
+  assert.equal((await scope('https://probe-b.invalid').resolveKey())?.key, 'synthetic-extra')
+})
+
 test('a literal key wins over the credential reference and the auth file', async () => {
   const { pool } = makePool({
     slots: [defaultSlot({ literal: 'literal-key' })],

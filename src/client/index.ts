@@ -30,6 +30,8 @@ import { CommandCodePricesController, type SessionCostPricesState } from './pric
 import { CommandCodeLoginController, type LoginPageState, type LoginRemote } from './login.ts'
 import { USAGE_REMOTE_CONTRIBUTION, MODELS_REMOTE_CONTRIBUTION, PRICES_REMOTE_CONTRIBUTION } from '../usage-wire.ts'
 import { LOGIN_REMOTE_CONTRIBUTION } from '../login-wire.ts'
+import { ENROLLMENT_REMOTE_CONTRIBUTION } from '../enrollment-wire.ts'
+import { AccountEnrollmentController, type EnrollmentRemote } from './enrollment.ts'
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { CommandCodeSettingsPage } from './section.tsx'
 import { CommandCodeProviderCard } from './card.tsx'
@@ -223,6 +225,7 @@ function applyClientSurfaces(
       ...MODELS_REMOTE_CONTRIBUTION.descriptors,
       ...PRICES_REMOTE_CONTRIBUTION.descriptors,
       ...LOGIN_REMOTE_CONTRIBUTION.descriptors,
+      ...ENROLLMENT_REMOTE_CONTRIBUTION.descriptors,
     ],
   }
   ctx.effect(() => {
@@ -348,36 +351,36 @@ function applyClientSurfaces(
   })
 
   const refreshUsageOn = (ok: boolean): boolean => {
-    if (ok) void usageController.refresh()
+    const outcome = controller.state().accountResult
+    if (ok || outcome?.config === 'confirmed' || outcome?.credential === 'confirmed') void usageController.refresh()
     return ok
   }
   const injected = () => ({
+    createEnrollment: () => new AccountEnrollmentController(() => {
+      if (!usageNamespace?.enrollmentBegin) throw new Error('宿主不支持账号开通，请更新插件')
+      return usageNamespace as EnrollmentRemote
+    }, () => { scope.refresh(); controller.refreshCredentials(); void usageController.refresh() }),
     hooks: { commandCodeSettings: store, commandCodeUsage: usageStore, commandCodeLogin: loginStore },
     edit: (field: string, text: string) => controller.edit(field, text),
     resetField: (field: string) => controller.resetField(field),
-    // A landed save can change the key or endpoint the usage endpoints read,
-    // so the account card refetches; a failed save keeps the old data.
-    save: () => void controller.save().then(() => {
-      const settled = controller.state()
-      if (!settled.failed && settled.anyAccountConfigured) void usageController.refresh()
+    // 部分完成也可能改变凭据或连接配置，用本次确认结果刷新用量。
+    save: () => void controller.save().then(outcome => {
+      if (outcome?.config === 'confirmed' || outcome?.credential === 'confirmed') void usageController.refresh()
     }),
     discard: () => controller.discard(),
+    refreshCredentials: () => void controller.refreshCredentials(),
     refreshUsage: () => void usageController.refresh(),
     beginLogin: (targetRef?: string) => void loginController.begin(targetRef),
     cancelLogin: () => void loginController.cancel(),
     // Account operations commit immediately. The ones that change which keys
     // exist refetch the usage report so the account rows follow.
-    createAccount: (input: { label: string; key?: string }) => controller.createAccount(input).then((ref) => {
-      if (ref !== undefined && input.key) void usageController.refresh()
-      return ref
-    }),
     renameAccount: (ref: string, label: string) => controller.renameAccount(ref, label),
     removeAccount: (ref: string) => controller.removeAccount(ref).then((ok) => {
       // 配置可能已移除、凭据清理仍失败；用量页也应立即跟随新的账户列表。
       if (ok || !controller.state().accounts.some((account) => account.ref === ref)) void usageController.refresh()
       return ok
     }),
-    retryCredentialCleanup: (ref: string) => controller.retryCredentialCleanup(ref),
+    retryCredentialCleanup: (ref: string) => controller.retryCredentialCleanup(ref).then(refreshUsageOn),
     setAccountKey: (target: string, key: string) => controller.setAccountKey(target, key).then(refreshUsageOn),
     clearAccountKey: (target: string) => controller.clearAccountKey(target).then(refreshUsageOn),
     setActiveAccount: (id: string) => controller.setActiveAccount(id).then(refreshUsageOn),
@@ -416,11 +419,11 @@ function applyClientSurfaces(
     inject: () => ({
       hooks: { commandCodeSettings: store, commandCodeLogin: loginStore },
       edit: (field: string, text: string) => controller.edit(field, text),
-      save: () => void controller.save().then(() => {
-        const settled = controller.state()
-        if (!settled.failed && settled.anyAccountConfigured) void usageController.refresh()
+      save: () => void controller.save().then(outcome => {
+        if (outcome?.config === 'confirmed' || outcome?.credential === 'confirmed') void usageController.refresh()
       }),
       discard: () => controller.discard(),
+      refreshCredentials: () => void controller.refreshCredentials(),
       beginLogin: () => void loginController.begin(),
       cancelLogin: () => void loginController.cancel(),
     }),

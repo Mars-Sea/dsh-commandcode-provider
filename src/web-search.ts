@@ -140,8 +140,8 @@ const SEARCH_ROUTE = '/alpha/web-search'
 
 /** Per-request facts the provider needs, all injected so the class stays cordis-free and testable. */
 export interface CommandCodeSearchProviderDeps {
-  /** Resolve one usable Command Code key (credential seam → env → auth file), or undefined when none. */
-  resolveKey(): Promise<string | undefined>
+  /** 使用搜索已捕获的网关解析账号，探测不能在等待后转到另一个网关。 */
+  resolveKey(apiBase?: string): Promise<string | undefined>
   /** The API base host (defaults to `https://api.commandcode.ai`). */
   apiBase(): string
   /** Injectable fetch for tests; defaults to the global fetch. */
@@ -213,7 +213,7 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
         'WEB_PROVIDER_ERROR',
       )
     }
-    const key = await this.resolveKey(signal)
+    const key = await this.resolveKey(signal, apiBase)
     throwIfAborted(signal)
     const endpoint = `${apiBase.replace(/\/$/, '')}${SEARCH_ROUTE}`
 
@@ -301,10 +301,10 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
     return { sources, truncated: false }
   }
 
-  private async resolveKey(signal: AbortSignal | undefined): Promise<string> {
+  private async resolveKey(signal: AbortSignal | undefined, apiBase: string): Promise<string> {
     let key: string | undefined
     try {
-      key = await this.deps.resolveKey()
+      key = await this.deps.resolveKey(apiBase)
     } catch (error) {
       if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
       // Preserve the plugin's structured credential/usage taxonomy so the web

@@ -15,6 +15,7 @@
 
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import { readableErrorText } from './error-text.ts'
+import { openLoginPage } from './login-page.ts'
 import type { CommandCodeLoginFailureReason, CommandCodeLoginStatus } from '../login-wire.ts'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsCommandCodeKey } from './locales.ts'
@@ -97,8 +98,9 @@ export class CommandCodeLoginController {
   private keyName: string | undefined
   private reason: CommandCodeLoginFailureReason | undefined
   private message: string | undefined
+  private openedPage = false
 
-  constructor(remote: () => LoginRemote | undefined, pollMs = POLL_INTERVAL_MS) {
+  constructor(remote: () => LoginRemote | undefined, pollMs = POLL_INTERVAL_MS, private readonly openPage = openLoginPage) {
     this.remote = remote
     this.pollMs = pollMs
   }
@@ -125,6 +127,7 @@ export class CommandCodeLoginController {
   async begin(targetRef?: string): Promise<void> {
     if (this.disposed || this.phase === 'starting' || this.phase === 'waiting') return
     const generation = ++this.generation
+    this.openedPage = false
     this.targetRef = targetRef
     this.set({ phase: 'starting', authUrl: undefined, userName: undefined, keyName: undefined, reason: undefined, message: undefined })
     const remote = this.remote()
@@ -206,6 +209,11 @@ export class CommandCodeLoginController {
   private apply(status: CommandCodeLoginStatus): void {
     const base = { authUrl: undefined, userName: undefined, keyName: undefined, reason: undefined, message: undefined }
     if (status.state === 'waiting') {
+      // 在宿主返回地址后打开，每次尝试仅执行一次，状态轮询不重复开页。
+      if (status.authUrl && !this.openedPage) {
+        this.openedPage = true
+        this.openPage(status.authUrl)
+      }
       this.set({ ...base, phase: 'waiting', authUrl: status.authUrl })
       return
     }

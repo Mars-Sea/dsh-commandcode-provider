@@ -112,6 +112,52 @@ function waitForPhase(
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+test('收到授权地址后才自动开页，重复轮询及取消后的迟到地址不再开页，拦截不终止登录', async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const opened: unknown[][] = []
+  let throwOnOpen = false
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    open: (...args: unknown[]) => { opened.push(args); if (throwOnOpen) throw new Error('浏览器阻止打开'); return null },
+  } })
+  let reply!: (value: LoginCallResult) => void
+  let polls = 0
+  const waiting: LoginCallResult = { ok: true, value: { state: 'waiting', authUrl: 'https://example.invalid/auth' } }
+  const remote: LoginRemote = {
+    loginBegin: () => new Promise((resolve) => { reply = resolve }),
+    loginStatus: async () => { polls++; return waiting },
+    loginCancel: async () => ({ ok: true, value: { state: 'failed', reason: 'cancelled' } }),
+  }
+  const controller = new CommandCodeLoginController(() => remote, POLL_MS)
+  try {
+    const begin = controller.begin()
+    assert.deepEqual(opened, [], '没有地址时不开准备页')
+    reply(waiting)
+    await begin
+    assert.deepEqual(opened, [['https://example.invalid/auth', '_blank', 'noopener,noreferrer']])
+    for (let n = 0; n < 100 && polls < 2; n++) await sleep(POLL_MS)
+    assert.ok(polls >= 2)
+    assert.equal(opened.length, 1, '成功返回 null 也不在轮询中重开')
+    await controller.cancel()
+    throwOnOpen = true
+    const retry = controller.begin()
+    reply(waiting)
+    await retry
+    assert.equal(opened.length, 2, '新的登录尝试允许再次打开')
+    assert.equal(controller.state().phase, 'waiting', '浏览器抛错仍保留授权状态和手动链接')
+    assert.equal(controller.state().authUrl, 'https://example.invalid/auth')
+    await controller.cancel()
+    const cancelled = controller.begin()
+    await controller.cancel()
+    reply(waiting)
+    await cancelled
+    assert.equal(opened.length, 2, '取消后迟到的地址不会打开')
+  } finally {
+    controller.dispose()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
 test('a fresh begin walks starting → waiting with the Studio URL', async () => {
   let statusResult: LoginCallResult = { ok: true, value: { state: 'waiting', authUrl: 'https://commandcode.ai/studio/auth/cli?callback=x' } }
   const remote = makeRemote({

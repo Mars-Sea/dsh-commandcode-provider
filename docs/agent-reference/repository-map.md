@@ -16,17 +16,20 @@ An unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-har
 src/adapter.ts        CommandCodeAdapter (LlmAdapter) — wire protocol (three
                       transports: the private CLI protocol, OpenAI Chat
                       Completions, and Anthropic Messages), message
-                      conversion, SSE/JSONL stream parsing, catalog + cache
-                      (incl. `supported_endpoints`), pre-stream account
-                      rotation loop.
+                      conversion, 单次请求快照与连接前账号轮换。
+src/gateway-facts.ts  网关目录、来源校验、共享刷新发布权、公布与学习上限，
+                      返回独立能力快照；生成冷读取不额外联网。
+src/stream-response.ts 单次已连接响应：解析、块装配、终态校验、
+                      最后用量、取消门控与本地清理。
+src/provider-errors.ts 连接拒绝、流内错误与连接前账号轮换的共享错误分类。
 src/capabilities.ts   Static capability snapshot (model efforts/vision/thinking,
                       plan tiers, subscription plans, deals, peak pricing) +
                       its read helpers — the sync-only surface for upstream
                       CLI/doc updates; imported by src/adapter.ts and re-exported
                       from src/index.ts. Also holds the Messages-route model set
                       and the per-model output ceilings the catalog omits.
-src/accounts.ts       CommandCodeAccountPool — multi-account slots, per-key
-                      rotation state (429/401 marks), window-probe revival.
+src/accounts.ts       CommandCodeAccountPool — 固定账号定义的调用作用域，
+                      按网关与密钥共享健康及节流，凭据实时解析与窗口恢复。
 src/image-request.ts  Request-image target: the long-edge/byte budget one
                       request asks the attachment service to encode to
                       (`{ width, height, maxBytes }`), plus the local
@@ -50,6 +53,10 @@ src/stream-trace.ts   The opt-in raw-stream trace (`DSH_COMMANDCODE_TRACE`),
 src/index.ts          Plugin entry: Config schema, credential resolution,
                       settings namespace, route + directory registration,
                       /commandcode command wiring, usage-Remote wiring.
+src/enrollment.ts    Host-owned account enrollment, durable recovery journal,
+                      naming and cancellation compensation.
+src/enrollment-wire.ts Shared strict enrollment Remotes and page watch stream.
+src/client/enrollment.ts Page-owned enrollment controller and stream lifetime.
 src/commands.ts       The /commandcode usage dashboard command.
 src/command-locales.ts  zh/en copy for the /commandcode command (Host-side
                       plain constants, no ctx.locale).
@@ -68,8 +75,9 @@ src/client/index.ts   Browser client entry: registers the "Command Code"
                       plans & quota panel's `main` cell + gated
                       `sidebar.footer.action` card, and the composer
                       `conversation.composer.dock` session-cost entry.
-src/client/settings.ts  Settings-page controller (scope + credentials + staged
-                      form; React-free so node tests can drive it).
+src/client/settings.ts  设置输入校验、草稿对象版本和页面投影；设置页与模型卡共享。
+src/client/settings-write.ts  设置写入过程：统一意图队列、冻结目标与配置基线、
+                      整批配置、凭据确认、事实读取世代、部分结果与销毁门控。
 src/client/usage.ts   Account-card controller (Remote fetch lifecycle +
                       formatting; React-free) + the TypertRemoteMap merge
                       declaration for `commandcode/report`.
@@ -143,7 +151,7 @@ src/config-volatile.ts  The volatile-config helpers: `markVolatile()` /
                       so `apply()` and the adapter always see plain values).
 src/client/settings-scope.ts  Self-contained `SettingsScope` over the
                       `remote.settings` wire (describe mirror + revision-fenced
-                      mutate queue). The harness's own `settingsScope`
+                      mutate queue with explicit local acknowledgement). The harness's own `settingsScope`
                       wrapper service was removed by the 0.1.7 settings
                       rewrite, so this IS the client half — there is no
                       engine-side replacement to switch to.

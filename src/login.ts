@@ -212,6 +212,8 @@ export class CommandCodeLoginFlow {
   private targetRef: string | undefined
   /** A `cancel()` that arrived while a start was still binding (see {@link CommandCodeLoginFlow.cancel}). */
   private cancelPending = false
+  /** 取消只能阻止尚未发出的写入；补偿者须等这些实际存储任务结束。 */
+  private readonly pendingStores = new Set<Promise<void>>()
   private disposed = false
 
   constructor(deps: CommandCodeLoginFlowDeps) {
@@ -334,6 +336,14 @@ export class CommandCodeLoginFlow {
       return
     }
     if (this.starting !== undefined) this.cancelPending = true
+  }
+
+  /** 结束验证/监听并等待已开始的写入，供账号开通过程安全补偿。 */
+  async cancelAndDrain(): Promise<void> {
+    this.cancel()
+    await this.starting?.catch(() => undefined)
+    this.cancel()
+    await Promise.allSettled([...this.pendingStores])
   }
 
   /** Stop everything; a waiting attempt ends cancelled. Idempotent. */
@@ -515,9 +525,10 @@ export class CommandCodeLoginFlow {
    * Every step re-checks {@link ownsAttempt} first: the whoami round-trip and
    * the credential write are awaits, and the user may cancel (or start another
    * attempt) while one is in flight. A completion that no longer owns the
-   * attempt must not write the key or publish a status — otherwise cancel
-   * would report "cancelled" while the credential landed anyway, and the page
-   * would silently flip to success.
+   * attempt must not START a key write or publish a status. A write already
+   * handed to storage is tracked separately: cancelAndDrain() lets the owning
+   * enrollment wait for it before compensation, without pretending it can be
+   * aborted halfway through.
    */
   private async complete(attempt: number, credentials: CommandCodeLoginCredentials, targetRef: string | undefined): Promise<void> {
     if (!this.ownsAttempt(attempt)) return
@@ -545,7 +556,12 @@ export class CommandCodeLoginFlow {
     if (!this.ownsAttempt(attempt)) return
     try {
       this.deps.validateTargetRef?.(targetRef)
-      await this.deps.storeKey(credentials, targetRef)
+      const store = Promise.resolve().then(() => {
+        // 微任务排队期间的取消仍应阻止副作用。
+        if (this.ownsAttempt(attempt)) return this.deps.storeKey(credentials, targetRef)
+      })
+      this.pendingStores.add(store)
+      try { await store } finally { this.pendingStores.delete(store) }
     } catch (error: unknown) {
       if (!this.ownsAttempt(attempt)) return
       this.teardown()

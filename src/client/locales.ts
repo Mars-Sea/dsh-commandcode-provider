@@ -72,6 +72,19 @@ export type SettingsCommandCodeKey =
   | 'saving'
   | 'saved'
   | 'saveFailed'
+  | 'writeConflict'
+  | 'writeConfigUnconfirmed'
+  | 'writeConfigSaved'
+  | 'writeKeyNotIssued'
+  | 'writeKeyUnconfirmed'
+  | 'writeKeyConfirmed'
+  | 'writeTargetBefore'
+  | 'writeTargetAfter'
+  | 'writeClosed'
+  | 'writeCleanupPending'
+  | 'writeRefreshFailed'
+  | 'writeRefreshRetry'
+  | 'writeStateUnknown'
   | 'unsavedChanges'
   | 'saveInvalid'
   | 'discard'
@@ -238,6 +251,19 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   saving: '保存中',
   saved: '设置已保存',
   saveFailed: '保存失败，请重试。',
+  writeConflict: '待提交字段已被其他操作修改，配置未写入；请核对后再保存。',
+  writeConfigUnconfirmed: '配置提交未获确认；密钥未写入，请核对宿主状态后重试。',
+  writeConfigSaved: '配置已保存。',
+  writeKeyNotIssued: '密钥操作尚未发出；请核对后重试。',
+  writeKeyUnconfirmed: '密钥操作未获确认；请核对后手动重试。',
+  writeKeyConfirmed: '原引用的密钥操作已获确认。',
+  writeTargetBefore: '默认密钥引用已变化，本次密钥操作未发出；请核对当前目标。',
+  writeTargetAfter: '原引用的密钥操作已发出，默认引用随后变化；请核对两个引用。',
+  writeClosed: '客户端已销毁，未发出的操作已停止；已确认的修改保留。',
+  writeCleanupPending: '账号修改已确认，清理记录尚未收束，请重试清理。',
+  writeRefreshFailed: '密钥状态刷新失败；已获确认的写入仍有效。',
+  writeRefreshRetry: '仅刷新密钥状态',
+  writeStateUnknown: '密钥状态尚未确认',
   unsavedChanges: '有未保存的更改',
   saveInvalid: '有字段填写不正确，修正后才能保存',
   discard: '放弃',
@@ -284,7 +310,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   loginHintIdle: '也可通过网页授权自动获取并保存密钥。',
   loginButton: '登录 Command Code',
   loginStarting: '正在启动本地回调服务…',
-  loginWaiting: '等待在浏览器中完成授权…',
+  loginWaiting: '等待在浏览器中完成授权；若页面未自动打开，请点击授权链接。',
   loginOpenLink: '打开授权页面 ↗',
   loginCancel: '取消登录',
   loginSuccess: '已登录为',
@@ -409,6 +435,19 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   saving: 'Saving',
   saved: 'Settings saved',
   saveFailed: 'Save failed, please retry.',
+  writeConflict: '待提交字段已被其他操作修改，配置未写入；请核对后再保存。',
+  writeConfigUnconfirmed: '配置提交未获确认；密钥未写入，请核对宿主状态后重试。',
+  writeConfigSaved: '配置已保存。',
+  writeKeyNotIssued: '密钥操作尚未发出；请核对后重试。',
+  writeKeyUnconfirmed: '密钥操作未获确认；请核对后手动重试。',
+  writeKeyConfirmed: '原引用的密钥操作已获确认。',
+  writeTargetBefore: '默认密钥引用已变化，本次密钥操作未发出；请核对当前目标。',
+  writeTargetAfter: '原引用的密钥操作已发出，默认引用随后变化；请核对两个引用。',
+  writeClosed: '客户端已销毁，未发出的操作已停止；已确认的修改保留。',
+  writeCleanupPending: '账号修改已确认，清理记录尚未收束，请重试清理。',
+  writeRefreshFailed: '密钥状态刷新失败；已获确认的写入仍有效。',
+  writeRefreshRetry: '仅刷新密钥状态',
+  writeStateUnknown: '密钥状态尚未确认',
   unsavedChanges: 'You have unsaved changes',
   saveInvalid: 'Fix the highlighted field before saving',
   discard: 'Discard',
@@ -455,7 +494,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   loginHintIdle: 'Alternatively, sign in to fetch and store a key automatically.',
   loginButton: 'Sign in to Command Code',
   loginStarting: 'Starting the local callback server…',
-  loginWaiting: 'Waiting for authorization in your browser…',
+  loginWaiting: 'Waiting for authorization in your browser. If the page did not open automatically, use the authorization link.',
   loginOpenLink: 'Open the authorization page ↗',
   loginCancel: 'Cancel sign-in',
   loginSuccess: 'Signed in as',
@@ -508,4 +547,28 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   modelsTitle: 'Models',
   privacyTitle: 'Privacy & security',
   integrationsTitle: 'Integrations & display',
+}
+
+/** 同一确认结果在设置页和模型卡使用相同措辞，不从 configured 推断写入结果。 */
+export function settingsWriteNotice(
+  result: import('./settings-write.ts').SettingsWriteResult | undefined,
+  t: (key: SettingsCommandCodeKey) => string,
+): string {
+  if (!result) return ''
+  let key: SettingsCommandCodeKey | undefined
+  if (result.issue === 'closed') key = 'writeClosed'
+  else if (result.issue === 'target-changed') key = result.credential === 'not-issued' ? 'writeTargetBefore' : 'writeTargetAfter'
+  else if (result.issue === 'cleanup-pending') key = 'writeCleanupPending'
+  else if (result.config === 'conflict') key = 'writeConflict'
+  else if (result.config === 'unconfirmed') key = 'writeConfigUnconfirmed'
+  else if (result.credential === 'unconfirmed') key = 'writeKeyUnconfirmed'
+  else if (result.credential === 'not-issued') key = 'writeKeyNotIssued'
+  const messages = key ? [t(key)] : []
+  if (result.issue === 'target-changed' && result.credentialRef) {
+    messages.push(t(result.credential === 'confirmed' ? 'writeKeyConfirmed' : 'writeKeyUnconfirmed'))
+    messages.push(`（原引用：${result.credentialRef}）`)
+  }
+  if (key && result.config === 'confirmed' && result.issue !== 'cleanup-pending') messages.unshift(t('writeConfigSaved'))
+  if (result.refreshFailed) messages.push(t('writeRefreshFailed'))
+  return messages.join(' ')
 }

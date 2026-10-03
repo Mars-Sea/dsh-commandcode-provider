@@ -3,9 +3,12 @@
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
 - **错误正文读取有界**：收到非成功 HTTP 状态后，正文最多读取 64 KiB，期限为请求超时与 30 秒中的较小值；超时或截断保留原状态和已收片段，用于分类与重试。调用者取消传播原取消原因。成功生成流仍受独立的流空闲期限控制。
-- **流式终止与用量**：OpenAI 的 `finish_reason` 后继续读取独立用量，直到 `[DONE]` 或正文结束；Messages 的 `message_delta` 更新累计字段，在 `message_stop` 结束。缺失用量字段保留先前值，不能当作零覆盖，也不能把累计值相加。历史实测的完整末尾用量仍兼容。此边界已用分包模拟回归，本轮没有重新发送付费请求。
+- **流式终止与用量**：`src/stream-response.ts` 拥有单次已连接响应的读取、装配和释放；`src/provider-errors.ts` 统一连接拒绝与流内错误分类。OpenAI 的 `finish_reason`（生成结束原因）后继续读取独立用量，直到 `[DONE]` 或正文结束；尾部错误或空闲超时仍失败。Messages 的 `message_delta` 更新累计字段，在 `message_stop` 结束；其缺失用量字段保留先前值，不能当作零覆盖，也不能把累计值相加。
+- **取消与清理**：调用者取消后不再输出正文、工具或成功结束，仅交付取消前已解析的最后一份用量，再传播原取消原因。CLI 的 `finish`、OpenAI 的 `[DONE]`、Messages 的 `message_stop` 后，同包多余事件被忽略并留下有界诊断。释放本地读取锁、计时器和监听时发起底层取消，不等待其承诺完成。适配器迭代器的 `return()`（结束消费）先唤醒待读；消费方已结束时不能再交付用量。宿主迭代器自身的结束排队由宿主负责，宿主中止验证使用调用者取消信号。
 - **超时建议与设置范围一致**：OpenAI 请求超时建议使用页面 3600 秒上限，并且只在高于当前值时提供；重试退避上限不用于限制单次请求期限。
 - **冷生成预算**：内存目录未预热时合并一次同网关、版本 3 的磁盘目录读取；不额外联网，缺失或来源不符时保持未知窗口行为。文件读取不覆盖并发联网刷新得到的全局输出上限；切换地址或文件会换缓存状态。
+- **网关事实所有权**：`src/gateway-facts.ts` 持有目录校验、来源状态、共享发布权及输出上限；同网关最新发起的刷新接管发布权，旧结果仍可供原等待者使用，但失败、无效目录和迟到旧响应不能改写较新共享事实。磁盘只补充可信来源，不能倒灌联网上限；有效新目录移除字段则完整替换旧公布值。
+- **单次调用快照**：入口捕获连接与账号定义，取得原来源目录后固定模型路由及公布能力；内部轮换、协议回退、唯一降档不读取其他来源目录或等待后新配置。每次连接发出前只采纳更低学习上限。降档资格比较实际发送值，不依赖是否更新共享学习，仍要求未交付任何块且最多一次。见[《决策记录》第三章](../决策记录.md#三网关状态隔离)。
 
 - **Lone UTF-16 surrogate halves are stripped from every outgoing request body.** The strip runs as the
   `JSON.stringify` replacer at the single serialization point in `streamRequest()`, so all three transports
@@ -26,7 +29,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   snapshot in `src/capabilities.ts` is informational and may lag provider coverage or capacity.
   `tests/adapter.test.ts` checks the chat transports, off by default, unsupported models retaining the header,
   and 422 diagnosis.
-- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.73.0):
+- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.74.1):
   - `POST {apiBase}/alpha/generate` — CLI transport body `{ config, memory, taste, skills, permissionMode,
     params: { model, messages, tools, system, max_tokens, temperature, stream, reasoning_effort? },
     threadId }`. The real CLI's request also carries `mode` (server-validated against a fixed enum —
@@ -72,6 +75,23 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
       `GenerateCallFacts`). Measured 2026-09-29: the switch does NOT suppress thinking — six live requests
       across `adaptive` present/absent × `temperature` present/absent all produced a thinking block, so the
       apparent difference in one probe run was the `max` vs `xhigh` effort, not the switch.
+    - **`off` is model-relative, not a blanket "no effort"** (command-code@1.73.3). No Claude model lists it,
+      so on the Messages transport it keeps the host meaning and sends nothing. The DeepSeek V4 line DOES
+      list it as a real level, and there the omission itself is the mechanism: the official CLI's body
+      builder spreads `reasoning_effort` whenever the effort is a non-empty string, so `'off'` travels
+      verbatim as `reasoning_effort:"off"` and that is how thinking gets switched off. `stream()` therefore
+      keys the decision on the snapshot — `KNOWN_EFFORTS[model].includes('off')` — and both chat transports
+      pass the value through verbatim. `deepseek/deepseek-v4-flash-fast` never gained the level, so it keeps
+      dropping it. Pinned by the "`off` travels only for models whose snapshot publishes it" test.
+      **Measured 2026-10-03** against `deepseek/deepseek-v4-pro` through the real adapter (both chat
+      transports), three runs on one prompt, reading `usage.completion_tokens_details.reasoning_tokens`
+      off the raw response: no effort at all → **156** reasoning tokens (so omission is NOT how you switch
+      thinking off, and a blanket drop of `off` would have left a dead switch on screen), `high` → 147,
+      `off` → **0** with no reasoning member in the stream at all. The adapter's own path is the CLI
+      transport (`/alpha/generate`), whose body carries `params.reasoning_effort:"off"` — byte-identical
+      to what the official CLI sends; `/provider/v1/chat/completions` answers the same way. Control on the
+      un-listed `deepseek-v4-flash-fast`: `off` is dropped, no field goes out, and the run still spends
+      **193** reasoning tokens — the two branches behave exactly as the snapshot says they should.
     - `max_tokens` is capped PER MODEL and the endpoint names the ceiling in its rejection
       (`max_tokens: 200000 > 128000, which is the maximum allowed number of output tokens for
       claude-sonnet-5-5`). `/provider/v1/models` publishes no `max_output_tokens`, so the ceiling comes from
@@ -305,7 +325,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   deliberately OUTSIDE the retry whitelist because `dsh-compaction-basic`'s `agent/request-error` hook
   compacts the session and retries the reduced surface for that code — resending the byte-identical
   oversized request is exactly the old bug where a long session retried forever (issue #39).
-  `streamErrorToLlmError()` is the ONE in-band classifier for both transports (the CLI's `error` event and
+  `streamErrorToLlmError()` in `src/provider-errors.ts` is the ONE in-band classifier for all three transports (the CLI's `error` event and
   the Provider API chunk's `error` member, which was silently ignored before); it reads the wording before
   the status, so a `statusCode: 500` carrying "prompt is too long" still takes the overflow path, while only
   client-side pre-stream statuses (`status < 500`) are inspected for the wording, so an HTML 5xx page cannot
@@ -327,13 +347,13 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   [docs/issue-64-cache-review.md](../issue-64-cache-review.md) for upstream evidence and the remaining
   live-session acceptance check.
 - **Stream termination must distinguish an answer, an empty completion, and a cut**
-  (`CommandCodeAdapter.stream()`, `src/stream-trace.ts`). A terminal CLI `finish`, an OpenAI
+  (`CommandCodeAdapter.stream()`, `src/stream-response.ts`, `src/stream-trace.ts`). A terminal CLI `finish`, an OpenAI
   `finish_reason` or a Messages `message_delta` carrying `stop_reason`
   is necessary but not sufficient for success: reasoning alone, empty text, whitespace, and `tool_calls: []`
-  are not an answer. Hold the success `finish` until validation; DSH 0.1.7 converts an adapter throw into an
+  are not an answer. Hold the success `finish` until validation; DSH 0.2.0-rc.2 converts an adapter throw into an
   error finish, so throwing after publishing success creates two terminal events. A terminal response with
-  no text/tools maps to retryable `EMPTY_RESPONSE`; a length/max-token finish maps to non-retryable
-  `OUTPUT_TOKEN_LIMIT` unconditionally, and explicit content filtering remains non-retryable. **No
+  no text/tools maps to retryable `EMPTY_RESPONSE`; a length/max-token finish with no effective content maps to non-retryable
+  `OUTPUT_TOKEN_LIMIT`. 有效正文或工具已产生时保留内容，并返回 `max-tokens`（输出截断）；不自动重试。Explicit content filtering remains non-retryable. **No
   client-side estimate of the prompt's share of the context window feeds this decision** — an earlier
   version pre-shrank the request's own `max_tokens` from such an estimate (`requestContextBudget()`,
   issue #67) and used whether that shrink had reached an emergency floor to route an empty length finish to
@@ -348,7 +368,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `isContextOverflowDetail` branch or `streamErrorToLlmError()`'s in-band equivalent. See
   [决策记录](../决策记录.md) for the fuller record, including the one case (the original ambiguous-400
   wording last measured on `stealth/pixel-canary`) the live probe could not re-verify because that model was
-  itself unavailable at test time. Preserve
+  itself unavailable at test time — and Command Code has since retired it outright (2026-10-01), so that
+  wording can now only be re-measured on another model. Preserve
   received usage on failures; report the actual finish reason, request budget, output tokens and reasoning
   tokens (unknown when absent). A length finish proves a limit, not that every token was spent reasoning. Without any
   terminal event, preserve `EMPTY_RESPONSE` when no content arrived and `STREAM_CLOSED` after text/tool
@@ -359,7 +380,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   what an explicit disable used to look like — it wrote the conversation to `./false`) records raw response
   chunks and terminal diagnostics; payload logging stops at 4 MiB but reserves bounded `end`/`stream-close`
   records so long reasoning cannot hide the outcome. Traces contain conversation output; they do not record
-  request credentials or headers. Tests cover both transports, limit aliases, missing usage, valid
+  request credentials or headers. Tests cover all three transports, limit aliases, missing usage, valid
   text/tools, EOF, and a failure before any success finish. `scripts/probe-stream.mjs` tests a separate
   request; its result is not evidence for a prior session.
 - **Routing is decided by the catalog's `supported_endpoints`, with the `claude-*` prefix as the fallback —

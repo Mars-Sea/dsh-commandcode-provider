@@ -55,6 +55,7 @@ const { apply, inject } = await import('../src/client/index.ts')
 async function boot(
   {
     mountCredentials = true,
+    failCredentialSet = false,
     mountLayout = true,
     // The core contribution's `remote.settings` namespace is on every real
     // profile (api-remotes mounts it with `immediately: true`); `false` models
@@ -75,6 +76,7 @@ async function boot(
     immediateUsageMount = true,
   }: {
     mountCredentials?: boolean
+    failCredentialSet?: boolean
     mountLayout?: boolean
     mountSettings?: boolean
     declaredSlots?: Set<string>
@@ -89,6 +91,8 @@ async function boot(
     for (const listener of remoteListeners.get(event) ?? []) listener()
   }
   /** Calls the plugin's own Remote namespace received, by method. */
+  const credentialCalls = { describe: 0, set: 0, unset: 0 }
+  const credentialStore = new Map<string, string>()
   const commandCodeCalls = { report: 0, models: 0, prices: 0, loginStatus: 0 }
 
   /**
@@ -138,6 +142,19 @@ async function boot(
             if (ns === 'commandcode' && method in commandCodeCalls) {
               commandCodeCalls[method as keyof typeof commandCodeCalls] += 1
             }
+            if (ns === 'credentials') {
+              if (method === 'describe') {
+                credentialCalls.describe++
+                const refs = _args[0] as string[]
+                return { ok: true, value: Object.fromEntries(refs.map(ref => [ref, { configured: credentialStore.has(ref), writable: true }])) }
+              }
+              if (method === 'set') {
+                credentialCalls.set++
+                if (failCredentialSet) return { ok: false, error: { message: '合成凭据拒绝' } }
+                credentialStore.set(_args[0] as string, _args[1] as string)
+              }
+              if (method === 'unset') { credentialCalls.unset++; credentialStore.delete(_args[0] as string) }
+            }
             return { ok: true, value: ns === 'commandcode' && method === 'report' ? { accounts: [] } : undefined }
           }
         }
@@ -168,7 +185,7 @@ async function boot(
     package: 'boot',
     descriptors: [
       // The credentials namespace (dsh-api-settings-controller in alpha2).
-      ...(mountCredentials ? [{ namespace: 'credentials', method: 'describe' }] : []),
+      ...(mountCredentials ? ['describe', 'set', 'unset'].map(method => ({ namespace: 'credentials', method })) : []),
       // The plugin's own report/models/prices/login namespace. Not pre-mounted
       // in the deferred variant: there it must NOT exist until the plugin's own
       // `$mount` installs it, which is the whole point of that model.
@@ -287,7 +304,7 @@ async function boot(
   // are timer rounds).
   for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
 
-  return { registered, selectedPanels, localeNamespaces, settingsCalls, settingsRow, fireRemoteEvent, commandCodeCalls }
+  return { registered, selectedPanels, localeNamespaces, settingsCalls, settingsRow, fireRemoteEvent, commandCodeCalls, credentialCalls, credentialStore }
 }
 
 // Client boot
@@ -515,4 +532,38 @@ test('the client apply gates only on the services every surface needs', () => {
   // its own. `connection` is gone too — nothing reads that service any more,
   // and a gate on it would park the whole bundle.
   assert.deepEqual(inject, ['slots', 'locale', 'remote'])
+})
+
+
+test('设置页与模型卡共享确认结果，部分成功刷新用量；事实重试不重写密钥', async () => {
+  const { registered, commandCodeCalls, credentialCalls, settingsCalls } = await boot({ failCredentialSet: true, immediateUsageMount: false })
+  type Face = {
+    hooks: { commandCodeSettings: { getSnapshot(): import('../src/client/settings.ts').SettingsPageState } }
+    edit(field: string, text: string): void
+    save(): void
+    refreshCredentials(): void
+  }
+  const page = registered.get('commandcode')![0]!.inject!() as Face
+  const card = registered.get('llm-commandcode')![0]!.inject!() as Face
+  assert.equal(page.hooks.commandCodeSettings, card.hooks.commandCodeSettings)
+  page.edit('requestTimeoutMs', '2')
+  card.edit('apiKey', 'synthetic-key')
+  const usageBefore = commandCodeCalls.report
+  page.save()
+  for (let round = 0; round < 6; round++) await new Promise(resolve => setTimeout(resolve, 0))
+  const state = card.hooks.commandCodeSettings.getSnapshot()
+  assert.equal(settingsCalls.mutate.length, 1)
+  assert.equal(state.saveResult?.config, 'confirmed')
+  assert.equal(state.saveResult?.credential, 'unconfirmed')
+  assert.equal(state.failed, true)
+  assert.equal(state.apiKey.text, 'synthetic-key')
+  assert.ok(commandCodeCalls.report > usageBefore, `整体失败不能抑制已确认配置的用量刷新：${usageBefore} -> ${commandCodeCalls.report}`)
+  assert.equal(credentialCalls.set, 1)
+  const reads = credentialCalls.describe
+  card.refreshCredentials()
+  for (let round = 0; round < 4; round++) await new Promise(resolve => setTimeout(resolve, 0))
+  assert.ok(credentialCalls.describe > reads)
+  assert.equal(credentialCalls.set, 1)
+  assert.equal(credentialCalls.unset, 0)
+  assert.equal(page.hooks.commandCodeSettings.getSnapshot().apiKey.text, 'synthetic-key')
 })

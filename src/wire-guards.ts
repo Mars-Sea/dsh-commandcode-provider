@@ -15,3 +15,18 @@ export function numberValue(value: unknown): number | undefined {
 export function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
+
+/** 工具参数可为对象或完整 JSON 字符串；不把未完成的字符串片段当作完整参数。 */
+
+export function recordOrEmpty(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) return value
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value)
+      if (isRecord(parsed)) return parsed
+    } catch {
+      // Some providers stream incomplete JSON argument fragments.
+    }
+  }
+  return {}
+}

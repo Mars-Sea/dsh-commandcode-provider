@@ -230,17 +230,55 @@ export function selectAccountForModel(
   return accounts.find((account) => account.slot.id === rule.account && accountUsable(account.state))
 }
 
-/**
- * The account pool. Rotation state is keyed by API key (never logged), so two
- * slots resolving to the same credential share one mark, and a key changed in
- * the credentials service starts with a clean slate.
- */
+/** 不包含解析秘密的账号定义；作用域独立复制列表及模型规则。 */
+export interface CommandCodeAccountSelection {
+  slots: readonly CommandCodeAccountSlot[]
+  preferredId?: string | undefined
+  modelAccountRules: readonly CommandCodeModelAccountRule[]
+}
+
+/** 仅复制账号定义；凭据服务的秘密仍在每次解析时读取。 */
+export function captureAccountSelection(selection: CommandCodeAccountSelection): CommandCodeAccountSelection {
+  return Object.freeze({
+    slots: Object.freeze(selection.slots.map(slot => Object.freeze({ ...slot }))),
+    preferredId: selection.preferredId,
+    modelAccountRules: Object.freeze(selection.modelAccountRules.map(rule => {
+      const models = [...rule.models]
+      Object.freeze(models)
+      return Object.freeze({ ...rule, models })
+    })),
+  })
+}
+
+/** 账号选择与展示共用恢复规则；宿主作用域内的状态按网关与密钥共享。 */
 export class CommandCodeAccountPool {
-  /** Rotation state by API key. */
-  private readonly states = new Map<string, CommandCodeAccountState>()
-  /** Last explicit-revival probe attempt by API key (throttles a failing probe). */
-  private readonly explicitProbes = new Map<string, number>()
+  /** 当前作用域内按密钥共享的健康状态；不记录到日志。 */
+  private states = new Map<string, CommandCodeAccountState>()
+  /** 当前网关与密钥的显式探测时间，限制失败探测的频率。 */
+  private explicitProbes = new Map<string, number>()
+  private scopedStates = new Map<string, { states: Map<string, CommandCodeAccountState>; probes: Map<string, number> }>()
   constructor(private readonly deps: CommandCodeAccountPoolDeps) {}
+
+  /** 每个调用持有自己的定义和探测，只有同网关的健康事实共享；不临时改写全局依赖。 */
+  scope(context: CommandCodeAccountSelection & { apiBase: string; probeWindow: CommandCodeAccountPoolDeps['probeWindow'] }): CommandCodeAccountPool {
+    const selection = captureAccountSelection(context)
+    let shared = this.scopedStates.get(context.apiBase)
+    if (shared === undefined) {
+      shared = { states: new Map(), probes: new Map() }
+      this.scopedStates.set(context.apiBase, shared)
+    }
+    const scoped = new CommandCodeAccountPool({
+      ...this.deps,
+      slots: () => selection.slots,
+      preferredId: () => selection.preferredId,
+      modelAccountRules: () => selection.modelAccountRules,
+      probeWindow: context.probeWindow,
+    })
+    scoped.states = shared.states
+    scoped.explicitProbes = shared.probes
+    scoped.scopedStates = this.scopedStates
+    return scoped
+  }
 
   /**
    * Resolve every slot's key, deduplicated by key (first slot wins). Slots
@@ -287,7 +325,7 @@ export class CommandCodeAccountPool {
    * from the resolution entirely, which is what lets one request walk a
    * four-account pool. An explicit selection (pin or model rule) that a
    * rate-limit mark would demote is probed first, so a fallback never becomes
-   * permanent (issue #51). Rules re-read per resolution, so settings apply live.
+   * permanent (issue #51). Scoped rules stay fixed for the call; credential values re-resolve.
    */
   async resolveKey(options?: { tried?: readonly string[]; model?: string }): Promise<{ key: string; slot: CommandCodeAccountSlot } | undefined> {
     const accounts = await this.resolvedAccounts()

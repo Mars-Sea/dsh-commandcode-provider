@@ -19,10 +19,12 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     themselves are NOT a reliable source since the 2026-09-30 reformat**: `/docs/plans/go|goat|pro` now emit
     a rendered `minPlanName` instead of an availability map, `/docs/plans/max` dropped its table entirely,
     and `/docs/plans/provider` became the Provider API reference. Strict superset chain; every catalog ID
-    covered exactly once (re-verified at command-code@1.73.0, 2026-10-01 — the public catalog serves 86
-    models. `gpt-6.1-sol` (1.71.0) is the first **`max`** member: every lower tier false, only
+    covered exactly once (re-verified at command-code@1.74.1, 2026-10-03 — the public catalog serves 85
+    models: `stealth/pixel-canary` left it when 1.73.1 retired that stealth preview, and nothing else
+    moved. `gpt-6.1-sol` (1.71.0) is the first **`max`** member: every lower tier false, only
     `individual-max`/`individual-ultra`/`teams-pro` true. `inclusionai/ling-3.1-flash:free` (1.70.0) is `go`.
-    No existing tier moved, taking the map to 54/63/77/85/86 — additions only, so the chain still holds.
+    No tier moved, taking the map to 53/62/76/84/85 — one removal and no additions, so the chain still
+    holds. At command-code@1.73.0 (2026-10-01) the catalog served 86 models and the map read 54/63/77/85/86.
     The tiers the ladder now carries are `individual-{go,go-v1,goat,pro,pro-v1,provider,max,ultra}`; the
     `-v1` keys are **billing variants of their base plan** (1.69.0 moved Go to per-model credits), so a
     model served on only one of a pair still belongs to that plan, and an *absent* key means "unknown",

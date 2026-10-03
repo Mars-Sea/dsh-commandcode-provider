@@ -2,6 +2,11 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
+- **账号开通与恢复**：`accountEnrollmentTasks` 在写凭据前登记引用和阶段；`pending`（未完成）与 `cleanup`（清理中）账号不进入轮转池，`naming`（已登录待命名）保留可用账号。分配引用同时排除默认账号、已有账号、恢复日志、清理队列以及凭据服务中已占用的引用。宿主设置写入读取最新版本并按字段修改，避免丢失组合配置的密钥。
+- **取消补偿**：已开始写入不能撤销，`cancelAndDrain()` 等实际存储结束，再原子登记账号移除和 `credentialCleanupRefs`，最后清理凭据。清理失败仅保留日志，不自动重试；无法确认事实时也不移除日志。恢复中的命名失败保留账号，允许重试或接受已有名称。见[《决策记录》第四章](../决策记录.md#四账号开通过程)及[领域词汇](../../GLOSSARY.md)。
+
+- **请求账号作用域**：宿主从同一次配置读取取得连接与账号定义，`pool.scope()` 固定本次列表、固定账号和模型规则，并把探测绑定原连接。账号健康与显式探测节流按网关及密钥隔离，同网关共享密钥仍共享标记；引用凭据每次选择重新解析，直接填写的密钥随定义固定。用量、模型套餐筛选和网页搜索同样显式传递捕获网关，展示与请求共用恢复规则。见[《决策记录》第三章](../决策记录.md#三网关状态隔离)。
+
 - **API key resolution order** (in `src/index.ts`): `config.apiKey` → credential ref `apiKeyEnv` (default
   `COMMANDCODE_API_KEY`, via the dsh credentials seam) → launch environment → official CLI auth file
   `~/.commandcode/auth.json`. **pi/OMP auth files are intentionally NOT scanned** — keep it that way.
@@ -15,12 +20,12 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   rotate). When every account is marked, the pool probes `/alpha/billing/credits` per key
   (`probeWindowLimits`, which reads BOTH windows the endpoint publishes — the five-hour and the weekly one)
   to revive reset windows, else throws `RATE_LIMIT` naming the earliest `resetAt` (all-401 →
-  `INVALID_CREDENTIAL`). State is keyed by API key, not slot — shared credentials share one mark. **Manual
+  `INVALID_CREDENTIAL`). State is keyed by gateway and API key, not slot — same-gateway shared credentials share one mark. **Manual
   selection**: `Config.activeAccount` (a slot id) pins the serving account via the pool's `preferredId` seam
   + `selectActiveAccount()` (shared with the usage view's active badge); a pinned-but-exhausted or unknown
   id falls back to rotation order. **Model routing**: `Config.modelAccountRules` (`[{ models: string[],
   account }]`) lists catalog model ids per account slot; the request's model reaches key resolution
-  (`resolveApiKey(connection, model)`), the pool's `modelAccountRules` seam re-reads rules per resolution,
+  (`resolveApiKey(connection, model)`), the pool's `modelAccountRules` seam uses the call's captured rules,
   and `matchModelRule()`/`selectAccountForModel()` serve the routed account before preferred/rotation — an
   unusable routed account falls back, so the router is a hint, never a hard gate. **A fallback is never
   permanent, and that is a separate mechanism from the all-marked pass** (issue #51): a 429 marks the key
@@ -111,7 +116,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   what the runtime would serve), and `setAccountModels` moves each chosen model out of every other account
   and writes one rule per account, so the stored list carries no shadowed entries. The config shape is
   unchanged. `workingDir` stays a valid Config field but is no longer on the page (and not a page field, so
-  a save never touches it). The picker's billing-access cache is per key. The usage Remote result is
+  a save never touches it). The picker's billing-access cache is per gateway and key. The usage Remote result is
   `CommandCodeAccountsReport` (`{ accounts: [...] }`); host and client ship in one bundle, so wire-shape
   changes need no migration — only synced edits in `src/usage-wire.ts`, `src/usage-remote.ts`,
   `src/client/usage.ts`, and `src/commands.ts`. **A blocked usage report names the CAUSE, not just a

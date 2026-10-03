@@ -18,14 +18,15 @@
  * class-prefixed `cc-` to stay local.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
 import type { CommandCodeAccountUsage, CommandCodeUsageReport } from '../usage-wire.ts'
-import type { SettingsCommandCodeKey } from './locales.ts'
+import { settingsWriteNotice, type SettingsCommandCodeKey } from './locales.ts'
 import type { CatalogModelOption, SettingsPageState, StagedField } from './settings.ts'
+import type { AccountEnrollmentController, EnrollmentPageState } from './enrollment.ts'
 import type { LoginPageState } from './login.ts'
 import { loginHint, loginStateForTarget } from './login.ts'
 import { buildModelSelectOptions, catalogIsReady, groupModelSelectOptions, staleModelIds, tierHeadingFor, toggleModelSelection } from './model-select.ts'
@@ -46,9 +47,10 @@ export interface CommandCodeSettingsProps {
   save(): void
   discard(): void
   refreshUsage(): void
+  refreshCredentials(): void
   beginLogin(targetRef?: string): void
   cancelLogin(): void
-  createAccount(input: { label: string; key?: string }): Promise<string | undefined>
+  createEnrollment(): AccountEnrollmentController
   renameAccount(ref: string, label: string): Promise<boolean>
   removeAccount(ref: string): Promise<boolean>
   retryCredentialCleanup(ref: string): Promise<boolean>
@@ -823,6 +825,7 @@ interface AccountRowModel {
   configured: boolean
   /** Whether a stored credential exists this page could delete. */
   storedKey: boolean
+  credentialKnown: boolean
   keyWritable: boolean
   usage: CommandCodeAccountUsage | undefined
 }
@@ -844,6 +847,7 @@ function accountRows(state: SettingsPageState, usage: UsagePageState, t: Transla
     managed: true,
     configured: state.apiKeyConfigured || defaultUsage?.configured === true,
     storedKey: state.apiKeyConfigured,
+    credentialKnown: state.apiKeyKnown || typeof defaultUsage?.configured === 'boolean',
     keyWritable: state.apiKeyWritable,
     usage: defaultUsage,
   }]
@@ -857,6 +861,7 @@ function accountRows(state: SettingsPageState, usage: UsagePageState, t: Transla
       managed: true,
       configured: account.configured || entry?.configured === true,
       storedKey: account.configured,
+      credentialKnown: account.credentialKnown || typeof entry?.configured === 'boolean',
       keyWritable: account.writable,
       usage: entry,
     })
@@ -873,6 +878,7 @@ function accountRows(state: SettingsPageState, usage: UsagePageState, t: Transla
       managed: false,
       configured: entry.configured,
       storedKey: false,
+      credentialKnown: true,
       keyWritable: false,
       usage: entry,
     })
@@ -906,6 +912,7 @@ function statusDotTitle(row: AccountRowModel, t: Translate<SettingsCommandCodeKe
   const entry = row.usage
   if (entry?.mark === 'invalid-credential') return t('usageInvalidKey')
   if (entry !== undefined && (entry.mark !== '' || entry.cooldownUntil > 0)) return t('usageCooldown')
+  if (!row.credentialKnown) return t('writeStateUnknown')
   if (!row.configured) return t('apiKeyUnset')
   return entry?.active === true ? t('usageActive') : undefined
 }
@@ -1106,7 +1113,7 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
           {planName !== '' ? <span className="cc-usagePlan">{planName}</span> : null}
           {entry?.active && multi ? <span className="cc-badge">{t('usageActive')}</span> : null}
           {pinned ? <span className="cc-badge">{t('accountStatusPinned')}</span> : null}
-          {!row.configured ? <span className="cc-badgeMuted">{t('apiKeyUnset')}</span> : null}
+          {!row.credentialKnown || !row.configured ? <span className="cc-badgeMuted">{t(row.credentialKnown ? 'apiKeyUnset' : 'writeStateUnknown')}</span> : null}
           {entry?.mark === 'invalid-credential' ? <span className="cc-usagePlanStatus">{t('usageInvalidKey')}</span> : null}
           {entry !== undefined && entry.mark !== 'invalid-credential' && (entry.cooldownUntil > 0 || entry.mark === 'rate-limit') ? (
             <span className="cc-usagePlanStatus">
@@ -1151,7 +1158,7 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
         </div>
       ) : null}
 
-      {!row.configured && row.managed && mode === undefined && !showLogin ? (
+      {row.credentialKnown && !row.configured && row.managed && mode === undefined && !showLogin ? (
         <div className="cc-accountSetup">
           <p className="cc-hint">{row.keyWritable ? t('accountNoKeyHint') : t('apiKeyLocked')}</p>
           {keyActions ? (
@@ -1284,8 +1291,8 @@ function LoginStatus({ state, t, onCancel }: {
 
 /** The immediate account operations the list and its rows call. */
 interface AccountActions {
+  refreshCredentials(): void
   cleanup(ref: string): Promise<boolean>
-  create(input: { label: string; key?: string }): Promise<string | undefined>
   rename(ref: string, label: string): Promise<boolean>
   remove(ref: string): Promise<boolean>
   setKey(target: string, key: string): Promise<boolean>
@@ -1296,101 +1303,52 @@ interface AccountActions {
   cancelLogin(): void
 }
 
-/**
- * The add-account panel. Both paths store the account at once: pasting a key
- * writes key then row; browser sign-in stores a keyless row first (the Host
- * only signs in to a reference the stored list names) and drops it again if
- * the sign-in does not complete, so a failed attempt leaves no empty account.
- */
-function AddAccountPanel({ state, login, disabled, t, actions, pendingRef, setPendingRef, onClose }: {
+/** 新增面板只负责输入和操作意图；账号、登录、命名与补偿由宿主过程负责。 */
+function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: {
   state: SettingsPageState
-  login: LoginPageState
   disabled: boolean
   t: Translate<SettingsCommandCodeKey>
-  actions: AccountActions
-  /** The account stored for an in-flight sign-in; its row stays hidden until the sign-in lands. */
-  pendingRef: string | undefined
-  setPendingRef(ref: string | undefined): void
+  enrollment: AccountEnrollmentController
+  snapshot: EnrollmentPageState
   onClose(): void
 }) {
   const [label, setLabel] = useState('')
   const [pasting, setPasting] = useState(false)
-  const [loginFailure, setLoginFailure] = useState<string | undefined>(undefined)
+  const active = snapshot.active
+  const busy = active !== undefined && ['creating', 'waiting', 'writing', 'cancelling', 'naming'].includes(active.phase)
   const fallbackName = t('accountNameN', { n: state.accounts.length + 2 })
-  const pending = pendingRef === undefined ? undefined : loginStateForTarget(login, pendingRef).visible
-  const busy = state.accountBusy || pending?.phase === 'starting' || pending?.phase === 'waiting'
-  const loginBusyElsewhere = login.phase === 'starting' || login.phase === 'waiting'
-
-  useEffect(() => {
-    if (pendingRef === undefined || login.targetRef !== pendingRef) return
-    if (login.phase === 'success') {
-      const named = label.trim() === '' && login.userName !== undefined && login.userName !== ''
-      setPendingRef(undefined)
-      void (named ? actions.rename(pendingRef, login.userName!) : Promise.resolve(true)).then(onClose)
-      return
-    }
-    if (login.phase === 'failed' || login.phase === 'unavailable') {
-      setLoginFailure(loginHint(login, t).text)
-      setPendingRef(undefined)
-      void actions.remove(pendingRef)
-    }
-  }, [login, pendingRef, setPendingRef, label, actions, onClose, t])
-
-  const startLogin = async () => {
-    setLoginFailure(undefined)
-    const ref = await actions.create({ label: label.trim() === '' ? fallbackName : label })
-    if (ref === undefined) return
-    setPendingRef(ref)
-    actions.beginLogin(ref)
-  }
-
+  useEffect(() => { if (active?.phase === 'finished') onClose() }, [active?.phase, onClose])
+  const start = (key?: string) => enrollment.begin({ mode: key === undefined ? 'browser' : 'manual',
+    label: label.trim() || fallbackName, automaticName: label.trim() === '', ...(key === undefined ? {} : { key }) })
+  const close = () => { enrollment.cancel(); onClose() }
   return (
     <div className="cc-addPanel" aria-label={t('accountAdd')}>
       <span className="cc-panelTitle">{t('accountAdd')}</span>
-      <input
-        className="cc-input"
-        type="text"
-        aria-label={t('accountNamePlaceholder')}
-        placeholder={t('accountNamePlaceholder')}
-        value={label}
-        disabled={disabled || busy}
-        onChange={(event) => setLabel(event.target.value)}
-      />
-      {pending !== undefined && pending.phase !== 'idle' ? (
-        <LoginStatus state={pending} t={t} onCancel={actions.cancelLogin} />
-      ) : null}
-      {loginFailure !== undefined ? <p className="cc-loginError">{loginFailure}</p> : null}
-      {pasting ? (
-        <InlineInput
-          id="cc-add-account-key"
-          label={t('accountKeyPlaceholder')}
-          secret
-          placeholder={t('accountKeyPlaceholder')}
-          confirmLabel={t('accountAddConfirm')}
-          disabled={disabled || busy}
-          t={t}
-          onCancel={() => setPasting(false)}
-          onSubmit={(key) => {
-            void actions.create({ label: label.trim() === '' ? fallbackName : label, key }).then((ref) => {
-              if (ref !== undefined) onClose()
-            })
-          }}
-        />
+      <input className="cc-input" type="text" aria-label={t('accountNamePlaceholder')} placeholder={t('accountNamePlaceholder')}
+        value={label} disabled={disabled || busy} onChange={(event) => setLabel(event.target.value)} />
+      {active ? <p className="cc-hint" role="status">{active.message}</p> : null}
+      {active?.authUrl && active.phase === 'waiting' ? <p className="cc-hint">若登录页面未自动打开，请点击下方链接。</p> : null}
+      {active?.authUrl && active.phase === 'waiting' ? <a className="cc-linkButton" href={active.authUrl} target="_blank" rel="noreferrer">打开浏览器登录</a> : null}
+      {snapshot.error ? <p className="cc-loginError" role="status">{snapshot.error}</p> : null}
+      {active?.phase === 'naming' ? (
+        <div className="cc-inlineActions">
+          <Button variant="primary" size="sm" disabled={disabled} onClick={() => void enrollment.name(active.suggestedName || label || fallbackName)}>重试保存名称</Button>
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void enrollment.name()}>接受已有名称</Button>
+          <Button variant="ghost" size="sm" onClick={close}>{t('cancel')}</Button>
+        </div>
+      ) : pasting ? (
+        <InlineInput id="cc-add-account-key" label={t('accountKeyPlaceholder')} secret placeholder={t('accountKeyPlaceholder')}
+          confirmLabel={t('accountAddConfirm')} disabled={disabled || busy} t={t}
+          onCancel={close} onSubmit={(key) => { void start(key) }} />
       ) : (
-        <>
-          <p className="cc-hint">{t('accountAddHint')}</p>
-          <div className="cc-inlineActions">
-            <Button variant="primary" size="sm" disabled={disabled || busy || loginBusyElsewhere} onClick={() => void startLogin()}>
-              {t('accountAddLogin')}
-            </Button>
-            <Button variant="ghost" size="sm" disabled={disabled || busy} onClick={() => setPasting(true)}>
-              {t('accountAddPaste')}
-            </Button>
-            <span className="cc-spacer" />
-            <Button variant="ghost" size="sm" disabled={busy} onClick={onClose}>{t('cancel')}</Button>
-          </div>
-        </>
+        <div className="cc-inlineActions">
+          <Button variant="primary" size="sm" disabled={disabled || busy} onClick={() => void start()}>{t('accountAddLogin')}</Button>
+          <Button variant="ghost" size="sm" disabled={disabled || busy} onClick={() => setPasting(true)}>{t('accountAddPaste')}</Button>
+          <span className="cc-spacer" />
+          <Button variant="ghost" size="sm" onClick={close}>{t('cancel')}</Button>
+        </div>
       )}
+      {busy && active?.phase !== 'naming' && pasting ? <Button variant="ghost" size="sm" onClick={close}>取消开通</Button> : null}
     </div>
   )
 }
@@ -1400,7 +1358,7 @@ function AddAccountPanel({ state, login, disabled, t, actions, pendingRef, setPe
  * each, with its status and quota inline — so one account's facts no longer
  * have to be cross-read across separate surfaces.
  */
-function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: {
+function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh, createEnrollment }: {
   t: Translate<SettingsCommandCodeKey>
   state: SettingsPageState
   usage: UsagePageState
@@ -1408,9 +1366,12 @@ function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: 
   disabled: boolean
   actions: AccountActions
   onRefresh(): void
+  createEnrollment(): AccountEnrollmentController
 }) {
   const [adding, setAdding] = useState(false)
-  const [pendingRef, setPendingRef] = useState<string | undefined>(undefined)
+  const [enrollment] = useState(createEnrollment)
+  const snapshot = useSyncExternalStore(enrollment.store.subscribe, enrollment.store.getSnapshot)
+  useEffect(() => { enrollment.activate(); return () => enrollment.dispose() }, [enrollment])
   const closeAdd = useCallback(() => setAdding(false), [])
   const { loading, shouldRefresh } = usageCardState(usage)
   // Ask the Host on first paint: CLI auth and composition keys are not
@@ -1418,7 +1379,7 @@ function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: 
   useEffect(() => {
     if (shouldRefresh) onRefresh()
   }, [shouldRefresh, onRefresh])
-  const rows = accountRows(state, usage, t).filter((row) => row.ref === undefined || row.ref !== pendingRef)
+  const rows = accountRows(state, usage, t).filter((row) => row.ref === undefined || !state.accountEnrollmentRefs.includes(row.ref))
   const multi = rows.length > 1
   const pinnedRow = rows.find((row) => row.id === state.activeAccount)
   return (
@@ -1426,7 +1387,7 @@ function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: 
       <div className="cc-groupHead">
         <h3 className="cc-groupTitle">{t('accountsTitle')}</h3>
         <span className="cc-spacer" />
-        <button type="button" className="cc-linkButton" disabled={loading} onClick={onRefresh}>
+        <button type="button" className="cc-linkButton" disabled={loading} onClick={() => { onRefresh(); void enrollment.refresh() }}>
           {loading ? t('usageRefreshing') : t('usageRefresh')}
         </button>
       </div>
@@ -1446,7 +1407,9 @@ function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: 
           {t('usageError')}{usage.error !== undefined && usage.error !== '' ? ` — ${usage.error}` : ''}
         </p>
       ) : null}
-      {state.accountFailed !== undefined ? <p className="cc-rowError" role="status">{t('accountOpFailed')}</p> : null}
+      {settingsWriteNotice(state.accountResult, t) || state.accountFailed !== undefined ? <p className="cc-rowError" role="status">{settingsWriteNotice(state.accountResult, t) || t('accountOpFailed')}</p> : null}
+      {state.credentialRefreshFailed || state.accountResult?.refreshFailed || state.saveResult?.refreshFailed ? <div className="cc-rowError" role="status"><p>{t('writeRefreshFailed')}</p><button type="button" className="cc-btn cc-btnSm" onClick={actions.refreshCredentials}>{t('writeRefreshRetry')}</button></div> : null}
+      {!adding && snapshot.error ? <p className="cc-rowError" role="status">{snapshot.error}</p> : null}
       {state.pendingCredentialCleanup.length > 0 ? (
         <div className="cc-rowError" role="status">
           <p>{t('accountCleanupPending')}</p>
@@ -1454,6 +1417,23 @@ function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: 
             onClick={() => { for (const ref of state.pendingCredentialCleanup) void actions.cleanup(ref) }}>
             {t('accountCleanupRetry')}
           </button>
+        </div>
+      ) : null}
+      {snapshot.pending.filter((record) => record.id !== snapshot.active?.id).map((record) => (
+        <div className="cc-rowError" role="status" key={record.id}>
+          <p>{record.ref}：{record.message}</p>
+          {record.phase === 'naming' && record.suggestedName ? (
+            <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void enrollment.recover(record, record.suggestedName)}>重试保存名称</Button>
+          ) : null}
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void enrollment.recover(record)}>
+            {record.phase === 'naming' ? '接受已有名称' : '重试清理'}
+          </Button>
+        </div>
+      ))}
+      {snapshot.active?.phase === 'cleanup-needed' ? (
+        <div className="cc-rowError" role="status">
+          <p>{snapshot.active.message}</p>
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void enrollment.recover(snapshot.active!)}>重试清理</Button>
         </div>
       ) : null}
       <div className="cc-accountList">
@@ -1475,16 +1455,14 @@ function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh }: 
       {adding ? (
         <AddAccountPanel
           state={state}
-          login={login}
           disabled={disabled}
           t={t}
-          actions={actions}
-          pendingRef={pendingRef}
-          setPendingRef={setPendingRef}
+          enrollment={enrollment}
+          snapshot={snapshot}
           onClose={closeAdd}
         />
       ) : (
-        <button type="button" className="cc-addButton" disabled={disabled} onClick={() => setAdding(true)}>
+        <button type="button" className="cc-addButton" disabled={disabled} onClick={() => { enrollment.reset(); setAdding(true) }}>
           <span className="cc-addGlyph" aria-hidden="true" />
           {t('accountAdd')}
         </button>
@@ -1557,7 +1535,9 @@ interface SaveBarView {
  * commit on their own.
  */
 function saveBarView(state: SettingsPageState, savedVisible: boolean, t: Translate<SettingsCommandCodeKey>): SaveBarView {
-  if (state.failed) return { visible: true, tone: 'error', message: t('saveFailed'), actions: state.dirty }
+  const notice = settingsWriteNotice(state.saveResult, t)
+  if (notice) return { visible: true, tone: state.failed ? 'error' : 'pending', message: notice, actions: state.dirty || state.failed }
+  if (state.failed) return { visible: true, tone: 'error', message: t('saveFailed'), actions: state.dirty || state.failed }
   if (state.dirty || state.saving) {
     return state.invalid
       ? { visible: true, tone: 'error', message: t('saveInvalid'), actions: true }
@@ -1613,7 +1593,7 @@ function SaveBar({ view, state, t, onDiscard, onSave }: {
             <button
               type="button"
               className="cc-saveBarButton cc-saveBarGhost"
-              disabled={!view.visible || !state.dirty || state.saving}
+              disabled={!view.visible || (!state.dirty && !state.failed) || state.saving}
               onClick={onDiscard}
             >
               {t('discard')}
@@ -1642,24 +1622,23 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const disabled = !state.writable
   const savedVisible = useSavedFlash(state.savedCount)
   const updateVersion = usePluginUpdate()
-  // One stable object: the add panel's effect depends on it, and a fresh
-  // object per render would re-run that effect on every store notification.
+  // 账号行共享稳定的操作对象；新增账号的过程则由页面自己的控制器持有。
   const {
-    createAccount, renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey,
-    setActiveAccount, setAccountModels, beginLogin, cancelLogin,
+    renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey,
+    setActiveAccount, setAccountModels, beginLogin, cancelLogin, refreshCredentials,
   } = props
   const actions = useMemo<AccountActions>(() => ({
-    create: createAccount,
     rename: renameAccount,
     remove: removeAccount,
     cleanup: retryCredentialCleanup,
+    refreshCredentials,
     setKey: setAccountKey,
     clearKey: clearAccountKey,
     setActive: setActiveAccount,
     setModels: setAccountModels,
     beginLogin,
     cancelLogin,
-  }), [createAccount, renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey, setActiveAccount, setAccountModels, beginLogin, cancelLogin])
+  }), [renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey, setActiveAccount, setAccountModels, beginLogin, cancelLogin, refreshCredentials])
   const bar = saveBarView(state, savedVisible, t)
   const form = { state, disabled, t, onEdit: props.edit, onReset: props.resetField }
   return (
@@ -1675,6 +1654,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         disabled={disabled}
         actions={actions}
         onRefresh={props.refreshUsage}
+        createEnrollment={props.createEnrollment}
       />
       <ModelsCard {...form} onSelect={props.editVisibleModels} onClear={props.clearVisibleModels} />
       <PrivacyCard {...form} />

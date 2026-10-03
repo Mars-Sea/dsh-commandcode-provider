@@ -47,7 +47,8 @@ import {
 } from '../src/capabilities.ts'
 import type { CommandCodeAdapterDeps, CommandCodeConnectionOptions, SurfaceImagePolicy } from '../src/adapter.ts'
 import type { ContentBlock, GenerateOptions, Message, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { MessageId, ToolCallId, type LlmError } from '@deepseek-ai/dsh-llm'
+import type { RequestTimingSummary } from '../src/request-timing.ts'
 import type {
   AttachmentStore,
   ImageAttachmentRef,
@@ -107,6 +108,248 @@ function makeAdapter(overrides: Partial<CommandCodeAdapterDeps> = {}): CommandCo
 function userMessage(text: string): Message {
   return { id: messageId(), role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }
 }
+
+test('调用等待目录后取消，不开始凭据解析或网络生成', async () => {
+  let resolved = false, fetched = false
+  const control = new AbortController()
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: 'https://cancel-facts.invalid', workingDir: '/tmp', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    resolveApiKey: async () => { resolved = true; return 'synthetic-key' },
+    fetchImpl: (async () => { fetched = true; return new Response('') }) as typeof fetch,
+  })
+  const running = collect(adapter.stream({ provider: 'commandcode', model: 'synthetic/model', messages: [userMessage('hello')], signal: control.signal }))
+  control.abort(new Error('合成取消'))
+  await assert.rejects(running)
+  assert.equal(resolved, false)
+  assert.equal(fetched, false)
+})
+
+/** 三种线上协议各自的终止顺序；这些回归通过适配器入口观察完整响应过程。 */
+function settlementFrames(protocol: 'cli' | 'openai' | 'messages'): string[] {
+  const sse = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`
+  if (protocol === 'cli') return [
+    sse({ type: 'text-delta', text: 'first' }), sse({ type: 'text-delta', text: 'second' }),
+    sse({ type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 3 } }),
+  ]
+  if (protocol === 'openai') return [
+    sse({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 1 } }),
+    sse({ choices: [{ delta: { content: 'first' } }] }), sse({ choices: [{ delta: { content: 'second' } }] }),
+    sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+    sse({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 3 } }), 'data: [DONE]\n\n',
+  ]
+  return [
+    sse({ type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 1 } } }),
+    sse({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+    sse({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'first' } }),
+    sse({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'second' } }),
+    sse({ type: 'content_block_stop', index: 0 }),
+    sse({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 } }),
+    sse({ type: 'message_stop' }),
+  ]
+}
+
+for (const protocol of ['cli', 'openai', 'messages'] as const) {
+  const options = () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', modelsCachePath: '', protocol, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 })
+  const model = protocol === 'messages' ? 'claude-settlement' : 'settlement/model'
+  test(`${protocol}：取消后不再交付同包缓冲正文，只保留取消前已解析用量`, async () => {
+    const control = new AbortController()
+    const reason = new Error('用户取消')
+    const adapter = makeAdapter({ options, fetchImpl: fetchReturning(200, settlementFrames(protocol).join('')) })
+    const seen: StreamChunk[] = []
+    await assert.rejects(async () => {
+      for await (const chunk of adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')], signal: control.signal })) {
+        seen.push(chunk)
+        if (chunk.type === 'text-delta') control.abort(reason)
+      }
+    }, (error: unknown) => error === reason)
+    assert.deepEqual(seen.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['first'])
+    assert.equal(seen.some(chunk => chunk.type === 'finish' || chunk.type === 'tool-call-delta'), false)
+    const usage = seen.filter(chunk => chunk.type === 'usage')
+    assert.equal(usage.length, protocol === 'cli' ? 0 : 1)
+    if (usage[0]?.type === 'usage') assert.equal(usage[0].usage.outputTokens, 1, '不能继续读取取消后的用量')
+  })
+
+  test(`${protocol}：交付最后用量时取消，不再发布成功结束`, async () => {
+    const control = new AbortController()
+    const reason = new Error('用量后取消')
+    const adapter = makeAdapter({ options, fetchImpl: fetchReturning(200, settlementFrames(protocol).join('')) })
+    const seen: StreamChunk[] = []
+    await assert.rejects(async () => {
+      for await (const chunk of adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')], signal: control.signal })) {
+        seen.push(chunk)
+        if (chunk.type === 'usage') control.abort(reason)
+      }
+    }, (error: unknown) => error === reason)
+    assert.equal(seen.filter(chunk => chunk.type === 'usage').length, 1)
+    assert.equal(seen.some(chunk => chunk.type === 'finish'), false)
+  })
+
+  test(`${protocol}：块结束处取消仍保留当前事件已经解析的用量`, async () => {
+    const control = new AbortController()
+    const reason = new Error('块结束时取消')
+    const adapter = makeAdapter({ options, fetchImpl: fetchReturning(200, settlementFrames(protocol).join('')) })
+    const seen: StreamChunk[] = []
+    await assert.rejects(async () => {
+      for await (const chunk of adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')], signal: control.signal })) {
+        seen.push(chunk)
+        if (chunk.type === 'block-end') control.abort(reason)
+      }
+    }, (error: unknown) => error === reason)
+    const usage = seen.filter(chunk => chunk.type === 'usage')
+    assert.equal(usage.length, 1)
+    assert.equal(usage[0]?.type === 'usage' ? usage[0].usage.outputTokens : undefined, protocol === 'cli' ? 3 : 1)
+    assert.equal(seen.some(chunk => chunk.type === 'finish'), false)
+  })
+
+  test(`${protocol}：最终标记后的同包非法内容不会创建新块`, async () => {
+    const extra = protocol === 'cli' ? { type: 'text-delta', text: 'extra' }
+      : protocol === 'openai' ? { choices: [{ delta: { content: 'extra' } }] }
+        : { type: 'content_block_start', index: 1, content_block: { type: 'text', text: 'extra' } }
+    const adapter = makeAdapter({ options, fetchImpl: fetchReturning(200, `${settlementFrames(protocol).join('')}data: ${JSON.stringify(extra)}\n\n`) })
+    const chunks = await collect(adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] }))
+    assert.equal(chunks.filter(chunk => chunk.type === 'finish').length, 1)
+    assert.equal(chunks.filter(chunk => chunk.type === 'block-start').length, chunks.filter(chunk => chunk.type === 'block-end').length)
+    assert.equal(chunks.some(chunk => chunk.type === 'text-delta' && chunk.text === 'extra'), false)
+  })
+
+  test(`${protocol}：底层取消不完成也不阻塞成功响应的迭代结束`, async () => {
+    let release!: () => void
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(settlementFrames(protocol).join(''))) },
+      cancel() { cancelled = true; return new Promise<void>(resolve => { release = resolve }) },
+    })
+    const adapter = makeAdapter({ options, fetchImpl: (async () => new Response(body)) as typeof fetch })
+    const iterator = adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] })[Symbol.asyncIterator]()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      while ((await iterator.next()).value?.type !== 'finish') { /* 读到公开成功结束。 */ }
+      const result = await Promise.race([
+        iterator.next().then(value => value.done),
+        new Promise<'超时'>(resolve => { timer = setTimeout(() => resolve('超时'), 100) }),
+      ])
+      assert.equal(result, true)
+      assert.equal(cancelled, true)
+      assert.equal(body.locked, false)
+    } finally {
+      if (timer) clearTimeout(timer)
+      release?.()
+      await iterator.return?.()
+    }
+  })
+
+  test(`${protocol}：消费者提前结束也释放读取锁并记录消费中断`, async () => {
+    let cancelled = false
+    const summaries: RequestTimingSummary[] = []
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(settlementFrames(protocol).join(''))) },
+      cancel() { cancelled = true },
+    })
+    const adapter = makeAdapter({ options, fetchImpl: (async () => new Response(body)) as typeof fetch, onRequestTiming: summary => { summaries.push(summary) } })
+    for await (const chunk of adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')] })) {
+      if (chunk.type === 'text-delta') break
+    }
+    assert.equal(cancelled, true)
+    assert.equal(body.locked, false)
+    assert.equal(summaries.length, 1)
+    assert.equal(summaries[0]?.outcome, 'cancelled')
+  })
+
+  for (const consumerReturn of [false, true]) {
+    test(`${protocol}：读取正在等待时${consumerReturn ? '结束迭代' : '调用者取消'}也能唤醒并清理`, async () => {
+      let ready!: () => void
+      const reading = new Promise<void>(resolve => { ready = resolve })
+      let source!: ReadableStreamDefaultController<Uint8Array>
+      let cancelled = false
+      const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller }, cancel() { cancelled = true } })
+      const getReader = body.getReader.bind(body)
+      Object.defineProperty(body, 'getReader', { value: () => { ready(); return getReader() } })
+      const summaries: RequestTimingSummary[] = []
+      const control = new AbortController()
+      const reason = new Error('读取期间取消')
+      const adapter = makeAdapter({ options, fetchImpl: (async () => new Response(body)) as typeof fetch, onRequestTiming: summary => { summaries.push(summary) } })
+      const iterator = adapter.stream({ provider: 'commandcode', model, messages: [userMessage('hi')], signal: control.signal })[Symbol.asyncIterator]()
+      const pending = iterator.next().then(value => value, error => error)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let returning: Promise<IteratorResult<StreamChunk>> | undefined
+      try {
+        await reading
+        if (consumerReturn) returning = iterator.return?.()
+        else control.abort(reason)
+        const result = await Promise.race([
+          pending,
+          new Promise<'超时'>(resolve => { timer = setTimeout(() => resolve('超时'), 100) }),
+        ])
+        assert.notEqual(result, '超时')
+        if (consumerReturn) {
+          assert.equal(result.done, true)
+          assert.equal((await returning)?.done, true)
+        } else assert.equal(result, reason)
+        assert.equal(cancelled, true)
+        assert.equal(body.locked, false)
+        assert.equal(summaries[0]?.outcome, consumerReturn ? 'cancelled' : 'aborted')
+      } finally {
+        if (timer) clearTimeout(timer)
+        try { source.close() } catch { /* 已取消的流已关闭。 */ }
+        await pending
+        await returning
+        await iterator.return?.()
+      }
+    })
+  }
+}
+
+for (const failure of ['error', 'timeout', 'cancel'] as const) {
+  test(`OpenAI：结束原因后的尾部${failure}仍失败并只交付已解析用量一次`, async () => {
+    const control = new AbortController()
+    const reason = new Error('尾部取消')
+    let reads = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads++ === 0) controller.enqueue(new TextEncoder().encode(settlementFrames('openai').slice(0, 4).join('')))
+        else if (failure === 'error') controller.error(new Error('尾部连接中断'))
+      },
+    })
+    const adapter = makeAdapter({
+      options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', modelsCachePath: '', protocol: 'openai', requestTimeoutMs: 1000, streamIdleTimeoutMs: 20 }),
+      fetchImpl: (async () => new Response(body)) as typeof fetch,
+    })
+    const seen: StreamChunk[] = []
+    await assert.rejects(async () => {
+      for await (const chunk of adapter.stream({ provider: 'commandcode', model: 'tail/model', messages: [userMessage('hi')], signal: control.signal })) {
+        seen.push(chunk)
+        if (failure === 'cancel' && chunk.type === 'block-end') control.abort(reason)
+      }
+    }, (error: unknown) => failure === 'cancel' ? error === reason : (error as LlmError).code === (failure === 'error' ? 'TRANSPORT' : 'TIMEOUT'))
+    assert.equal(seen.some(chunk => chunk.type === 'finish'), false)
+    assert.equal(seen.filter(chunk => chunk.type === 'usage').length, 1)
+    assert.equal(body.locked, false)
+  })
+}
+
+test('同一个适配器的并发响应不共享取消、块索引或用量', async () => {
+  const control = new AbortController()
+  const reason = new Error('只取消第一条')
+  const adapter = makeAdapter({
+    fetchImpl: (async (_url, init) => {
+      const model = (JSON.parse(String(init?.body)) as { params: { model: string } }).params.model
+      return new Response(`data: ${JSON.stringify({ type: 'text-delta', text: model })}\n\ndata: ${JSON.stringify({ type: 'finish', finishReason: 'stop', totalUsage: { outputTokens: model === 'first' ? 1 : 2 } })}\n\n`)
+    }) as typeof fetch,
+  })
+  const [, second] = await Promise.all([
+    assert.rejects(async () => {
+      for await (const chunk of adapter.stream({ provider: 'commandcode', model: 'first', messages: [userMessage('hi')], signal: control.signal })) {
+        if (chunk.type === 'text-delta') control.abort(reason)
+      }
+    }, (error: unknown) => error === reason),
+    collect(adapter.stream({ provider: 'commandcode', model: 'second', messages: [userMessage('hi')] })),
+  ])
+  assert.deepEqual(second.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['second'])
+  assert.equal(second.find(chunk => chunk.type === 'block-start')?.index, 0)
+  const usage = second.find(chunk => chunk.type === 'usage')
+  assert.equal(usage?.type === 'usage' ? usage.usage.outputTokens : undefined, 2)
+  assert.equal(second.filter(chunk => chunk.type === 'finish').length, 1)
+})
 
 /**
  * A successful `/provider/v1/messages` text stream, in the exact event order the
@@ -3858,6 +4101,43 @@ test('an unsupported effort is dropped rather than sent as output_config', async
   assert.equal(sent()[0]!.output_config, undefined)
 })
 
+test('`off` travels only for models whose snapshot publishes it as a level', async () => {
+  // command-code@1.73.3 gave the DeepSeek V4 line a real "do not think" level,
+  // and the official CLI sends it verbatim — its body builder spreads the effort
+  // whenever it is a non-empty string — rather than omitting the field. That
+  // omission is the whole mechanism: without `reasoning_effort:"off"` there is
+  // no way to switch thinking off. So `off` must NOT be blanket-dropped the way
+  // it is for a model that has no such level.
+  const sent: Record<string, unknown>[] = []
+  const adapter = makeAdapter({
+    options: OPENAI_OPTIONS,
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({ object: 'list', data: [] }), { status: 200 })
+      }
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 })
+    }) as unknown as typeof fetch,
+  })
+  const effortOnWire = async (model: string): Promise<unknown> => {
+    sent.length = 0
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model,
+      reasoningEffort: 'off' as never,
+      messages: [userMessage('hi')],
+    }))
+    return sent[0]?.reasoning_effort
+  }
+  assert.equal(await effortOnWire('deepseek/deepseek-v4-pro'), 'off')
+  assert.equal(await effortOnWire('deepseek/deepseek-v4.1-flash'), 'off')
+  // `deepseek-v4-flash-fast` never gained the level, so for it "off" keeps its
+  // host meaning — "no reasoning strength requested" — and nothing travels.
+  assert.equal(await effortOnWire('deepseek/deepseek-v4-flash-fast'), undefined)
+  // A model absent from the snapshot is treated the same way.
+  assert.equal(await effortOnWire('m'), undefined)
+})
+
 test('Messages drops an explicit temperature, which adaptive thinking constrains to 1', async () => {
   // Live failure, 2026-09-29: every request carrying the other transports' 0.3
   // default was refused with
@@ -4673,8 +4953,11 @@ test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_E
 })
 
 test('stream() prices image content as vision tokens rather than inline base64', async () => {
-  const model = 'stealth/pixel-canary'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Pixel Canary', context_length: 100_000 }] })
+  // Space Bunny Alpha stands in for the retired Pixel Canary here: it is the
+  // other stealth-preview Vision model, and the test needs one that the
+  // snapshot still admits image input for.
+  const model = 'stealth/space-bunny-alpha'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Space Bunny Alpha', context_length: 100_000 }] })
   const ref = { ...imageRef(), attachmentId: AttachmentId('sha256:large-inline-image'), bytes: 500_000 }
   const data = new Uint8Array(ref.bytes)
   let output: number | undefined
@@ -5065,15 +5348,15 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Flash'], ['low', 'medium', 'xhigh'])
   assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen3.8-Max-0902'], ['low', 'medium', 'xhigh'])
   assert.deepEqual(KNOWN_EFFORTS['google/gemini-3.8-flash'], ['low', 'medium', 'high'])
-  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-vision-exp'], ['high', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-vision-exp'], ['off', 'high', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flash'], ['low', 'high', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['z-ai/glm-5.3-flashx'], ['low', 'high', 'max'])
   assert.ok(!KNOWN_EFFORTS['stealth/ox-alpha'])
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash-fast'], ['low', 'high', 'max'])
-  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['low', 'high', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['off', 'low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the command-code provider table; `src/capabilities.ts` owns the
-  // table and is currently synced to command-code@1.73.0.
+  // table and is currently synced to command-code@1.74.1.
   // Every model the CLI's provider table ships effort levels for must be present, and
   // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
   // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
@@ -5094,14 +5377,21 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-flash'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro-ultraspeed'])
-  assert.deepEqual(KNOWN_EFFORTS['stealth/space-bunny-alpha'], ['low', 'medium', 'high'])
-  // Pixel Canary's set offers `xhigh` INSTEAD of `high` — a distinct shape from its
-  // Space Bunny Alpha sibling's, not a copy of it.
-  assert.deepEqual(KNOWN_EFFORTS['stealth/pixel-canary'], ['low', 'medium', 'xhigh'])
+  // command-code@1.73.4 added `max` to Space Bunny Alpha, taking it to four
+  // levels — one short of the five-level set its `gpt-6.1-sol` peer ships.
+  assert.deepEqual(KNOWN_EFFORTS['stealth/space-bunny-alpha'], ['low', 'medium', 'high', 'max'])
+  // `stealth/pixel-canary` was retired by command-code@1.73.1 (the CLI hides it
+  // past 2026-10-01T06:00:00Z and it left the catalog and the pricing page), so
+  // it must not reappear in any snapshot table.
+  assert.ok(!KNOWN_EFFORTS['stealth/pixel-canary'])
   // command-code@1.68.0 takes the Sonnet/Opus five-level set; 1.67.0's DeepSeek
   // V4.1 Flash Fast keeps the three-level set its `deepseek-v4.1-flash` sibling ships.
   assert.deepEqual(KNOWN_EFFORTS['claude-sonnet-5-5'], ['low', 'medium', 'high', 'xhigh', 'max'])
-  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash-fast'], ['low', 'high', 'max'])
+  // command-code@1.73.3 added `off` to both DeepSeek V4.1 models, taking them to
+  // four levels; `deepseek-v4-flash-fast` alone stayed at three.
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash-fast'], ['off', 'low', 'high', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'], ['off', 'high', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-pro'], ['off', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('claude-sonnet-5-5'))
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash-fast'))
 })
@@ -5205,7 +5495,9 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro-ultraspeed'))
   assert.ok(KNOWN_IMAGE_MODELS.has('stealth/space-bunny-alpha'))
-  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/pixel-canary'))
+  // Retired with the model itself on 2026-10-01: it must not linger in the
+  // Vision set either.
+  assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/pixel-canary'))
   // The MiMo V2.6 family does not reason (docs: "Text input, Vision"); only its
   // Vision capability is snapshotted.
   assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.6-pro'))
@@ -5245,7 +5537,7 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro'], 'go')
   assert.equal(KNOWN_PLANS['stealth/space-bunny-alpha'], 'go')
-  assert.equal(KNOWN_PLANS['stealth/pixel-canary'], 'go')
+  assert.equal(KNOWN_PLANS['stealth/pixel-canary'], undefined)
   // GOAT adds a handful of closed/premium models.
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
   assert.equal(KNOWN_PLANS['xai/grok-4.6'], 'goat')
@@ -5337,12 +5629,11 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.label, 'FREE')
   assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.free, true)
   assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.expiresAt, undefined)
-  // Pixel Canary carries the identical permanent-style terms, and `isFreeModel()` must
-  // see it: that is what sorts it first in the picker and prices it at zero.
-  assert.equal(KNOWN_DEALS['stealth/pixel-canary']?.label, 'FREE')
-  assert.equal(KNOWN_DEALS['stealth/pixel-canary']?.free, true)
-  assert.equal(KNOWN_DEALS['stealth/pixel-canary']?.expiresAt, undefined)
-  assert.equal(isFreeModel('stealth/pixel-canary'), true)
+  // Pixel Canary carried the identical permanent-style terms until the model
+  // itself was retired on 2026-10-01; the deal left the snapshot with it, so
+  // `isFreeModel()` must stop reporting it free.
+  assert.equal(KNOWN_DEALS['stealth/pixel-canary'], undefined)
+  assert.equal(isFreeModel('stealth/pixel-canary'), false)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
@@ -5554,7 +5845,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.73.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.74.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

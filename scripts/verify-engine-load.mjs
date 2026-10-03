@@ -38,6 +38,11 @@
  *   7. Builds tool history with this engine's message constructors and captures
  *      both transports' next request. Calls AND results must survive; merely
  *      loading the bundle cannot detect message-envelope drift.
+ *   8. Opens the published enrollment watch through the real registry and
+ *      Gateway, then proves cancellation waits for a synthetic key write and
+ *      compensates. This uses in-memory settings and credentials, no account.
+ *   9. 通过真实模型运行时与块装配器检查三协议的成功、截断、取消、空响应、
+ *      工具断流和尾部错误；只使用合成响应，不访问提供商。
  *
  * Usage:
  *   node scripts/verify-engine-load.mjs                     # install + check
@@ -592,6 +597,295 @@ async function checkToolHistory(staged, engineModules) {
   process.stdout.write(`tool history checked with engine result role: ${messages[2].role}\n`)
 }
 
+/** 用真实宿主注册表与网关验证发布包的单页观察流；仅使用内存设置和合成凭据。 */
+async function checkEnrollmentStream(staged, engineModules) {
+  if (staged === undefined) return
+  const require = createRequire(join(dirname(engineModules), 'enrollment-probe.cjs'))
+  const load = async (name) => import(pathToFileURL(require.resolve(name)).href)
+  const [{ Context, Service }, { TypertRegistry }, { TypertGatewayService }, plugin] = await Promise.all([
+    load(`${SCOPE}/cordis`), load(`${SCOPE}/dsh-typert-registry`), load(`${SCOPE}/dsh-api-gateway`),
+    import(pathToFileURL(join(staged, 'lib', 'index.js')).href),
+  ])
+  const ctx = new Context()
+  const config = { apiKeyEnv: 'ENROLLMENT_PROBE' }
+  let revision = 1
+  let releaseWrite
+  const writing = new Promise((resolve) => { releaseWrite = resolve })
+  const keys = new Map()
+  let started = false
+  const pageId = '00000000-0000-4000-8000-000000000001'
+  const id = '00000000-0000-4000-8000-000000000002'
+  class ProbeLlm extends Service {
+    constructor(c) { super(c, 'llm') }
+    registerConfigurableProviders() {}
+    registerAdapter() {}
+  }
+  class ProbeSettings extends Service {
+    constructor(c) { super(c, 'settings') }
+    get writable() { return true }
+    configure() { return () => {} }
+    describe() { return [{ ns: 'llm-commandcode', value: structuredClone(config), revision }] }
+    async mutate(_ns, ops, expected) {
+      assert.equal(expected, revision)
+      for (const op of ops) config[op.path[0]] = structuredClone(op.value)
+      revision++
+    }
+  }
+  class ProbeCredentials extends Service {
+    constructor(c) { super(c, 'credentials') }
+    async describe(ref) { return { configured: keys.has(ref), writable: true } }
+    async set(ref, key) { started = true; await writing; keys.set(ref, key) }
+    async unset(ref) { keys.delete(ref) }
+  }
+  try {
+    new ProbeLlm(ctx)
+    new ProbeSettings(ctx)
+    new ProbeCredentials(ctx)
+    await ctx.plugin(TypertRegistry)
+    await ctx.plugin(TypertGatewayService, {})
+    await ctx.plugin({ inject: plugin.inject, apply(c) { plugin.apply(c, config) } })
+    const gateway = ctx.get('typertGateway')
+    const control = new AbortController()
+    const stream = await gateway.stream({ namespace: 'commandcode', method: 'enrollmentWatch', args: { input: { pageId } }, signal: control.signal })
+    const iterator = stream[Symbol.asyncIterator]()
+    assert.equal((await iterator.next()).value, true)
+    const state = await gateway.invoke({ namespace: 'commandcode', method: 'enrollmentBegin', args: { input: { id, pageId, mode: 'manual', label: '合成账号', automaticName: false, key: 'synthetic-key' } } })
+    assert.equal(state.id, id)
+    for (let n = 0; n < 100 && !started; n++) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.equal(started, true)
+    assert.equal(config.accountEnrollmentTasks[0].phase, 'pending')
+    const ended = iterator.next().catch(() => undefined)
+    control.abort()
+    await ended
+    releaseWrite()
+    for (let n = 0; n < 100 && config.accountEnrollmentTasks.length; n++) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.deepEqual(config.accountEnrollmentTasks, [])
+    assert.deepEqual(config.accounts, [])
+    assert.equal(keys.size, 0)
+    process.stdout.write('enrollment stream cancellation checked through the real engine Gateway\n')
+  } catch (error) { fail(`account enrollment stream contract: ${error.message}`) }
+  finally { releaseWrite(); await ctx.fiber.dispose() }
+}
+
+/** 真实宿主负责把适配器异常转为唯一的失败结束；不是在测试里自行模拟这层转换。 */
+async function checkStreamSettlement(staged, engineModules) {
+  if (staged === undefined) return
+  const require = createRequire(join(dirname(engineModules), 'stream-settlement-probe.cjs'))
+  const load = async name => import(pathToFileURL(require.resolve(name)).href)
+  const [{ Context }, llm, plugin] = await Promise.all([
+    load(`${SCOPE}/cordis`), load(`${SCOPE}/dsh-llm`), import(pathToFileURL(join(staged, 'lib', 'index.js')).href),
+  ])
+  const sse = event => `data: ${JSON.stringify(event)}\n\n`
+  let verified = true
+  for (const protocol of ['cli', 'openai', 'messages']) {
+    const scenarios = ['success', 'limited', 'empty-limit', 'tool-cut', 'cancel', 'cancel-tool', 'trailing']
+    if (protocol === 'openai') scenarios.push('tail-error')
+    for (const scenario of scenarios) {
+      const model = protocol === 'messages' ? 'claude-engine-settlement' : 'engine-settlement'
+      const control = new AbortController()
+      const tool = { id: 'settlement-tool', name: 'read', arguments: '{"path":"synthetic"}' }
+      const toolScenario = scenario === 'tool-cut' || scenario === 'cancel-tool'
+      const reason = scenario === 'limited' || scenario === 'empty-limit' ? 'length' : 'stop'
+      let events
+      if (protocol === 'cli') {
+        events = [toolScenario ? { type: 'tool-call', toolCallId: tool.id, toolName: tool.name, input: { path: 'synthetic' } }
+          : scenario === 'empty-limit' ? { type: 'reasoning-delta', text: 'thinking' } : { type: 'text-delta', text: 'first' }]
+        if (scenario !== 'tool-cut') events.push({ type: 'finish', finishReason: reason, totalUsage: { outputTokens: 3 } })
+      } else if (protocol === 'openai') {
+        events = [{ choices: [], usage: { prompt_tokens: 10, completion_tokens: 1 } }, { choices: [{ delta: toolScenario
+          ? { tool_calls: [{ index: 0, id: tool.id, function: { name: tool.name, arguments: tool.arguments } }] }
+          : scenario === 'empty-limit' ? { reasoning_content: 'thinking' } : { content: 'first' } }] }]
+        if (scenario !== 'tool-cut') events.push({ choices: [{ delta: {}, finish_reason: toolScenario ? 'tool_calls' : reason }] },
+          { choices: [], usage: { prompt_tokens: 10, completion_tokens: 3 } })
+      } else {
+        const type = toolScenario ? 'tool_use' : scenario === 'empty-limit' ? 'thinking' : 'text'
+        events = [{ type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 1 } } },
+          { type: 'content_block_start', index: 0, content_block: type === 'tool_use'
+            ? { type, id: tool.id, name: tool.name, input: {} } : { type, text: '', thinking: '' } },
+          { type: 'content_block_delta', index: 0, delta: type === 'tool_use'
+            ? { type: 'input_json_delta', partial_json: tool.arguments }
+            : type === 'thinking' ? { type: 'thinking_delta', thinking: 'thinking' } : { type: 'text_delta', text: 'first' } },
+          { type: 'content_block_stop', index: 0 }]
+        if (scenario !== 'tool-cut') events.push({ type: 'message_delta', delta: { stop_reason: reason === 'length' ? 'max_tokens' : 'end_turn' }, usage: { output_tokens: 3 } },
+          { type: 'message_stop' })
+      }
+      if (scenario === 'tail-error') events.push({ error: { message: 'synthetic tail failure', isRetryable: false } })
+      let body = events.map(sse).join('') + (protocol === 'openai' && scenario !== 'tool-cut' && scenario !== 'tail-error' ? 'data: [DONE]\n\n' : '')
+      if (scenario === 'trailing') body += sse(protocol === 'cli' ? { type: 'text-delta', text: 'extra' }
+        : protocol === 'openai' ? { choices: [{ delta: { content: 'extra' } }] }
+          : { type: 'content_block_start', index: 1, content_block: { type: 'text', text: 'extra' } })
+      const ctx = new Context()
+      try {
+        const runtime = new llm.LlmRuntime(ctx)
+        const adapter = new plugin.CommandCodeAdapter({
+          options: () => ({ apiBase: 'https://engine-settlement.invalid', workingDir: '/tmp', modelsCachePath: '', protocol, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+          resolveApiKey: async () => 'synthetic-settlement-key',
+          fetchImpl: async url => String(url).endsWith('/provider/v1/models')
+            ? new Response(JSON.stringify({ data: [{ id: model, name: 'Synthetic', context_length: 262144, supported_endpoints: [protocol === 'messages' ? '/messages' : '/chat/completions'] }] }))
+            : new Response(body, { headers: { 'x-request-id': 'settlement-request' } }),
+        })
+        runtime.registerAdapter(['commandcode'], adapter)
+        const assembly = new llm.BlockAssembler()
+        const chunks = []
+        for await (const chunk of runtime.stream({ provider: 'commandcode', model, maxTokens: 100,
+          messages: [llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'synthetic' }] })], signal: control.signal })) {
+          chunks.push(chunk)
+          assembly.push(chunk)
+          if ((scenario === 'cancel' && chunk.type === 'text-delta')
+            || (scenario === 'cancel-tool' && chunk.type === 'block-start' && chunk.blockType === 'tool-call')) control.abort(new Error('合成取消'))
+        }
+        const finishes = chunks.filter(chunk => chunk.type === 'finish')
+        assert.equal(finishes.length, 1, '真实宿主只能产生一个最终结果')
+        const expected = scenario.startsWith('cancel') ? 'aborted' : ['empty-limit', 'tool-cut', 'tail-error'].includes(scenario) ? 'error' : scenario === 'limited' ? 'max-tokens' : 'stop'
+        assert.equal(assembly.finish.kind, expected)
+        assert.equal(chunks.filter(chunk => chunk.type === 'usage').length <= 1, true)
+        if (['empty-limit', 'tool-cut', 'tail-error'].includes(scenario)) {
+          assert.equal(assembly.finish.failure.code, scenario === 'empty-limit' ? 'OUTPUT_TOKEN_LIMIT' : scenario === 'tool-cut' ? 'STREAM_CLOSED' : 'PROVIDER_STREAM_ERROR')
+          assert.equal(assembly.finish.failure.requestId, 'settlement-request')
+        }
+        if (scenario.startsWith('cancel') || scenario === 'tool-cut') {
+          assert.equal(assembly.interruptedBlocks().some(block => block.type === 'tool-call'), false,
+            '宿主中断快照不保留可以执行的工具调用；失败终态走请求错误分支')
+        }
+        if (scenario === 'trailing') assert.equal(chunks.some(chunk => chunk.type === 'text-delta' && chunk.text === 'extra'), false)
+        if (['success', 'limited', 'trailing', 'tail-error'].includes(scenario)) assert.equal(assembly.usage.outputTokens, 3)
+      } catch (error) { verified = false; fail(`${protocol} ${scenario} 流收束验证失败：${error.message}`) }
+      finally { await ctx.fiber.dispose() }
+    }
+  }
+  if (verified) process.stdout.write('真实宿主已验证三协议唯一终态、截断、取消、尾部失败、失败工具快照与用量（22 个场景）\n')
+}
+
+/** 使用真实插件入口、易变引用与账号池验证接线，网络及凭据仍为合成依赖。 */
+async function checkGatewayRequestFacts(staged, engineModules) {
+  if (staged === undefined) return
+  const require = createRequire(join(dirname(engineModules), 'gateway-facts-probe.cjs'))
+  const load = async name => import(pathToFileURL(require.resolve(name)).href)
+  const [{ Context, Service }, { updateVolatile }, { TypertRegistry }, plugin] = await Promise.all([
+    load(`${SCOPE}/cordis`), load(`${SCOPE}/cosmokit`), load(`${SCOPE}/dsh-typert-registry`),
+    import(pathToFileURL(join(staged, 'lib', 'index.js')).href),
+  ])
+  const a = 'https://engine-facts-a.invalid', b = 'https://engine-facts-b.invalid', c = 'https://engine-facts-c.invalid'
+  const d = 'https://engine-facts-d.invalid', e = 'https://engine-facts-e.invalid'
+  const ctx = new Context(), savedFetch = globalThis.fetch
+  const calls = [], keys = new Map([['GATEWAY_FACTS_PROBE', 'synthetic-default'], ['GATEWAY_FACTS_EXTRA', 'synthetic-extra']])
+  let adapter, armed, rejected = false, rejectExtraForReport = false, rejectRotation = false
+  let values = { apiBase: a, apiKeyEnv: 'GATEWAY_FACTS_PROBE', modelsCachePath: '', filterModelsByPlan: false, activeAccount: 'default' }
+  const config = plugin.Config(values)
+  const change = patch => {
+    values = { ...values, ...patch }
+    const candidate = plugin.Config(values)
+    for (const name of Object.keys(patch)) updateVolatile(config[name], candidate[name])
+  }
+  const gate = () => {
+    let enter, release
+    const entered = new Promise(resolve => { enter = resolve })
+    const waiting = new Promise(resolve => { release = resolve })
+    return { enter, release, entered, waiting }
+  }
+  class ProbeLlm extends Service {
+    constructor(context) { super(context, 'llm') }
+    registerConfigurableProviders() {}
+    registerAdapter(_providers, value) { adapter = value }
+  }
+  class ProbeCredentials extends Service {
+    constructor(context) { super(context, 'credentials') }
+    async resolve(ref) {
+      const value = keys.get(ref)
+      if (armed !== undefined) {
+        const pending = armed
+        armed = undefined
+        pending.enter()
+        await pending.waiting
+      }
+      return value === undefined ? undefined : { value }
+    }
+  }
+  const request = { provider: 'commandcode', model: 'synthetic/engine-facts', messages: [{ id: 'synthetic-message', role: 'user', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }] }
+  const generate = async () => { for await (const _ of adapter.stream(request)) { /* 检查真实收束。 */ } }
+  let pending
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input), key = new Headers(init?.headers).get('authorization')
+      calls.push({ url, key })
+      if (url.endsWith('/provider/v1/chat/completions')) {
+        if (!rejected) { rejected = true; return new Response('rate limited', { status: 429 }) }
+        if (rejectExtraForReport && url.startsWith(b) && key === 'Bearer synthetic-extra') {
+          rejectExtraForReport = false
+          return new Response('rate limited', { status: 429 })
+        }
+        if (rejectRotation && url.startsWith(d) && key === 'Bearer synthetic-extra') {
+          rejectRotation = false
+          armed = pending
+          return new Response('invalid credential', { status: 401 })
+        }
+        return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+      }
+      return new Response(JSON.stringify({ windowLimits: { fiveHour: { exceeded: false } } }))
+    }
+    new ProbeLlm(ctx)
+    new ProbeCredentials(ctx)
+    await ctx.plugin(TypertRegistry)
+    await ctx.plugin({ inject: plugin.inject, apply(context) { plugin.apply(context, config) } })
+    assert.ok(adapter, '真实宿主必须注册适配器')
+    await assert.rejects(generate(), error => error.code === 'THROTTLED')
+    pending = gate()
+    armed = pending
+    const old = generate()
+    await pending.entered
+    change({ apiBase: b, accounts: [{ apiKeyEnv: 'GATEWAY_FACTS_EXTRA', label: '合成额外账号' }], activeAccount: 'GATEWAY_FACTS_EXTRA' })
+    pending.release()
+    await old
+    assert.deepEqual(calls.map(call => call.url), [
+      `${a}/provider/v1/chat/completions`, `${a}/alpha/billing/credits`, `${a}/provider/v1/chat/completions`,
+    ])
+    assert.equal(calls[2].key, 'Bearer synthetic-default', '旧调用固定账号定义')
+    await generate()
+    assert.equal(calls.at(-1).url, `${b}/provider/v1/chat/completions`)
+    assert.equal(calls.at(-1).key, 'Bearer synthetic-extra', '新调用使用新账号配置且不继承甲的限流')
+
+    rejectExtraForReport = true
+    await generate()
+
+    // 实际远端接收者读取账号时切第三个网关，整个报告仍属于乙。
+    pending = gate()
+    armed = pending
+    const beforeReport = calls.length
+    const reporting = ctx.get('commandcodeUsage').report()
+    await pending.entered
+    change({ apiBase: c, accounts: [], activeAccount: 'default' })
+    pending.release()
+    const report = await reporting
+    assert.equal(report.accounts.length, 2, '旧用量报告仍保留乙的账号定义')
+    assert.equal(report.accounts.find(account => account.id === 'GATEWAY_FACTS_EXTRA').active, true)
+    assert.equal(report.accounts.find(account => account.id === 'GATEWAY_FACTS_EXTRA').mark, '', '用量报告使用共享恢复后的标记')
+    assert.equal(calls.length > beforeReport, true)
+    assert.equal(calls.slice(beforeReport).every(call => call.url.startsWith(b)), true, '旧报告不得读取丙网关的用量')
+    change({ apiBase: d, accounts: [{ apiKeyEnv: 'GATEWAY_FACTS_EXTRA', label: '合成额外账号' }], activeAccount: 'GATEWAY_FACTS_EXTRA' })
+    const beforeRotation = calls.length
+    pending = gate()
+    rejectRotation = true
+    const rotating = generate()
+    await pending.entered
+    change({ apiBase: e, accounts: [], activeAccount: 'default' })
+    pending.release()
+    await rotating
+    assert.deepEqual(calls.slice(beforeRotation), [
+      { url: `${d}/provider/v1/chat/completions`, key: 'Bearer synthetic-extra' },
+      { url: `${d}/provider/v1/chat/completions`, key: 'Bearer synthetic-default' },
+    ], '真实轮换回调必须沿用原连接及账号定义')
+    await generate()
+    assert.equal(calls.at(-1).url, `${e}/provider/v1/chat/completions`)
+    process.stdout.write('网关事实真实宿主检查通过：初次解析、轮换、探测与用量固定原来源，新调用读取新配置\n')
+  } catch (error) { fail(`网关事实真实宿主检查：${error.stack ?? error.message}`) }
+  finally {
+    pending?.release()
+    armed?.release()
+    globalThis.fetch = savedFetch
+    await ctx.fiber.dispose()
+  }
+}
+
 /** Run every check against one resolved engine. */
 async function verify(argv) {
   const options = parseArgs(argv)
@@ -613,6 +907,9 @@ async function verify(argv) {
     await checkImagePricing(staged)
     await checkVolatileConfig(staged)
     await checkToolHistory(staged, engine.modules)
+    await checkEnrollmentStream(staged, engine.modules)
+    await checkStreamSettlement(staged, engine.modules)
+    await checkGatewayRequestFacts(staged, engine.modules)
     const policy = await checkImagePolicy(engine.modules)
     process.stdout.write(`request-image offload contract on this engine: ${policy}\n`)
     if (version !== undefined && engine.version !== version) {

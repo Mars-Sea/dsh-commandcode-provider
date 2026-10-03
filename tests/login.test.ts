@@ -113,6 +113,30 @@ function credentials(state: string, apiKey = 'cc_sk_test_key'): CommandCodeLogin
   return { apiKey, state, userId: 'u1', userName: 'mars-sea', keyName: 'cli' }
 }
 
+test('取消收尾等待真实存储结束，不等待永远没有回调的监听任务', async () => {
+  let release!: () => void
+  const stored = new Promise<void>((resolve) => { release = resolve })
+  let entered!: () => void
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  const { flow } = makeFlow({ storeKey: async () => { entered(); await stored } })
+  try {
+    const status = await flow.begin('COMMANDCODE_API_KEY_2')
+    const { callbackUrl, state } = parseAuthUrl(status.authUrl!)
+    await fetch(callbackUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(credentials(state)) })
+    await started
+    let drained = false
+    const cancel = flow.cancelAndDrain().then(() => { drained = true })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.equal(drained, false)
+    release()
+    await cancel
+    assert.equal(flow.status().reason, 'cancelled')
+    await flow.begin('COMMANDCODE_API_KEY_3')
+    await flow.cancelAndDrain()
+    assert.equal(flow.status().reason, 'cancelled')
+  } finally { release(); flow.dispose() }
+})
+
 test('回调后的验证仍受登录总期限约束并中止网络请求', async () => {
   let signal: AbortSignal | null | undefined
   let release: (response: Response) => void = () => undefined

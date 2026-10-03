@@ -25,6 +25,8 @@ import type { CommandCodeAccountsReport, CommandCodeCatalog, CommandCodePriceTab
 import { modelPriceTable } from './model-prices.ts'
 import { LOGIN_HOST_CONTRIBUTION } from './login-wire.ts'
 import type { CommandCodeLoginStatus } from './login-wire.ts'
+import { ENROLLMENT_DESCRIPTORS, type EnrollmentAction, type EnrollmentInput, type EnrollmentPage, type EnrollmentState } from './enrollment-wire.ts'
+import type { AccountEnrollmentManager } from './enrollment.ts'
 
 /**
  * The browser-login face the usage service exposes (`commandcode/login*`).
@@ -67,6 +69,7 @@ export interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = C
   prices?: () => CommandCodePriceTable
   /** The browser-login flow (wired by the plugin entry); see {@link LoginFlowFacade}. */
   login?: LoginFlowFacade
+  enrollment?: AccountEnrollmentManager
 }
 
 /**
@@ -165,6 +168,56 @@ export class CommandCodeUsageService<C extends CommandCodeConnectionOptions = Co
     return this.deps.login?.status() ?? { state: 'idle' }
   }
 
+  async enrollmentBegin(input: EnrollmentInput): Promise<EnrollmentState> {
+    const manager = this.requireEnrollment()
+    const owner = this.enrollmentOwner(input)
+    if (!manager.hasPage(owner)) throw new Error('账号开通页面观察流未建立')
+    return manager.begin(owner, input)
+  }
+  async enrollmentStatus(input: EnrollmentAction): Promise<EnrollmentState> {
+    return this.requireEnrollment().status(this.enrollmentOwner(input), input.id)
+  }
+  async enrollmentCancel(input: EnrollmentAction): Promise<EnrollmentState> {
+    return this.requireEnrollment().cancel(this.enrollmentOwner(input), input.id)
+  }
+  async enrollmentName(input: EnrollmentAction): Promise<EnrollmentState> {
+    return this.requireEnrollment().name(this.enrollmentOwner(input), input.id, input.name)
+  }
+  async enrollmentRetry(input: EnrollmentAction): Promise<EnrollmentState> {
+    return this.requireEnrollment().retry(this.enrollmentOwner(input), input.id, input.name)
+  }
+  async enrollmentPending(input: EnrollmentPage): Promise<EnrollmentState[]> { return this.requireEnrollment().pending(this.enrollmentOwner(input)) }
+  async *enrollmentWatch(input: EnrollmentPage): AsyncIterable<boolean> {
+    const invocation = this.ctx.invocation
+    if (!invocation) throw new Error('账号开通必须从已连接的页面调用')
+    const manager = this.requireEnrollment()
+    const release = manager.watch(this.enrollmentOwner(input))
+    let abort: (() => void) | undefined
+    try {
+      const ended = new Promise<void>((resolve) => {
+        abort = () => resolve()
+        invocation.signal.addEventListener('abort', abort, { once: true })
+        if (invocation.signal.aborted) resolve()
+      })
+      if (invocation.signal.aborted) return
+      yield true
+      await ended
+    } finally {
+      if (abort) invocation.signal.removeEventListener('abort', abort)
+      release()
+    }
+  }
+  private enrollmentOwner(input: EnrollmentPage): string { return `${this.enrollmentPeer().id}:${input.pageId}` }
+  private enrollmentPeer() {
+    const invocation = this.ctx.invocation
+    if (!invocation) throw new Error('账号开通必须从已连接的页面调用')
+    return invocation.peer
+  }
+  private requireEnrollment(): AccountEnrollmentManager {
+    if (!this.deps.enrollment) throw new Error('宿主不支持账号开通，请更新插件')
+    return this.deps.enrollment
+  }
+
   private requireLogin(): LoginFlowFacade {
     const login = this.deps.login
     if (login === undefined) {
@@ -192,7 +245,7 @@ export function applyUsageRemote<C extends CommandCodeConnectionOptions>(
     // Client mount) 1:1.
     const unregister = registry.register({
       ...USAGE_HOST_CONTRIBUTION,
-      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, MODELS_DESCRIPTOR, PRICES_DESCRIPTOR, ...LOGIN_HOST_CONTRIBUTION.invocations],
+      invocations: [...USAGE_HOST_CONTRIBUTION.invocations, MODELS_DESCRIPTOR, PRICES_DESCRIPTOR, ...LOGIN_HOST_CONTRIBUTION.invocations, ...ENROLLMENT_DESCRIPTORS],
     })
     // The registry's own effect would outlive this fiber; withdraw the
     // contribution when the plugin unloads.

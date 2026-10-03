@@ -4,9 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.3] - 2026-10-03
+
+### Added
+
+- DeepSeek V4 系列新增 `off` 思考档，与官方 command-code@1.73.3 对齐：`deepseek-v4-pro`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`deepseek-v4.1-flash`、`deepseek-v4.1-flash-fast` 的可选档位里现在有 `off`，可以真正关闭思考。判定依据是快照本身——官方 CLI 的请求体只要 effort 非空字符串就原样下发，所以 `off` 是靠 `reasoning_effort:"off"` 这个字段本身生效的，省略字段反而做不到；因此仅当模型快照列出 `off` 时透传，未列出的模型（Claude 全系，以及始终三档的 `deepseek-v4-flash-fast`）继续保持原有行为：把 `off` 当作"未请求思考强度"而丢弃。
+
+### Changed
+
+- 同步官方 command-code@1.74.1：请求头 `x-command-code-version` 升至 `1.74.1`；Space Bunny Alpha 增加 `max` 档（官方 1.73.4），成为四档模型；零数据保留例外名单移除 `meituan/LongCat-2.0`（官方已不再把它列入任何 ZDR 排除集合，名单由 23 项减为 22 项）。
+
+### Removed
+
+- 移除 `stealth/pixel-canary` 的全部快照条目（思考档、Vision、最低套餐、免费促销）。官方已于 2026-10-01 结束该隐身预览：CLI 用 `hidden` 标记把它从模型选择器隐藏，模型也已从 `/provider/v1/models` 与定价页撤下，继续展示只会给出一个调不通的选项。它仍保留在零数据保留例外名单里——官方 CLI 的 ZDR 集合至今仍列着它，`supportsZeroDataRetention()` 对老会话里残留的 id 依然要说实话。
 
 ### Fixed
+
+- 固定单次调用的连接、账号定义和目录路由，避免设置切换期间混用网关事实；隔离各网关账号状态与探测，统一目录刷新发布权，保留失败前有效事实，并发已有更低上限时仍可完成本次唯一降档重试。用量展示使用同一来源及恢复后的健康事实。
+
+- 统一设置保存与即时账号操作的写入顺序，普通字段和模型选择整批提交；默认密钥引用变化时停止或提示核对，避免迟到保存恢复已清密钥或写入错误引用。区分配置、密钥和状态刷新结果，保留新草稿并提供只刷新状态的重试；插件销毁停止未发操作，取消继承固定账号真正恢复自动轮换。
+
+- 集中单次流响应收束：取消后停止缓冲正文、工具和成功结束，保留已解析用量；协议最终标记后忽略多余内容，底层取消不返回也能释放本地读取。保留正文截断行为及 OpenAI 尾部失败规则，并增加真实宿主终止装配验证。
+
+- 网页登录在收到授权地址后自动打开新页面，每次尝试只打开一次；保留手动链接，避免浏览器拦截自动打开后无法继续授权。
+
+- 将两种新增账号方式收进宿主开通过程：设置页离开或观察流断开后取消，已开始的凭据写入结束后再补偿；命名失败保留已登录账号，清理失败持久显示并由用户重试。
 
 - 修复持续集成里"隔离安装"检查在 npm 10 下必然失败：`npm pack --json` 在 npm 10 仍会触发本项目的 `prepare`（`tsdown`），其彩色横幅打在 stdout 上、排在 JSON 之前，脚本直接 `JSON.parse(stdout)` 就抛 `Unexpected token 'ℹ'` 并中断该步骤。改为跳过 JSON 之前的噪声再解析，并接受数组与键值对象两种形状；两个打包校验脚本共用同一套解析，新增 6 条用例（含噪声中的方括号、无 JSON 时报错、噪声超上限停止扫描）。本地 npm 11 不触发 `prepare`，所以只在持续集成暴露。
 
@@ -92,7 +114,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   checked against their registry-published sha512 digests (`pi-ai` 0.87.1, `command-code` 1.68.0, both
   matching) rather than taken on trust, and `command-code` 1.68.0 separately shows the CLI marks only its own
   system section and never touches this endpoint — which is why the CLI-route cache regressions in
-  [docs/issue-64-cache-review.md](../docs/issue-64-cache-review.md) say nothing about this one. **This could
+  [docs/issue-64-cache-review.md](docs/issue-64-cache-review.md) say nothing about this one. **This could
   not be confirmed against a live Command Code response** — the account had no remaining quota — so the
   claim that the gateway honours the field rests on the official provider depending on it for its own cost
   display, not on a measured `cache_read_input_tokens`. The downside is bounded either way: a gateway that

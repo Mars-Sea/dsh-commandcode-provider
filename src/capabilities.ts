@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.73.0) and
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.74.1) and
  * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
  * for the extraction procedures. Keeping the snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
@@ -19,7 +19,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.73.0 bundled model
+  // Re-verified against the authoritative command-code@1.74.1 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -27,6 +27,14 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // 'reasoning_effort' for them, so the picker must not offer a selector. Do
   // NOT add entries from the OAuth provider tables (anthropic/openai) - only
   // the Provider-API table is authoritative for this plugin's route.
+  //
+  // `off` is NOT a strength: it is the DeepSeek family's "do not think" level
+  // (command-code@1.73.3), and the official CLI sends it verbatim as
+  // `reasoning_effort:"off"` rather than omitting the field. Its presence here
+  // is what makes the adapter treat `off` as a real choice for these models
+  // instead of the host's "no effort requested" signal - see the lookup in
+  // `stream()`. No other family lists it: the Messages transport's
+  // `output_config.effort` has no such value, so `off` stays dropped there.
   'Qwen/Qwen3.8-Max': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-Max-0902': ['low', 'medium', 'xhigh'],
   'Qwen/Qwen3.8-27B': ['low', 'medium', 'xhigh'],
@@ -44,15 +52,20 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // Opus family. It takes the "recommended" slot from `claude-sonnet-5`.
   'claude-sonnet-5-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   // command-code@1.39.1 dropped `medium`; the 1.39.2 table ships these three.
+  // Still a three-level set at 1.74.1: unlike its V4 siblings, this one never
+  // gained `off`, so thinking cannot be switched off on this variant.
   'deepseek/deepseek-v4-flash-fast': ['low', 'high', 'max'],
   // command-code@1.53.0.
-  'deepseek/deepseek-v4.1-flash': ['low', 'high', 'max'],
-  // command-code@1.67.0; the same three-level set as its `deepseek-v4.1-flash`
+  'deepseek/deepseek-v4.1-flash': ['off', 'low', 'high', 'max'],
+  // command-code@1.67.0; the same four-level set as its `deepseek-v4.1-flash`
   // sibling, whose throughput-focused variant this is.
-  'deepseek/deepseek-v4.1-flash-fast': ['low', 'high', 'max'],
-  'deepseek/deepseek-v4-flash': ['high', 'max'],
-  'deepseek/deepseek-v4-flash-vision-exp': ['high', 'max'],
-  'deepseek/deepseek-v4-pro': ['high', 'max'],
+  'deepseek/deepseek-v4.1-flash-fast': ['off', 'low', 'high', 'max'],
+  // command-code@1.73.3 added `off` ("Allow disabling thinking for DeepSeek
+  // models") to the DeepSeek V4 line and the 4.1 pair above - but NOT to
+  // `deepseek-v4-flash-fast`, which the 1.74.1 table still ships at three.
+  'deepseek/deepseek-v4-flash': ['off', 'high', 'max'],
+  'deepseek/deepseek-v4-flash-vision-exp': ['off', 'high', 'max'],
+  'deepseek/deepseek-v4-pro': ['off', 'high', 'max'],
   'google/gemini-3.1-flash-lite': ['low', 'medium', 'high'],
   'google/gemini-3.5-flash': ['low', 'medium', 'high'],
   'google/gemini-3.5-flash-lite': ['low', 'medium', 'high'],
@@ -103,13 +116,15 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // and lived in KNOWN_THINKING_MODELS. The hidden
   // `minimax/minimax-m3-free` sibling gained the same set in the bundle.
   'MiniMaxAI/MiniMax-M3': ['low', 'medium', 'high'],
-  // command-code@1.65.0. Free during the stealth preview (see KNOWN_DEALS) and
-  // NOT routed under ZDR (see KNOWN_NON_ZDR_MODELS).
-  'stealth/space-bunny-alpha': ['low', 'medium', 'high'],
-  // command-code@1.66.0. A three-level set offering `xhigh` INSTEAD of `high` —
-  // the GLM 5.3 / 5.2 family's shape, unlike Space Bunny Alpha's. Free during
-  // the stealth preview and NOT routed under ZDR (see the tables above).
-  'stealth/pixel-canary': ['low', 'medium', 'xhigh'],
+  // command-code@1.65.0, with `max` added by 1.73.4 — the model this session
+  // runs on. Free during the stealth preview (see KNOWN_DEALS) and NOT routed
+  // under ZDR (see KNOWN_NON_ZDR_MODELS).
+  'stealth/space-bunny-alpha': ['low', 'medium', 'high', 'max'],
+  // `stealth/pixel-canary` (the second stealth preview, `xhigh` instead of
+  // `high`) was RETIRED by command-code@1.73.1 and no longer belongs in any
+  // table here: the CLI hides it behind `isPixelCanaryEnded()` (past
+  // 2026-10-01T06:00:00Z) and it is gone from `/provider/v1/models` and the
+  // pricing page. Only the ZDR exclusion set still names it.
   // command-code@1.71.0. Max-and-above availability (see KNOWN_PLANS), Vision
   // per the official registry and inputModalities:["text","image"], and the
   // same five-level set as its `gpt-6-astra` / `gpt-6-sol` predecessors.
@@ -203,9 +218,6 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'moonshotai/Kimi-K2.7-Code-Highspeed',
   'moonshotai/Kimi-K3',
   'sakana/fugu-ultra',
-  // command-code@1.66.0; Vision per the official registry (the docs models page
-  // lists it in the Stealth group) and the CLI's inputModalities.
-  'stealth/pixel-canary',
   // command-code@1.65.0; Vision per the official registry and inputModalities.
   'stealth/space-bunny-alpha',
   'stepfun/Step-3.7-Flash',
@@ -232,14 +244,14 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.73.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.74.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
- * is this set. Reading only the sibling route table would drop `meituan/
- * LongCat-2.0`, which appears in `modelSupportsZdr` alone (re-read from the
- * 1.66.0 / 1.67.0 / 1.68.0 artifacts on 2026-09-29: the two stealth-preview
- * rows sit in BOTH sets, so LongCat is the only divergence). The official docs (commandcode.ai/docs/resources/
- * zdr) put it in prose — "99% of our models have ZDR-capable upstreams … only
+ * is this set. Reading only the sibling route table dropped
+ * `meituan/LongCat-2.0`, which sat in `modelSupportsZdr` alone through
+ * 1.73.0; the 1.74.1 table lists it in NEITHER set, so as of this snapshot it
+ * is no longer excluded. The official docs (commandcode.ai/docs/resources/
+ * zdr) put coverage in prose — "99% of our models have ZDR-capable upstreams … only
  * a small handful of models are affected" — so the CLI's exclusion list is
  * the only per-model evidence there is; a ZDR request naming one of these
  * fails with HTTP 422 `cmd_zdr_no_providers` instead of routing through a
@@ -262,8 +274,14 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * is the snapshot of the exclusion set and nothing more. It is a rare change:
  * 20 members held across 1.62.0 → 1.64.0, 1.65.0 and 1.66.0 each added exactly
  * one (the two stealth-preview models below), 1.67.0 added one
- * (`deepseek/deepseek-v4.1-flash-fast`), and 1.68.0 changed nothing — 23
- * members as of 2026-09-29.
+ * (`deepseek/deepseek-v4.1-flash-fast`), 1.68.0 changed nothing, and 1.74.1
+ * removed one (`meituan/LongCat-2.0`) — 22 members as of 2026-10-03.
+ *
+ * `stealth/pixel-canary` is the one member whose model itself is retired (see
+ * `KNOWN_EFFORTS`): the CLI keeps naming it in the ZDR anchors even though it
+ * hides the row and dropped it from the catalog, so it stays listed here rather
+ * than being pruned with the rest of the tables — `supportsZeroDataRetention`
+ * stays truthful for any id a stale session still names.
  */
 export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'MiniMaxAI/MiniMax-M3',
@@ -273,7 +291,6 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // the pricing page carries no ZDR note for this row — the artifact is the
   // evidence, and the sibling `deepseek-v4.1-flash` stays ZDR-covered.
   'deepseek/deepseek-v4.1-flash-fast',
-  'meituan/LongCat-2.0',
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
   'meta/muse-spark-1.2-contributor',
@@ -286,11 +303,9 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // "Free while the preview lasts. Not routed under ZDR."
   'stealth/space-bunny-alpha',
   // command-code@1.66.0 added `stealth/pixel-canary` — the second stealth-preview
-  // free model, and like its sibling it is not routed under ZDR. Re-read from
-  // the 1.66.0 / 1.67.0 / 1.68.0 artifacts on 2026-09-29: it is listed in BOTH
-  // anchor sets in all three, so an earlier note here claiming it entered
-  // through `modelSupportsZdr` alone was wrong. The pricing page's own tip says
-  // it either way: "Free while the preview lasts. Not routed under ZDR."
+  // free model, and like its sibling it is not routed under ZDR. It sat in BOTH
+  // anchor sets through 1.73.0 and still does at 1.74.1, which is why the model
+  // survives in this one table after its 2026-10-01 retirement elsewhere.
   'stealth/pixel-canary',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
@@ -560,6 +575,10 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   // sakana
   ['sakana/fugu-ultra', 1000000],
   // 1 provider(s), unanimous
+  // `stealth/pixel-canary` stays in this models.dev-derived table even though
+  // Command Code retired the model on 2026-10-01: this file is generated from
+  // models.dev (scripts/sync-output-limits.mjs), which still lists it, so
+  // dropping the row by hand would only diverge from the next regeneration.
   ['stealth/pixel-canary', 131072],
   // 3 provider(s), unanimous
   ['stealth/space-bunny-alpha', 524288],
@@ -637,7 +656,7 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (54) ---
+  // --- Go (53) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -699,9 +718,6 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.60.0; every tier, and listed by the Go/GOAT/Pro/Max plan
   // pages alike — the superset chain this map encodes.
   'stepfun/Step-5-Preview': 'go',
-  // command-code@1.66.0; all-tiers availability, so a Go model every higher
-  // plan also serves. Free during the stealth preview (see KNOWN_DEALS).
-  'stealth/pixel-canary': 'go',
   // command-code@1.65.0; all-tiers availability. Free during the stealth
   // preview (see KNOWN_DEALS).
   'stealth/space-bunny-alpha': 'go',
@@ -962,13 +978,12 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'inclusionai/ling-3.1-flash:free': { label: 'FREE', free: true },
   // command-code@1.65.0 added Space Bunny Alpha as a stealth-preview free model
   // ("Free while the stealth preview lasts", 100% off, auto-applied, no
-  // published end date), and command-code@1.66.0 added Pixel Canary on
-  // identical terms. Neither is routed under ZDR (see
-  // KNOWN_NON_ZDR_MODELS), and the pricing page publishes both at a literal
-  // zero, which `modelPriceTable()` serves from these deals — so neither gets a
-  // row in the vendored price table.
+  // published end date). It is not routed under ZDR (see
+  // KNOWN_NON_ZDR_MODELS), and the pricing page publishes it at a literal
+  // zero, which `modelPriceTable()` serves from this deal — so it gets no row
+  // in the vendored price table. Its twin Pixel Canary left this map when
+  // command-code@1.73.1 retired it on 2026-10-01.
   'stealth/space-bunny-alpha': { label: 'FREE', free: true },
-  'stealth/pixel-canary': { label: 'FREE', free: true },
 }
 
 /**

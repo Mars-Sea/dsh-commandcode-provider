@@ -1,30 +1,14 @@
-/**
- * Browser controller for the "Command Code" settings page (a `settings.section`
- * entry, id `commandcode`). React-free: it only produces the state face
- * `section.tsx` renders, so node tests can drive it.
- *
- * Two write paths with different contracts:
- *   - The staged form (connection facts, behavior switches, model visibility,
- *     plus the Models-page card's default key draft) lands on `save()`.
- *   - Account management commits IMMEDIATELY and serially.
- *
- * The API key is written through the CREDENTIALS domain under the reference the
- * plugin resolves (`apiKeyEnv`), never through the settings document, so the
- * literal cannot leak into a document; the control only reports whether one is
- * configured. Everything else rides the `llm-commandcode` namespace through this
- * plugin's own `SettingsScope` over `remote.settings` (see `./settings-scope.ts`).
- * The Host stays the single fact source; the snapshot is republished after each
- * accepted write.
- */
+/** 设置页面控制器只负责输入校验、草稿版本与页面投影。
+ * 保存及即时账号操作由同一个设置写入过程持有；设置与凭据分别确认。 */
 
 import { MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS } from '../timeout-limits.ts'
 import { modelIsVisible, readVisibility } from '../model-visibility.ts'
-import type { SettingsPathOp } from './settings-scope.ts'
+import type { SettingsMutationResult, SettingsPathOp } from './settings-scope.ts'
+import { SettingsWriter, DEFAULT_API_KEY_REF, accountModelMap, writeCompleted, type StoredRule, type SettingsWriteIntent, type SettingsWriteResult } from './settings-write.ts'
+export { DEFAULT_API_KEY_REF, accountModelMap } from './settings-write.ts'
 
 /** The settings namespace the plugin registers (host half, src/index.ts). */
 export const COMMANDCODE_NS = 'llm-commandcode'
-/** Default credential reference the plugin resolves when none is named. */
-export const DEFAULT_API_KEY_REF = 'COMMANDCODE_API_KEY'
 
 /** The settings-scope snapshot fields consumed by this controller. */
 export interface SettingsScopeSnapshot<T> {
@@ -43,8 +27,8 @@ export interface SettingsScope<T> {
   subscribe(listener: () => void): () => void
   set(field: string, value: unknown): Promise<void>
   unset(field: string): Promise<void>
-  /** 多字段共用一次宿主版本检查；缺少此能力时不能安全删除账户。 */
-  mutate?(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void>
+  /** 多字段共用一次宿主版本检查并返回确认；缺少此能力不能提交配置。 */
+  mutate?(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationResult>
 }
 
 /** Result envelope returned by one current Typert Remote call. */
@@ -103,11 +87,12 @@ export interface AccountItemState {
   /** Stored label (falls back to the reference). */
   label: string
   configured: boolean
+  credentialKnown: boolean
   writable: boolean
 }
 
 /** The immediate account operations, named for the failure copy. */
-export type AccountOperation = 'create' | 'rename' | 'remove' | 'key' | 'active' | 'models'
+export type AccountOperation = 'rename' | 'remove' | 'key' | 'active' | 'models'
 
 /** One selectable catalog model in the settings page's model editors. */
 export interface CatalogModelOption {
@@ -136,6 +121,8 @@ export interface SettingsPageState {
   writable: boolean
   /** Whether the API key is currently configured (Host-reported). */
   apiKeyConfigured: boolean
+  /** 没有描述或写入确认时状态未知，不能显示为未配置。 */
+  apiKeyKnown: boolean
   /** Whether ANY account (default or extra) has a stored key — gates the usage card. */
   anyAccountConfigured: boolean
   /** Whether the credentials domain can store the key. */
@@ -191,6 +178,8 @@ export interface SettingsPageState {
   accountFailed: AccountOperation | undefined
   /** 已移除账户的待清理凭据引用，来自持久化配置，刷新后仍能重试。 */
   pendingCredentialCleanup: string[]
+  /** 宿主开通尚未完成的引用，不展示可操作的账号行。 */
+  accountEnrollmentRefs: string[]
   /** Effective visible-model allowlist: staged draft or stored value. Empty = show all. */
   visibleModels: string[]
   /** 区分不受限制与终端显式隐藏全部；不能用空数组推断显示全部。 */
@@ -209,6 +198,10 @@ export interface SettingsPageState {
   failed: boolean
   /** Monotonic counter bumped once per accepted save (the component flashes on it). */
   savedCount: number
+  /** 本次写入各阶段的确认事实，不用整体失败推断回滚。 */
+  saveResult: SettingsWriteResult | undefined
+  accountResult: SettingsWriteResult | undefined
+  credentialRefreshFailed: boolean
 }
 
 /** Parsed outcome of one field's draft. */
@@ -352,51 +345,7 @@ function sameModels(a: readonly string[], b: readonly string[]): boolean {
   return b.every((id) => set.has(id))
 }
 
-/** One stored routing rule, normalized. */
-interface StoredRule {
-  models: string[]
-  account: string
-}
-
-/**
- * Fold routing rules into one model list per account with the runtime's
- * first-match-wins order (`matchModelRule()` in src/accounts.ts): a model
- * claimed by an earlier rule is ignored by every later one. Account order is
- * first appearance, which keeps a rewrite's rule order stable.
- */
-export function accountModelMap(rules: readonly StoredRule[]): Map<string, string[]> {
-  const claimed = new Set<string>()
-  const map = new Map<string, string[]>()
-  for (const rule of rules) {
-    const list = map.get(rule.account) ?? []
-    for (const model of rule.models) {
-      if (claimed.has(model)) continue
-      claimed.add(model)
-      list.push(model)
-    }
-    map.set(rule.account, list)
-  }
-  return map
-}
-
-/** Serialize a per-account model map back into `modelAccountRules`. */
-function rulesFromMap(map: ReadonlyMap<string, readonly string[]>): StoredRule[] {
-  const out: StoredRule[] = []
-  for (const [account, models] of map) {
-    if (models.length > 0) out.push({ models: [...models], account })
-  }
-  return out
-}
-
-/**
- * Controller bridging the `llm-commandcode` scope and the credentials domain
- * onto the page. See the module header for the two write paths.
- *
- * Account ops commit immediately, so a new account can be created, signed into
- * and pinned in one gesture — the Host refuses a login for a reference the
- * stored `accounts` list does not name, so a staged row could not be signed
- * into at all.
- */
+/** 共享控制器跨普通切页保存草稿，插件销毁才关闭写入过程。 */
 export class CommandCodeSettingsController {
   private readonly scope: SettingsScope<Record<string, unknown>>
   private readonly api: SettingsPageApi
@@ -406,8 +355,9 @@ export class CommandCodeSettingsController {
   private readonly disposers: Array<() => void> = []
   private disposed = false
   private credentialRef = DEFAULT_API_KEY_REF
-  /** Host-reported configured/writable state per credential reference. */
-  private readonly credentialStates = new Map<string, { configured: boolean; writable: boolean }>()
+  private readonly writer: SettingsWriter
+  private saveResult: SettingsWriteResult | undefined
+  private accountResult: SettingsWriteResult | undefined
   /** Staged visible-model allowlist (undefined = no draft). */
   private visibleModelsDraft: string[] | undefined = undefined
   private catalogModels: CatalogModelOption[] = []
@@ -415,8 +365,6 @@ export class CommandCodeSettingsController {
   private saving = false
   private failed = false
   private savedCount = 0
-  /** Tail of the serial account-operation queue. */
-  private accountQueue: Promise<unknown> = Promise.resolve()
   private accountPending = 0
   private accountFailed: AccountOperation | undefined = undefined
 
@@ -426,13 +374,14 @@ export class CommandCodeSettingsController {
   ) {
     this.scope = scope
     this.api = api
+    this.writer = new SettingsWriter(scope, api.credentials, () => this.publish())
     this.disposers.push(scope.subscribe(() => {
       this.recomputeCredentialRef()
-      void this.describeAll()
+      void this.writer.refreshCredentials()
       this.publish()
     }))
     this.recomputeCredentialRef()
-    void this.describeAll()
+    void this.writer.refreshCredentials()
     this.refreshCatalog()
   }
 
@@ -440,6 +389,9 @@ export class CommandCodeSettingsController {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.writer.dispose()
+    this.staged.clear()
+    this.visibleModelsDraft = undefined
     for (const dispose of this.disposers) dispose()
     this.disposers.length = 0
     this.listeners.clear()
@@ -449,7 +401,7 @@ export class CommandCodeSettingsController {
    * The credential reference the section names, or the provider default. A
    * user who renamed `apiKeyEnv` in the profile Config gets a page that
    * addresses the renamed ref instead of silently writing the default —
-   * mirroring the Models page's `refFor()`.
+   * 与模型卡共享同一设置引用。
    */
   private recomputeCredentialRef(): void {
     const snapshot = this.scope.getSnapshot()
@@ -457,7 +409,6 @@ export class CommandCodeSettingsController {
       ? snapshot.value.apiKeyEnv
       : DEFAULT_API_KEY_REF
     if (named === this.credentialRef) return
-    this.credentialStates.delete(this.credentialRef)
     this.credentialRef = named
   }
 
@@ -471,13 +422,14 @@ export class CommandCodeSettingsController {
   state(): SettingsPageState {
     const snapshot = this.scope.getSnapshot()
     const plan = this.plan()
-    const credential = this.credentialStates.get(this.credentialRef)
+    const credential = this.writer.credential(this.credentialRef)
     const accounts = this.effectiveAccounts()
     const active = this.sectionValue('activeAccount')
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable,
       apiKeyConfigured: credential?.configured ?? false,
+      apiKeyKnown: credential !== undefined,
       anyAccountConfigured: (credential?.configured ?? false) || accounts.some((account) => account.configured),
       apiKeyWritable: credential?.writable ?? true,
       apiKey: {
@@ -502,26 +454,41 @@ export class CommandCodeSettingsController {
       accountModels: Object.fromEntries(accountModelMap(this.storedRules())),
       accountBusy: this.accountPending > 0,
       accountFailed: this.accountFailed,
-      pendingCredentialCleanup: this.cleanupRefs(),
+      pendingCredentialCleanup: this.cleanupRefs().filter((ref) => !this.enrollmentRefs(true).includes(ref)),
+      accountEnrollmentRefs: this.enrollmentRefs(false),
       visibleModels: this.effectiveVisibleModels(),
       visibleModelsAll: this.visibleModelsDraft === undefined ? this.storedShowsAll() : this.visibleModelsDraft.length === 0,
       catalogModels: this.catalogModels,
       catalogFailed: this.catalogFailed,
       dirty: plan.length > 0 || this.visibleModelsDirty(),
-      invalid: plan.some((item) => item.run === undefined),
+      invalid: plan.some((item) => item.change === undefined),
       saving: this.saving,
       failed: this.failed,
       savedCount: this.savedCount,
+      saveResult: this.saveResult,
+      accountResult: this.accountResult,
+      credentialRefreshFailed: this.writer.factsRefreshFailed(),
     }
   }
 
   // --- Staged form ---
+
+  private enrollmentRefs(includeNamed: boolean): string[] {
+    const records = this.sectionValue('accountEnrollmentTasks')
+    if (!Array.isArray(records)) return []
+    return records.flatMap((item: unknown) => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      return typeof record.ref === 'string' && (includeNamed || record.phase !== 'naming') ? [record.ref] : []
+    })
+  }
 
   /** Stage one field's draft text. */
   edit(field: string, text: string): void {
     if (field !== 'apiKey') this.spec(field)
     this.staged.set(field, { text, clear: false })
     this.failed = false
+    this.saveResult = undefined
     this.publish()
   }
 
@@ -536,6 +503,7 @@ export class CommandCodeSettingsController {
     const spec = this.spec(field)
     this.staged.set(field, { text: spec.format(this.baseValue(field)), clear: true })
     this.failed = false
+    this.saveResult = undefined
     this.publish()
   }
 
@@ -545,6 +513,7 @@ export class CommandCodeSettingsController {
     this.staged.clear()
     this.visibleModelsDraft = undefined
     this.failed = false
+    this.saveResult = undefined
     this.publish()
   }
 
@@ -553,61 +522,54 @@ export class CommandCodeSettingsController {
    * login stores a key Host-side behind the page's back; the plugin entry
    * calls this when a login lands so the configured/writable badges follow.
    */
-  refreshCredentials(): void {
-    void this.describeAll()
+  async refreshCredentials(): Promise<void> {
+    if (!(await this.writer.refreshCredentials()) || this.disposed) return
+    if (this.saveResult) this.saveResult = { ...this.saveResult, refreshFailed: false }
+    if (this.accountResult) this.accountResult = { ...this.accountResult, refreshFailed: false }
+    this.publish()
   }
 
-  /** Write every staged edit, then re-read the Host's accepted state. */
-  async save(): Promise<void> {
-    // 草稿对象每次编辑都会替换。保存完成只清理本次捕获的对象，
-    // 网络等待期间新增或重置的草稿仍由用户继续保存。
+  /** 冻结点击时的草稿；只清理本次已确认且期间未被替换的对象。 */
+  async save(): Promise<SettingsWriteResult | undefined> {
+    if (this.disposed || this.saving) return
     const submitted = new Map(this.staged)
     const submittedVisible = this.visibleModelsDraft
     const plan = this.plan()
-    const visibleRuns = this.visibleModelsPlan()
-    if ((plan.length === 0 && visibleRuns.length === 0) || this.saving) return
-    const runs: Array<() => Promise<boolean>> = []
-    for (const item of plan) {
-      if (item.run === undefined) return
-      runs.push(item.run)
-    }
+    const visibleDirty = this.visibleModelsDirty()
+    if ((plan.length === 0 && !visibleDirty) || plan.some(item => item.change === undefined)) return
+    const ops = plan.flatMap(item => typeof item.change === 'object' ? [item.change] : [])
+    const key = plan.find(item => item.field === 'apiKey')?.change
     this.saving = true
     this.failed = false
+    this.saveResult = undefined
+    // 入队先于通知订阅者，避免通知回调发起的后续操作插队。
+    const completion = this.writer.submit({ kind: 'save', ops,
+      ...(visibleDirty ? { visibleModels: submittedVisible ?? [] } : {}),
+      ...(typeof key === 'string' ? { key } : {}),
+    })
     this.publish()
-    let landed = true
-    // Stop at the first failure: later writes would persist a partial state
-    // the staged drafts no longer describe. A throwing write counts as a
-    // failure too (the scope seam may reject).
-    for (const run of [...runs, ...visibleRuns]) {
-      let ok = false
-      try {
-        ok = await run()
-      } catch {
-        ok = false
-      }
-      if (!ok) {
-        landed = false
-        break
-      }
-    }
+    const outcome = await completion
+    if (this.disposed) return outcome
     this.saving = false
-    this.failed = !landed
-    if (landed) {
-      this.savedCount += 1
-      for (const [field, draft] of submitted) {
-        if (this.staged.get(field) === draft) this.staged.delete(field)
-      }
-      if (this.visibleModelsDraft === submittedVisible) this.visibleModelsDraft = undefined
-    } else {
-      this.reconcileStaging()
+    this.saveResult = outcome
+    this.failed = !writeCompleted(outcome)
+    if (!this.failed) this.savedCount += 1
+    for (const [field, draft] of submitted) {
+      const confirmed = field === 'apiKey'
+        ? outcome.credential === 'confirmed' && outcome.issue === undefined
+        : outcome.config === 'confirmed' || writeCompleted(outcome)
+      if (confirmed && this.staged.get(field) === draft) this.staged.delete(field)
     }
+    if ((outcome.config === 'confirmed' || writeCompleted(outcome)) && this.visibleModelsDraft === submittedVisible) this.visibleModelsDraft = undefined
     this.publish()
+    return outcome
   }
 
   /** Stage the visible-model allowlist (multi-select). */
   editVisibleModels(models: string[]): void {
     this.visibleModelsDraft = [...models]
     this.failed = false
+    this.saveResult = undefined
     this.publish()
   }
 
@@ -615,103 +577,23 @@ export class CommandCodeSettingsController {
   clearVisibleModels(): void {
     this.visibleModelsDraft = []
     this.failed = false
+    this.saveResult = undefined
     this.publish()
   }
 
   // --- Immediate account management ---
 
-  /**
-   * Create one extra account now and return its credential reference, or
-   * undefined when the account could not be stored. With `key` the key lands
-   * first, so a stored row never names a reference whose key write failed;
-   * without it the row is stored keyless so browser sign-in can target it.
-   */
-  async createAccount(input: { label: string; key?: string }): Promise<string | undefined> {
-    let created: string | undefined
-    await this.runAccountOp('create', async () => {
-      const ref = this.nextAccountRef()
-      const key = input.key?.trim() ?? ''
-      if (key !== '' && !(await this.writeKeyTo(ref, key))) return false
-      const label = input.label.trim() === '' ? ref : input.label.trim()
-      let ok = false
-      try {
-        ok = await this.writeAccountList([...this.rawStoredAccounts(), { label, apiKeyEnv: ref }])
-      } catch {
-        ok = false
-      }
-      if (!ok) {
-        if (key !== '') await this.unsetKey(ref)
-        return false
-      }
-      created = ref
-      return true
-    })
-    return created
-  }
-
-  /** Rename one stored extra account now. */
   renameAccount(ref: string, label: string): Promise<boolean> {
-    const next = label.trim()
-    return this.runAccountOp('rename', async () => {
-      if (next === '') return false
-      const list = this.rawStoredAccounts().map((entry) => entry.apiKeyEnv === ref ? { ...entry, label: next } : { ...entry })
-      return this.writeAccountList(list)
-    })
+    return this.runAccountOp('rename', { kind: 'rename', ref, label: label.trim() })
   }
 
-  /**
-   * 账户、路由、固定账户与清理队列一起提交；随后才删密钥。
-   * 跨服务不能构造事务，持久化队列让中断或凭据失败后仍可重试。
-   */
+  /** 配置移除确认后才清理凭据，失败记录留在宿主清理队列。 */
   removeAccount(ref: string): Promise<boolean> {
-    return this.runAccountOp('remove', async () => {
-      if (this.scope.mutate === undefined) return false
-      const existing = this.rawStoredAccounts().some((entry) => entry.apiKeyEnv === ref)
-      if (!existing && !this.cleanupRefs().includes(ref)) return false
-      const snapshot = this.scope.getSnapshot()
-      const list = this.rawStoredAccounts().filter((entry) => entry.apiKeyEnv !== ref).map((entry) => ({ ...entry }))
-      const rules = this.storedRules().filter((rule) => rule.account !== ref)
-      const cleanup = [...new Set([...this.cleanupRefs(), ref])]
-      const ops: SettingsPathOp[] = [
-        { op: 'set', path: ['accounts'], value: list },
-        { op: 'set', path: ['modelAccountRules'], value: rules },
-        { op: 'set', path: ['credentialCleanupRefs'], value: cleanup },
-      ]
-      const pinned = this.sectionValue('activeAccount') === ref
-      if (pinned) {
-        // 清除用户层不能重新露出同名继承固定账户；空串明确恢复自动轮换。
-        ops.push(this.baseValue('activeAccount') === ref
-          ? { op: 'set', path: ['activeAccount'], value: '' }
-          : { op: 'unset', path: ['activeAccount'] })
-      }
-      await this.scope.mutate(ops, snapshot.revision)
-      if (this.rawStoredAccounts().some((entry) => entry.apiKeyEnv === ref)
-        || this.storedRules().some((rule) => rule.account === ref)
-        || (pinned && this.sectionValue('activeAccount') === ref)
-        || !this.cleanupRefs().includes(ref)) return false
-
-      return this.cleanRemovedCredential(ref)
-    })
+    return this.runAccountOp('remove', { kind: 'remove', ref })
   }
 
-  /** 清理重试不能再次删除同名新账户，配置移除与凭据清理分开调用。 */
   retryCredentialCleanup(ref: string): Promise<boolean> {
-    return this.runAccountOp('remove', () => this.cleanRemovedCredential(ref))
-  }
-
-  private async cleanRemovedCredential(ref: string): Promise<boolean> {
-    if (!this.cleanupRefs().includes(ref) || this.scope.mutate === undefined) return false
-    if (!(await this.describeAll([ref]))) return false
-    // 重新读取引用事实；继承配置也必须保护，重置用户层后它可能重新生效。
-    const baseAccounts = this.baseValue('accounts')
-    const inherited = Array.isArray(baseAccounts) && baseAccounts.some((entry) =>
-      typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).apiKeyEnv === ref)
-    const referenced = ref === this.credentialRef || inherited
-      || this.rawStoredAccounts().some((entry) => entry.apiKeyEnv === ref)
-      || this.storedRules().some((rule) => rule.account === ref)
-      || this.sectionValue('activeAccount') === ref
-    if (!referenced && this.credentialStates.get(ref)?.configured === true && !(await this.unsetKey(ref))) return false
-    return this.finishCleanup(ref)
+    return this.runAccountOp('remove', { kind: 'cleanup', ref })
   }
 
   private cleanupRefs(): string[] {
@@ -719,89 +601,37 @@ export class CommandCodeSettingsController {
     return Array.isArray(raw) ? [...new Set(raw.filter((ref): ref is string => typeof ref === 'string' && ref !== ''))] : []
   }
 
-  private async finishCleanup(ref: string): Promise<boolean> {
-    const snapshot = this.scope.getSnapshot()
-    const refs = this.cleanupRefs().filter((entry) => entry !== ref)
-    await this.scope.mutate?.([{ op: 'set', path: ['credentialCleanupRefs'], value: refs }], snapshot.revision)
-    return !this.cleanupRefs().includes(ref)
-  }
-
-  /** Store a replacement key now; `target` is `'default'` or an extra account's reference. */
   setAccountKey(target: string, key: string): Promise<boolean> {
-    const value = key.trim()
-    return this.runAccountOp('key', async () => {
-      if (value === '') return false
-      return this.writeKeyTo(this.refFor(target), value)
-    })
+    return this.runAccountOp('key', { kind: 'key', target, value: key.trim() })
   }
 
-  /** Remove a stored key now; `target` is `'default'` or an extra account's reference. */
   clearAccountKey(target: string): Promise<boolean> {
-    return this.runAccountOp('key', () => this.unsetKey(this.refFor(target)))
+    return this.runAccountOp('key', { kind: 'key', target })
   }
 
-  /** Pin the serving account now (`''` returns to automatic rotation). */
   setActiveAccount(id: string): Promise<boolean> {
-    return this.runAccountOp('active', () => id === ''
-      ? this.clear('activeAccount')
-      : this.store('activeAccount', id))
+    return this.runAccountOp('active', { kind: 'active', id })
   }
 
-  /**
-   * Replace one account's dedicated models now. A model belongs to one
-   * account at a time, so each selected model is moved out of any other
-   * account's list — the stored rules then carry no shadowed entries.
-   */
   setAccountModels(target: string, models: readonly string[]): Promise<boolean> {
-    return this.runAccountOp('models', async () => {
-      const chosen = [...new Set(models.filter((id) => id !== ''))]
-      const taken = new Set(chosen)
-      const map = accountModelMap(this.storedRules())
-      for (const [account, list] of map) {
-        if (account !== target) map.set(account, list.filter((id) => !taken.has(id)))
-      }
-      map.set(target, chosen)
-      return this.writeRules(rulesFromMap(map))
-    })
+    return this.runAccountOp('models', { kind: 'models', target, models })
   }
 
-  // --- Internals ---
-
-  /** Run one account operation after every earlier one, tracking busy/failure. */
-  private runAccountOp(op: AccountOperation, run: () => Promise<boolean>): Promise<boolean> {
+  /** 即时入口与保存共享写入过程，只在这里维护页面忙碌投影。 */
+  private async runAccountOp(op: AccountOperation, intent: SettingsWriteIntent): Promise<boolean> {
     this.accountPending += 1
     this.accountFailed = undefined
+    this.accountResult = undefined
+    const completion = this.writer.submit(intent)
     this.publish()
-    const result = this.accountQueue.then(async () => {
-      if (!this.scope.getSnapshot().writable) return false
-      try {
-        return await run()
-      } catch {
-        return false
-      }
-    })
-    this.accountQueue = result
-    return result.then((ok) => {
-      this.accountPending -= 1
-      if (!ok) this.accountFailed = op
-      this.publish()
-      return ok
-    })
-  }
-
-  private refFor(target: string): string {
-    return target === 'default' ? this.credentialRef : target
-  }
-
-  /**
-   * The first free `<credentialRef>_<n>` reference, so a renamed `apiKeyEnv`
-   * yields `MY_KEY_2`-style refs consistent with the default slot.
-   */
-  private nextAccountRef(): string {
-    const used = new Set([this.credentialRef, ...this.storedExtras().map((extra) => extra.ref)])
-    let n = 2
-    while (used.has(`${this.credentialRef}_${n}`)) n += 1
-    return `${this.credentialRef}_${n}`
+    const outcome = await completion
+    this.accountPending -= 1
+    if (this.disposed) return false
+    const ok = writeCompleted(outcome)
+    this.accountResult = outcome
+    this.accountFailed = ok ? undefined : op
+    this.publish()
+    return ok
   }
 
   private spec(field: string): FieldSpec {
@@ -856,108 +686,27 @@ export class CommandCodeSettingsController {
     return user !== undefined && Object.prototype.hasOwnProperty.call(user, field)
   }
 
-  /**
-   * The writes a save would perform, in staged order. A field whose draft is
-   * not a value its spec accepts carries no write (the save refuses).
-   */
-  private plan(): Array<{ field: string; run: (() => Promise<boolean>) | undefined }> {
-    const plan: Array<{ field: string; run: (() => Promise<boolean>) | undefined }> = []
+  /** 纯提交计划；不捕获副作用闭包，也不在排队后重新读取草稿。 */
+  private plan(): Array<{ field: string; change: SettingsPathOp | string | undefined }> {
+    const plan: Array<{ field: string; change: SettingsPathOp | string | undefined }> = []
     for (const [field, staged] of this.staged) {
       if (field === 'apiKey') {
         const value = staged.text.trim()
-        if (value !== '') plan.push({ field, run: () => this.writeKeyTo(this.credentialRef, value) })
+        if (value !== '') plan.push({ field, change: value })
         continue
       }
       const spec = this.spec(field)
       if (staged.clear) {
-        if (this.stored(field)) plan.push({ field, run: () => this.clear(field) })
+        if (this.stored(field)) plan.push({ field, change: { op: 'unset', path: [field] } })
         continue
       }
       if (staged.text === spec.format(this.sectionValue(field))) continue
       const parsed = spec.parse(staged.text)
-      if (parsed.kind === 'invalid') plan.push({ field, run: undefined })
-      else if (parsed.kind === 'clear') plan.push({ field, run: () => this.clear(field) })
-      else plan.push({ field, run: () => this.store(field, parsed.value) })
+      const change: SettingsPathOp | undefined = parsed.kind === 'invalid' ? undefined
+        : parsed.kind === 'clear' ? { op: 'unset', path: [field] } : { op: 'set', path: [field], value: parsed.value }
+      plan.push({ field, change })
     }
     return plan
-  }
-
-  /** Drop staged drafts a partially landed save already stored. */
-  private reconcileStaging(): void {
-    for (const [field, staged] of [...this.staged]) {
-      if (field === 'apiKey' || staged.clear) continue
-      if (staged.text === this.spec(field).format(this.sectionValue(field))) this.staged.delete(field)
-    }
-    if (this.visibleModelsDraft !== undefined && !this.visibleModelsDirty()) {
-      this.visibleModelsDraft = undefined
-    }
-  }
-
-  private async clear(field: string): Promise<boolean> {
-    if (!this.stored(field)) return true
-    await this.scope.unset(field)
-    return !this.stored(field)
-  }
-
-  private async store(field: string, value: string | number | boolean): Promise<boolean> {
-    await this.scope.set(field, value)
-    return this.userLayer()?.[field] === value
-  }
-
-  /** Write one account's key, then re-read the Host's credential states. */
-  private async writeKeyTo(ref: string, value: string): Promise<boolean> {
-    try {
-      const response = await this.api.credentials.set(ref, value)
-      if (!response.ok) return false
-    } catch {
-      return false
-    }
-    await this.describeAll([ref])
-    return this.credentialStates.get(ref)?.configured ?? false
-  }
-
-  /** Unset one stored credential, then re-read the Host's credential states. */
-  private async unsetKey(ref: string): Promise<boolean> {
-    try {
-      const response = await this.api.credentials.unset(ref)
-      if (!response.ok) return false
-    } catch {
-      return false
-    }
-    await this.describeAll([ref])
-    return this.credentialStates.get(ref)?.configured !== true
-  }
-
-  /**
-   * Ask the credentials domain about every reference this page writes, plus
-   * `extra` — a key written for an account whose row is not stored yet.
-   */
-  private async describeAll(extra: readonly string[] = []): Promise<boolean> {
-    const refs = [...new Set([this.credentialRef, ...this.storedExtras().map((account) => account.ref), ...extra])]
-    let response: Awaited<ReturnType<SettingsPageApi['credentials']['describe']>>
-    try {
-      response = await this.api.credentials.describe(refs)
-    } catch {
-      return false
-    }
-    if (!response.ok) return false
-    // 清理凭据必须取得明确事实，缺少引用项不能解释为“密钥已不存在”。
-    if (extra.some((ref) => typeof response.value?.[ref]?.configured !== 'boolean')) return false
-    let changed = false
-    for (const ref of refs) {
-      const view = response.value?.[ref]
-      const next = {
-        configured: view?.configured ?? false,
-        writable: view?.writable ?? true,
-      }
-      const prev = this.credentialStates.get(ref)
-      if (prev === undefined || prev.configured !== next.configured || prev.writable !== next.writable) {
-        this.credentialStates.set(ref, next)
-        changed = true
-      }
-    }
-    if (changed) this.publish()
-    return true
   }
 
   /**
@@ -1038,17 +787,10 @@ export class CommandCodeSettingsController {
       id: extra.ref,
       ref: extra.ref,
       label: extra.label,
-      configured: this.credentialStates.get(extra.ref)?.configured ?? false,
-      writable: this.credentialStates.get(extra.ref)?.writable ?? true,
+      configured: this.writer.credential(extra.ref)?.configured ?? false,
+      credentialKnown: this.writer.credential(extra.ref) !== undefined,
+      writable: this.writer.credential(extra.ref)?.writable ?? true,
     }))
-  }
-
-  /** Persist a full accounts list and verify the Host stored it. */
-  private async writeAccountList(list: Array<Record<string, unknown>>): Promise<boolean> {
-    await this.scope.set('accounts', list)
-    const after = this.rawStoredAccounts()
-    return after.length === list.length
-      && list.every((item, index) => after[index]?.apiKeyEnv === item.apiKeyEnv && after[index]?.label === item.label)
   }
 
   /** The stored routing rules from the settings section (`modelAccountRules`). */
@@ -1069,17 +811,6 @@ export class CommandCodeSettingsController {
       })
     }
     return out
-  }
-
-  /** Persist routing rules and verify the Host stored them. */
-  private async writeRules(list: StoredRule[]): Promise<boolean> {
-    await this.scope.set('modelAccountRules', list)
-    const after = this.storedRules()
-    return after.length === list.length
-      && list.every((item, index) =>
-        after[index] !== undefined
-        && sameModels(after[index].models, item.models)
-        && after[index].account === item.account)
   }
 
   /** 原始白名单；空列表延续现有的显示全部语义。 */
@@ -1113,30 +844,6 @@ export class CommandCodeSettingsController {
     if (this.visibleModelsDraft === undefined) return false
     if (this.visibleModelsDraft.length === 0) return !this.storedShowsAll()
     return this.storedShowsAll() || !sameModels(this.visibleModelsDraft, this.storedVisibleModels())
-  }
-
-  private visibleModelsPlan(): Array<() => Promise<boolean>> {
-    if (!this.visibleModelsDirty()) return []
-    // 与普通字段一样，在保存开始时冻结提交值，不能延迟读取新草稿。
-    const list = [...(this.visibleModelsDraft ?? [])]
-    return [async () => {
-      // 两个配置字段共用一次宿主版本检查。覆盖继承层的全部已知开关，
-      // 不能简单删掉用户字典，否则基础配置里的隐藏项会重新生效。
-      if (this.scope.mutate === undefined) return false
-      const snapshot = this.scope.getSnapshot()
-      const layers = [snapshot.base, snapshot.user, snapshot.value]
-      const keys = new Set<string>()
-      for (const layer of layers) {
-        if (layer === null || typeof layer !== 'object') continue
-        for (const id of Object.keys(readVisibility((layer as Record<string, unknown>).modelVisibility))) keys.add(id)
-      }
-      const flags = Object.fromEntries([...keys].map((id) => [id, list.length === 0 || list.includes(id)]))
-      await this.scope.mutate([
-        { op: 'set', path: ['visibleModels'], value: list },
-        { op: 'set', path: ['modelVisibility'], value: flags },
-      ], snapshot.revision)
-      return list.length === 0 ? this.storedShowsAll() : sameModels(this.storedVisibleModels(), list)
-    }]
   }
 
   private publish(): void {

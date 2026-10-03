@@ -2,6 +2,8 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
+- **网关事实宿主回归**：`scripts/verify-engine-load.mjs` 使用真实插件入口、DSH 易变配置引用与更新函数、账号池及用量接收者，验证凭据等待和轮换期间切网关后旧调用及探测仍使用原地址，新调用使用新账号配置，用量报告只读取入口捕获的来源并展示恢复后的标记。网络响应和凭据为合成依赖，不证明真实网关或凭据持久化行为。
+
 - **Isolated package install**: pnpm 10 auto-installs the package's DSH peers
   when a desktop marketplace prepares a fresh generation. Keep
   `@deepseek-ai/dsh-invariants` as an explicit peer matching
@@ -75,3 +77,13 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   Config schema is proven to drive that engine's settings forms (every field
   marked volatile, parsing to a live reference). Run it before publishing and
   whenever a peer range or an engine version changes.
+
+## 一、账号开通的宿主验证
+
+1. `npm run test:engine` 除加载发布包外，还使用真实 DSH 注册表与网关打开 `enrollmentWatch`，通过网关开始合成手动账号，取消流并确认写入收束后的账号及凭据补偿。设置与凭据使用内存替身；不读真实凭据、不访问真实上游。
+2. 当前验证覆盖发布产物、严格描述符、网关接收器和流取消信号。浏览器 WebSocket（网页套接字）物理断连、真实 Studio（登录网站）授权及操作系统强杀仍需实际环境验证，不得由本地绿色检查推定。
+
+## 二、流响应的宿主验证
+
+1. `npm run test:engine` 使用真实 DSH 0.2.0-rc.2 的 `LlmRuntime`（模型运行时）及 `BlockAssembler`（响应块装配器），加载发布产物并交付合成响应。22 个场景覆盖三协议成功、正文截断、纯思考达到上限、工具断流、正文及工具取消、最终标记后多余内容，以及 OpenAI 尾部错误；确认唯一终态、失败关联标识、最终用量和中断工具快照。
+2. 宿主源码在失败或取消终态走请求错误分支，不进入工具执行；验证没有运行完整代理工具链。适配器本地锁和待读释放由回归测试覆盖；真实提供商异常、收费记录及远端连接实际关闭时间尚未实测。

@@ -165,6 +165,7 @@ function makeCardProps(opts?: {
     edit: (field, text) => controller.edit(field, text),
     save: () => void controller.save(),
     discard: () => controller.discard(),
+    refreshCredentials: () => void controller.refreshCredentials(),
     beginLogin: () => void loginController.begin(),
     cancelLogin: () => void loginController.cancel(),
   }

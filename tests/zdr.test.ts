@@ -17,15 +17,17 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.73.0)', () => {
-  // Verbatim from `dist/cli.mjs` 1.73.0: `modelSupportsZdr(id) = !wD.has(id)`
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.74.1)', () => {
+  // Verbatim from `dist/cli.mjs` 1.74.1: `modelSupportsZdr(id) = !wD.has(id)`
   // unioned with the sibling route table's `br` set, cross-checked against the
   // public catalog. A sync that moves membership must be a deliberate diff.
+  // 1.74.1 dropped `meituan/LongCat-2.0` from both anchors, so it is no longer
+  // listed; `stealth/pixel-canary` stays because the CLI still names it even
+  // though Command Code retired the model itself on 2026-10-01.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
     'deepseek/deepseek-v4.1-flash-fast',
-    'meituan/LongCat-2.0',
     'meta/muse-spark-1.1',
     'meta/muse-spark-1.2',
     'meta/muse-spark-1.2-contributor',
@@ -54,9 +56,12 @@ test('supportsZeroDataRetention answers false for every listed model and true ot
   }
   // One per family served through the Provider API, plus unseen ids: the table
   // only shrinks the answer for listed ids, and the header rides either way.
+  // `meituan/LongCat-2.0` moved here in 1.74.1 — it left the CLI's exclusion
+  // sets, so the snapshot now answers true for it.
   for (const id of [
     'deepseek/deepseek-v4.1-flash',
     'deepseek/deepseek-v4-flash',
+    'meituan/LongCat-2.0',
     'claude-opus-5',
     'claude-sonnet-5',
     'gpt-5.6-luna',

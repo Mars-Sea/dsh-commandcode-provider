@@ -13,6 +13,19 @@ import assert from 'node:assert/strict'
 import { CommandCodeSearchProvider, applyCommandCodeSearchSelection, commandCodeSearchSelection, COMMANDCODE_SEARCH_PROVIDER_ID } from '../src/web-search.ts'
 import { COMMAND_CODE_CLI_VERSION } from '../src/adapter.ts'
 
+test('搜索把已捕获的网关交给账号解析，等待后不读取新地址', async () => {
+  let base = 'https://search-scope-a.invalid'
+  let scoped = '', sent = ''
+  const provider = new CommandCodeSearchProvider({
+    apiBase: () => base,
+    resolveKey: async captured => { scoped = captured ?? ''; base = 'https://search-scope-b.invalid'; return 'synthetic-key' },
+    fetchImpl: (async input => { sent = String(input); return new Response(JSON.stringify({ results: [] })) }) as typeof fetch,
+  })
+  await provider.search({ query: '合成查询' })
+  assert.equal(scoped, 'https://search-scope-a.invalid')
+  assert.equal(sent, 'https://search-scope-a.invalid/alpha/web-search')
+})
+
 /** A fetch stub that records the request and returns a scripted response. */
 interface Stub {
   fetchImpl: typeof fetch

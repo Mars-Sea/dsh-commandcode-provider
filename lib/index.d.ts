@@ -1,11 +1,26 @@
 import z from "@deepseek-ai/schemastery";
-import { GenerateOptions, LlmAdapter, LlmImageRequestPricing, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, projectOffloadedImages, requiredImageOffload } from "@deepseek-ai/dsh-llm";
+import { GenerateOptions, LlmAdapter, LlmError, LlmImageRequestPricing, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, ResolvedRetryPolicy, StreamChunk, projectOffloadedImages, requiredImageOffload } from "@deepseek-ai/dsh-llm";
 import { CredentialRef } from "@deepseek-ai/dsh-credentials";
 import { TypertRemoteService, TypertSchema } from "@deepseek-ai/dsh-typert-protocol";
 import { WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
 import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
+//#region src/provider-errors.d.ts
+/**
+ * Why a pre-stream rejection rotates to another account. `rate-limit` (a usage
+ * window the provider NAMED), `throttled` (a 429 that named no window) and
+ * `invalid-credential` are the three the pool records as marks; `unavailable`
+ * is an account-scoped rejection that must NOT become a mark — the account's
+ * key is valid and its windows may be open, the ACCOUNT just cannot serve THIS
+ * request — so the pool moves on without remembering anything.
+ *
+ * The window/throttle split decides what the pool may CLAIM, never whether it
+ * rotates (issue #54); the evidence that separates them is in
+ * {@link classifyAccountRejection}.
+ */
+type AccountRotationReason = 'rate-limit' | 'throttled' | 'invalid-credential' | 'unavailable';
+//#endregion
 //#region src/request-timing.d.ts
 type Phase = 'credentials' | 'images' | 'body' | 'serialization' | 'headers';
 type Outcome = 'finished' | 'error' | 'aborted' | 'cancelled';
@@ -28,8 +43,25 @@ interface RequestTimingSummary {
 }
 type RequestTimingSink = (summary: RequestTimingSummary) => void | Promise<void>;
 //#endregion
+//#region src/stream-response.d.ts
+/**
+ * Endpoint protocol selected for one generate call.
+ *
+ * `messages` is the Anthropic Messages surface at
+ * `{apiBase}/provider/v1/messages`, the only Provider API route the Claude
+ * family answers (posted to `/chat/completions` they refuse with `400 Model
+ * "<id>" must be called via /provider/v1/messages`). `openai` is the
+ * documented Chat Completions surface; `cli` is Command Code's private
+ * `/alpha/generate` transport, kept for Go-plan keys (the one plan without
+ * Provider API access) and as the `upgrade_required` fallback.
+ */
+type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
+//#endregion
+//#region src/gateway-facts.d.ts
+declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
+//#endregion
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.73.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.74.1";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.
@@ -38,8 +70,9 @@ declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
  * Probing `/alpha/generate` directly on 2026-09-28: 64 000 → 200, 131 072 → 200,
  * 196 608 → 200, **200 000 → 200, 200 704 → 400**, 1 000 000 → 400. The server
  * therefore caps `max_tokens` at 200 000, and it does so identically for a
- * 262 144-window model (`stealth/pixel-canary`) and a 1 000 000-window one
- * (`stealth/space-bunny-alpha`) — the cap is global, not per model. 131 072
+ * 262 144-window model (`stealth/pixel-canary`, retired by Command Code on
+ * 2026-10-01 and named here only as the probe's subject) and a 1 000 000-window
+ * one (`stealth/space-bunny-alpha`) — the cap is global, not per model. 131 072
  * keeps a 35 % margin under it while covering the real output ceiling of the
  * models that have one (Claude 64 K, Gemini 64 K, several at 128 K).
  *
@@ -59,30 +92,8 @@ declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
  * [决策记录](../docs/决策记录.md).
  */
 declare const DEFAULT_GENERATE_MAX_TOKENS = 131072;
-/**
- * The fallback when the catalog carries no output ceiling for a model.
- *
- * `/provider/v1/models` publishes only `context_length` — no output limit — so
- * the catalog cannot learn one per model and derives a stand-in from the
- * window instead. Kept equal to {@link DEFAULT_GENERATE_MAX_TOKENS} on purpose:
- * a lower value here would silently re-cap every request through
- * `Math.min(contextLength, this)` before the ceiling above is ever consulted.
- */
-declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 /** How long the picker's plan-filter billing facts stay cached before refetching. */
 declare const BILLING_ACCESS_TTL_MS: number;
-/**
- * Endpoint protocol selected for one generate call.
- *
- * `messages` is the Anthropic Messages surface at
- * `{apiBase}/provider/v1/messages`, the only Provider API route the Claude
- * family answers (posted to `/chat/completions` they refuse with `400 Model
- * "<id>" must be called via /provider/v1/messages`). `openai` is the
- * documented Chat Completions surface; `cli` is Command Code's private
- * `/alpha/generate` transport, kept for Go-plan keys (the one plan without
- * Provider API access) and as the `upgrade_required` fallback.
- */
-type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
 /**
  * Head-of-request timeout: how long to wait for the first response byte.
  *
@@ -198,19 +209,6 @@ interface CommandCodeConnectionOptions {
  * text-only request never depends on the attachment seam.
  */
 type ResolveAttachments = () => AttachmentStore | undefined;
-/**
- * Why a pre-stream rejection rotates to another account. `rate-limit` (a usage
- * window the provider NAMED), `throttled` (a 429 that named no window) and
- * `invalid-credential` are the three the pool records as marks; `unavailable`
- * is an account-scoped rejection that must NOT become a mark — the account's
- * key is valid and its windows may be open, the ACCOUNT just cannot serve THIS
- * request — so the pool moves on without remembering anything.
- *
- * The window/throttle split decides what the pool may CLAIM, never whether it
- * rotates (issue #54); the evidence that separates them is in
- * {@link classifyAccountRejection}.
- */
-type AccountRotationReason = 'rate-limit' | 'throttled' | 'invalid-credential' | 'unavailable';
 /** What the rotation hook knows about the request it is rotating within. */
 interface AccountRotationContext {
   /** Every API key this request has already used, just-rejected key included. */
@@ -257,7 +255,7 @@ interface CommandCodeAdapterDeps<C extends CommandCodeConnectionOptions = Comman
    * a host without a pool omits this seam and the filter falls back to the key
    * that would serve the current request.
    */
-  resolveAccountKeys?: () => Promise<readonly string[]>;
+  resolveAccountKeys?: (connection: C) => Promise<readonly string[]>;
   /** HTTP transport override (tests); defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
   /** Resolve the optional durable attachment service for image input (tests); defaults to none. */
@@ -366,8 +364,7 @@ interface CommandCodeUsageReport {
 }
 declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private readonly deps;
-  private catalog;
-  private catalogState;
+  private readonly gatewayFacts;
   private readonly fetchImpl;
   private readonly resolveAttachments;
   /**
@@ -446,12 +443,6 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * requirement — the meter throws when the counts differ.
    */
   imageRequestPricing(_provider: string, model: string): LlmImageRequestPricing | undefined;
-  /** 地址或缓存文件变化时丢弃旧目录，防止旧网关的路由声明影响新请求。 */
-  private currentCatalogState;
-  /** 直接生成也使用本地可信目录，不额外联网；并发冷请求共用一次文件读取。 */
-  private catalogForGenerate;
-  /** 共享一次刷新；调用者取消只结束自己的等待，不取消其他调用者的请求。 */
-  private loadCatalog;
   listModels(provider: string, opts?: {
     unfiltered?: boolean;
   }): Promise<readonly LlmModelInfo[]>;
@@ -570,7 +561,7 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * 60 s), not the catalog's 10 s probe budget, because on a slow link a 10 s
    * cap made every account query time out while chat kept working.
    */
-  getUsage(apiKey?: string): Promise<CommandCodeUsageReport>;
+  getUsage(apiKey?: string, capturedConnection?: C): Promise<CommandCodeUsageReport>;
   /**
    * Probe one account's real usage windows from `/alpha/billing/credits`. The
    * multi-account pool calls this when every account is marked exhausted: an
@@ -593,11 +584,12 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * state. The credit balances are deliberately NOT part of this answer: they
    * carry no reset time, and the server remains the final gate on them.
    */
-  probeWindowLimits(apiKey: string): Promise<{
+  probeWindowLimits(apiKey: string, connection?: C): Promise<{
     exceeded: boolean;
     resetAt: number;
   } | undefined>;
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
+  private streamWithTiming;
   /**
    * One turn, with at most one output-ceiling downshift.
    *
@@ -765,18 +757,26 @@ declare function matchModelRule(model: string, rules: readonly CommandCodeModelA
  * the normal preferred/rotation selection).
  */
 declare function selectAccountForModel(accounts: readonly ResolvedAccount[], model: string, rules: readonly CommandCodeModelAccountRule[] | undefined): ResolvedAccount | undefined;
-/**
- * The account pool. Rotation state is keyed by API key (never logged), so two
- * slots resolving to the same credential share one mark, and a key changed in
- * the credentials service starts with a clean slate.
- */
+/** 不包含解析秘密的账号定义；作用域独立复制列表及模型规则。 */
+interface CommandCodeAccountSelection {
+  slots: readonly CommandCodeAccountSlot[];
+  preferredId?: string | undefined;
+  modelAccountRules: readonly CommandCodeModelAccountRule[];
+}
+/** 账号选择与展示共用恢复规则；宿主作用域内的状态按网关与密钥共享。 */
 declare class CommandCodeAccountPool {
   private readonly deps;
-  /** Rotation state by API key. */
-  private readonly states;
-  /** Last explicit-revival probe attempt by API key (throttles a failing probe). */
-  private readonly explicitProbes;
+  /** 当前作用域内按密钥共享的健康状态；不记录到日志。 */
+  private states;
+  /** 当前网关与密钥的显式探测时间，限制失败探测的频率。 */
+  private explicitProbes;
+  private scopedStates;
   constructor(deps: CommandCodeAccountPoolDeps);
+  /** 每个调用持有自己的定义和探测，只有同网关的健康事实共享；不临时改写全局依赖。 */
+  scope(context: CommandCodeAccountSelection & {
+    apiBase: string;
+    probeWindow: CommandCodeAccountPoolDeps['probeWindow'];
+  }): CommandCodeAccountPool;
   /**
    * Resolve every slot's key, deduplicated by key (first slot wins). Slots
    * without any resolvable key are omitted — they still appear in the
@@ -802,7 +802,7 @@ declare class CommandCodeAccountPool {
    * from the resolution entirely, which is what lets one request walk a
    * four-account pool. An explicit selection (pin or model rule) that a
    * rate-limit mark would demote is probed first, so a fallback never becomes
-   * permanent (issue #51). Rules re-read per resolution, so settings apply live.
+   * permanent (issue #51). Scoped rules stay fixed for the call; credential values re-resolve.
    */
   resolveKey(options?: {
     tried?: readonly string[];
@@ -920,6 +920,40 @@ declare class CommandCodeAccountPool {
   private pick;
 }
 //#endregion
+//#region src/enrollment-wire.d.ts
+interface EnrollmentInput {
+  id: string;
+  pageId: string;
+  mode: 'browser' | 'manual';
+  label: string;
+  /** 用户未填写名称时，允许使用浏览器登录返回的账号名。 */
+  automaticName: boolean;
+  key?: string;
+}
+type EnrollmentPhase = 'creating' | 'waiting' | 'writing' | 'naming' | 'finished' | 'cancelling' | 'cancelled' | 'failed' | 'cleanup-needed';
+interface EnrollmentState {
+  id: string;
+  ref: string;
+  phase: EnrollmentPhase;
+  message: string;
+  authUrl?: string;
+  suggestedName?: string;
+}
+/** 配置中的恢复日志：先登记，再写凭据；只保留引用与阶段，不保留密钥或连接身份。 */
+interface EnrollmentRecord {
+  id: string;
+  ref: string;
+  phase: 'pending' | 'naming' | 'cleanup';
+  label: string;
+}
+interface EnrollmentPage {
+  pageId: string;
+}
+interface EnrollmentAction extends EnrollmentPage {
+  id: string;
+  name?: string;
+}
+//#endregion
 //#region src/plan-tiers.d.ts
 declare const PLAN_LABELS: Readonly<Record<string, string>>;
 declare const PLAN_ORDER: Readonly<Record<string, number>>;
@@ -944,14 +978,14 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.73.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.74.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
- * is this set. Reading only the sibling route table would drop `meituan/
- * LongCat-2.0`, which appears in `modelSupportsZdr` alone (re-read from the
- * 1.66.0 / 1.67.0 / 1.68.0 artifacts on 2026-09-29: the two stealth-preview
- * rows sit in BOTH sets, so LongCat is the only divergence). The official docs (commandcode.ai/docs/resources/
- * zdr) put it in prose — "99% of our models have ZDR-capable upstreams … only
+ * is this set. Reading only the sibling route table dropped
+ * `meituan/LongCat-2.0`, which sat in `modelSupportsZdr` alone through
+ * 1.73.0; the 1.74.1 table lists it in NEITHER set, so as of this snapshot it
+ * is no longer excluded. The official docs (commandcode.ai/docs/resources/
+ * zdr) put coverage in prose — "99% of our models have ZDR-capable upstreams … only
  * a small handful of models are affected" — so the CLI's exclusion list is
  * the only per-model evidence there is; a ZDR request naming one of these
  * fails with HTTP 422 `cmd_zdr_no_providers` instead of routing through a
@@ -974,8 +1008,14 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * is the snapshot of the exclusion set and nothing more. It is a rare change:
  * 20 members held across 1.62.0 → 1.64.0, 1.65.0 and 1.66.0 each added exactly
  * one (the two stealth-preview models below), 1.67.0 added one
- * (`deepseek/deepseek-v4.1-flash-fast`), and 1.68.0 changed nothing — 23
- * members as of 2026-09-29.
+ * (`deepseek/deepseek-v4.1-flash-fast`), 1.68.0 changed nothing, and 1.74.1
+ * removed one (`meituan/LongCat-2.0`) — 22 members as of 2026-10-03.
+ *
+ * `stealth/pixel-canary` is the one member whose model itself is retired (see
+ * `KNOWN_EFFORTS`): the CLI keeps naming it in the ZDR anchors even though it
+ * hides the row and dropped it from the catalog, so it stays listed here rather
+ * than being pruned with the rest of the tables — `supportsZeroDataRetention`
+ * stays truthful for any id a stale session still names.
  */
 declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
 /**
@@ -1395,98 +1435,6 @@ declare function parseLoginStatus(value: unknown): CommandCodeLoginStatus;
 /** The strict result codec shared by all three login endpoints. */
 declare const loginStatusSchema: TypertSchema<CommandCodeLoginStatus>;
 //#endregion
-//#region src/usage-remote.d.ts
-/**
- * The browser-login face the usage service exposes (`commandcode/login*`).
- * Backed by the Host-half {@link !CommandCodeLoginFlow} when the plugin entry
- * wired one; absent, `status`/`cancel` degrade to the idle status and `begin`
- * rejects with a plain message, so the page's manual paste path stays the
- * fallback instead of hanging.
- */
-interface LoginFlowFacade {
-  /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
-  begin(targetRef?: string): Promise<CommandCodeLoginStatus>;
-  /** The current attempt's status. */
-  status(): CommandCodeLoginStatus;
-  /** Cancel a waiting attempt. */
-  cancel(): void;
-}
-/** Everything the usage service needs beyond its Cordis context. */
-interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
-  /** The registered adapter (for getUsage). */
-  adapter: CommandCodeAdapter<C>;
-  /**
-   * Multi-account report source (wired by the plugin entry). Absent in
-   * programmatic setups, the service falls back to a single default-account
-   * entry around `adapter.getUsage()`.
-   */
-  reports?: () => Promise<CommandCodeAccountsReport>;
-  /**
-   * Model-catalog source for the settings page's model editors. Absent, the
-   * `models` endpoint answers an empty list — the page's editors degrade to
-   * the empty state.
-   */
-  listModels?: () => Promise<CommandCodeCatalog>;
-  /**
-   * Price-table source for the composer's session-cost figure. Defaults to the
-   * vendored snapshot, so the endpoint can never silently serve an empty table
-   * — an unpriced cost is the failure this feature is meant to remove. Override
-   * only to stub it in a test.
-   */
-  prices?: () => CommandCodePriceTable;
-  /** The browser-login flow (wired by the plugin entry); see {@link LoginFlowFacade}. */
-  login?: LoginFlowFacade;
-}
-/**
- * The Remote receiver: a Cordis service the Gateway resolves by key
- * (`commandcodeUsage`) and binds to the wire namespace (`commandcode`). The
- * base class stamps the `typertRemote` binding the Gateway validates on every
- * dispatch; no decorators are needed because the descriptor is registered
- * explicitly (strict path) rather than discovered from source markers.
- */
-declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends TypertRemoteService {
-  private readonly deps;
-  constructor(ctx: Context, deps: CommandCodeUsageDeps<C>);
-  /**
-   * Account, usage, and credit state for the settings page's account card.
-   * Degrades per endpoint like the `/commandcode` command (failures land in
-   * `report.failures`); throws `MISSING_CREDENTIAL` when no key resolves, which
-   * the Gateway folds into the failure branch the page renders as a hint.
-   */
-  report(): Promise<CommandCodeAccountsReport>;
-  /**
-   * The full model catalog for the settings page's model editors. The browser
-   * never calls the Command Code API directly — the Host serves the catalog
-   * (already fetched/cached by the adapter) so models can be picked from the
-   * live list instead of typed by hand.
-   */
-  models(): Promise<CommandCodeCatalog>;
-  /**
-   * The model price table the composer prices an in-progress session with.
-   * Static vendored data, served Host-side so the browser bundle never carries
-   * a copy that could drift from the snapshot, and so a price update reaches an
-   * open page without a rebuild.
-   */
-  prices(): Promise<CommandCodePriceTable>;
-  /**
-   * Start (or rejoin) a browser-login attempt and return its fresh status —
-   * `waiting` carrying the Studio URL. Rejects when the flow cannot start
-   * (no free loopback port, disposed plugin).
-   */
-  loginBegin(targetRef?: string): Promise<CommandCodeLoginStatus>;
-  /** Poll a login attempt's status. */
-  loginStatus(): Promise<CommandCodeLoginStatus>;
-  /** Cancel a waiting attempt; returns the post-cancel status. */
-  loginCancel(): Promise<CommandCodeLoginStatus>;
-  private requireLogin;
-}
-/**
- * Provide the usage service and register its Remote descriptor. The registry
- * contribution is tied to this fiber's lifetime: the registry's own
- * `register()` effect would otherwise outlive the plugin.
- */
-declare function applyUsageRemote<C extends CommandCodeConnectionOptions>(ctx: Context, deps: CommandCodeUsageDeps<C>): void;
-//#endregion
 //#region src/login.d.ts
 /** 登录总期限包含浏览器回调、密钥验证与存储，不能在收到回调后撤掉保护。 */
 declare const LOGIN_TIMEOUT_MS = 120000;
@@ -1589,6 +1537,8 @@ declare class CommandCodeLoginFlow {
   private targetRef;
   /** A `cancel()` that arrived while a start was still binding (see {@link CommandCodeLoginFlow.cancel}). */
   private cancelPending;
+  /** 取消只能阻止尚未发出的写入；补偿者须等这些实际存储任务结束。 */
+  private readonly pendingStores;
   private disposed;
   constructor(deps: CommandCodeLoginFlowDeps);
   /** Subscribe to state transitions. @returns the disposer. */
@@ -1614,6 +1564,8 @@ declare class CommandCodeLoginFlow {
    * the flag once the bind settles and retires it.
    */
   cancel(): void;
+  /** 结束验证/监听并等待已开始的写入，供账号开通过程安全补偿。 */
+  cancelAndDrain(): Promise<void>;
   /** Stop everything; a waiting attempt ends cancelled. Idempotent. */
   dispose(): void;
   private readApiBase;
@@ -1636,9 +1588,10 @@ declare class CommandCodeLoginFlow {
    * Every step re-checks {@link ownsAttempt} first: the whoami round-trip and
    * the credential write are awaits, and the user may cancel (or start another
    * attempt) while one is in flight. A completion that no longer owns the
-   * attempt must not write the key or publish a status — otherwise cancel
-   * would report "cancelled" while the credential landed anyway, and the page
-   * would silently flip to success.
+   * attempt must not START a key write or publish a status. A write already
+   * handed to storage is tracked separately: cancelAndDrain() lets the owning
+   * enrollment wait for it before compensation, without pretending it can be
+   * aborted halfway through.
    */
   private complete;
   /** Whether one attempt still owns the status face (not cancelled, replaced, or disposed). */
@@ -1651,6 +1604,189 @@ declare class CommandCodeLoginFlow {
   /** 结束整个尝试，同时中止验证请求，迟到结果由所有权检查拦截。 */
   private teardown;
 }
+//#endregion
+//#region src/enrollment.d.ts
+interface Account {
+  label?: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+}
+interface EnrollmentConfig {
+  apiKeyEnv?: string;
+  accounts?: Account[];
+  accountEnrollmentTasks?: EnrollmentRecord[];
+  credentialCleanupRefs?: string[];
+  modelAccountRules?: {
+    models: string[];
+    account: string;
+  }[];
+  activeAccount?: string;
+}
+interface EnrollmentSettings {
+  writable: boolean;
+  read(): {
+    value: EnrollmentConfig;
+    revision: number;
+    base?: EnrollmentConfig;
+  };
+  mutate(ops: {
+    op: 'set';
+    path: string[];
+    value: unknown;
+  }[], revision: number): Promise<void>;
+}
+interface EnrollmentLogin {
+  begin(ref?: string): Promise<CommandCodeLoginStatus>;
+  status(): CommandCodeLoginStatus;
+  onChange(listener: () => void): () => void;
+  cancelAndDrain(): Promise<void>;
+  dispose(): void;
+}
+interface EnrollmentDeps {
+  settings(): EnrollmentSettings | undefined;
+  describe(ref: string): Promise<{
+    configured: boolean;
+    writable: boolean;
+  }>;
+  set(ref: string, key: string): Promise<void>;
+  unset(ref: string): Promise<void>;
+  login(store: (credentials: CommandCodeLoginCredentials) => Promise<void>): EnrollmentLogin;
+}
+declare class AccountEnrollmentManager {
+  private readonly deps;
+  private readonly tasks;
+  private writes;
+  private closed;
+  private readonly pages;
+  constructor(deps: EnrollmentDeps);
+  /** 每页独立的持续调用才代表页面生命期；宿主的 operator Peer 由所有浏览器共享。 */
+  watch(owner: string): () => void;
+  hasPage(owner: string): boolean;
+  /** begin 不等待整个过程；客户端预先生成的 id 让早到的取消也能生效。 */
+  begin(owner: string, input: EnrollmentInput): EnrollmentState;
+  status(owner: string, id: string): EnrollmentState;
+  pending(owner: string): EnrollmentState[];
+  /** 离开已登录的待命名过程等同接受已有名称，其余阶段等待写入结束再补偿。 */
+  cancel(owner: string, id: string): Promise<EnrollmentState>;
+  disconnect(owner: string): void;
+  dispose(): void;
+  name(owner: string, id: string, name?: string): Promise<EnrollmentState>;
+  retry(owner: string, id: string, name?: string): Promise<EnrollmentState>;
+  private run;
+  private store;
+  private cleanup;
+  private settings;
+  private records;
+  private change;
+  private owned;
+  private publish;
+  /** 只淘汰已完成且没有恢复日志的旧状态，活跃过程和未收尾事实始终保留。 */
+  private prune;
+  private recovered;
+}
+//#endregion
+//#region src/usage-remote.d.ts
+/**
+ * The browser-login face the usage service exposes (`commandcode/login*`).
+ * Backed by the Host-half {@link !CommandCodeLoginFlow} when the plugin entry
+ * wired one; absent, `status`/`cancel` degrade to the idle status and `begin`
+ * rejects with a plain message, so the page's manual paste path stays the
+ * fallback instead of hanging.
+ */
+interface LoginFlowFacade {
+  /** Start (or rejoin) an attempt; rejects when it cannot start at all. */
+  begin(targetRef?: string): Promise<CommandCodeLoginStatus>;
+  /** The current attempt's status. */
+  status(): CommandCodeLoginStatus;
+  /** Cancel a waiting attempt. */
+  cancel(): void;
+}
+/** Everything the usage service needs beyond its Cordis context. */
+interface CommandCodeUsageDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
+  /** The registered adapter (for getUsage). */
+  adapter: CommandCodeAdapter<C>;
+  /**
+   * Multi-account report source (wired by the plugin entry). Absent in
+   * programmatic setups, the service falls back to a single default-account
+   * entry around `adapter.getUsage()`.
+   */
+  reports?: () => Promise<CommandCodeAccountsReport>;
+  /**
+   * Model-catalog source for the settings page's model editors. Absent, the
+   * `models` endpoint answers an empty list — the page's editors degrade to
+   * the empty state.
+   */
+  listModels?: () => Promise<CommandCodeCatalog>;
+  /**
+   * Price-table source for the composer's session-cost figure. Defaults to the
+   * vendored snapshot, so the endpoint can never silently serve an empty table
+   * — an unpriced cost is the failure this feature is meant to remove. Override
+   * only to stub it in a test.
+   */
+  prices?: () => CommandCodePriceTable;
+  /** The browser-login flow (wired by the plugin entry); see {@link LoginFlowFacade}. */
+  login?: LoginFlowFacade;
+  enrollment?: AccountEnrollmentManager;
+}
+/**
+ * The Remote receiver: a Cordis service the Gateway resolves by key
+ * (`commandcodeUsage`) and binds to the wire namespace (`commandcode`). The
+ * base class stamps the `typertRemote` binding the Gateway validates on every
+ * dispatch; no decorators are needed because the descriptor is registered
+ * explicitly (strict path) rather than discovered from source markers.
+ */
+declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends TypertRemoteService {
+  private readonly deps;
+  constructor(ctx: Context, deps: CommandCodeUsageDeps<C>);
+  /**
+   * Account, usage, and credit state for the settings page's account card.
+   * Degrades per endpoint like the `/commandcode` command (failures land in
+   * `report.failures`); throws `MISSING_CREDENTIAL` when no key resolves, which
+   * the Gateway folds into the failure branch the page renders as a hint.
+   */
+  report(): Promise<CommandCodeAccountsReport>;
+  /**
+   * The full model catalog for the settings page's model editors. The browser
+   * never calls the Command Code API directly — the Host serves the catalog
+   * (already fetched/cached by the adapter) so models can be picked from the
+   * live list instead of typed by hand.
+   */
+  models(): Promise<CommandCodeCatalog>;
+  /**
+   * The model price table the composer prices an in-progress session with.
+   * Static vendored data, served Host-side so the browser bundle never carries
+   * a copy that could drift from the snapshot, and so a price update reaches an
+   * open page without a rebuild.
+   */
+  prices(): Promise<CommandCodePriceTable>;
+  /**
+   * Start (or rejoin) a browser-login attempt and return its fresh status —
+   * `waiting` carrying the Studio URL. Rejects when the flow cannot start
+   * (no free loopback port, disposed plugin).
+   */
+  loginBegin(targetRef?: string): Promise<CommandCodeLoginStatus>;
+  /** Poll a login attempt's status. */
+  loginStatus(): Promise<CommandCodeLoginStatus>;
+  /** Cancel a waiting attempt; returns the post-cancel status. */
+  loginCancel(): Promise<CommandCodeLoginStatus>;
+  enrollmentBegin(input: EnrollmentInput): Promise<EnrollmentState>;
+  enrollmentStatus(input: EnrollmentAction): Promise<EnrollmentState>;
+  enrollmentCancel(input: EnrollmentAction): Promise<EnrollmentState>;
+  enrollmentName(input: EnrollmentAction): Promise<EnrollmentState>;
+  enrollmentRetry(input: EnrollmentAction): Promise<EnrollmentState>;
+  enrollmentPending(input: EnrollmentPage): Promise<EnrollmentState[]>;
+  enrollmentWatch(input: EnrollmentPage): AsyncIterable<boolean>;
+  private enrollmentOwner;
+  private enrollmentPeer;
+  private requireEnrollment;
+  private requireLogin;
+}
+/**
+ * Provide the usage service and register its Remote descriptor. The registry
+ * contribution is tied to this fiber's lifetime: the registry's own
+ * `register()` effect would otherwise outlive the plugin.
+ */
+declare function applyUsageRemote<C extends CommandCodeConnectionOptions>(ctx: Context, deps: CommandCodeUsageDeps<C>): void;
 //#endregion
 //#region src/web-search.d.ts
 /** Stable id this provider registers under in `ctx.web`. */
@@ -1706,8 +1842,8 @@ declare function commandCodeSearchSelection(): CommandCodeSearchSelection;
 declare function applyCommandCodeSearchSelection(web: WebRuntime, state: CommandCodeSearchSelection, enable: boolean): void;
 /** Per-request facts the provider needs, all injected so the class stays cordis-free and testable. */
 interface CommandCodeSearchProviderDeps {
-  /** Resolve one usable Command Code key (credential seam → env → auth file), or undefined when none. */
-  resolveKey(): Promise<string | undefined>;
+  /** 使用搜索已捕获的网关解析账号，探测不能在等待后转到另一个网关。 */
+  resolveKey(apiBase?: string): Promise<string | undefined>;
   /** The API base host (defaults to `https://api.commandcode.ai`). */
   apiBase(): string;
   /** Injectable fetch for tests; defaults to the global fetch. */
@@ -1959,6 +2095,8 @@ interface Config {
    * the key and the next account's key is retried transparently.
    */
   accounts?: CommandCodeAccountConfig[];
+  /** 账号开通恢复日志，只保留引用与阶段。 */
+  accountEnrollmentTasks?: EnrollmentRecord[];
   /**
    * Manually selected active account: a slot id — `default`, or an extra
    * account's credential reference (e.g. `COMMANDCODE_API_KEY_2`). It serves
@@ -2029,6 +2167,8 @@ declare const Config: z<Config>;
 /** One resolution's complete request facts: connection plus credential reference. */
 interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
   apiKeyEnv: CredentialRef;
+  /** 本次调用的账号定义，与连接从同一次易变配置读取。 */
+  accountSelection?: CommandCodeAccountSelection;
 }
 /**
  * The one explicit resolve step from raw config to validated connection
