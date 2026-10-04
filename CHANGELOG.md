@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.4] - 2026-10-04
+
+### Changed
+
+- **引擎配对从 `0.2.0-rc.2` 升到 `0.2.1-alpha.1`，业务代码零改动。** 所有 `@deepseek-ai/dsh-*` peer 与开发依赖、`dsh.compatibility.dsh`、`engines.dsh` 和那唯一一条 `dshReleases` 记录现在一起指向 `0.2.1-alpha.1`。本次审计覆盖官方全量公开源码增量（4760 个变更路径、341 个包清单）：本插件导入的每个包**都没有破坏性变更**——`dsh-llm` 的 `GenerateOptions`/`RequestMessage`/`ContentBlock`/`LlmError` 线格式类型零改动（`src` 下三处差异全是删除 invariant 重抛逻辑与注释链接更新），`dsh-settings` 与 `dsh-credentials` 只在内部通知路径上做同样删除、公开 API 不变，`dsh-commands`、`dsh-web`、`dsh-typert-protocol`、`dsh-timeout`、`dsh-launch-environment` 入口全部存活。本插件注册的五个 slot id（`settings.section`、`settings.models.provider-card`、`settings.models.footer`、`sidebar.footer.action`、`conversation.composer.dock`）全部健在，`conversation.composer.dock` 的 `{ kind: 'list'; scope: 'session' }` 契约未变，`packages/client/web/src/boot.ts` 零变更因而 Web 端 `staticModules` 种子表不变、`react` / `ui-primitives` / `ui-slots` 的 optional 策略继续成立。`npm run test:engine` 在真实 `@deepseek-ai/dsh@0.2.1-alpha.1` 上通过（ESM 链接、静态具名导入审计、客户端 `require()` 种子审计、22 个流终态场景、网关事实隔离、持久化图片卸载契约、Config 易变契约）。
+
+  ⚠️ **`0.2.1-alpha.1` 是 alpha 早期测试版，稳定性低于它取代的 `0.2.0-rc.2` 候选发布**，这是维护者在本轮明确权衡后接受的配对，不是疏漏。
+
+- **`@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery` 随引擎同批迁移。** 上游每个 Harness 包都以 `workspace:~` 声明这两个包，发布引擎时会被改写成同批的 `~<version>`：`0.2.1-alpha.1` 配 `cordis ~4.0.5-alpha.1` 与 `schemastery ~3.18.5-alpha.1`（npm 上两者都有 `dsh-0-2-1-alpha-1` dist-tag）。原有的 `^4.0.2` 与 `~3.18.4` 不是静默不匹配而是直接 `ERESOLVE`：`dsh-agent@0.2.1-alpha.1` 要求 `cordis ~4.0.5-alpha.1`，`dsh-settings@0.2.1-alpha.1` 要求 `schemastery ~3.18.5-alpha.1`。`react ^18.2.0` 不受本次迁移影响，保持原样。
+
+### Removed
+
+- **不再声明 `@deepseek-ai/dsh-invariants`。** 上游在 `0.2.1-alpha.1` 删除了运行时 invariant 插件及所有包的 `./invariant` 子路径导出，`packages/runtime-diagnostics/invariants` 整棵目录从源码树消失，且 npm 上从未发布过该包的 `0.2.1-alpha.1`（照抄引擎版本号会 404）。本插件源码从未 import 它，所以这条声明是直接移除而非替换。`scripts/verify-isolated-install.mjs` 的隔离安装断言改为从 `package.json` 读取声明的 `@deepseek-ai/dsh-llm` peer 再比对锁文件，不再硬编码包名——上游删掉某个 peer 时这条检查会失败，而不是靠陈旧预期蒙混过关。
+
+### Fixed
+
+- **输入框下方费用读数不再依赖一个已被上游第二次删除的 DOM 锚点。** `data-composer-stats` 在 `0.2.1-alpha.1` 第二次消失：官方把单一的 `StatsPills` 组件拆成 `activity`（order 0）与 `usage`（order 1）两个独立的 dock 入口，每个 pill 自带标记，不再有共同的外层容器。插件的 `STATS_ROOT` 一直是「有则用、无则退回 dock outlet」的偏好而非硬要求——这正是它为 `0.1.6-alpha.2` 第一次删除该属性时设计的退路，本次无需改行为。已逐项核实退路在新结构下依然正确：两个 pill 都保留 `aria-haspopup="dialog"`，`activity` 在前、`usage` 在后，因此「最后一个触发器胜出」仍选中用量 pill；`data-session-stats-usage` 仍唯一属于 token 对话框。源码与测试注释已更新为记录第二次删除的事实。
+
+### 刻意未采纳
+
+Claude Code Mods 兼容层、插件管理页的「让 Agent 创建插件」入口、开发者工具组合包、Web 的 `--public-url`、子路径插件不再读取独立 `package.json`（对本插件 `./client` 与 `./locale/*.json` 导出**未观察到影响，但并非已证明无影响**），以及 `bindDraftMirror` → `bindDraftPersistence` 的会话契约改名——均不属于本插件拥有的界面所需。
+
 ## [0.12.3] - 2026-10-03
 
 ### Added

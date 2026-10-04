@@ -55,14 +55,21 @@ import {
 /**
  * The shipped composer stats row (dsh-client-ui-chat `StatsPills`).
  *
- * A PREFERENCE, not a requirement: the attribute has already been dropped once
- * upstream (0.1.6-alpha.2) while the rest of the row's markup stayed identical,
- * so a lookup that insisted on it would silently stop finding the row. When it
- * is absent the search falls back to the dock OUTLET — deliberately the outlet
+ * A PREFERENCE, not a requirement: the attribute has been dropped TWICE
+ * upstream — in 0.1.6-alpha.2, and again in 0.2.1-alpha.1, where the single
+ * `StatsPills` component became two independent dock entries (`activity` and
+ * `usage`) and each pill lost the shared row wrapper this selector named. A
+ * lookup that insisted on it would silently stop finding the row. When it is
+ * absent the search falls back to the dock OUTLET — deliberately the outlet
  * and never the outlet's parent, because the parent is the composer footer,
  * which holds the `ContextMeter` as well, and that meter's trigger is itself a
  * `button[aria-haspopup="dialog"]` rendered AFTER the dock. A parent-scoped
  * "last trigger wins" would append the cost to the context ring instead.
+ *
+ * The fallback is still correct on 0.2.1-alpha.1: the dock registers `activity`
+ * at order 0 and `usage` at order 1, both keep `aria-haspopup="dialog"` on their
+ * trigger button, and `data-session-stats-usage` remains unique to the token
+ * dialog — so "last trigger wins" still selects the usage pill.
  */
 const STATS_ROOT = '[data-composer-stats]'
 

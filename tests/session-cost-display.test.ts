@@ -222,10 +222,16 @@ const asDocument = (fake: FakeDocument): Document => fake as unknown as Document
  * pill, also a `button[aria-haspopup="dialog"]`, so taking the FIRST trigger
  * would decorate the clock. Both shapes are modelled for that reason.
  *
- * `marker: false` models dsh 0.1.6-alpha.2, which deleted `data-composer-stats`
- * from this root while leaving the rest of the markup identical — the deletion
- * that took the readout dark, and a lookup insisting on the attribute is
- * exactly the bug.
+ * `marker: false` models an engine that deleted `data-composer-stats` from this
+ * root while leaving the rest of the markup identical. That has happened TWICE:
+ * 0.1.6-alpha.2 dropped the attribute, and 0.2.1-alpha.1 split the single
+ * `StatsPills` component into two independent dock entries (`activity` at order
+ * 0, `usage` at order 1), each rendering its own pill with no shared wrapper —
+ * so on the currently supported engine the wrapper is GONE and this unmarked
+ * two-trigger shape is the live one, not a legacy fallback. The order modelled
+ * above (activity-style trigger first, token pill last) is exactly that split's
+ * order, which is what keeps "last trigger wins" selecting the token pill. A
+ * lookup insisting on the attribute is exactly the bug.
  */
 function shippedPill(parent: FakeElement, options: { marker?: boolean } = {}): {
   root: FakeElement
@@ -460,13 +466,16 @@ test('an unpriceable session removes the injected figure', () => {
   assert.equal(button.hasAttribute('aria-describedby'), false)
 })
 
-// The next three tests are the regression fence for dsh 0.1.6-alpha.2, which
-// deleted `data-composer-stats` AND moved the composer's context meter beside
-// the dock outlet. The old suite built its own marked root and treated an
-// unmarked row as an acceptable no-op, so the readout could go dark on a real
-// engine with every check green (CHANGELOG).
+// The next three tests are the regression fence for the two engines that
+// deleted `data-composer-stats` — 0.1.6-alpha.2, and 0.2.1-alpha.1 again by
+// splitting the stats row into two dock entries — with 0.1.6-alpha.2 also moving
+// the composer's context meter beside the dock outlet. The old suite built its
+// own marked root and treated an unmarked row as an acceptable no-op, so the
+// readout could go dark on a real engine with every check green (CHANGELOG).
+// Because the currently supported engine has no marked row at all, the unmarked
+// fixture below is the shape it actually ships, not a hypothetical.
 
-test('an unmarked stats row (dsh 0.1.6-alpha.2) still gets the cost', () => {
+test('an unmarked stats row (no data-composer-stats) still gets the cost', () => {
   const outlet = new FakeElement('div')
   const { button, timeButton } = shippedPill(outlet, { marker: false })
   const { display } = makeDisplay(outlet)

@@ -2,7 +2,7 @@
  * Client-boot integration tests (node:test). Run with `npm test`.
  *
  * These drive the *real* `apply()` from `src/client/index.ts` against a Cordis
- * context mirroring the dsh 0.2.0-rc.2 client assembly, and assert that every
+ * context mirroring the dsh 0.2.1-alpha.1 client assembly, and assert that every
  * browser surface registers: the settings page (`settings.section`, id
  * `commandcode`), the Models-page provider card
  * (`settings.models.provider-card`, key `llm-commandcode`), the panel's `main`
@@ -34,7 +34,7 @@ const { apply, inject } = await import('../src/client/index.ts')
 
 /**
  * Boot the real plugin `apply()` on a fresh Cordis root provisioned with the
- * dsh 0.2.0-rc.2 client service set: `remote` (carrying the `credentials` +
+ * dsh 0.2.1-alpha.1 client service set: `remote` (carrying the `credentials` +
  * `commandcode` namespaces and the `settings` directory the plugin's own scope
  * reads), `slots`, `locale`, and — when `mountLayout` is set — `layout`.
  *
@@ -61,7 +61,7 @@ async function boot(
     // profile (api-remotes mounts it with `immediately: true`); `false` models
     // the degraded profile the scope must survive without gating the plugin.
     mountSettings = true,
-    // The slots the engine declares; the default is the full dsh 0.2.0-rc.2 set.
+    // The slots the engine declares; the default is the full dsh 0.2.1-alpha.1 set.
     // A narrower set models a client assembly that declares fewer seats (a
     // composition difference, not an engine version).
     declaredSlots = new Set([

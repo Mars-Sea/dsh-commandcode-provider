@@ -33,7 +33,7 @@
 
 ## 安装
 
-本版本**只支持 dsh 0.2.0-rc.2**：插件的 peer 范围就是这一个版本，兼容性记录里也只列它。
+本版本**只支持 dsh 0.2.1-alpha.1**：插件的 peer 范围就是这一个版本，兼容性记录里也只列它。
 
 ```sh
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
@@ -55,14 +55,14 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.15
 
 这一点对每个 profile 都成立，包括下面的终端界面。
 
-插件可直接在 pnpm 10 的全新插件市场 generation 中安装。不要另行添加 `@deepseek-ai/dsh-invariants` dependency；插件已将其声明为 Host peer，Harness 包仍由当前 dsh profile 统一管理。
+插件可直接在 pnpm 10 的全新插件市场 generation 中安装。所有 Harness 包（含 `@deepseek-ai/cordis`、`@deepseek-ai/schemastery`）都由插件按精确版本声明为 Host peer，由当前 dsh profile 统一管理，不要另行添加 dependency。上游曾在 `0.2.1-alpha.1` 删除 `@deepseek-ai/dsh-invariants` 这个包，因此插件不再声明它。
 
 ## 更新
 
 用与安装时相同的 tag 更新：
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.1-alpha.1
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 更早的 dsh（0.5.0 线，不再维护）
 ```
 
@@ -136,7 +136,7 @@ cmd login                               # 写入 ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**引擎版本要求。** 插件只针对一个引擎维护：**dsh 0.2.0-rc.2**。它的 `@deepseek-ai/dsh-*` 对等依赖使用精确版本 `0.2.0-rc.2`，`dsh.compatibility.dshReleases` 也只记录这一个版本。相邻预发布版与稳定补丁版尚未验证。在更早的引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
+**引擎版本要求。** 插件只针对一个引擎维护：**dsh 0.2.1-alpha.1**。它的 `@deepseek-ai/dsh-*` 对等依赖使用精确版本 `0.2.1-alpha.1`，`@deepseek-ai/cordis` 固定 `~4.0.5-alpha.1`、`@deepseek-ai/schemastery` 固定 `~3.18.5-alpha.1`（三者都与该引擎同批发布），`dsh.compatibility.dshReleases` 也只记录这一个版本。相邻预发布版与稳定补丁版尚未验证。注意 `0.2.1-alpha.1` 是 alpha 早期测试版，稳定性低于上一版的 `0.2.0-rc.2` 候选发布。在更早的引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
 
 ## 用量面板
 

@@ -44,12 +44,18 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   and a price per row into the shipped usage dialog, matched POSITIONALLY (the
   labels are the `chat` locale's, so they are never read) and confirmed by the
   token count each row must be showing. **The pill's scope is the OUTLET, and
-  its row marker is a PREFERENCE.** `data-composer-stats` IS present on
-  0.2.0-rc.2, but it has already been deleted once upstream while the row's
-  markup stayed otherwise identical, so `STATS_ROOT` narrows the lookup when it
-  is there and the lookup falls back to the dock outlet
+  its row marker is a PREFERENCE.** `data-composer-stats` is NOT present on
+  0.2.1-alpha.1 — upstream deleted it a second time (the first was
+  0.1.6-alpha.2), this time by splitting the single `StatsPills` component into
+  two independent dock entries (`activity` at order 0, `usage` at order 1) so
+  each pill lost the shared row wrapper that attribute named. So `STATS_ROOT` no
+  longer narrows anything and the lookup takes its dock-outlet fallback
   (`[data-slot="conversation.composer.dock"]`, a `display:contents` div holding
-  exactly that slot's entries: the shipped `stats` cell and ours). The fallback
+  exactly that slot's entries: the shipped `activity`/`usage` cells and ours).
+  That fallback stays correct because both pills keep `aria-haspopup="dialog"`
+  on their trigger button and `data-session-stats-usage` remains unique to the
+  token dialog, so "last trigger wins" still selects the usage pill.
+  The fallback
   is the outlet and NEVER the outlet's parent, because the parent is the
   composer footer, which also holds the `ContextMeter`, whose
   trigger is itself a `button[aria-haspopup="dialog"]` rendered AFTER the dock:

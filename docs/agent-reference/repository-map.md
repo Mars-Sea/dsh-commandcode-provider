@@ -196,7 +196,7 @@ tests/login.test.ts   browser-login flow integration tests (real loopback
 tests/login-wire.test.ts login descriptor uniformity + status parser.
 tests/login-client.test.ts login-panel controller poll lifecycle.
 tests/client-boot.test.ts client-boot integration tests (real apply() against a
-                      dsh 0.2.0-rc.2-shaped client assembly; settings page +
+                      dsh 0.2.1-alpha.1-shaped client assembly; settings page +
                       provider card, and the `remote.settings` scope path end to
                       end: directory read, invalidation re-read, a save over the
                       path-op wire, and the degraded profile without the

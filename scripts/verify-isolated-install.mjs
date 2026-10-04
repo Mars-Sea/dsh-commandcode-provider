@@ -12,6 +12,8 @@ const repositoryDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npmCache = join(repositoryDir, '.npm-cache')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+/** This checkout's own manifest: the peer assertion below is read from it, never hardcoded. */
+const manifest = JSON.parse(readFileSync(join(repositoryDir, 'package.json'), 'utf8'))
 
 /** Run a child command and return its captured streams or throw with diagnostics. */
 function run(command, args, cwd) {
@@ -64,9 +66,13 @@ function verifyIsolatedInstall() {
       join(packDir, filename),
     ], consumerDir)
     const lock = readFileSync(join(consumerDir, 'pnpm-lock.yaml'), 'utf8')
-    if (!lock.includes('@deepseek-ai/dsh-invariants@')) {
+    // 断言一个仍然存在、且本插件确实声明为 peer 的核心宿主包。dsh-invariants
+    // 曾承担这个角色，但上游在 0.2.1-alpha.1 删除了整个包（npm 上从未发布该版本），
+    // 因此改用 dsh-llm —— 适配器的宿主底座，任何 fresh generation 都必须解析到它。
+    const expectedPeer = `@deepseek-ai/dsh-llm@${manifest.peerDependencies['@deepseek-ai/dsh-llm']}`
+    if (!lock.includes(expectedPeer)) {
       throw new Error(
-        'isolated install did not resolve the invariants peer\n'
+        `isolated install did not resolve the declared peer ${expectedPeer}\n`
         + installResult.stdout
         + installResult.stderr,
       )

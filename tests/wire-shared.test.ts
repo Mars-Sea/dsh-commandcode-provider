@@ -1,6 +1,6 @@
 /**
  * Strict-codec contract: every Remote descriptor this plugin ships must
- * register on dsh 0.2.0-rc.2 (node:test; issue #49).
+ * register on dsh 0.2.1-alpha.1 (node:test; issue #49).
  *
  * The Typert strict result codec is a LAZY schema factory — `{ mode: 'strict',
  * typeSymbol, create: () => TypertSchema }` — and both the registry and the

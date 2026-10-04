@@ -5,21 +5,32 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 - **网关事实宿主回归**：`scripts/verify-engine-load.mjs` 使用真实插件入口、DSH 易变配置引用与更新函数、账号池及用量接收者，验证凭据等待和轮换期间切网关后旧调用及探测仍使用原地址，新调用使用新账号配置，用量报告只读取入口捕获的来源并展示恢复后的标记。网络响应和凭据为合成依赖，不证明真实网关或凭据持久化行为。
 
 - **Isolated package install**: pnpm 10 auto-installs the package's DSH peers
-  when a desktop marketplace prepares a fresh generation. Keep
-  `@deepseek-ai/dsh-invariants` as an explicit peer matching
-  the other Harness packages; otherwise pnpm reaches it only through
-  `dsh-llm`, rewrites the prerelease range to an unsatisfiable stable range,
-  and aborts with `ERR_PNPM_NO_MATCHING_VERSION`. Do not move it to
+  when a desktop marketplace prepares a fresh generation. Every Harness peer
+  stays an explicit declaration matching the other Harness packages; otherwise
+  pnpm reaches it only through `dsh-llm`, rewrites the prerelease range to an
+  unsatisfiable stable range, and aborts with `ERR_PNPM_NO_MATCHING_VERSION`.
+  Do not move them to
   `dependencies`: the active profile owns Harness packages. Run
-  `npm run test:install` after changing DSH peer metadata. **Client-only UI
+  `npm run test:install` after changing DSH peer metadata; its assertion reads
+  the declared `@deepseek-ai/dsh-llm` peer out of `package.json` rather than
+  hardcoding it, so a peer that disappears upstream fails the check instead of
+  silently passing on a stale expectation.
+  **`@deepseek-ai/dsh-invariants` used to be one of these declarations and is
+  gone since `0.2.1-alpha.1`**: upstream deleted the package outright (its
+  `packages/runtime-diagnostics/invariants` tree no longer exists and npm never
+  published a `0.2.1-alpha.1` of it, so copying the engine version across would
+  404). This plugin never imported it, so the declaration is simply removed
+  rather than replaced — see `scripts/verify-isolated-install.mjs`.
+  **Client-only UI
   peers the Web frontend already seeds are the ONE exception, and they must stay
   optional AND stay in `devDependencies`** (PR #52). The shipped
   `dsh-web-frontend` hands every client bundle a `staticModules` table —
   `react`, `react/jsx-runtime`, `react-dom`, `react-dom/client`,
   `@deepseek-ai/cordis`, `@deepseek-ai/dsh-client-store`,
   `@deepseek-ai/dsh-client-ui-slots`, `@deepseek-ai/dsh-client-ui-primitives`,
-  `@deepseek-ai/dsh-client-ui-dockkit` (read out of the 0.2.0-rc.2 engine, and
-  re-read at every Harness peer bump: the list is unchanged from 0.1.7-rc.2) — so
+  `@deepseek-ai/dsh-client-ui-dockkit` (read out of the 0.2.1-alpha.1 engine, and
+  re-read at every Harness peer bump: the list is unchanged from 0.2.0-rc.2 and
+  0.1.7-rc.2) — so
   the three `require()` targets `lib/client.js` carries resolve in the webview
   with no installed copy, which is why `react`,
   `@deepseek-ai/dsh-client-ui-primitives` and
@@ -37,7 +48,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   NON-optional peers**, so each optional name must also be a `devDependency` or
   the authortime tree silently loses it — `tests/client-boot.test.ts` imports
   the React component tree, so an absent `react` is a red `npm test`, and
-  `dsh-client-ui-primitives@0.2.0-rc.2` declares NO dependencies at all, so
+  `dsh-client-ui-primitives@0.2.1-alpha.1` declares NO dependencies at all, so
   nothing else would pull it in. Note that the same package's npm entry point
   imports `clsx`, `katex` and the shiki/mdast stack without declaring them
   (the ENGINE's own tree does not install them either): it is a seed module,
@@ -46,8 +57,23 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   against the package's `.d.ts`. `tests/package.test.ts` pins the exact
   optional set, that every optional name is a declared peer, and that it stays a
   development package.
+- **`@deepseek-ai/cordis` and `@deepseek-ai/schemastery` move WITH the engine,
+  not independently.** Both are declared by every upstream Harness package as
+  `workspace:~`, so publishing an engine rewrites them to the `~<version>` that
+  shipped alongside it: `0.2.1-alpha.1` pairs `cordis ~4.0.5-alpha.1` and
+  `schemastery ~3.18.5-alpha.1` (npm carries a `dsh-0-2-1-alpha-1` dist-tag for
+  both). Leaving this plugin's previous `^4.0.2` / `~3.18.4` in place is an
+  immediate `ERESOLVE`, not a silent mismatch: `dsh-agent@0.2.1-alpha.1` demands
+  `cordis ~4.0.5-alpha.1` and `dsh-settings@0.2.1-alpha.1` demands
+  `schemastery ~3.18.5-alpha.1`. A caret is doubly wrong here — it neither
+  admits the `-alpha.1` prerelease nor excludes the neighbour.
+  `react ^18.2.0` is unchanged by the bump and stays as it is.
+  Note that npm's peer resolver reads the EXISTING `node_modules` tree, so a
+  bump that should resolve cleanly still reports `ERESOLVE` against stale rc-era
+  packages until the tree is rebuilt; `rm -rf node_modules` before judging a
+  genuine conflict.
 - **The Harness peer range names exactly ONE release, and that is
-  load-bearing.** 使用精确版本 `0.2.0-rc.2`。原 `^0.2.0-rc.2` 会放行
+  load-bearing.** 使用精确版本 `0.2.1-alpha.1`。原 `^0.2.1-alpha.1` 会放行
   相邻预发布版及稳定补丁版，并不等于只支持一个版本。That exactness is the point: this bundle is
   maintained against one engine, and a range that quietly admitted a neighbour
   is how a broken pairing stayed invisible (issue #43). A caret once pinned every
@@ -85,5 +111,5 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 
 ## 二、流响应的宿主验证
 
-1. `npm run test:engine` 使用真实 DSH 0.2.0-rc.2 的 `LlmRuntime`（模型运行时）及 `BlockAssembler`（响应块装配器），加载发布产物并交付合成响应。22 个场景覆盖三协议成功、正文截断、纯思考达到上限、工具断流、正文及工具取消、最终标记后多余内容，以及 OpenAI 尾部错误；确认唯一终态、失败关联标识、最终用量和中断工具快照。
+1. `npm run test:engine` 使用真实 DSH 0.2.1-alpha.1 的 `LlmRuntime`（模型运行时）及 `BlockAssembler`（响应块装配器），加载发布产物并交付合成响应。22 个场景覆盖三协议成功、正文截断、纯思考达到上限、工具断流、正文及工具取消、最终标记后多余内容，以及 OpenAI 尾部错误；确认唯一终态、失败关联标识、最终用量和中断工具快照。
 2. 宿主源码在失败或取消终态走请求错误分支，不进入工具执行；验证没有运行完整代理工具链。适配器本地锁和待读释放由回归测试覆盖；真实提供商异常、收费记录及远端连接实际关闭时间尚未实测。

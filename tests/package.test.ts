@@ -32,7 +32,7 @@ test('every Harness peer and development package shares one supported release ra
     assert.equal(dev[name], range, `${name} development range`)
   }
   // caret 会放行邻近预发布和稳定补丁版，不能表达只验证一个宿主的约定。
-  assert.equal(range, '0.2.0-rc.2', '精确版本才能阻止未验证的相邻引擎')
+  assert.equal(range, '0.2.1-alpha.1', '精确版本才能阻止未验证的相邻引擎')
   for (const version of Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})) {
     assert.ok(
       range === version,
@@ -47,8 +47,8 @@ test('per-release DSH compatibility names exactly the one supported release', ()
   // `unknown`. Exactly one record ships: a stale entry for an older engine would
   // advertise a pairing no test covers.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  assert.deepEqual(Object.keys(releases), ['0.2.0-rc.2'])
-  assert.equal(releases['0.2.0-rc.2'], 'compatible')
+  assert.deepEqual(Object.keys(releases), ['0.2.1-alpha.1'])
+  assert.equal(releases['0.2.1-alpha.1'], 'compatible')
 })
 
 test('the manifest declares the same engine range it supports', () => {

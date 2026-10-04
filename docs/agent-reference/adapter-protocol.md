@@ -350,7 +350,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   (`CommandCodeAdapter.stream()`, `src/stream-response.ts`, `src/stream-trace.ts`). A terminal CLI `finish`, an OpenAI
   `finish_reason` or a Messages `message_delta` carrying `stop_reason`
   is necessary but not sufficient for success: reasoning alone, empty text, whitespace, and `tool_calls: []`
-  are not an answer. Hold the success `finish` until validation; DSH 0.2.0-rc.2 converts an adapter throw into an
+  are not an answer. Hold the success `finish` until validation; DSH 0.2.1-alpha.1 converts an adapter throw into an
   error finish, so throwing after publishing success creates two terminal events. A terminal response with
   no text/tools maps to retryable `EMPTY_RESPONSE`; a length/max-token finish with no effective content maps to non-retryable
   `OUTPUT_TOKEN_LIMIT`. 有效正文或工具已产生时保留内容，并返回 `max-tokens`（输出截断）；不自动重试。Explicit content filtering remains non-retryable. **No

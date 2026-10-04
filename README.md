@@ -35,7 +35,7 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-This release supports **dsh 0.2.0-rc.2 and nothing else** — the plugin's peer
+This release supports **dsh 0.2.1-alpha.1 and nothing else** — the plugin's peer
 range is that one version, and its compatibility record names it alone:
 
 ```sh
@@ -63,14 +63,14 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.15
 
 The same applies to every profile you install into, including the terminal UI below.
 
-Fresh pnpm 10 marketplace generations are supported directly. Do not add a separate `@deepseek-ai/dsh-invariants` dependency; the plugin declares it as a Host peer so the active dsh profile remains the owner of Harness packages.
+Fresh pnpm 10 marketplace generations are supported directly. Every Harness package — including `@deepseek-ai/cordis` and `@deepseek-ai/schemastery` — is declared by the plugin at an exact version as a Host peer, so the active dsh profile remains their owner; do not add a separate dependency for any of them. Upstream removed the `@deepseek-ai/dsh-invariants` package in `0.2.1-alpha.1`, so the plugin no longer declares it.
 
 ## Updating
 
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.1-alpha.1
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
@@ -144,7 +144,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.2.0-rc.2**. Its `@deepseek-ai/dsh-*` peers use the exact version `0.2.0-rc.2`, and `dsh.compatibility.dshReleases` records that single release. Adjacent prereleases and stable patch versions have not been verified. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
+**Engine version.** The plugin is maintained against exactly one engine: **dsh 0.2.1-alpha.1**. Its `@deepseek-ai/dsh-*` peers use the exact version `0.2.1-alpha.1`, `@deepseek-ai/cordis` is pinned to `~4.0.5-alpha.1` and `@deepseek-ai/schemastery` to `~3.18.5-alpha.1` (all three released with that engine), and `dsh.compatibility.dshReleases` records that single release. Adjacent prereleases and stable patch versions have not been verified. Note that `0.2.1-alpha.1` is an early alpha, so it is less stable than the `0.2.0-rc.2` release candidate it replaces. On an older engine the settings page, the message envelope, or the request-image budget will not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
 
 ## Usage dashboard
 
