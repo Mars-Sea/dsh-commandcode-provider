@@ -61,7 +61,7 @@ type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 //#endregion
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.74.1";
+declare const COMMAND_CODE_CLI_VERSION = "1.74.3";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.
@@ -978,12 +978,12 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.74.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.74.3` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table dropped
  * `meituan/LongCat-2.0`, which sat in `modelSupportsZdr` alone through
- * 1.73.0; the 1.74.1 table lists it in NEITHER set, so as of this snapshot it
+ * 1.73.0; the 1.74.3 table lists it in NEITHER set, so as of this snapshot it
  * is no longer excluded. The official docs (commandcode.ai/docs/resources/
  * zdr) put coverage in prose — "99% of our models have ZDR-capable upstreams … only
  * a small handful of models are affected" — so the CLI's exclusion list is
@@ -1009,13 +1009,15 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * 20 members held across 1.62.0 → 1.64.0, 1.65.0 and 1.66.0 each added exactly
  * one (the two stealth-preview models below), 1.67.0 added one
  * (`deepseek/deepseek-v4.1-flash-fast`), 1.68.0 changed nothing, and 1.74.1
- * removed one (`meituan/LongCat-2.0`) — 22 members as of 2026-10-03.
+ * removed one (`meituan/LongCat-2.0`). The 1.74.2/1.74.3 pair changed nothing
+ * here either — 22 members as of 2026-10-06.
  *
- * `stealth/pixel-canary` is the one member whose model itself is retired (see
- * `KNOWN_EFFORTS`): the CLI keeps naming it in the ZDR anchors even though it
- * hides the row and dropped it from the catalog, so it stays listed here rather
- * than being pruned with the rest of the tables — `supportsZeroDataRetention`
- * stays truthful for any id a stale session still names.
+ * `stealth/pixel-canary` and `stealth/space-bunny-alpha` are the members whose
+ * models themselves are retired (see `KNOWN_EFFORTS`): the CLI keeps naming both
+ * in the ZDR anchors even though it hides their rows and dropped them from the
+ * catalog, so they stay listed here rather than being pruned with the rest of
+ * the tables — `supportsZeroDataRetention` stays truthful for any id a stale
+ * session still names.
  */
 declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
 /**
@@ -1045,10 +1047,11 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.73.0 (2026-10-01): 86 catalog
- * ids at 53/62/76/84 cumulative, a strict superset chain — every release since
- * 1.49.0 has been additive with no tier move, and per-entry tags below name the
- * release that added each row.
+ * Provider-tier. Re-verified at command-code@1.74.3 (2026-10-06): 84 catalog
+ * ids at 52/61/75/83 cumulative, a strict superset chain — the only removals
+ * since 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1,
+ * Space Bunny Alpha at 1.74.3), no tier ever moved, and per-entry tags below
+ * name the release that added each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to

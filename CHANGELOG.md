@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.5] - 2026-10-06
+
+### Changed
+
+- 同步官方 command-code@1.74.2／1.74.3：请求头 `x-command-code-version` 升至 `1.74.3`。两次发布都没有官方 changelog 条目，证据是 npm 发布时间线（1.74.2 于 2026-10-05T21:55Z、1.74.3 于 23:19Z）加 `dist/cli.mjs` 逐行比对：除打包变量改名与那两条隐身模型外，Effort 表、订阅计划、ZDR 锚点、峰时窗口、促销与协议面全部重核无变化。
+
+### Removed
+
+- 退役 `stealth/space-bunny-alpha` 的全部快照条目（思考档、Vision、最低套餐、免费促销）。官方 2026-10-06 结束该隐身预览：command-code@1.74.3 用 `hidden` 标记把它从模型选择器隐藏，`/provider/v1/models` 由 85 减为 84、定价页也已撤下，官方 Desktop 0.1.48 更新日志写明「Remove Space Bunny Alpha from the model picker」。它仍保留在零数据保留例外名单里——官方 CLI 的 ZDR 集合至今仍列着它，`supportsZeroDataRetention()` 对老会话里残留的 id 依然要说实话；模型输出上限表同样保留（该表由 models.dev 生成，手工删除只会与下次重新生成分叉）。
+
 ## [0.12.4] - 2026-10-04
 
 ### Changed

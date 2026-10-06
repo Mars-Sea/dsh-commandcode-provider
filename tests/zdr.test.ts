@@ -17,13 +17,15 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.74.1)', () => {
-  // Verbatim from `dist/cli.mjs` 1.74.1: `modelSupportsZdr(id) = !wD.has(id)`
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.74.3)', () => {
+  // Verbatim from `dist/cli.mjs` 1.74.3: `modelSupportsZdr(id) = !wD.has(id)`
   // unioned with the sibling route table's `br` set, cross-checked against the
   // public catalog. A sync that moves membership must be a deliberate diff.
   // 1.74.1 dropped `meituan/LongCat-2.0` from both anchors, so it is no longer
-  // listed; `stealth/pixel-canary` stays because the CLI still names it even
-  // though Command Code retired the model itself on 2026-10-01.
+  // listed; both stealth previews stay because the CLI still names them even
+  // though Command Code retired the models themselves — Pixel Canary on
+  // 2026-10-01, Space Bunny Alpha on 2026-10-06. The 1.74.2/1.74.3 pair moved no
+  // membership here.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',

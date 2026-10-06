@@ -4953,11 +4953,11 @@ test('stream() reports a pre-stream context-window rejection as CONTEXT_WINDOW_E
 })
 
 test('stream() prices image content as vision tokens rather than inline base64', async () => {
-  // Space Bunny Alpha stands in for the retired Pixel Canary here: it is the
-  // other stealth-preview Vision model, and the test needs one that the
-  // snapshot still admits image input for.
-  const model = 'stealth/space-bunny-alpha'
-  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Space Bunny Alpha', context_length: 100_000 }] })
+  // Grok 4.6 stands in as a snapshotted Vision model: both stealth-preview
+  // Vision models are out of the snapshot now (Pixel Canary retired 2026-10-01,
+  // Space Bunny Alpha retired 2026-10-06).
+  const model = 'xai/grok-4.6'
+  const catalog = JSON.stringify({ object: 'list', data: [{ id: model, name: 'Grok 4.6', context_length: 100_000 }] })
   const ref = { ...imageRef(), attachmentId: AttachmentId('sha256:large-inline-image'), bytes: 500_000 }
   const data = new Uint8Array(ref.bytes)
   let output: number | undefined
@@ -5356,7 +5356,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['off', 'low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the command-code provider table; `src/capabilities.ts` owns the
-  // table and is currently synced to command-code@1.74.1.
+  // table and is currently synced to command-code@1.74.3.
   // Every model the CLI's provider table ships effort levels for must be present, and
   // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
   // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
@@ -5377,9 +5377,11 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-flash'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro'])
   assert.ok(!KNOWN_EFFORTS['xiaomi/mimo-v2.6-pro-ultraspeed'])
-  // command-code@1.73.4 added `max` to Space Bunny Alpha, taking it to four
-  // levels — one short of the five-level set its `gpt-6.1-sol` peer ships.
-  assert.deepEqual(KNOWN_EFFORTS['stealth/space-bunny-alpha'], ['low', 'medium', 'high', 'max'])
+  // `stealth/space-bunny-alpha` (command-code@1.65.0, `max` added by 1.73.4)
+  // was retired by command-code@1.74.3: the artifact ships the row as `hidden`
+  // with no effort list, the catalog and pricing page dropped it, and the
+  // official Desktop changelog says it left the model picker.
+  assert.equal(KNOWN_EFFORTS['stealth/space-bunny-alpha'], undefined)
   // `stealth/pixel-canary` was retired by command-code@1.73.1 (the CLI hides it
   // past 2026-10-01T06:00:00Z and it left the catalog and the pricing page), so
   // it must not reappear in any snapshot table.
@@ -5494,10 +5496,10 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-flash'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro-ultraspeed'))
-  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/space-bunny-alpha'))
-  // Retired with the model itself on 2026-10-01: it must not linger in the
-  // Vision set either.
+  // Both stealth previews are retired now — Pixel Canary on 2026-10-01 and
+  // Space Bunny Alpha on 2026-10-06 — so neither may linger in the Vision set.
   assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/pixel-canary'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/space-bunny-alpha'))
   // The MiMo V2.6 family does not reason (docs: "Text input, Vision"); only its
   // Vision capability is snapshotted.
   assert.ok(!KNOWN_THINKING_MODELS.has('xiaomi/mimo-v2.6-pro'))
@@ -5536,7 +5538,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['stepfun/Step-5-Preview'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro'], 'go')
-  assert.equal(KNOWN_PLANS['stealth/space-bunny-alpha'], 'go')
+  // Both retired stealth previews are out of the plan snapshot as well.
+  assert.equal(KNOWN_PLANS['stealth/space-bunny-alpha'], undefined)
   assert.equal(KNOWN_PLANS['stealth/pixel-canary'], undefined)
   // GOAT adds a handful of closed/premium models.
   assert.equal(KNOWN_PLANS['google/gemini-3.7-flash'], 'goat')
@@ -5625,15 +5628,15 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // `qwen-3.7-max-2x-usage` record its own Deals section does not list, so it stays
   // out of the snapshot — the rate row already carries the discounted figures.
   assert.equal(KNOWN_DEALS['Qwen/Qwen3.7-Max'], undefined)
-  // Space Bunny Alpha is free "while the stealth preview lasts" — permanent-style, so no expiresAt.
-  assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.label, 'FREE')
-  assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.free, true)
-  assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha']?.expiresAt, undefined)
-  // Pixel Canary carried the identical permanent-style terms until the model
-  // itself was retired on 2026-10-01; the deal left the snapshot with it, so
-  // `isFreeModel()` must stop reporting it free.
+  // Both stealth previews carried the identical permanent-style terms ("Free
+  // while the stealth preview lasts", 100% off, no expiresAt) until they were
+  // retired — Pixel Canary on 2026-10-01, Space Bunny Alpha on 2026-10-06. The
+  // deals left the snapshot with the models, so `isFreeModel()` must stop
+  // reporting both free.
   assert.equal(KNOWN_DEALS['stealth/pixel-canary'], undefined)
   assert.equal(isFreeModel('stealth/pixel-canary'), false)
+  assert.equal(KNOWN_DEALS['stealth/space-bunny-alpha'], undefined)
+  assert.equal(isFreeModel('stealth/space-bunny-alpha'), false)
 })
 
 test('dealLabel() hides a deal after its expiry date', () => {
@@ -5845,7 +5848,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.74.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.74.3')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

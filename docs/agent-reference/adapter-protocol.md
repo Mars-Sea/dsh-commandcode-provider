@@ -29,7 +29,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   snapshot in `src/capabilities.ts` is informational and may lag provider coverage or capacity.
   `tests/adapter.test.ts` checks the chat transports, off by default, unsupported models retaining the header,
   and 422 diagnosis.
-- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.74.1):
+- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.74.3):
   - `POST {apiBase}/alpha/generate` — CLI transport body `{ config, memory, taste, skills, permissionMode,
     params: { model, messages, tools, system, max_tokens, temperature, stream, reasoning_effort? },
     threadId }`. The real CLI's request also carries `mode` (server-validated against a fixed enum —
