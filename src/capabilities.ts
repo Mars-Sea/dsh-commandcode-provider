@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.74.3) and
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.77.0) and
  * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
  * for the extraction procedures. Keeping the snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
@@ -19,7 +19,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.74.3 bundled model
+  // Re-verified against the authoritative command-code@1.77.0 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -121,13 +121,15 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // effort list and ships the row as `hidden` instead, the official Desktop
   // changelog for 2026-10-06 says "Remove Space Bunny Alpha from the model
   // picker", and the model is gone from `/provider/v1/models` as well as the
-  // pricing page. Only the ZDR exclusion set still names it (see
-  // `KNOWN_NON_ZDR_MODELS`).
+  // pricing page.
   // `stealth/pixel-canary` (the second stealth preview, `xhigh` instead of
-  // `high`) was RETIRED by command-code@1.73.1 and no longer belongs in any
-  // table here: the CLI hides it behind `isPixelCanaryEnded()` (past
-  // 2026-10-01T06:00:00Z) and it is gone from `/provider/v1/models` and the
-  // pricing page. Only the ZDR exclusion set still names it.
+  // `high`) was RETIRED by command-code@1.73.1: the CLI hides it behind
+  // `isPixelCanaryEnded()` (past 2026-10-01T06:00:00Z) and it is gone from
+  // `/provider/v1/models` and the pricing page.
+  // command-code@1.77.0 closed both out here as well: neither carries an effort
+  // list any more, both sit in the CLI's non-selectable set (its
+  // `listSelectableModelIds()` filters them out), and both left the ZDR
+  // exclusion set — so no table in this file names either one any more.
   // command-code@1.71.0. Max-and-above availability (see KNOWN_PLANS), Vision
   // per the official registry and inputModalities:["text","image"], and the
   // same five-level set as its `gpt-6-astra` / `gpt-6-sol` predecessors.
@@ -137,6 +139,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // predecessor, it still carries selectable efforts — so it belongs here and
   // NOT in KNOWN_THINKING_MODELS.
   'inclusionai/ling-3.1-flash:free': ['low', 'medium', 'high'],
+  // command-code@1.75.0 ("Add Mistral Large 4") — the only model the 1.74.3 ->
+  // 1.77.0 train added. A three-level set; Vision per the official registry and
+  // the CLI's inputModalities:["text","image"] (see `KNOWN_IMAGE_MODELS`), and
+  // Go-tier availability (see `KNOWN_PLANS`).
+  'mistral/mistral-large-4': ['low', 'medium', 'high'],
 }
 
 /**
@@ -215,6 +222,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'meta/muse-spark-1.2-contributor',
   'meta/muse-spark-1.3',
   'meta/muse-spark-1.3-contributor',
+  // command-code@1.75.0; Vision per the official registry and the CLI's
+  // inputModalities:["text","image"].
+  'mistral/mistral-large-4',
   'moonshotai/Kimi-K2.5',
   'moonshotai/Kimi-K2.6',
   'moonshotai/Kimi-K2.7-Code',
@@ -246,7 +256,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.74.3` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.77.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table dropped
@@ -275,25 +285,27 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * flags) is upstream-internal routing, not a per-model contract, so this table
  * is the snapshot of the exclusion set and nothing more. It is a rare change:
  * 20 members held across 1.62.0 → 1.64.0, 1.65.0 and 1.66.0 each added exactly
- * one (the two stealth-preview models below), 1.67.0 added one
+ * one (the two stealth-preview models), 1.67.0 added one
  * (`deepseek/deepseek-v4.1-flash-fast`), 1.68.0 changed nothing, and 1.74.1
  * removed one (`meituan/LongCat-2.0`). The 1.74.2/1.74.3 pair changed nothing
- * here either — 22 members as of 2026-10-06.
+ * here either (22 members as of 2026-10-06); 1.77.0 dropped the two retired
+ * stealth previews, back to 20 members as of 2026-10-07.
  *
- * `stealth/pixel-canary` and `stealth/space-bunny-alpha` are the members whose
- * models themselves are retired (see `KNOWN_EFFORTS`): the CLI keeps naming both
- * in the ZDR anchors even though it hides their rows and dropped them from the
- * catalog, so they stay listed here rather than being pruned with the rest of
- * the tables — `supportsZeroDataRetention` stays truthful for any id a stale
- * session still names.
+ * 1.77.0 also settled the two retired stealth previews (see `KNOWN_EFFORTS`):
+ * 1.74.3 still named both in the ZDR anchors, so they stayed listed here on
+ * purpose — an id a stale session named still got a truthful answer. The 1.77.0
+ * artifact names neither in its exclusion set and filters both out of
+ * `listSelectableModelIds()`, so they are pruned along with the rest of the
+ * tables and `supportsZeroDataRetention` now answers TRUE for them, matching
+ * what the current CLI says.
  */
 export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'MiniMaxAI/MiniMax-M3',
   'Qwen/Qwen3.8-Max-0902',
   // command-code@1.67.0. The 1.67.0 artifact lists it in BOTH anchor sets, so
-  // the CLI's own ZDR predicate excludes it. Unlike the stealth previews below,
-  // the pricing page carries no ZDR note for this row — the artifact is the
-  // evidence, and the sibling `deepseek-v4.1-flash` stays ZDR-covered.
+  // the CLI's own ZDR predicate excludes it. Unlike the retired stealth
+  // previews, the pricing page carries no ZDR note for this row — the artifact
+  // is the evidence, and the sibling `deepseek-v4.1-flash` stays ZDR-covered.
   'deepseek/deepseek-v4.1-flash-fast',
   'meta/muse-spark-1.1',
   'meta/muse-spark-1.2',
@@ -303,16 +315,6 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'minimax/minimax-m3-free',
   'poolside/laguna-s-2.1-free',
   'sakana/fugu-ultra',
-  // command-code@1.65.0, in BOTH anchors; still in both at 1.74.3, after the
-  // model's 2026-10-06 retirement (see `KNOWN_EFFORTS`). The pricing page's own
-  // tip agreed while it was live: "Free while the preview lasts. Not routed
-  // under ZDR."
-  'stealth/space-bunny-alpha',
-  // command-code@1.66.0 added `stealth/pixel-canary` — the second stealth-preview
-  // free model, and like its sibling it is not routed under ZDR. It sat in BOTH
-  // anchor sets through 1.73.0 and still does at 1.74.3, which is why the model
-  // survives in this one table after its 2026-10-01 retirement elsewhere.
-  'stealth/pixel-canary',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
   'xai/grok-4.5',
@@ -648,11 +650,12 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.74.3 (2026-10-06): 84 catalog
- * ids at 52/61/75/83 cumulative, a strict superset chain — the only removals
- * since 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1,
- * Space Bunny Alpha at 1.74.3), no tier ever moved, and per-entry tags below
- * name the release that added each row.
+ * Provider-tier. Re-verified at command-code@1.77.0 (2026-10-07): 85 catalog
+ * ids at 53/62/76/84 cumulative, a strict superset chain. Mistral Large 4
+ * (1.75.0) is the only addition since the 1.74.3 check; the only removals since
+ * 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1, Space
+ * Bunny Alpha at 1.74.3). No tier ever moved, and per-entry tags below name the
+ * release that added each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -663,7 +666,7 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (52) ---
+  // --- Go (53) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -712,6 +715,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // sibling.
   'meta/muse-spark-1.2-contributor': 'go',
   'meta/muse-spark-1.3-contributor': 'go',
+  // command-code@1.75.0; the pricing page's embedded availability grants every
+  // tier (individual-go through teams-pro) — the "all":true shape shared by the
+  // Qwen 3.8 family above.
+  'mistral/mistral-large-4': 'go',
 
   'moonshotai/Kimi-K2.5': 'go',
   'moonshotai/Kimi-K2.6': 'go',

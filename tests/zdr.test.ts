@@ -17,15 +17,16 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.74.3)', () => {
-  // Verbatim from `dist/cli.mjs` 1.74.3: `modelSupportsZdr(id) = !wD.has(id)`
-  // unioned with the sibling route table's `br` set, cross-checked against the
-  // public catalog. A sync that moves membership must be a deliberate diff.
-  // 1.74.1 dropped `meituan/LongCat-2.0` from both anchors, so it is no longer
-  // listed; both stealth previews stay because the CLI still names them even
-  // though Command Code retired the models themselves — Pixel Canary on
-  // 2026-10-01, Space Bunny Alpha on 2026-10-06. The 1.74.2/1.74.3 pair moved no
-  // membership here.
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.77.0)', () => {
+  // Verbatim from `dist/cli.mjs` 1.77.0: `knownModelSupportsZdr(id) =
+  // !zo.has(resolveKnownModelId(id))`, unioned with the sibling route table's
+  // exclusion set, cross-checked against the public catalog. A sync that moves
+  // membership must be a deliberate diff. 1.74.1 dropped `meituan/LongCat-2.0`
+  // from both anchors, so it is no longer listed. Both retired stealth previews
+  // (Pixel Canary, retired 2026-10-01; Space Bunny Alpha, retired 2026-10-06)
+  // stayed listed through 1.74.3 because the CLI still named them; 1.77.0 names
+  // neither and filters both out of `listSelectableModelIds()`, so they left
+  // this list with it.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
@@ -38,8 +39,6 @@ test('the ZDR exception list is the CLI registry exclusion set (command-code@1.7
     'minimax/minimax-m3-free',
     'poolside/laguna-s-2.1-free',
     'sakana/fugu-ultra',
-    'stealth/pixel-canary',
-    'stealth/space-bunny-alpha',
     'stepfun/Step-3.7-Flash',
     'stepfun/Step-5-Preview',
     'xai/grok-4.5',
@@ -58,12 +57,15 @@ test('supportsZeroDataRetention answers false for every listed model and true ot
   }
   // One per family served through the Provider API, plus unseen ids: the table
   // only shrinks the answer for listed ids, and the header rides either way.
-  // `meituan/LongCat-2.0` moved here in 1.74.1 — it left the CLI's exclusion
-  // sets, so the snapshot now answers true for it.
+  // `meituan/LongCat-2.0` moved here in 1.74.1 and both retired stealth
+  // previews followed in 1.77.0 — they left the CLI's exclusion sets, so the
+  // snapshot now answers true for them.
   for (const id of [
     'deepseek/deepseek-v4.1-flash',
     'deepseek/deepseek-v4-flash',
     'meituan/LongCat-2.0',
+    'stealth/pixel-canary',
+    'stealth/space-bunny-alpha',
     'claude-opus-5',
     'claude-sonnet-5',
     'gpt-5.6-luna',

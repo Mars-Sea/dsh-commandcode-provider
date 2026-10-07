@@ -5356,7 +5356,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['off', 'low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the command-code provider table; `src/capabilities.ts` owns the
-  // table and is currently synced to command-code@1.74.3.
+  // table and is currently synced to command-code@1.77.0.
   // Every model the CLI's provider table ships effort levels for must be present, and
   // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
   // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
@@ -5396,6 +5396,10 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-pro'], ['off', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('claude-sonnet-5-5'))
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash-fast'))
+  // command-code@1.75.0 ("Add Mistral Large 4") — the only model the 1.74.3 ->
+  // 1.77.0 train added. Three selectable levels; Vision and Go-tier
+  // availability are pinned by their own snapshots above.
+  assert.deepEqual(KNOWN_EFFORTS['mistral/mistral-large-4'], ['low', 'medium', 'high'])
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
@@ -5496,6 +5500,8 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-flash'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro-ultraspeed'))
+  // command-code@1.75.0; Vision per the official registry and inputModalities.
+  assert.ok(KNOWN_IMAGE_MODELS.has('mistral/mistral-large-4'))
   // Both stealth previews are retired now — Pixel Canary on 2026-10-01 and
   // Space Bunny Alpha on 2026-10-06 — so neither may linger in the Vision set.
   assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/pixel-canary'))
@@ -5535,6 +5541,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // command-code@1.67.0: the throughput variant is Go-tier like the rest of the family.
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash-fast'], 'go')
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3-contributor'], 'go')
+  // command-code@1.75.0; Mistral Large 4 is on every tier, so its minimum is Go.
+  assert.equal(KNOWN_PLANS['mistral/mistral-large-4'], 'go')
   assert.equal(KNOWN_PLANS['stepfun/Step-5-Preview'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro'], 'go')
@@ -5848,7 +5856,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.74.3')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.77.0')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

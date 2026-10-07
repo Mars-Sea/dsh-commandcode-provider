@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.6] - 2026-10-07
+
+### Added
+
+- 同步官方 command-code@1.75.0 新增的 `mistral/mistral-large-4`（Mistral Large 4）：最低套餐 Go，支持视觉与推理，三档思考强度 `low`/`medium`/`high`，524 288 上下文；价格 $1.36 入 / $4.18 出 / $0.14 缓存读每 1M，月度额度 Go $10 / GOAT $40 / Pro $50（官方「启动价期间的额度提升」已折算在内）。该模型在公开目录、定价页与 CLI 注册表三处同步出现，各记 +1。
+
+### Changed
+
+- 同步官方 command-code@1.77.0：请求头 `x-command-code-version` 升至 `1.77.0`。1.75.0／1.75.1／1.76.0 的官方日志分别是「新增 Mistral Large 4」「hooks 跳过 stdin 与良性写错误不再让 CLI 崩溃」「`/peek` 任务回顾图」；1.77.0 没有 changelog 条目，逐行比对 1.76.0 → 1.77.0 的 `dist/cli.mjs` 后确认变化只落在 CLI 自己的命令行参数层（云会话转正、新增 `--base`、`cloud list/status/stop` 子命令、机器可读参数判定由子串包含改为精确匹配），协议面未动——142 个 API 路径与 13 个请求头集合完全一致，`toWireMessages`／`toWireTools`／`toWirePermissionMode` 的调用点数量与形态不变。
+- 两个既有模型的月度额度跟上官方定价页：`glm-5.3-flash` 的 GOAT/Pro 从 $40/$50 提到 $60/$70，`kimi-k3` 从 $20/$30 提到 $60/$70。这类数字来自定价页的 `planAllowanceUsd` 字段，不在上游审计脚本的提取范围内，本轮靠逐行对照 84 条额度记录才发现；对照后价格表与页面已逐条一致。
+
+### Removed
+
+- 零数据保留例外名单移除 `stealth/pixel-canary` 与 `stealth/space-bunny-alpha`（22 → 20 项）。1.77.0 的 CLI 不再把两者列入 ZDR 排除集合，并把它们放进 `listSelectableModelIds()` 过滤掉的不可选择集合，因此 `supportsZeroDataRetention()` 现在对这两个 id 回答 true，与当前 CLI 一致。这推翻了 0.12.5 那轮「刻意保留」的选择——当时的前提是 1.74.3 仍把它们列在两个锚点里，该前提已随 1.77.0 消失。
+
 ## [0.12.5] - 2026-10-06
 
 ### Changed
