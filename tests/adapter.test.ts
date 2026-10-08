@@ -5356,7 +5356,7 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash'], ['off', 'low', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Synced from the command-code provider table; `src/capabilities.ts` owns the
-  // table and is currently synced to command-code@1.77.0.
+  // table and is currently synced to command-code@1.79.1.
   // Every model the CLI's provider table ships effort levels for must be present, and
   // every model without them must stay out. The 0.2.0 snapshot wrongly added ten
   // models (Kimi K2.5, MiMo V2.5, Claude Haiku 4.5, MiniMax M2.5, Muse Spark 1.2
@@ -5400,6 +5400,14 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // 1.77.0 train added. Three selectable levels; Vision and Go-tier
   // availability are pinned by their own snapshots above.
   assert.deepEqual(KNOWN_EFFORTS['mistral/mistral-large-4'], ['low', 'medium', 'high'])
+  // command-code@1.78.0 ("Add Claude Haiku 5.5 (Pro and above)") and 1.79.0
+  // ("Add Glyph Cluster as a free model, 100 requests a day") are the only
+  // registry additions in the 1.77.0 -> 1.79.1 train. Both keep selectable
+  // efforts, so neither belongs in KNOWN_THINKING_MODELS.
+  assert.deepEqual(KNOWN_EFFORTS['claude-haiku-5-5'], ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['stealth/glyph-cluster:free'], ['low', 'medium', 'high', 'xhigh'])
+  assert.ok(!KNOWN_THINKING_MODELS.has('claude-haiku-5-5'))
+  assert.ok(!KNOWN_THINKING_MODELS.has('stealth/glyph-cluster:free'))
 })
 
 test('known thinking snapshot covers reasoning models without effort levels', () => {
@@ -5502,6 +5510,11 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('xiaomi/mimo-v2.6-pro-ultraspeed'))
   // command-code@1.75.0; Vision per the official registry and inputModalities.
   assert.ok(KNOWN_IMAGE_MODELS.has('mistral/mistral-large-4'))
+  // command-code@1.78.0; Vision per the official registry and the CLI's
+  // inputModalities:["text","image"]. Its free Glyph Cluster sibling preview is
+  // text-only, so it stays out of this set.
+  assert.ok(KNOWN_IMAGE_MODELS.has('claude-haiku-5-5'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/glyph-cluster:free'))
   // Both stealth previews are retired now — Pixel Canary on 2026-10-01 and
   // Space Bunny Alpha on 2026-10-06 — so neither may linger in the Vision set.
   assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/pixel-canary'))
@@ -5543,6 +5556,8 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['meta/muse-spark-1.3-contributor'], 'go')
   // command-code@1.75.0; Mistral Large 4 is on every tier, so its minimum is Go.
   assert.equal(KNOWN_PLANS['mistral/mistral-large-4'], 'go')
+  // command-code@1.79.0; the free Glyph Cluster preview is on every tier too.
+  assert.equal(KNOWN_PLANS['stealth/glyph-cluster:free'], 'go')
   assert.equal(KNOWN_PLANS['stepfun/Step-5-Preview'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-flash'], 'go')
   assert.equal(KNOWN_PLANS['xiaomi/mimo-v2.6-pro'], 'go')
@@ -5565,6 +5580,11 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['claude-sonnet-5-5'], 'goat')
   // Pro adds Claude Sonnet/Haiku, GPT-5.x, Gemini 3.5/3.1.
   assert.equal(KNOWN_PLANS['claude-sonnet-5'], 'pro')
+  // command-code@1.78.0; Claude Haiku 5.5 is "Pro and above" — individual-go and
+  // individual-goat are false while individual-pro is true, so Pro, one tier
+  // below the Provider-only Claude Opus/Fable rows further down.
+  assert.equal(KNOWN_PLANS['claude-haiku-5-5'], 'pro')
+  assert.equal(planLabel('claude-haiku-5-5'), 'Pro')
   assert.equal(KNOWN_PLANS['gpt-5.4'], 'pro')
   assert.equal(KNOWN_PLANS['google/gemini-3.5-flash'], 'pro')
   // Provider/Max: Claude Opus/Fable and Fugu Ultra are not on lower plans.
@@ -5630,6 +5650,13 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash:free']?.free, true)
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash:free']?.expiresAt, undefined)
   assert.equal(isFreeModel('inclusionai/ling-3.1-flash:free'), true)
+  // command-code@1.79.0; the free Glyph Cluster preview carries the same
+  // permanent-style terms as its Ling predecessors — 100% off "Free while the
+  // preview lasts" with no published end date, so no `expiresAt` to lapse.
+  assert.equal(KNOWN_DEALS['stealth/glyph-cluster:free']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['stealth/glyph-cluster:free']?.free, true)
+  assert.equal(KNOWN_DEALS['stealth/glyph-cluster:free']?.expiresAt, undefined)
+  assert.equal(isFreeModel('stealth/glyph-cluster:free'), true)
   // GPT-6.1 Sol (command-code@1.71.0) ships at full price with no promotion.
   assert.equal(KNOWN_DEALS['gpt-6.1-sol'], undefined)
   // The pricing page still embeds an already-expired (2026-06-22)
@@ -5856,7 +5883,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.77.0')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.79.1')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

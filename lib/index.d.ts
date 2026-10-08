@@ -61,7 +61,7 @@ type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 //#endregion
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.77.0";
+declare const COMMAND_CODE_CLI_VERSION = "1.79.1";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.
@@ -978,7 +978,7 @@ declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.77.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.79.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table dropped
@@ -1011,7 +1011,8 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * (`deepseek/deepseek-v4.1-flash-fast`), 1.68.0 changed nothing, and 1.74.1
  * removed one (`meituan/LongCat-2.0`). The 1.74.2/1.74.3 pair changed nothing
  * here either (22 members as of 2026-10-06); 1.77.0 dropped the two retired
- * stealth previews, back to 20 members as of 2026-10-07.
+ * stealth previews, back to 20 members as of 2026-10-07, and 1.79.0 added the
+ * free `stealth/glyph-cluster:free` preview — 21 members as of 2026-10-08.
  *
  * 1.77.0 also settled the two retired stealth previews (see `KNOWN_EFFORTS`):
  * 1.74.3 still named both in the ZDR anchors, so they stayed listed here on
@@ -1049,12 +1050,13 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.77.0 (2026-10-07): 85 catalog
- * ids at 53/62/76/84 cumulative, a strict superset chain. Mistral Large 4
- * (1.75.0) is the only addition since the 1.74.3 check; the only removals since
- * 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1, Space
- * Bunny Alpha at 1.74.3). No tier ever moved, and per-entry tags below name the
- * release that added each row.
+ * Provider-tier. Re-verified at command-code@1.79.1 (2026-10-08): 87 catalog
+ * ids at 54/63/78/86 cumulative, a strict superset chain. Mistral Large 4
+ * (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
+ * added two more — Claude Haiku 5.5 at Pro and the free Glyph Cluster preview
+ * at Go — and the only removals since 1.49.0 are the two retired stealth
+ * previews (Pixel Canary at 1.73.1, Space Bunny Alpha at 1.74.3). No tier ever
+ * moved, and per-entry tags below name the release that added each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to

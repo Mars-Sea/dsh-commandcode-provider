@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.7] - 2026-10-08
+
+### Added
+
+- 同步官方 command-code@1.78.0 新增的 `claude-haiku-5-5`（Claude Haiku 5.5）：最低套餐 Pro，支持视觉与推理，五档思考强度 `low`/`medium`/`high`/`xhigh`/`max`，1 000 000 上下文；价格按提示长度分档，`≤100K` tokens 为 $0.10 入 / $0.50 出 / $0.01 缓存读 / $0.125 缓存写每 1M，`>100K` 为 $0.50 / $2.50 / $0.05 / $0.625。该模型在公开目录、定价页与 CLI 注册表三处同步出现，各记 +1。
+- 同步官方 command-code@1.79.0 新增的 `stealth/glyph-cluster:free`（Glyph Cluster）隐身预览：最低套餐 Go（全部套餐可用），纯文本、支持推理，四档思考强度 `low`/`medium`/`high`/`xhigh`，256 000 上下文；隐身预览期内免费、每天 100 次请求，官方标为 100% 折扣且没有公布结束日期，因此按「永久型」促销处理、不带 `expiresAt`，并排在模型选择器最前。
+
+### Changed
+
+- 同步官方 command-code@1.79.1：请求头 `x-command-code-version` 升至 `1.79.1`。官方日志覆盖到 1.79.0——1.78.0 是「新增 Claude Haiku 5.5（Pro 及以上）」、CLI 中文本地化（新增 `/language` 命令）与 Windows 上 Taste learning 归类崩溃的修复，1.79.0 是「新增 Glyph Cluster 免费模型，每天 100 次请求」；1.79.1 没有日志条目，逐字节比对 1.79.0 → 1.79.1 的 `dist/cli.mjs` 后确认唯一差异是 `resolveKittyKeyboard` 在 `win32` 平台跳过 Kitty 键盘协议探测（Windows 终端兼容修复）。协议面静态复核无变化：13 个请求头集合完全一致，`toWireMessages`／`toWireTools`／`toWirePermissionMode`／`knownModelSupportsZdr`／`getSupportedEfforts`／`buildModelGroups`／`listSelectableModelIds` 的调用点计数与形态不变，接口路径里唯一的新增是 CLI 自己的 `/language` 斜杠命令。
+- 零数据保留例外名单新增 `stealth/glyph-cluster:free`（20 → 21 项）：官方定价页在该行写明「Not routed under ZDR」，CLI 的排除集合同样列出它，两处证据一致。
+- 定价页额度与其余各行逐条复核对齐，价格表本次只有 `claude-haiku-5-5` 一行新增（含 `≤100K`／`>100K` 两个上下文分档），无其他行漂移。
+
 ## [0.12.6] - 2026-10-07
 
 ### Added

@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.77.0) and
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.79.1) and
  * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
  * for the extraction procedures. Keeping the snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
@@ -19,7 +19,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.77.0 bundled model
+  // Re-verified against the authoritative command-code@1.79.1 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -144,6 +144,14 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // the CLI's inputModalities:["text","image"] (see `KNOWN_IMAGE_MODELS`), and
   // Go-tier availability (see `KNOWN_PLANS`).
   'mistral/mistral-large-4': ['low', 'medium', 'high'],
+  // command-code@1.78.0 ("Add Claude Haiku 5.5 (Pro and above)") and 1.79.0
+  // ("Add Glyph Cluster as a free model, 100 requests a day") are the only
+  // registry additions in the 1.77.0 -> 1.79.1 train. Both carry selectable
+  // efforts, so neither belongs in KNOWN_THINKING_MODELS; Claude Haiku 5.5 takes
+  // the Claude family's five-level set, while the free Glyph Cluster preview
+  // stops at four and offers no `max`.
+  'claude-haiku-5-5': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'stealth/glyph-cluster:free': ['low', 'medium', 'high', 'xhigh'],
 }
 
 /**
@@ -177,6 +185,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'claude-fable-5-1',
   'claude-fable-5',
   'claude-haiku-4-5-20251001',
+  // command-code@1.78.0; Vision per the official registry and the CLI's
+  // inputModalities:["text","image"].
+  'claude-haiku-5-5',
   'claude-opus-4-7',
   'claude-opus-4-8',
   // command-code@1.64.0; Vision per the official registry and inputModalities.
@@ -256,7 +267,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.77.0` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.79.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table dropped
@@ -289,7 +300,8 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * (`deepseek/deepseek-v4.1-flash-fast`), 1.68.0 changed nothing, and 1.74.1
  * removed one (`meituan/LongCat-2.0`). The 1.74.2/1.74.3 pair changed nothing
  * here either (22 members as of 2026-10-06); 1.77.0 dropped the two retired
- * stealth previews, back to 20 members as of 2026-10-07.
+ * stealth previews, back to 20 members as of 2026-10-07, and 1.79.0 added the
+ * free `stealth/glyph-cluster:free` preview — 21 members as of 2026-10-08.
  *
  * 1.77.0 also settled the two retired stealth previews (see `KNOWN_EFFORTS`):
  * 1.74.3 still named both in the ZDR anchors, so they stayed listed here on
@@ -315,6 +327,12 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'minimax/minimax-m3-free',
   'poolside/laguna-s-2.1-free',
   'sakana/fugu-ultra',
+  // command-code@1.79.0. The free Glyph Cluster preview is the ONE entry here
+  // whose exclusion the official pricing page states in prose rather than
+  // leaving to the artifact: its tip reads "Free while the preview lasts. Up to
+  // 100 requests a day. Not routed under ZDR." The CLI's own exclusion set
+  // carries the same membership.
+  'stealth/glyph-cluster:free',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
   'xai/grok-4.5',
@@ -650,12 +668,13 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.77.0 (2026-10-07): 85 catalog
- * ids at 53/62/76/84 cumulative, a strict superset chain. Mistral Large 4
- * (1.75.0) is the only addition since the 1.74.3 check; the only removals since
- * 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1, Space
- * Bunny Alpha at 1.74.3). No tier ever moved, and per-entry tags below name the
- * release that added each row.
+ * Provider-tier. Re-verified at command-code@1.79.1 (2026-10-08): 87 catalog
+ * ids at 54/63/78/86 cumulative, a strict superset chain. Mistral Large 4
+ * (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
+ * added two more — Claude Haiku 5.5 at Pro and the free Glyph Cluster preview
+ * at Go — and the only removals since 1.49.0 are the two retired stealth
+ * previews (Pixel Canary at 1.73.1, Space Bunny Alpha at 1.74.3). No tier ever
+ * moved, and per-entry tags below name the release that added each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -666,7 +685,7 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (53) ---
+  // --- Go (54) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -732,6 +751,12 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.60.0; every tier, and listed by the Go/GOAT/Pro/Max plan
   // pages alike — the superset chain this map encodes.
   'stepfun/Step-5-Preview': 'go',
+  // command-code@1.79.0 ("Add Glyph Cluster as a free model, 100 requests a
+  // day"); the pricing page's embedded availability grants every tier
+  // (individual-go through teams-pro) — the "all":true shape shared by the Ling
+  // free models above. Its zero-credit deal (see KNOWN_DEALS) also makes it lead
+  // the picker.
+  'stealth/glyph-cluster:free': 'go',
   'tencent/hy3-paid': 'go',
   'tencent/hy4-preview': 'go',
   'thinkingmachines/inkling': 'go',
@@ -772,8 +797,12 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.62.0; GOAT and above, the same split as its Grok 4.7
   // sibling. Its two cheaper V2.6 siblings are Go, above.
   'xiaomi/mimo-v2.6-pro-ultraspeed': 'goat',
-  // --- Pro (14 more) ---
+  // --- Pro (15 more) ---
   'claude-haiku-4-5-20251001': 'pro',
+  // command-code@1.78.0 ("Add Claude Haiku 5.5 (Pro and above)"): individual-go
+  // and individual-goat are both false while individual-pro is true — the same
+  // gate as its `claude-haiku-4-5-20251001` predecessor, so Pro, not Provider.
+  'claude-haiku-5-5': 'pro',
   'claude-sonnet-4-6': 'pro',
   'claude-sonnet-5': 'pro',
   'google/gemini-3.1-flash-lite': 'pro',
@@ -987,6 +1016,14 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   // at a literal zero, which `modelPriceTable()` serves from this deal, so it
   // gets no row in the vendored price table either.
   'inclusionai/ling-3.1-flash:free': { label: 'FREE', free: true },
+  // command-code@1.79.0 ("Add Glyph Cluster as a free model, 100 requests a
+  // day"): 100% off "Free while the preview lasts", the same 100-requests-a-day
+  // cap as its Ling predecessors and likewise no published end date, so no
+  // `expiresAt`. The pricing page publishes it at a literal zero, which
+  // `modelPriceTable()` serves from this deal, so it gets no row in the vendored
+  // price table either. Unlike those free models it is NOT ZDR-routed — the
+  // page's own tip says so outright (see `KNOWN_NON_ZDR_MODELS`).
+  'stealth/glyph-cluster:free': { label: 'FREE', free: true },
   // `stealth/space-bunny-alpha` (command-code@1.65.0, 100% off "Free while the
   // stealth preview lasts", auto-applied, no published end date) left this map
   // on 2026-10-06: command-code@1.74.3 hides the model, the catalog and the

@@ -17,8 +17,8 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.77.0)', () => {
-  // Verbatim from `dist/cli.mjs` 1.77.0: `knownModelSupportsZdr(id) =
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.79.1)', () => {
+  // Verbatim from `dist/cli.mjs` 1.79.1: `knownModelSupportsZdr(id) =
   // !zo.has(resolveKnownModelId(id))`, unioned with the sibling route table's
   // exclusion set, cross-checked against the public catalog. A sync that moves
   // membership must be a deliberate diff. 1.74.1 dropped `meituan/LongCat-2.0`
@@ -26,7 +26,9 @@ test('the ZDR exception list is the CLI registry exclusion set (command-code@1.7
   // (Pixel Canary, retired 2026-10-01; Space Bunny Alpha, retired 2026-10-06)
   // stayed listed through 1.74.3 because the CLI still named them; 1.77.0 names
   // neither and filters both out of `listSelectableModelIds()`, so they left
-  // this list with it.
+  // this list with it. 1.79.0 added the free `stealth/glyph-cluster:free`
+  // preview — the one entry the pricing page itself flags "Not routed under
+  // ZDR" — bringing the set back to 21.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
@@ -39,6 +41,7 @@ test('the ZDR exception list is the CLI registry exclusion set (command-code@1.7
     'minimax/minimax-m3-free',
     'poolside/laguna-s-2.1-free',
     'sakana/fugu-ultra',
+    'stealth/glyph-cluster:free',
     'stepfun/Step-3.7-Flash',
     'stepfun/Step-5-Preview',
     'xai/grok-4.5',

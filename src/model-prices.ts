@@ -150,6 +150,7 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'claude-fable-5', rates: [10, 50, 1, 12.5], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'claude-fable-5-1', rates: [10, 50, 0.25, 12.5], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'claude-haiku-4-5', rates: [1, 5, 0.1, 1.25], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-haiku-5-5', rates: [0.1, 0.5, 0.01, 0.125], allowance: { go: 6, goat: 20, pro: 20 }, contextTiers: [{"maxContext":100000,"rates":[0.1,0.5,0.01,0.125]},{"rates":[0.5,2.5,0.05,0.625]}] },
   { id: 'claude-opus-4-6', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'claude-opus-4-7', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'claude-opus-4-8', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },

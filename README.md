@@ -231,7 +231,7 @@ Command Code can serve a request only through upstreams that retain no prompts o
 
 **Off by default.** Turn it on with the *"Zero data retention (ZDR)"* toggle (`zdr`) in the Privacy & security card, or in your profile config. How this plugin implements it:
 
-- The header is sent on **every chat request** while ZDR is on. The plugin maintains an informational exception list (`KNOWN_NON_ZDR_MODELS`, synced from the official CLI — 23 models as of 2026-09-29, e.g. `xai/grok-4.5`, `stepfun/Step-3.7-Flash`, `meta/muse-spark-1.3`). A model without an available ZDR upstream fails with `422 cmd_zdr_no_providers`; the request is never retried without the header.
+- The header is sent on **every chat request** while ZDR is on. The plugin maintains an informational exception list (`KNOWN_NON_ZDR_MODELS`, synced from the official CLI — 21 models as of 2026-10-08, e.g. `xai/grok-4.5`, `stealth/glyph-cluster:free`, `stepfun/Step-3.7-Flash`, `meta/muse-spark-1.3`). A model without an available ZDR upstream fails with `422 cmd_zdr_no_providers`; the request is never retried without the header.
 - If a refusal still happens (coverage churn, or no ZDR upstream with spare capacity at that moment), the error names the cause and how to turn ZDR off, instead of surfacing as a bare HTTP 422.
 - **ZDR usually costs more**: capacity is limited and billed at each upstream's pass-through rates, and which upstream serves a request can change per request. The session-cost readout keeps quoting the ordinary catalog rates; the real per-request price shows in Command Code's Studio usage page.
 - Works on every plan; plan credits meter ZDR requests at the plan's default allowance.
