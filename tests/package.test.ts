@@ -19,6 +19,13 @@ const pkg = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ) as PackageManifest
 
+/**
+ * 一个「裸」语义化版本号：不带任何范围操作符。
+ * 支持范围必须由若干裸版本号用 `||` 析取而成，`^`／`~`／`>=` 这类会静默放行
+ * 相邻预发布版与稳定补丁版的写法一律不可接受（issue #43 的教训）。
+ */
+const BARE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+
 test('every Harness peer and development package shares one supported release range', () => {
   const peers = pkg.peerDependencies ?? {}
   const dev = pkg.devDependencies ?? {}
@@ -31,24 +38,40 @@ test('every Harness peer and development package shares one supported release ra
   for (const name of harnessPeers) {
     assert.equal(dev[name], range, `${name} development range`)
   }
-  // caret 会放行邻近预发布和稳定补丁版，不能表达只验证一个宿主的约定。
-  assert.equal(range, '0.2.1-alpha.1', '精确版本才能阻止未验证的相邻引擎')
-  for (const version of Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})) {
-    assert.ok(
-      range === version,
-      `peer range must admit declared-compatible ${version}`,
+  // 支持范围是「已验证引擎版本」的析取：每个分支都必须是裸版本号，
+  // 于是一个分支对应且只对应一个经过引擎验证的宿主。
+  const admitted = range.split('||').map((part) => part.trim())
+  for (const part of admitted) {
+    assert.match(
+      part,
+      BARE_VERSION,
+      `peer range branch ${JSON.stringify(part)} must be a bare verified version`,
     )
   }
+  // 范围与 dshReleases 必须逐条对应：既不允许放行没有验证记录的引擎，
+  // 也不允许某个已验证引擎被范围漏掉。
+  const declared = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
+  assert.deepEqual(
+    [...admitted].sort(),
+    [...declared].sort(),
+    'the peer range must be exactly the disjunction of the declared-compatible releases',
+  )
 })
 
-test('per-release DSH compatibility names exactly the one supported release', () => {
+test('per-release DSH compatibility lists only verified releases', () => {
   // DSH STORE only restores a listing from exact per-release records under
   // dsh.compatibility.dshReleases, and a release with no record reads as
-  // `unknown`. Exactly one record ships: a stale entry for an older engine would
-  // advertise a pairing no test covers.
+  // `unknown`. DSH itself refuses to load a plugin whose @deepseek-ai/dsh*
+  // peers do not admit the running engine, so every record here must name a
+  // bare version the honest peer range also admits — never a range, and never
+  // an engine that no `test:engine` run covers.
   const releases = pkg.dsh?.compatibility?.dshReleases ?? {}
-  assert.deepEqual(Object.keys(releases), ['0.2.1-alpha.1'])
-  assert.equal(releases['0.2.1-alpha.1'], 'compatible')
+  const declared = Object.keys(releases)
+  assert.ok(declared.length > 0, 'at least one declared-compatible release')
+  for (const version of declared) {
+    assert.match(version, BARE_VERSION, `${version} must be a bare version`)
+    assert.equal(releases[version], 'compatible')
+  }
 })
 
 test('the manifest declares the same engine range it supports', () => {

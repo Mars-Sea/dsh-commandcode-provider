@@ -69,15 +69,23 @@ function verifyIsolatedInstall() {
     // 断言一个仍然存在、且本插件确实声明为 peer 的核心宿主包。dsh-invariants
     // 曾承担这个角色，但上游在 0.2.1-alpha.1 删除了整个包（npm 上从未发布该版本），
     // 因此改用 dsh-llm —— 适配器的宿主底座，任何 fresh generation 都必须解析到它。
-    const expectedPeer = `@deepseek-ai/dsh-llm@${manifest.peerDependencies['@deepseek-ai/dsh-llm']}`
-    if (!lock.includes(expectedPeer)) {
+    // 声明的 peer 是「已验证引擎版本」的析取（护栏见 tests/package.test.ts），
+    // 所以这里要在锁文件里找到其中至少一个确切版本，而不是整串范围文本。
+    const declaredPeerRange = manifest.peerDependencies['@deepseek-ai/dsh-llm']
+    const declaredPeerVersions = declaredPeerRange.split('||').map((part) => part.trim())
+    const resolvedVersions = [...new Set(
+      [...lock.matchAll(/@deepseek-ai\/dsh-llm@([^'"\s:()]+)/g)].map((match) => match[1]),
+    )]
+    const resolvedPeer = declaredPeerVersions.find((version) => resolvedVersions.includes(version))
+    if (resolvedPeer === undefined) {
       throw new Error(
-        `isolated install did not resolve the declared peer ${expectedPeer}\n`
+        'isolated install resolved no declared peer version of @deepseek-ai/dsh-llm '
+        + `(declared ${declaredPeerVersions.join(' | ')}; resolved ${resolvedVersions.join(', ') || 'none'})\n`
         + installResult.stdout
         + installResult.stderr,
       )
     }
-    process.stdout.write(`isolated install passed with pnpm ${PNPM_VERSION}\n`)
+    process.stdout.write(`isolated install passed with pnpm ${PNPM_VERSION} (dsh-llm ${resolvedPeer})\n`)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

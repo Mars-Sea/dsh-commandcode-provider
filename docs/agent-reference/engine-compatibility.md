@@ -68,26 +68,42 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `schemastery ~3.18.5-alpha.1`. A caret is doubly wrong here — it neither
   admits the `-alpha.1` prerelease nor excludes the neighbour.
   `react ^18.2.0` is unchanged by the bump and stays as it is.
+  **两个引擎并存后，这两个包同样按配对写成析取**：`cordis` 为
+  `~4.0.4 || ~4.0.5-alpha.1`，`schemastery` 为 `~3.18.4 || ~3.18.5-alpha.1`，
+  每个分支与对应引擎同批发布。注意这两个名字**不**匹配 `@deepseek-ai/dsh` /
+  `@deepseek-ai/dsh-*` 前缀，宿主 `evaluatePluginCompatibility` 根本不检查它们
+  ——判定层只看 dsh 包，这两个只在 pnpm 解析层起作用：只写单引擎版本不会让安装被
+  拒绝，却会在另一个引擎的 profile 里解析出冲突副本，所以两边必须同时覆盖。
   Note that npm's peer resolver reads the EXISTING `node_modules` tree, so a
   bump that should resolve cleanly still reports `ERESOLVE` against stale rc-era
   packages until the tree is rebuilt; `rm -rf node_modules` before judging a
   genuine conflict.
-- **The Harness peer range names exactly ONE release, and that is
-  load-bearing.** 使用精确版本 `0.2.1-alpha.1`。原 `^0.2.1-alpha.1` 会放行
-  相邻预发布版及稳定补丁版，并不等于只支持一个版本。That exactness is the point: this bundle is
-  maintained against one engine, and a range that quietly admitted a neighbour
-  is how a broken pairing stayed invisible (issue #43). A caret once pinned every
-  peer to an engine four releases old, so a fresh generation installed a second,
-  stale copy of the Harness beside the running engine instead of pairing with it;
-  worse, it made `npm test` structurally blind to engine drift, because a
-  `link:`-installed profile resolves the plugin's imports from the checkout
-  rather than from the engine. The one
-  supported range is written VERBATIM in `peerDependencies`, `devDependencies`,
-  `dsh.compatibility.dsh` and `engines.dsh`, and `tests/package.test.ts` fails if
-  those four drift apart, if the range stops admitting a release that
-  `dsh.compatibility.dshReleases` calls compatible, or if `dshReleases` grows a
-  second record. Move the range and that single record together, and only once
-  `npm run test:engine` passes against the new engine.
+- **The Harness peer range names exactly the VERIFIED releases — no more, no
+  fewer — and that is load-bearing.** 现行写法是两个精确版本的析取
+  `0.2.0-rc.2 || 0.2.1-alpha.1`。原 `^0.2.1-alpha.1` 会放行相邻预发布版及稳定
+  补丁版，并不等于只支持已验证的版本。That exactness is the point: every branch
+  is a bare version the release process actually ran `npm run test:engine`
+  against, and a range that quietly admitted a neighbour is how a broken pairing
+  stayed invisible (issue #43). A caret once pinned every peer to an engine four
+  releases old, so a fresh generation installed a second, stale copy of the
+  Harness beside the running engine instead of pairing with it; worse, it made
+  `npm test` structurally blind to engine drift, because a `link:`-installed
+  profile resolves the plugin's imports from the checkout rather than from the
+  engine. 为什么要写成两个分支：`@deepseek-ai/dsh` 的 npm `latest` 一直停在
+  `0.2.0-rc.2`（`alpha` 通道才是 `0.2.1-alpha.1`），官方桌面端放出的也是 rc 版本，
+  而宿主 `dsh-app-boot` 的 `evaluatePluginCompatibility` 会拿运行中的 dsh 版本逐条
+  比对插件的每个 `@deepseek-ai/dsh*` peer，不匹配即抛
+  `ManagementFailure('incompatible-version')` 拒绝安装——单个精确版本因此把绝大多数
+  用户挡在门外（issue #77／#78）。析取写法是唯一同时满足两边的表达：它接纳两个已验证
+  引擎，且**不**放行任何相邻版本（0.2.0-rc.1、0.2.1-alpha.2、0.2.1-rc.1、0.2.1、
+  0.3.0-alpha.1 全部被拒）。The supported range is written VERBATIM in
+  `peerDependencies`, `devDependencies`, `dsh.compatibility.dsh` and `engines.dsh`,
+  and `tests/package.test.ts` fails if those four drift apart, if any branch stops
+  being a bare version, or if the branch set stops matching
+  `dsh.compatibility.dshReleases` exactly. Move the range and those records
+  together, and only once `npm run test:engine` passes against EVERY engine in the
+  set — 脚本默认就是矩阵，逐个引擎跑完整套件，只验证其中一个等于把另一个
+  「已声明兼容」的引擎放行却无人验证。
 - **`npm run test:engine` is the only check that can see a bundle which cannot
   load on its engine** (issue #43): it resolves the newest release the manifest
   declares compatible (or `--engine <dir>`, or `$DSH_ENGINE`), copies this

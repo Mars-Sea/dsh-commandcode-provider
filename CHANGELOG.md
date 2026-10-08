@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.8] - 2026-10-08
+
+### Changed
+
+- **引擎配对从「只支持 `0.2.1-alpha.1`」改为同时支持 `0.2.0-rc.2` 与 `0.2.1-alpha.1`，业务代码零改动。** 15 个 `@deepseek-ai/dsh-*` peer 写成两个已验证版本的析取 `0.2.0-rc.2 || 0.2.1-alpha.1`；`@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery` 同批写成 `~4.0.4 || ~4.0.5-alpha.1` 与 `~3.18.4 || ~3.18.5-alpha.1`；`dsh.compatibility.dsh`、`engines.dsh` 与 `devDependencies` 逐字同步；`dsh.compatibility.dshReleases` 增补 `0.2.0-rc.2` 记录。**写成析取而不是宽范围是刻意的**：每个分支都是裸版本号，因此 `0.2.0-rc.1`、`0.2.1-alpha.2`、`0.2.1-rc.1`、`0.2.1`、`0.3.0-alpha.1` 等相邻版本仍然全部被拒——issue #43 的教训（未验证的邻居被静默放行）依旧被挡住。
+- `npm run test:engine` 改为**引擎矩阵**：默认对 `dshReleases` 里声明的每个引擎各跑一遍完整套件（ESM 链接、静态具名导入审计、客户端 `require()` 种子审计、22 个流终态场景、网关事实隔离、持久化图片卸载契约、Config 易变契约），只在一个引擎上全绿不再算通过。`tests/package.test.ts` 的护栏同步升级为「peer 范围必须**恰好**等于已声明兼容版本的析取，且每个分支必须是裸版本号」，`scripts/verify-isolated-install.mjs` 的 peer 断言改为按版本而不是按范围文本比对锁文件。
+
+### Fixed
+
+- **修掉「按官方默认方式装 dsh 的用户装不上本插件」。** `@deepseek-ai/dsh` 的 npm `latest` 一直停在 `0.2.0-rc.2`（`0.2.1-alpha.1` 只挂在 `alpha` 通道），官方桌面端放出的也是 rc 版本；而宿主 `dsh-app-boot` 的 `evaluatePluginCompatibility` 会拿运行中的 dsh 版本逐条比对插件的每个 `@deepseek-ai/dsh*` peer，不匹配即抛 `ManagementFailure('incompatible-version')` 当场拒绝安装。0.12.4～0.12.7 因此对 rc.2 用户完全无法安装（issue #77／#78）；现在两条通道都能装。
+
 ## [0.12.7] - 2026-10-08
 
 ### Added

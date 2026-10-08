@@ -16,8 +16,10 @@
  * proven to link before it ships.
  *
  * What it does, in order:
- *   1. Resolves the engine — `--engine <dir>`, `$DSH_ENGINE`, or the highest
- *      release `package.json` declares `compatible`, freshly installed.
+ *   1. Resolves the engine — `--engine <dir>`, `$DSH_ENGINE`, or EVERY release
+ *      `package.json` declares `compatible`, freshly installed and checked in
+ *      turn. A peer range that admits two engines is only honest while both of
+ *      them pass here.
  *   2. Copies this checkout's PUBLISHED surface into a scratch tree whose
  *      `node_modules` are the engine's, then imports the plugin there — the
  *      link check, and the assertion that `name`/`apply`/`Config` survive.
@@ -45,9 +47,10 @@
  *      工具断流和尾部错误；只使用合成响应，不访问提供商。
  *
  * Usage:
- *   node scripts/verify-engine-load.mjs                     # install + check
+ *   node scripts/verify-engine-load.mjs                     # matrix: install + check every declared release
  *   node scripts/verify-engine-load.mjs --engine /path/to/dsh-install
  *   node scripts/verify-engine-load.mjs --engine ~/.dsh/profiles/web
+ *   node scripts/verify-engine-load.mjs --version 0.2.0-rc.2
  *
  * Exit codes: 0 the bundle loads on the engine; 1 a check failed; 2 the engine
  * could not be resolved or installed, so "could not run" never reads as
@@ -92,16 +95,16 @@ function warn(message) {
   warnings.push(message)
 }
 
-/** Print the report and exit with the aggregate verdict. */
+/** Print one engine's report and return whether it passed; the matrix in main owns the exit code. */
 function report(engine) {
   for (const message of warnings) process.stdout.write(`  warn  ${message}\n`)
   if (failures.length === 0) {
     process.stdout.write(`engine-load smoke passed against dsh ${engine}\n`)
-    process.exit(0)
+    return true
   }
   for (const message of failures) process.stderr.write(`  FAIL  ${message}\n`)
   process.stderr.write(`engine-load smoke FAILED against dsh ${engine} (${failures.length})\n`)
-  process.exit(1)
+  return false
 }
 
 /** Leave the process with the "could not run" verdict. */
@@ -165,12 +168,18 @@ function compareVersions(a, b) {
   return 0
 }
 
-/** The newest release `package.json` claims to support. */
-function declaredEngineVersion() {
+/**
+ * Every release `package.json` claims to support, oldest first.
+ *
+ * 这里返回的是本插件对用户作出的全部兼容承诺，因此每一个都要跑完整套检查：
+ * 只验证其中一个，等于把另一个「已声明兼容」的引擎放行给用户却无人验证，
+ * 正是 issue #43 那种绿着发出去的坏配对。
+ */
+function declaredEngineVersions() {
   const pkg = JSON.parse(readFileSync(join(repositoryDir, 'package.json'), 'utf8'))
   const releases = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
   if (releases.length === 0) abort('package.json declares no dsh.compatibility.dshReleases')
-  return releases.sort(compareVersions).at(-1)
+  return releases.sort(compareVersions)
 }
 
 /**
@@ -886,10 +895,9 @@ async function checkGatewayRequestFacts(staged, engineModules) {
   }
 }
 
-/** Run every check against one resolved engine. */
-async function verify(argv) {
-  const options = parseArgs(argv)
-  const version = options.version ?? (options.engine === undefined ? declaredEngineVersion() : undefined)
+/** Run every check against one already-resolved engine. Returns whether that engine passed. */
+async function verify(options) {
+  const version = options.version ?? (options.engine === undefined ? declaredEngineVersions().at(-1) : undefined)
   let engineRoot = options.engine
   let scratch
   let installed
@@ -915,11 +923,40 @@ async function verify(argv) {
     if (version !== undefined && engine.version !== version) {
       warn(`engine reports ${engine.version}, expected ${version}`)
     }
-    report(engine.version)
+    return report(engine.version)
   } finally {
     if (scratch !== undefined && !options.keep) rmSync(scratch, { recursive: true, force: true })
     if (installed !== undefined && !options.keep) rmSync(installed, { recursive: true, force: true })
   }
 }
 
-await verify(process.argv.slice(2))
+/**
+ * 默认对 package.json 声明兼容的**每一个**引擎各跑一遍完整检查（矩阵）；
+ * `--engine` / `--version` 仍可把范围收窄到单个引擎。
+ */
+async function main(argv) {
+  const options = parseArgs(argv)
+  if (options.engine !== undefined || options.version !== undefined) {
+    process.exit((await verify(options)) ? 0 : 1)
+  }
+  const versions = declaredEngineVersions()
+  let passed = true
+  for (const [index, version] of versions.entries()) {
+    if (index > 0) process.stdout.write('\n')
+    process.stdout.write(`===== 引擎矩阵 ${index + 1}/${versions.length}: dsh ${version} =====\n`)
+    // 每个引擎独立结算：上一个引擎的失败不得污染下一个的判定。
+    failures.length = 0
+    warnings.length = 0
+    passed = (await verify({ ...options, version })) && passed
+  }
+  if (versions.length > 1) {
+    process.stdout.write(
+      passed
+        ? `engine-load smoke passed on all ${versions.length} declared-compatible engines (${versions.join(', ')})\n`
+        : `engine-load smoke FAILED on at least one of ${versions.length} declared-compatible engines (${versions.join(', ')})\n`,
+    )
+  }
+  process.exit(passed ? 0 : 1)
+}
+
+await main(process.argv.slice(2))
