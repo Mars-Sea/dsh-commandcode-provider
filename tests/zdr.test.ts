@@ -17,10 +17,10 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the CLI registry exclusion set (command-code@1.79.1)', () => {
-  // Verbatim from `dist/cli.mjs` 1.79.1: `knownModelSupportsZdr(id) =
-  // !zo.has(resolveKnownModelId(id))`, unioned with the sibling route table's
-  // exclusion set, cross-checked against the public catalog. A sync that moves
+test('the ZDR exception list is the CLI registry exclusion set (command-code@1.79.2)', () => {
+  // Re-verified at `dist/cli.mjs` 1.79.2: the negated canonical-ID membership
+  // predicates retain the same union across both route tables, cross-checked
+  // against the public catalog. A sync that moves
   // membership must be a deliberate diff. 1.74.1 dropped `meituan/LongCat-2.0`
   // from both anchors, so it is no longer listed. Both retired stealth previews
   // (Pixel Canary, retired 2026-10-01; Space Bunny Alpha, retired 2026-10-06)

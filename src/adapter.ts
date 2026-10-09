@@ -85,7 +85,7 @@ export { DEFAULT_MAX_OUTPUT_TOKENS, MODEL_CATALOG_TTL_MS } from './gateway-facts
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-export const COMMAND_CODE_CLI_VERSION = '1.79.1'
+export const COMMAND_CODE_CLI_VERSION = '1.79.2'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**

@@ -50,6 +50,13 @@ test('a published cache-write rate survives the table', () => {
   const sonnet = byId.get('claude-sonnet-4-6')
   assert.ok(sonnet, 'claude-sonnet-4-6 should be priced')
   assert.equal(sonnet.cacheWriteCost, 3.75)
+  // 2026-10-09 官网将 Sonnet 5.5 缓存读取降至 $0.10/百万词元，其余费率不变。
+  const sonnet55 = byId.get('claude-sonnet-5-5')
+  assert.ok(sonnet55)
+  assert.deepEqual(
+    [sonnet55.inputCost, sonnet55.outputCost, sonnet55.cacheReadCost, sonnet55.cacheWriteCost],
+    [2, 10, 0.1, 2.5],
+  )
 })
 
 test('time-of-day models carry a peak override and flat models do not', () => {
@@ -166,6 +173,9 @@ test('per-model allowances resolve by the same slug rules as prices', () => {
   // Vendor-prefixed catalog id → the page's unprefixed slug.
   assert.deepEqual(modelAllowanceFor('xai/grok-4.7'), { go: 6, goat: 20, pro: 30 })
   assert.deepEqual(modelAllowanceFor('claude-sonnet-5-5'), { go: 6, goat: 10, pro: 20 })
+  // 2026-10-09 定价页与 GOAT/Pro 套餐页一致；额度按目录 ID 提供给设置页。
+  assert.deepEqual(modelAllowanceFor('claude-haiku-5-5'), { go: 6, goat: 20, pro: 30 })
+  assert.deepEqual(modelAllowanceFor('moonshotai/Kimi-K3'), { go: 8, goat: 20, pro: 30 })
   // Unknown ids answer undefined rather than a neighbouring model's figure.
   assert.equal(modelAllowanceFor('a-model-from-the-future'), undefined)
   assert.equal(modelAllowanceFor(''), undefined)

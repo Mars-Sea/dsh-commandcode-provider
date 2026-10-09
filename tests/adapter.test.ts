@@ -3106,6 +3106,10 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
   assert.equal(modelVisibleInPlan('deepseek/deepseek-v4-pro', { tierWeight: 0, onDemandCredits: 0 }), true)
   assert.equal(modelVisibleInPlan('claude-sonnet-5', { tierWeight: 0, onDemandCredits: 0 }), false)
   assert.equal(modelVisibleInPlan('claude-sonnet-5', { tierWeight: 2, onDemandCredits: 0 }), true)
+  // Haiku 5.5 is included from GOAT upward at zero on-demand balance (1.79.2).
+  assert.equal(modelVisibleInPlan('claude-haiku-5-5', { tierWeight: 0, onDemandCredits: 0 }), false)
+  assert.equal(modelVisibleInPlan('claude-haiku-5-5', { tierWeight: 1, onDemandCredits: 0 }), true)
+  assert.equal(modelVisibleInPlan('claude-haiku-5-5', { tierWeight: 2, onDemandCredits: 0 }), true)
   assert.equal(modelVisibleInPlan('claude-opus-4-8', { tierWeight: 4, onDemandCredits: 0 }), true)
 })
 
@@ -5580,11 +5584,9 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['claude-sonnet-5-5'], 'goat')
   // Pro adds Claude Sonnet/Haiku, GPT-5.x, Gemini 3.5/3.1.
   assert.equal(KNOWN_PLANS['claude-sonnet-5'], 'pro')
-  // command-code@1.78.0; Claude Haiku 5.5 is "Pro and above" — individual-go and
-  // individual-goat are false while individual-pro is true, so Pro, one tier
-  // below the Provider-only Claude Opus/Fable rows further down.
-  assert.equal(KNOWN_PLANS['claude-haiku-5-5'], 'pro')
-  assert.equal(planLabel('claude-haiku-5-5'), 'Pro')
+  // command-code@1.79.2 lowers Haiku 5.5's minimum plan from Pro to GOAT.
+  assert.equal(KNOWN_PLANS['claude-haiku-5-5'], 'goat')
+  assert.equal(planLabel('claude-haiku-5-5'), 'GOAT')
   assert.equal(KNOWN_PLANS['gpt-5.4'], 'pro')
   assert.equal(KNOWN_PLANS['google/gemini-3.5-flash'], 'pro')
   // Provider/Max: Claude Opus/Fable and Fugu Ultra are not on lower plans.
@@ -5883,7 +5885,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.79.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.79.2')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

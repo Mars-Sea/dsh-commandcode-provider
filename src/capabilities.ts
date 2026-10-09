@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.79.1) and
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.79.2) and
  * the official plan/pricing/model docs; see the dsh-commandcode-upstream skill
  * for the extraction procedures. Keeping the snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
@@ -19,7 +19,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.79.1 bundled model
+  // Re-verified against the authoritative command-code@1.79.2 bundled model
   // table (dist/cli.mjs, the provider effort map): exactly these models carry
   // selectable efforts. Models marked 'reasoning:!0' without efforts
   // (e.g. Tencent Hy3, GLM-5/5.1/5.2-Fast)
@@ -267,7 +267,7 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
 
 /**
  * Models WITHOUT a zero-data-retention upstream, per the official CLI's own
- * registry (`command-code@1.79.1` `dist/cli.mjs`): `modelSupportsZdr(id)` is
+ * registry (`command-code@1.79.2` `dist/cli.mjs`): `modelSupportsZdr(id)` is
  * exactly `!nonZdrSet.has(canonicalize(id))`, and `knownModelSupportsZdr`
  * carries the same membership in the sibling route table — the UNION of both
  * is this set. Reading only the sibling route table dropped
@@ -668,13 +668,14 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.79.1 (2026-10-08): 87 catalog
- * ids at 54/63/78/86 cumulative, a strict superset chain. Mistral Large 4
+ * Provider-tier. Re-verified at command-code@1.79.2 (2026-10-09): 87 catalog
+ * ids at 54/64/78/86 cumulative, a strict superset chain. Mistral Large 4
  * (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
- * added two more — Claude Haiku 5.5 at Pro and the free Glyph Cluster preview
- * at Go — and the only removals since 1.49.0 are the two retired stealth
- * previews (Pixel Canary at 1.73.1, Space Bunny Alpha at 1.74.3). No tier ever
- * moved, and per-entry tags below name the release that added each row.
+ * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.
+ * 1.79.2 lowers Haiku 5.5's minimum plan to GOAT; every other tier is unchanged.
+ * The only removals since 1.49.0 are the two retired stealth previews (Pixel
+ * Canary at 1.73.1, Space Bunny Alpha at 1.74.3). Per-entry tags below name the
+ * releases that added or moved each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -778,7 +779,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'zai-org/GLM-5.2': 'go',
   'zai-org/GLM-5.2-Fast': 'go',
   'zai-org/GLM-5.3': 'go',
-  // --- GOAT (9 more) ---
+  // --- GOAT (10 more) ---
+  // command-code@1.79.2 lowers the 1.78.0 Pro gate to GOAT: individual-go
+  // remains false, individual-goat and all higher tiers are true.
+  'claude-haiku-5-5': 'goat',
   // command-code@1.68.0; individual-go false, individual-goat true — "Available
   // on GOAT and above", one tier ABOVE its `claude-sonnet-5` predecessor, which
   // sits in the Pro block below.
@@ -797,12 +801,8 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.62.0; GOAT and above, the same split as its Grok 4.7
   // sibling. Its two cheaper V2.6 siblings are Go, above.
   'xiaomi/mimo-v2.6-pro-ultraspeed': 'goat',
-  // --- Pro (15 more) ---
+  // --- Pro (14 more) ---
   'claude-haiku-4-5-20251001': 'pro',
-  // command-code@1.78.0 ("Add Claude Haiku 5.5 (Pro and above)"): individual-go
-  // and individual-goat are both false while individual-pro is true — the same
-  // gate as its `claude-haiku-4-5-20251001` predecessor, so Pro, not Provider.
-  'claude-haiku-5-5': 'pro',
   'claude-sonnet-4-6': 'pro',
   'claude-sonnet-5': 'pro',
   'google/gemini-3.1-flash-lite': 'pro',

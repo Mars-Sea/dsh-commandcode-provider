@@ -19,14 +19,17 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     themselves are NOT a reliable source since the 2026-09-30 reformat**: `/docs/plans/go|goat|pro` now emit
     a rendered `minPlanName` instead of an availability map, `/docs/plans/max` dropped its table entirely,
     and `/docs/plans/provider` became the Provider API reference. Strict superset chain; every catalog ID
-    covered exactly once (re-verified at command-code@1.79.1, 2026-10-08 — the public catalog serves 87
+    covered exactly once (re-verified at command-code@1.79.2, 2026-10-09 — the public catalog serves 87
     models: `stealth/pixel-canary` left it when 1.73.1 retired that stealth preview, `stealth/space-bunny-alpha`
     followed when 1.74.3 hid it, `mistral/mistral-large-4` joined in 1.75.0, and the 1.78.0/1.79.0 pair added
-    `claude-haiku-5-5` on Pro and the free `stealth/glyph-cluster:free` on Go — both stealth previews have now ended.
+    `claude-haiku-5-5` on Pro and the free `stealth/glyph-cluster:free` on Go. The retired previews above are
+    Pixel Canary and Space Bunny Alpha; Glyph Cluster remains active.
     `gpt-6.1-sol` (1.71.0) is the first **`max`** member: every lower tier false, only
     `individual-max`/`individual-ultra`/`teams-pro` true. `inclusionai/ling-3.1-flash:free` (1.70.0) is `go`.
-    No tier moved, taking the map to 54/63/78/86/87 — two removals then three additions, so the chain still
-    holds. At command-code@1.77.0 (2026-10-07) the catalog served 85 and read 53/62/76/84/85, unchanged from
+    1.79.2 将 Haiku 5.5 的最低套餐从 Pro 下调至 GOAT，其他模型分层不变；累计可见数由
+    54/63/78/86/87 变为 54/64/78/86/87，严格递增链仍成立。GOAT 套餐页明确列出 Haiku 5.5
+    的 $20 月额度，Pro 页为 $30；公开目录没有新增或删除。
+    At command-code@1.77.0 (2026-10-07) the catalog served 85 and read 53/62/76/84/85, unchanged from
     the 1.74.1 check on 2026-10-03; at
     command-code@1.73.0 (2026-10-01) it served 86 and read 54/63/77/85/86.
     The tiers the ladder now carries are `individual-{go,go-v1,goat,pro,pro-v1,provider,max,ultra}`; the

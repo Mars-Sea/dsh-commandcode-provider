@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.9] - 2026-10-09
+
+### Changed
+
+- 同步官方 command-code@1.79.2，请求头 `x-command-code-version` 升至 `1.79.2`。Claude Haiku 5.5 的最低套餐从 Pro 下调至 GOAT，GOAT 用户可在模型选择器中看到该模型，累计分层由 54/63/78/86/87 变为 54/64/78/86/87。
+- 同步官网价格与额度：Haiku 5.5 的 Pro 月额度 $20 → $30（GOAT 保持 $20）；Sonnet 5.5 的缓存读取单价 $0.20 → $0.10/百万词元；Kimi K3 的 GOAT／Pro 月额度 $60／$70 → $20／$30。这些额度从套餐月度池中扣除，不是额外赠送额度，也不授予 Provider API 权限。
+- 公开目录仍为 87 个模型；思考强度、视觉能力、订阅计划、促销、峰时规则与 21 项零数据保留例外未发现变化。CLI 请求、消息／工具转换、鉴权与登录函数静态对照未发现协议变化，本轮未进行登录后的实际生成验证。
+
 ## [0.12.8] - 2026-10-08
 
 ### Changed

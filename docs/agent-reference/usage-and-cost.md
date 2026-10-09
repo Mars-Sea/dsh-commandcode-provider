@@ -163,7 +163,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   carries the page's `planAllowanceUsd` as `allowance: { go?, goat, pro }` — dollars
   per MONTH, not per million tokens, so it never enters the price table.
   `modelAllowanceFor(catalogId)` resolves it through the same slug rules the
-  prices use. 2026-09-30 已同步官网 Go、GOAT、Pro 额度；原有 83 行价格及 GOAT／Pro 数值无变化。
+  prices use. 2026-10-09 复核 command-code@1.79.2 与官网：Haiku 5.5 的 Pro 月额度
+  $20 → $30（GOAT 保持 $20）；Kimi K3 的 GOAT／Pro 月额度 $60／$70 → $20／$30。
+  Sonnet 5.5 缓存读取单价 $0.20 → $0.10/百万词元，其余费率不变。定价页与 GOAT／Pro 页交叉确认。
   零额度仍显示零；缺失额度不补邻档数字，套餐额度不授予 Provider API 权限。
   同步脚本遇到未知字段、无效额度或双来源不一致时拒绝生成和写入。
   `allowanceTierForWeight()` maps a subscription tier
