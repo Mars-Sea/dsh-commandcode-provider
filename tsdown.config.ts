@@ -10,9 +10,9 @@ import { defineConfig } from 'tsdown'
  * that declares `dsh.client` + `exports["./client"]`; the artifact must call
  * `window.__ModuleLoader__.load({ id, factory })` — the same handoff shape the
  * harness's own client packages emit (see clientBundle() in the harness
- * packages/client/tsdown.client.ts). The client half only imports
- * `@deepseek-ai/cordis` (a platform module resolved from the loader's module
- * table at runtime), so it stays external here too.
+ * packages/client/tsdown.client.ts). The client half imports React (`react`,
+ * `react/jsx-runtime`) and the UI primitives the Web frontend already seeds,
+ * so those stay external and resolve from the loader's module table at runtime.
  */
 const lib = defineConfig({
   entry: ['src/index.ts'],
@@ -46,9 +46,11 @@ const client = defineConfig({
   sourcemap: true,
   dts: false,
   clean: false,
-  // Only platform/seed modules and host-shipped client bundles are resolvable
-  // from the loader's module table at runtime; anything else must stay
-  // external (a cross-plugin value import would be a build error upstream).
+  // Only platform/seed modules are resolvable from the loader's module table
+  // at runtime, so exactly those stay external. Every other import must be a
+  // type-only import (erased here) or a bundled local module: a runtime value
+  // import of a non-seeded package fails the client `require()` audit in
+  // scripts/verify-engine-load.mjs.
   deps: {
     neverBundle: [
       '@deepseek-ai/cordis',

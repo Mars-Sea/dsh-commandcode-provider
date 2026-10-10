@@ -11,6 +11,12 @@ import type { RequestTiming } from './request-timing.ts'
 class ConsumerStreamClosed extends Error {}
 
 /**
+ * 读循环唤醒闸门的标记值：底层 read() 既不结算、取消也叫不醒时，由闸门结束这次等待。
+ * 它不是错误，只在读循环内部出现，用来把「读取完成」与「读取卡住」区分开。
+ */
+const READ_STALLED = Symbol('readStalled')
+
+/**
  * 异步生成器的 return 会排在正在等待的 next 后面，因此必须先通过独立信号
  * 唤醒当前读取，再让生成器执行 finally。消费方已结束时不再交付用量或错误。
  */
@@ -82,7 +88,13 @@ async function* readResponse(response: Response, context: StreamResponseContext)
     try { void reader.cancel().catch(() => undefined) }
     catch { /* 已释放的读取器不影响已决定的终止结果。 */ }
   }
-  const onAbort = () => cancelReader()
+  // 读取唤醒闸门：空闲计时器与取消信号都先解开它，再尽力取消底层读取。合规流上
+  // cancel() 自己就会以 done 结算挂起的 read()；但被包装或被垫片替换的 body 可能
+  // 既不给结果也不响应取消，只依赖 cancel() 会让空闲期限、调用者取消和消费方结束
+  // 三条路径一起卡死。闸门让这三条路径始终有界，且不改变正常读取的顺序。
+  let openGate: (() => void) | undefined
+  const wakeRead = () => openGate?.()
+  const onAbort = () => { wakeRead(); cancelReader() }
   const decoder = new TextDecoder()
   let buffer = ''
 
@@ -99,15 +111,17 @@ async function* readResponse(response: Response, context: StreamResponseContext)
   // connection (the API keeps the socket open between reasoning/text
   // bursts). The default (300s) is deliberately generous — frontier
   // reasoning models can legitimately stay silent for minutes while
-  // thinking, and the official CLI sets no idle cap at all. reader.cancel()
-  // unblocks a pending read(), which the loop then turns into a TIMEOUT
-  // failure instead of hanging forever.
+  // thinking, and the official CLI sets no idle cap at all. Firing opens the
+  // read gate — so the loop ends even for a reader that ignores cancel() —
+  // and best-effort cancels the underlying read; the loop turns that into a
+  // TIMEOUT failure instead of hanging forever.
   let idleTimer: ReturnType<typeof setTimeout> | undefined
   let idleFired = false
   const armIdle = () => {
     if (idleTimer !== undefined) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
       idleFired = true
+      wakeRead()
       cancelReader()
     }, streamIdleTimeoutMs)
   }
@@ -117,6 +131,13 @@ async function* readResponse(response: Response, context: StreamResponseContext)
       idleTimer = undefined
     }
   }
+  /** 空闲期限结束读循环时的唯一错误文本；读取结算与读取卡住两条路径共用。 */
+  const idleTimeoutError = () => bilingual(
+    'TIMEOUT',
+    `Command Code API stream from ${apiBase} was idle for ${streamIdleTimeoutMs}ms`
+    + ' (no events) and was treated as a dead connection',
+    `Command Code API 流式响应已 ${streamIdleTimeoutMs} 毫秒无任何事件，被判定为死连接——长思考模型可在设置中调大流空闲超时`,
+  )
 
   const asm = createBlockAssembler()
   let finish: Extract<StreamChunk, { type: 'finish' }> | undefined
@@ -124,6 +145,16 @@ async function* readResponse(response: Response, context: StreamResponseContext)
   let usageEmitted = false
   let endRecorded = false
   let protocolStopped = false
+  /** 读循环收束（读到 EOF 或读取卡住）共用的诊断事实，两处记录字段保持一致。 */
+  const eofFacts = () => ({
+    chunks: chunkCount,
+    bytes: totalBytes,
+    silentMs: Date.now() - lastChunkAt,
+    totalMs: Date.now() - streamStartedAt,
+    finishSeen: finish !== undefined,
+    idleFired,
+    buffered: buffer.length,
+  })
   // Do not publish success until the assembled answer has been checked.
   // DSH converts an adapter throw into an error finish; throwing AFTER a
   // success finish would violate its single-terminal-event contract.
@@ -156,10 +187,16 @@ async function* readResponse(response: Response, context: StreamResponseContext)
   try {
     for (;;) {
       signal?.throwIfAborted()
-      let read: ReadableStreamReadResult<Uint8Array>
+      let read: ReadableStreamReadResult<Uint8Array> | typeof READ_STALLED
+      // 每次读取换一个新闸门：上一轮的闸门一旦解开就不再代表这次等待。
+      const gate = new Promise<typeof READ_STALLED>(resolve => { openGate = () => resolve(READ_STALLED) })
       armIdle()
       try {
-        read = await reader.read()
+        const pending = reader.read()
+        // 闸门先到时这个读取会被放弃：它可能永不结算，也可能迟到以「读取器已释放」
+        // 拒绝。结果已经不再需要，挂一个空 catch 免得它升级成未处理拒绝（Node 默认致命）。
+        void pending.catch(() => undefined)
+        read = await Promise.race([pending, gate])
       } catch (error: unknown) {
         // A mid-stream transport failure (connection reset, TLS teardown)
         // surfaces here. Caller cancellation propagates as-is.
@@ -178,6 +215,14 @@ async function* readResponse(response: Response, context: StreamResponseContext)
         )
       } finally {
         clearIdle()
+        openGate = undefined
+      }
+      if (read === READ_STALLED) {
+        // 期限或取消叫不醒底层读取：闸门自己结束等待。取消优先——调用者取消必须
+        // 原样传播，不能被记成超时失败；只有在没有取消时才按空闲期限失败。
+        trace.record('eof', { ...eofFacts(), readStalled: true })
+        signal?.throwIfAborted()
+        throw idleTimeoutError()
       }
       signal?.throwIfAborted()
       const { done, value } = read
@@ -185,23 +230,8 @@ async function* readResponse(response: Response, context: StreamResponseContext)
         // The idle watchdog cancels the reader to unblock a stalled read;
         // cancel() resolves a pending read() as done, so a done here after
         // the watchdog fired is a timeout, not a normal stream end.
-        trace.record('eof', {
-          chunks: chunkCount,
-          bytes: totalBytes,
-          silentMs: Date.now() - lastChunkAt,
-          totalMs: Date.now() - streamStartedAt,
-          finishSeen: finish !== undefined,
-          idleFired,
-          buffered: buffer.length,
-        })
-        if (idleFired) {
-          throw bilingual(
-            'TIMEOUT',
-            `Command Code API stream from ${apiBase} was idle for ${streamIdleTimeoutMs}ms`
-            + ' (no events) and was treated as a dead connection',
-            `Command Code API 流式响应已 ${streamIdleTimeoutMs} 毫秒无任何事件，被判定为死连接——长思考模型可在设置中调大流空闲超时`,
-          )
-        }
+        trace.record('eof', eofFacts())
+        if (idleFired) throw idleTimeoutError()
         if (buffer.trim()) {
           // The final line may lack its trailing newline; it uses the same
           // terminal validation as events parsed in the line loop.

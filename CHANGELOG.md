@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.10] - 2026-10-10
+
+### Changed
+
+- **引擎兼容范围增加 `0.2.1-alpha.2`，业务代码零改动。** 15 个 `@deepseek-ai/dsh-*` peer 的析取由 `0.2.0-rc.2 || 0.2.1-alpha.1` 扩为 `0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2`，`dsh.compatibility.dsh`、`engines.dsh`、`devDependencies`、`package-lock.json` 与 `dsh.compatibility.dshReleases` 同批同步；既有两个分支保留，`@deepseek-ai/cordis`（`~4.0.4 || ~4.0.5-alpha.1`）与 `@deepseek-ai/schemastery`（`~3.18.4 || ~3.18.5-alpha.1`）不用改——alpha.2 与 alpha.1 同批发布的正是这两个版本。逐文件对比 alpha.1 → alpha.2 的公开源码后确认无需改代码：`RequestMessage`／`GenerateOptions`／`ContentBlock`／`LlmError` 结构未变，Agent 事件、设置、凭据、附件与 Typert 严格描述符未变，五个客户端插槽的声明与 Web 预置模块表也未变。
+- alpha.2 有三处宿主内部行为变化，插件按现有接口继续工作，边界已记入参考文档：模型调用准备新增可选回调 `prepareCall(config, signal?, configure?)`（普通适配器不必调用）、请求准备完成后会刷新运行时上下文、代理卸载改为先停流再排空事件。上游 `idleWatchdog` 那处「挂起读取也能按期结束」的修复**不覆盖**插件自己的读流实现，因此本轮按同一目标单独补齐（见下方 Fixed）。
+- `npm run test:install` 改为**逐引擎矩阵**：每个已声明兼容版本各建一个全新的 pnpm 10.34.5 generation，安装时把该版本的必需 Harness peer 一起钉死，再断言锁文件解析出的 `@deepseek-ai/dsh-llm` 恰好是目标版本。此前单次安装只会命中范围里最新的那个分支，全绿并不能证明另外两个引擎装得上。
+
+### Fixed
+
+- **读取卡住的响应不再拖住收束。** 读循环每次读取改用一个「唤醒闸门」：空闲期限到期与调用者取消都先解开闸门，再尽力取消底层读取。此前只有 `reader.cancel()` 能把挂起的 `read()` 唤醒，遇到被包装或被垫片替换、既不结算读取也不响应取消的响应体时，空闲期限、调用者取消和消费方 `return()` 三条路径会一起卡死——期限到了不报错，取消也不返回。现在闸门自己结束等待：调用者取消原样传播（归类 `aborted`），否则以既有 `TIMEOUT` 失败；被放弃的读取结果丢弃，其迟到拒绝就地吞掉（真实读取器在释放锁时会以 `Invalid state: Releasing reader` 拒绝挂起的读取），读取锁仍只释放一次。`tests/adapter.test.ts` 新增三个用例固定这三种收束。
+
+### 已知边界
+
+- 真实引擎检查通过的是发布入口加载、静态具名导入、客户端 `require()` 种子、易变设置契约与 22 个流终态场景；浏览器实际渲染、真实账号请求、卸载期间最终事件排空与长期运行仍需实际环境验收。
+
+### 刻意未采纳
+
+- `systemPromptUpdate: 'in-history'`（历史内系统提示替换）与原生工具延迟激活语义：插件继续用前导系统提示与 `addition-only`（仅新增）工具声明，每次请求发送完整活跃工具列表。能力标记与实际 wire 行为必须一致，未实现前不宣告。
+- 新版 `prepareCall` 的可选准备回调：它是给需要注入辅助调用元数据的场景用的，本适配器不使用第三参数即可保持既有行为。
+
 ## [0.12.9] - 2026-10-09
 
 ### Changed

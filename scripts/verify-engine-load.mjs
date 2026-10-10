@@ -12,14 +12,14 @@
  * rather than from the engine. A named import of an absent export is a
  * link-time failure, so no amount of runtime testing short of importing the
  * bundle from a tree whose peers ARE the engine can see it. The plugin now
- * declares exactly ONE supported engine, so this is also where a peer bump is
- * proven to link before it ships.
+ * declares a fixed set of supported engines, so this is also where a peer bump
+ * is proven to link before it ships.
  *
  * What it does, in order:
  *   1. Resolves the engine — `--engine <dir>`, `$DSH_ENGINE`, or EVERY release
  *      `package.json` declares `compatible`, freshly installed and checked in
- *      turn. A peer range that admits two engines is only honest while both of
- *      them pass here.
+ *      turn. A peer range that admits several engines is only honest while all
+ *      of them pass here.
  *   2. Copies this checkout's PUBLISHED surface into a scratch tree whose
  *      `node_modules` are the engine's, then imports the plugin there — the
  *      link check, and the assertion that `name`/`apply`/`Config` survive.

@@ -5152,6 +5152,139 @@ test('stream() fails with TIMEOUT when the stream stalls past streamIdleTimeoutM
   )
 })
 
+/**
+ * 读取永不结算、取消也不结算的响应体：模拟被包装或被垫片替换的 body。
+ *
+ * 合规的 `ReadableStream` 上，`reader.cancel()` 自己就会以 `done` 结算挂起的
+ * `read()`（流自己的 `cancel()` 承诺是否完成都不影响这一点）。这里刻意去掉那条
+ * 路径，用来固定「插件自己的空闲期限与取消不依赖读取器合作」这条契约，以及被放弃
+ * 的读取迟到结算或迟到拒绝时不会制造第二次终止。
+ */
+function stalledReaderBody() {
+  const body = new ReadableStream<Uint8Array>({ start() { /* 永不入队、永不关闭。 */ } })
+  const counts = { reads: 0, cancel: 0, releaseLock: 0 }
+  let settle: ((result: ReadableStreamReadResult<Uint8Array>) => void) | undefined
+  let fail: ((error: unknown) => void) | undefined
+  const reader = {
+    read: () => {
+      counts.reads += 1
+      return new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => { settle = resolve; fail = reject })
+    },
+    cancel: () => { counts.cancel += 1; return new Promise<void>(() => { /* 永不结算。 */ }) },
+    releaseLock: () => { counts.releaseLock += 1 },
+  }
+  Object.defineProperty(body, 'getReader', { value: () => reader })
+  return {
+    body,
+    counts,
+    settleRead: (result: ReadableStreamReadResult<Uint8Array>) => settle?.(result),
+    failRead: (error: unknown) => fail?.(error),
+  }
+}
+
+/** 等到读循环真正进入读取，不用固定延时猜时序。 */
+async function waitForRead(counts: { reads: number }, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (counts.reads === 0) {
+    if (Date.now() > deadline) throw new Error('读循环没有在期限内开始读取')
+    await new Promise((resolve) => setTimeout(resolve, 2))
+  }
+}
+
+/** 卡死读取用例的连接参数：空闲期限可调，其余与默认一致。 */
+const stalledOptions = (idleMs: number) => (): CommandCodeConnectionOptions => ({
+  apiBase: DEFAULT_API_BASE,
+  workingDir: '/tmp/project',
+  modelsCachePath: '/tmp/cc-models-cache.json',
+  requestTimeoutMs: 60_000,
+  streamIdleTimeoutMs: idleMs,
+})
+
+/** 有界等待：返回值用于断言，避免任何一条收束路径把测试挂死。 */
+function withinBound<T>(work: Promise<T>, timeoutMs = 1000): Promise<T | '超时'> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race<T | '超时'>([
+    work,
+    new Promise<'超时'>((resolve) => { timer = setTimeout(() => resolve('超时'), timeoutMs) }),
+  ]).finally(() => { if (timer) clearTimeout(timer) })
+}
+
+test('读取永不结算时，流空闲期限仍然有界失败为 TIMEOUT', async () => {
+  const stalled = stalledReaderBody()
+  const summaries: RequestTimingSummary[] = []
+  const adapter = makeAdapter({
+    options: stalledOptions(20),
+    fetchImpl: (async () => new Response(stalled.body, { status: 200 })) as unknown as typeof fetch,
+    onRequestTiming: (summary) => { summaries.push(summary) },
+  })
+  const outcome = await withinBound(collect(
+    adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }),
+  ).then(() => '成功' as const, (error: unknown) => error))
+  assert.notEqual(outcome, '超时', '空闲期限不能依赖底层读取结算')
+  assert.notEqual(outcome, '成功')
+  const error = outcome as { code?: string; message?: string }
+  assert.equal(error.code, 'TIMEOUT')
+  assert.match(error.message ?? '', /idle for 20ms/)
+  assert.ok(stalled.counts.cancel >= 1, '仍需尽力取消底层读取')
+  assert.equal(stalled.counts.releaseLock, 1, '卡住的读取也必须释放读取锁')
+  assert.equal(summaries[0]?.outcome, 'error')
+  assert.equal(summaries[0]?.errorCode, 'TIMEOUT')
+  // 被放弃的读取迟到结算或迟到拒绝都不能制造第二次终止，也不能变成未处理拒绝
+  // （真实读取器在释放锁时会以 “Invalid state: Releasing reader” 拒绝挂起的读取）。
+  stalled.settleRead({ done: true, value: undefined })
+  stalled.failRead(new TypeError('Invalid state: Releasing reader'))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(stalled.counts.releaseLock, 1)
+})
+
+test('读取永不结算时，调用者取消仍然有界并原样传播原因', async () => {
+  const stalled = stalledReaderBody()
+  const summaries: RequestTimingSummary[] = []
+  const control = new AbortController()
+  const reason = new Error('卡死读取期间取消')
+  const adapter = makeAdapter({
+    options: stalledOptions(10_000),
+    fetchImpl: (async () => new Response(stalled.body, { status: 200 })) as unknown as typeof fetch,
+    onRequestTiming: (summary) => { summaries.push(summary) },
+  })
+  const iterator = adapter.stream({
+    provider: 'commandcode', model: 'm', messages: [userMessage('hi')], signal: control.signal,
+  })[Symbol.asyncIterator]()
+  const pending = iterator.next().then(value => value, (error: unknown) => error)
+  try {
+    await waitForRead(stalled.counts)
+    control.abort(reason)
+    const result = await withinBound(pending)
+    assert.notEqual(result, '超时', '取消不能依赖 cancel() 唤醒挂起读取')
+    assert.equal(result, reason, '调用者取消必须原样传播')
+    assert.equal(stalled.counts.releaseLock, 1)
+    assert.equal(summaries[0]?.outcome, 'aborted')
+  } finally {
+    await iterator.return?.()
+  }
+})
+
+test('读取永不结算时，消费方提前结束仍然有界收束并释放读取锁', async () => {
+  const stalled = stalledReaderBody()
+  const summaries: RequestTimingSummary[] = []
+  const adapter = makeAdapter({
+    options: stalledOptions(10_000),
+    fetchImpl: (async () => new Response(stalled.body, { status: 200 })) as unknown as typeof fetch,
+    onRequestTiming: (summary) => { summaries.push(summary) },
+  })
+  const iterator = adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })[Symbol.asyncIterator]()
+  const pending = iterator.next().then(value => value, (error: unknown) => error)
+  await waitForRead(stalled.counts)
+  const returning = iterator.return?.()
+  assert.ok(returning !== undefined, '适配器迭代器必须提供 return()')
+  const result = await withinBound(returning)
+  if (result === '超时') assert.fail('消费方结束不能被挂起的读取拖住')
+  assert.equal(result.done, true)
+  assert.equal((await pending as IteratorResult<StreamChunk>).done, true)
+  assert.equal(stalled.counts.releaseLock, 1)
+  assert.equal(summaries[0]?.outcome, 'cancelled')
+})
+
 test('stream() completes normally when the finish event arrives', async () => {
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, 'data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n') })
   const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] }))

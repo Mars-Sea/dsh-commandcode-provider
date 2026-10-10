@@ -173,7 +173,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   the boot-time `searchProvider: commandcode` cordis patch. The deprecated
   `selectCommandCodeSearchProvider()` (which forced the factory default on disable) was DELETED with the
   rest of the generation bridge — `applyCommandCodeSearchSelection()` is the only entry point. `dsh-web` is
-  a `0.2.0-rc.2 || 0.2.1-alpha.1` peer (kept external in tsdown); `tests/web-search.test.ts` pins the wire body, header,
+  a peer over every declared engine (`0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2`, kept external in tsdown); `tests/web-search.test.ts` pins the wire body, header,
   result mapping, the `WEB_ABORTED`/`WEB_PROVIDER_CREDENTIAL_MISSING`/`WEB_PROVIDER_ERROR` taxonomy, and the
   selection-field handoff (sibling-pin restore, re-enable memory, toggle-off through the real host `apply()`
   + `loader/volatile-update`).

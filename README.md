@@ -35,11 +35,13 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-This release supports **dsh 0.2.0-rc.2 and dsh 0.2.1-alpha.1, and nothing else** —
-the plugin's peer range is exactly those two verified versions, and its
+This release supports **dsh 0.2.0-rc.2, dsh 0.2.1-alpha.1 and dsh 0.2.1-alpha.2, and nothing else** —
+the plugin's peer range is exactly those three verified versions, and its
 compatibility records name them alone. `0.2.0-rc.2` is what
 `npm i -g @deepseek-ai/dsh@latest` and the official desktop build ship, so it is
-the version most users are on; `0.2.1-alpha.1` is the upstream `alpha` channel:
+the version most users are on; `0.2.1-alpha.2` is the upstream `alpha` channel
+today, and `0.2.1-alpha.1` stays in the range because it was already verified, so
+a profile pinned to it keeps working:
 
 ```sh
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
@@ -66,14 +68,14 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.15
 
 The same applies to every profile you install into, including the terminal UI below.
 
-Fresh pnpm 10 marketplace generations are supported directly. Every Harness package — including `@deepseek-ai/cordis` and `@deepseek-ai/schemastery` — is declared by the plugin over the same two-version range as its `@deepseek-ai/dsh-*` peers as a Host peer, so the active dsh profile remains their owner; do not add a separate dependency for any of them. Upstream removed the `@deepseek-ai/dsh-invariants` package in `0.2.1-alpha.1`, so the plugin no longer declares it.
+Fresh pnpm 10 marketplace generations are supported directly. Every Harness package is declared by the plugin as a Host peer, so the active dsh profile remains their owner; do not add a separate dependency for any of them. The `@deepseek-ai/dsh-*` packages share one exact-version disjunction; `@deepseek-ai/cordis` and `@deepseek-ai/schemastery` carry the paired ranges `~4.0.4 || ~4.0.5-alpha.1` and `~3.18.4 || ~3.18.5-alpha.1` instead, because publishing an engine rewrites both to the version that shipped alongside it. Upstream removed the `@deepseek-ai/dsh-invariants` package in `0.2.1-alpha.1`, so the plugin no longer declares it.
 
 ## Updating
 
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2 or 0.2.1-alpha.1
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2, 0.2.1-alpha.1 or 0.2.1-alpha.2
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
@@ -147,7 +149,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin is maintained against exactly two engines: **dsh 0.2.0-rc.2** and **dsh 0.2.1-alpha.1**. Its `@deepseek-ai/dsh-*` peers use the disjunction `0.2.0-rc.2 || 0.2.1-alpha.1`, `@deepseek-ai/cordis` is pinned to `~4.0.4 || ~4.0.5-alpha.1` and `@deepseek-ai/schemastery` to `~3.18.4 || ~3.18.5-alpha.1` (each branch shipped with its engine), and `dsh.compatibility.dshReleases` records exactly those two releases. That disjunction is deliberate and load-bearing: unlike a caret or a `>=` range it admits **no** adjacent prerelease, release candidate, or stable patch version, every branch is a bare version, and `npm run test:engine` runs the whole suite against **both** engines before a release. DSH itself refuses to load a plugin whose `@deepseek-ai/dsh*` peers do not admit the running engine, so a range that silently admitted an unverified neighbour would be worse than no range at all. On any other engine the settings page, the message envelope, or the request-image budget may not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
+**Engine version.** The plugin is maintained against exactly three engines: **dsh 0.2.0-rc.2**, **dsh 0.2.1-alpha.1** and **dsh 0.2.1-alpha.2**. Its `@deepseek-ai/dsh-*` peers use the disjunction `0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2`, `@deepseek-ai/cordis` is pinned to `~4.0.4 || ~4.0.5-alpha.1` and `@deepseek-ai/schemastery` to `~3.18.4 || ~3.18.5-alpha.1` (each branch shipped with its engine), and `dsh.compatibility.dshReleases` records exactly those three releases. That disjunction is deliberate and load-bearing: unlike a caret or a `>=` range it admits **no** adjacent prerelease, release candidate, or stable patch version, every branch is a bare version, and `npm run test:engine` runs the whole suite against **all three** engines before a release. DSH itself refuses to load a plugin whose `@deepseek-ai/dsh*` peers do not admit the running engine, so a range that silently admitted an unverified neighbour would be worse than no range at all. On any other engine the settings page, the message envelope, or the request-image budget may not line up — install the last release that supported your engine (see [Install](#install)) instead of forcing this one.
 
 ## Usage dashboard
 

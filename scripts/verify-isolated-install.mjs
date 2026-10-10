@@ -15,6 +15,37 @@ const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 /** This checkout's own manifest: the peer assertion below is read from it, never hardcoded. */
 const manifest = JSON.parse(readFileSync(join(repositoryDir, 'package.json'), 'utf8'))
 
+/**
+ * 需要逐版本验证的 Harness 包：peer 声明里所有**必需**的 `@deepseek-ai/dsh-*`。
+ *
+ * 可选 peer（客户端预置的 `react`、`dsh-client-ui-primitives`、`dsh-client-ui-slots`）
+ * 不参与：npm 与 pnpm 都不会为可选 peer 自动安装，宿主 Web 前端自带这些模块，
+ * 把它们写进隔离安装的依赖只会引入无关的解析失败。
+ */
+const requiredHarnessPeers = Object.keys(manifest.peerDependencies ?? {})
+  .filter((name) => name.startsWith('@deepseek-ai/dsh-')
+    && manifest.peerDependenciesMeta?.[name]?.optional !== true)
+
+/**
+ * 已验证引擎版本集合：取自 `@deepseek-ai/dsh-*` peer 范围的每个裸版本分支。
+ *
+ * 断言锚点选 `@deepseek-ai/dsh-llm`：它是适配器的宿主底座，任何 fresh generation 都必须
+ * 解析到它。`dsh-invariants` 曾承担这个角色，但上游在 0.2.1-alpha.1 删除了整个包
+ * （npm 上从未发布该版本），因此插件不再声明它。
+ * 声明与兼容记录的一致性由 `tests/package.test.ts` 守；这里额外断言两者逐条对应，
+ * 避免插件清单改了一处、隔离安装却在验证另一处。
+ */
+const declaredPeerRange = manifest.peerDependencies['@deepseek-ai/dsh-llm']
+if (typeof declaredPeerRange !== 'string') throw new Error('manifest declares no @deepseek-ai/dsh-llm peer')
+const declaredVersions = declaredPeerRange.split('||').map((part) => part.trim())
+const recordedVersions = Object.keys(manifest.dsh?.compatibility?.dshReleases ?? {})
+if ([...declaredVersions].sort().join() !== [...recordedVersions].sort().join()) {
+  throw new Error(
+    'the @deepseek-ai/dsh-llm peer range and dsh.compatibility.dshReleases disagree '
+    + `(declared ${declaredVersions.join(' | ')}; recorded ${recordedVersions.join(' | ') || 'none'})`,
+  )
+}
+
 /** Run a child command and return its captured streams or throw with diagnostics. */
 function run(command, args, cwd) {
   const result = spawnSync(command, args, {
@@ -30,13 +61,18 @@ function run(command, args, cwd) {
   return { stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
 }
 
-/** Pack this checkout and install the tarball into a fresh pnpm generation. */
-function verifyIsolatedInstall() {
+/**
+ * Pack this checkout ONCE and install the tarball into a fresh pnpm generation per declared
+ * engine version.
+ *
+ * 为什么每个版本各装一次：pnpm 只会为 peer 范围解析出**一个**满足条件的版本（通常是范围里
+ * 最新的那个分支），所以单次 `pnpm add` 全绿只证明那一个引擎能装。这里把该版本的必需 Harness
+ * 同伴依赖一起钉死，逐版本重装，再断言锁文件解析出的 `@deepseek-ai/dsh-llm` 恰好是目标版本。
+ */
+function packOnce() {
   const root = mkdtempSync(join(tmpdir(), 'dsh-commandcode-install-'))
   const packDir = join(root, 'pack')
-  const consumerDir = join(root, 'consumer')
   mkdirSync(packDir)
-  mkdirSync(consumerDir)
   try {
     const packOutput = run(npm, [
       'pack',
@@ -51,7 +87,17 @@ function verifyIsolatedInstall() {
     const entry = packedEntry(packOutput)
     const filename = entry?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not report a tarball filename')
+    return { root, tarball: join(packDir, filename) }
+  } catch (error) {
+    rmSync(root, { recursive: true, force: true })
+    throw error
+  }
+}
 
+/** Install the tarball with every required Harness peer pinned to one exact engine version. */
+function verifyIsolatedInstall(tarball, version) {
+  const consumerDir = mkdtempSync(join(tmpdir(), `dsh-commandcode-install-${version}-`))
+  try {
     writeFileSync(join(consumerDir, 'package.json'), `${JSON.stringify({
       name: 'dsh-commandcode-install-smoke',
       private: true,
@@ -63,32 +109,33 @@ function verifyIsolatedInstall() {
       '--yes',
       `pnpm@${PNPM_VERSION}`,
       'add',
-      join(packDir, filename),
+      tarball,
+      ...requiredHarnessPeers.map((name) => `${name}@${version}`),
     ], consumerDir)
     const lock = readFileSync(join(consumerDir, 'pnpm-lock.yaml'), 'utf8')
-    // 断言一个仍然存在、且本插件确实声明为 peer 的核心宿主包。dsh-invariants
-    // 曾承担这个角色，但上游在 0.2.1-alpha.1 删除了整个包（npm 上从未发布该版本），
-    // 因此改用 dsh-llm —— 适配器的宿主底座，任何 fresh generation 都必须解析到它。
-    // 声明的 peer 是「已验证引擎版本」的析取（护栏见 tests/package.test.ts），
-    // 所以这里要在锁文件里找到其中至少一个确切版本，而不是整串范围文本。
-    const declaredPeerRange = manifest.peerDependencies['@deepseek-ai/dsh-llm']
-    const declaredPeerVersions = declaredPeerRange.split('||').map((part) => part.trim())
+    // 断言锁文件解析出的 @deepseek-ai/dsh-llm 恰好是本次目标版本：安装成功但解析到别的分支，
+    // 说明钉版本没有生效，这一轮不能算这个引擎通过。
     const resolvedVersions = [...new Set(
       [...lock.matchAll(/@deepseek-ai\/dsh-llm@([^'"\s:()]+)/g)].map((match) => match[1]),
     )]
-    const resolvedPeer = declaredPeerVersions.find((version) => resolvedVersions.includes(version))
-    if (resolvedPeer === undefined) {
+    if (resolvedVersions.length !== 1 || resolvedVersions[0] !== version) {
       throw new Error(
-        'isolated install resolved no declared peer version of @deepseek-ai/dsh-llm '
-        + `(declared ${declaredPeerVersions.join(' | ')}; resolved ${resolvedVersions.join(', ') || 'none'})\n`
+        `isolated install for dsh ${version} resolved ${resolvedVersions.join(', ') || 'no'} `
+        + '@deepseek-ai/dsh-llm instead of the pinned version\n'
         + installResult.stdout
         + installResult.stderr,
       )
     }
-    process.stdout.write(`isolated install passed with pnpm ${PNPM_VERSION} (dsh-llm ${resolvedPeer})\n`)
+    process.stdout.write(`isolated install passed with pnpm ${PNPM_VERSION} (dsh ${version})\n`)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(consumerDir, { recursive: true, force: true })
   }
 }
 
-verifyIsolatedInstall()
+const packed = packOnce()
+try {
+  for (const version of declaredVersions) verifyIsolatedInstall(packed.tarball, version)
+  process.stdout.write(`engine matrix verified: ${declaredVersions.join(', ')}\n`)
+} finally {
+  rmSync(packed.root, { recursive: true, force: true })
+}

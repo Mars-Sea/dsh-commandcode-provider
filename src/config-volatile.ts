@@ -24,8 +24,8 @@
 /**
  * Mark one schema field volatile.
  *
- * `.volatile()` is unconditional: it is a schemastery 3.18.3 feature and the
- * only supported engine (`dsh 0.2.1-alpha.1`) pins `~3.18.5-alpha.1`, so the
+ * `.volatile()` is unconditional: it is a schemastery 3.18.3 feature and every
+ * supported engine ships `~3.18.4` or `~3.18.5-alpha.1`, so the
  * method is always present. It is reached through a structural member so the caller's
  * declared field type survives — the mark changes what the schema PARSES to (a
  * live reference), not the plugin-facing `Config` shape.

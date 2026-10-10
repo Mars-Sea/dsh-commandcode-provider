@@ -18,15 +18,20 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 
 - **Client bundle**: the package's `dsh.client` declaration (`platform: web`,
   `inject: [...]`) makes the host serve `lib/client.js` as a client module.
-  The bundle may only `require` platform/seed modules (`react`,
-  `react/jsx-runtime`, `@deepseek-ai/cordis`, `@deepseek-ai/dsh-client-ui-slots`,
-  `@deepseek-ai/dsh-client-web-react`, `@deepseek-ai/dsh-client-ui-primitives`,
-  `@deepseek-ai/dsh-client-schema-form`, `@deepseek-ai/dsh-client-ui-attachment`)
-  and host-shipped platform modules resolvable from the loader's module table
-  (e.g. `@deepseek-ai/dsh-client-ui-primitives`). The 0.1.7 Web shell
-  seeds `@deepseek-ai/dsh-client-store`; this client keeps the smaller local
+  The bundle may only `require` the platform/seed modules the Web frontend
+  actually seeds. That table is exactly `react`, `react/jsx-runtime`,
+  `react-dom`, `react-dom/client`, `@deepseek-ai/cordis`,
+  `@deepseek-ai/dsh-client-store`, `@deepseek-ai/dsh-client-ui-slots`,
+  `@deepseek-ai/dsh-client-ui-primitives` and
+  `@deepseek-ai/dsh-client-ui-dockkit` (re-read out of the 0.2.1-alpha.2 engine;
+  unchanged from 0.2.1-alpha.1, 0.2.0-rc.2 and 0.1.7-rc.2). Any other import
+  must be type-only or bundled — `dsh-client-web-react`, `dsh-client-schema-form`
+  and `dsh-client-ui-attachment` are NOT seeded and would fail the client
+  `require()` audit in `scripts/verify-engine-load.mjs`. This client keeps the
+  smaller local
   `getSnapshot`/`subscribe`/`set` subset in `src/client/snapshot-store.ts`
-  instead — ~30 lines, versus a fourth `require()` target and a client-only peer
+  instead of the seeded `@deepseek-ai/dsh-client-store` — ~30 lines, versus a fourth
+  `require()` target and a client-only peer
   for the engine's `set()` semantics (dev-mode deep freeze, forced
   replacement). The settings page binds the
   `llm-commandcode` namespace through THIS PLUGIN'S OWN scope over
@@ -56,8 +61,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   does not lie beneath a marked node is REFUSED. Six consequences are load-bearing:
   (1) **Every Config field except the top-level `apiKey` secret is marked via `markVolatileFields()`** — an
     unmarked field would be invisible to AND unwritable from the settings page. The mark is UNCONDITIONAL:
-    `.volatile()` is a schemastery 3.18.3 feature and the one supported engine pins `~3.18.4`, so the method
-    is always present (that is why `@deepseek-ai/schemastery` is a peer at `~3.18.4`, not `^3.18.2` — a
+    `.volatile()` is a schemastery 3.18.3 feature and every supported engine ships `~3.18.4` or
+    `~3.18.5-alpha.1`, so the method
+    is always present (that is why `@deepseek-ai/schemastery` is a peer at `~3.18.4 || ~3.18.5-alpha.1`, not `^3.18.2` — a
     profile resolving 3.18.2 would mark nothing and render a blank settings form). `apiKey` stays unmarked
     on purpose: no settings surface writes it (page and TUI both write keys through the credentials seam),
     so a config-file edit to it reloading the fiber is correct for a secret literal.

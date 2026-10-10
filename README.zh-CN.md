@@ -33,7 +33,7 @@
 
 ## 安装
 
-本版本**只支持 dsh 0.2.0-rc.2 与 dsh 0.2.1-alpha.1 这两个版本**：插件的 peer 范围就是这两个已验证版本的析取，兼容性记录里也只列它们。`0.2.0-rc.2` 正是 `npm i -g @deepseek-ai/dsh@latest` 与官方桌面端放出的版本，多数用户都在它上面；`0.2.1-alpha.1` 是上游的 `alpha` 通道：
+本版本**只支持 dsh 0.2.0-rc.2、dsh 0.2.1-alpha.1 与 dsh 0.2.1-alpha.2 这三个版本**：插件的 peer 范围就是这三个已验证版本的析取，兼容性记录里也只列它们。`0.2.0-rc.2` 正是 `npm i -g @deepseek-ai/dsh@latest` 与官方桌面端放出的版本，多数用户都在它上面；`0.2.1-alpha.2` 是上游 `alpha` 通道当前提供的版本，`0.2.1-alpha.1` 因为已经验证过而保留在范围内，钉在它上面的 profile 可以继续使用：
 
 ```sh
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
@@ -55,14 +55,14 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.15
 
 这一点对每个 profile 都成立，包括下面的终端界面。
 
-插件可直接在 pnpm 10 的全新插件市场 generation 中安装。所有 Harness 包（含 `@deepseek-ai/cordis`、`@deepseek-ai/schemastery`）都由插件按与 `@deepseek-ai/dsh-*` 相同的双版本范围声明为 Host peer，由当前 dsh profile 统一管理，不要另行添加 dependency。上游曾在 `0.2.1-alpha.1` 删除 `@deepseek-ai/dsh-invariants` 这个包，因此插件不再声明它。
+插件可直接在 pnpm 10 的全新插件市场 generation 中安装。所有 Harness 包都由插件声明为 Host peer，由当前 dsh profile 统一管理，不要另行添加 dependency。其中 `@deepseek-ai/dsh-*` 共用同一个精确版本析取；`@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery` 则分别写成配对范围 `~4.0.4 || ~4.0.5-alpha.1` 与 `~3.18.4 || ~3.18.5-alpha.1`——上游每次发引擎都会把这两个包重写成随引擎发布的版本。上游曾在 `0.2.1-alpha.1` 删除 `@deepseek-ai/dsh-invariants` 这个包，因此插件不再声明它。
 
 ## 更新
 
 用与安装时相同的 tag 更新：
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2 或 0.2.1-alpha.1
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2、0.2.1-alpha.1 或 0.2.1-alpha.2
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 更早的 dsh（0.5.0 线，不再维护）
 ```
 
@@ -136,7 +136,7 @@ cmd login                               # 写入 ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**引擎版本要求。** 插件针对两个引擎维护：**dsh 0.2.0-rc.2** 与 **dsh 0.2.1-alpha.1**。它的 `@deepseek-ai/dsh-*` 对等依赖写成两者的析取 `0.2.0-rc.2 || 0.2.1-alpha.1`，`@deepseek-ai/cordis` 固定为 `~4.0.4 || ~4.0.5-alpha.1`、`@deepseek-ai/schemastery` 固定为 `~3.18.4 || ~3.18.5-alpha.1`（每个分支都与对应引擎同批发布），`dsh.compatibility.dshReleases` 也只记录这两个版本。这个析取写法是刻意的、且是承重的：它不像 `^` 或 `>=` 那样放行任何相邻的预发布版、候选发布或稳定补丁版，每个分支都是一个裸版本号，且发版前 `npm run test:engine` 会对**两个引擎各跑一遍**完整套件。DSH 本身会拒绝加载 `@deepseek-ai/dsh*` peer 不接纳当前引擎的插件——所以一个静默放行未验证邻居的范围，比没有范围更糟。在其它引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
+**引擎版本要求。** 插件针对三个引擎维护：**dsh 0.2.0-rc.2**、**dsh 0.2.1-alpha.1** 与 **dsh 0.2.1-alpha.2**。它的 `@deepseek-ai/dsh-*` 对等依赖写成三者的析取 `0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-alpha.2`，`@deepseek-ai/cordis` 固定为 `~4.0.4 || ~4.0.5-alpha.1`、`@deepseek-ai/schemastery` 固定为 `~3.18.4 || ~3.18.5-alpha.1`（每个分支都与对应引擎同批发布），`dsh.compatibility.dshReleases` 也只记录这三个版本。这个析取写法是刻意的、且是承重的：它不像 `^` 或 `>=` 那样放行任何相邻的预发布版、候选发布或稳定补丁版，每个分支都是一个裸版本号，且发版前 `npm run test:engine` 会对**三个引擎各跑一遍**完整套件。DSH 本身会拒绝加载 `@deepseek-ai/dsh*` peer 不接纳当前引擎的插件——所以一个静默放行未验证邻居的范围，比没有范围更糟。在其它引擎上，设置页、消息封装或请求图片预算总有一处对不上——请改装支持你所用引擎的最后一个版本，而不是硬装这一个。
 
 ## 用量面板
 

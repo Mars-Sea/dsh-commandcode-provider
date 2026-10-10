@@ -41,7 +41,8 @@ you need to locate an unfamiliar module.
 - Catalog, plan tier, effort, deals, or peak-pricing updates: [model
   catalog](docs/agent-reference/model-catalog.md) and, when installed locally, the
   `dsh-commandcode-upstream` skill in `.agents/skills/`. For a DSH release upgrade, use the tracked
-  `dsh-release-upgrade` skill.
+  `dsh-release-upgrade` skill, and record the result in the [DSH integration
+  note](docs/对接说明.md) (four-category difference table plus verification boundaries).
 - Publishing a version: [commands and release procedure](docs/agent-reference/releasing.md).
 
 ## Verification
