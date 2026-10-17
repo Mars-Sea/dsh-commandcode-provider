@@ -35,7 +35,7 @@
 
 ## 安装
 
-本版本**只支持 dsh 0.2.0-rc.2（RC，候选发布版）与 dsh 0.2.1-alpha.4（alpha，早期测试版）**。维护策略为每条通道只保留官方最新且经过验证的一个版本；2026-10-15 核对时分别对应 npm 的 `latest` 与 `alpha` 发布标签。peer（对等依赖）范围和兼容记录只列这两个精确版本。注意 **dsh 0.2.1-alpha.4 判定插件兼容性时只读 `engines.dsh`**，dsh 对等依赖范围仅在该字段缺失时才被参考，因此 `engines.dsh` 声明错误会被直接拒绝。使用 `0.2.1-alpha.3` 及更早的配置需先升级引擎，再安装本构建：
+本版本**支持 dsh 0.2.0-rc.2、0.2.1-rc.2（RC，候选发布版）与 dsh 0.2.1-alpha.4（alpha，早期测试版）**，并保持**向下兼容**：上一稳定 RC（`0.2.0-rc.2`，npm 的 `latest`）与新 RC（`0.2.1-rc.2`，2026-10-18 核对时为 npm 的 `next` 标签）同时保留。alpha 通道保留上一轮已验证的官方 alpha 发布 `0.2.1-alpha.4`（npm 的 `alpha` 标签此后已到 `0.2.1-alpha.5`，本构建不声称支持它）。peer（对等依赖）范围和兼容记录恰好包含这三个版本。注意 **dsh 0.2.1-alpha.4 及之后判定插件兼容性时只读 `engines.dsh`**，dsh 对等依赖范围仅在该字段缺失时才被参考，因此 `engines.dsh` 声明错误会被直接拒绝。使用 `0.2.1-alpha.3` 及更早、或这三个版本之外的引擎，需先升级引擎（或继续使用插件 0.13.4），再安装本构建：
 
 ```sh
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
@@ -64,7 +64,7 @@ dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@0.11.15
 用与安装时相同的 tag 更新：
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2 或 0.2.1-alpha.4
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2、0.2.1-rc.2 或 0.2.1-alpha.4
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # 更早的 dsh（0.5.0 线，不再维护）
 ```
 
@@ -143,7 +143,7 @@ cmd login                               # 写入 ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**引擎版本要求。** 插件维护两个引擎：**dsh 0.2.0-rc.2** 与 **dsh 0.2.1-alpha.4**。`@deepseek-ai/dsh-*` 的 peer（对等依赖）为 `0.2.0-rc.2 || 0.2.1-alpha.4`；`@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery` 仍使用随引擎配对的范围 `~4.0.4 || ~4.0.5-alpha.1` 与 `~3.18.4 || ~3.18.5-alpha.1`（alpha.4 与 alpha.3 配对同两个版本，因此范围不动）。兼容记录恰好包含两个版本，同通道升级验证后替换旧版，不累加已支持版本、不放行未验证的邻近版本。`npm run test:engine` 与 `npm run test:install` 均逐版本验证，前者还会用该引擎自己的 `evaluatePluginCompatibility` 对发布清单求值——自 alpha.4 起该判定只读 `engines.dsh`，因此引擎声明写错会在这一步失败，而不是拖到安装时才暴露。旧引擎安装说明见[安装](#安装)。
+**引擎版本要求。** 插件向下兼容三个引擎：**dsh 0.2.0-rc.2**（上一稳定 RC）、**dsh 0.2.1-rc.2** 与 **dsh 0.2.1-alpha.4**。`@deepseek-ai/dsh-*` 的 peer（对等依赖）为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-alpha.4`；`@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery` 仍使用随引擎配对的范围 `~4.0.4 || ~4.0.5-alpha.1` 与 `~3.18.4 || ~3.18.5-alpha.1`（rc.2 配对的正是 Cordis `4.0.5` 与 Schemastery `3.18.5`，已被这两个分支覆盖，因此范围不动）。兼容记录恰好包含这三个版本：新增引擎须先在真实引擎上跑完整矩阵，上一稳定 RC 保留而不删除，因此升级引擎不再是使用新版的强制前提；同时不放行未验证的邻近版本。`npm run test:engine` 与 `npm run test:install` 均逐版本验证，前者还会用该引擎自己的 `evaluatePluginCompatibility` 对发布清单求值——自 alpha.4 起该判定只读 `engines.dsh`，因此引擎声明写错会在这一步失败，而不是拖到安装时才暴露。旧引擎安装说明见[安装](#安装)。
 
 ## 用量面板
 

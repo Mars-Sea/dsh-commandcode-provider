@@ -4,7 +4,9 @@
  * Drive `CommandCodeSearchProvider` against a stubbed fetch, pinning the
  * `/alpha/web-search` wire contract (POST body, `Authorization: Bearer` +
  * `x-command-code-version` headers), the result mapping, the failure taxonomy
- * and the `searchProviderId` selection handoff.
+ * and the `searchProvider` selection handoff for both runtime shapes: the
+ * pre-rc.2 private `searchProviderId` field and the rc.2 volatile config
+ * reference (`config.searchProvider`).
  */
 
 import { test } from 'node:test'
@@ -334,6 +336,83 @@ test('applyCommandCodeSearchSelection still clears a field that never read our i
   assert.equal((web as unknown as { searchProviderId?: string }).searchProviderId, undefined)
 })
 
+/**
+ * The `WebRuntime` shape dsh 0.2.1-rc.2 introduced: the selection is the
+ * engine-parsed volatile config reference `config.searchProvider`, updated
+ * through cosmokit's cross-copy `Symbol.for('cosmokit.volatile.write')`.
+ */
+function volatileWeb(initial: string | undefined): {
+  web: Parameters<typeof applyCommandCodeSearchSelection>[0]
+  read(): string | undefined
+} {
+  let current = initial
+  const reference = Object.freeze({
+    get: () => current,
+    [Symbol.for('cosmokit.volatile.write')]: (value: string | undefined) => { current = value },
+  })
+  return {
+    web: { config: { searchProvider: reference } } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0],
+    read: () => current,
+  }
+}
+
+test('applyCommandCodeSearchSelection restores a sibling pin on the 0.2.1-rc.2 volatile reference', () => {
+  // The rc.2 runtime reads `config.searchProvider.get()` per search call; the
+  // write must land in that reference, not on a removed instance field.
+  const volatile = volatileWeb('modsearch')
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(volatile.web, state, true)
+  assert.equal(volatile.read(), COMMANDCODE_SEARCH_PROVIDER_ID)
+
+  applyCommandCodeSearchSelection(volatile.web, state, false)
+  assert.equal(volatile.read(), 'modsearch')
+})
+
+test('applyCommandCodeSearchSelection keeps the displaced backend across volatile re-enables', () => {
+  const volatile = volatileWeb('modsearch')
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(volatile.web, state, true)
+  applyCommandCodeSearchSelection(volatile.web, state, true)
+  applyCommandCodeSearchSelection(volatile.web, state, false)
+  assert.equal(volatile.read(), 'modsearch')
+})
+
+test('applyCommandCodeSearchSelection treats a pre-set volatile commandcode pin as nothing to restore', () => {
+  const volatile = volatileWeb(COMMANDCODE_SEARCH_PROVIDER_ID)
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(volatile.web, state, true)
+  applyCommandCodeSearchSelection(volatile.web, state, false)
+  assert.equal(volatile.read(), COMMANDCODE_SEARCH_PROVIDER_ID)
+})
+
+test('applyCommandCodeSearchSelection restores an unset volatile field to undefined', () => {
+  const volatile = volatileWeb(undefined)
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(volatile.web, state, true)
+  assert.equal(volatile.read(), COMMANDCODE_SEARCH_PROVIDER_ID)
+  applyCommandCodeSearchSelection(volatile.web, state, false)
+  assert.equal(volatile.read(), undefined)
+})
+
+test('applyCommandCodeSearchSelection leaves an unwritable volatile shape alone', () => {
+  // A hand-constructed runtime (or a future hardening) whose reference has no
+  // write symbol: nothing `search()` reads can be changed, so the helper must
+  // not mutate the instance and must not throw.
+  let current: string | undefined = 'modsearch'
+  const web = {
+    config: { searchProvider: { get: () => current } },
+  } as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
+  const state = commandCodeSearchSelection()
+
+  applyCommandCodeSearchSelection(web, state, true)
+  assert.equal(current, 'modsearch')
+  assert.equal(state.owner, false)
+})
+
 test('applyCommandCodeSearchSelection never throws on a hardened runtime', () => {
   const frozen = Object.freeze({}) as unknown as Parameters<typeof applyCommandCodeSearchSelection>[0]
   const state = commandCodeSearchSelection()
@@ -376,6 +455,26 @@ function volatileProbeConfig(values: Record<string, unknown>): {
   }
 }
 
+/**
+ * Read the engine's current search selection from whichever shape it exposes:
+ * the pre-rc.2 private `searchProviderId` field, or the rc.2 volatile config
+ * reference `config.searchProvider`. These host-level tests run against the
+ * engine in this checkout's `node_modules`, so the helper keeps them green on
+ * both declared engines.
+ */
+function selectedSearchProvider(web: unknown): string | undefined {
+  const shaped = web as {
+    searchProviderId?: string | undefined
+    config?: { searchProvider?: { get(): unknown } | undefined } | undefined
+  }
+  const reference = shaped.config?.searchProvider
+  if (reference !== undefined && typeof reference.get === 'function') {
+    const value = reference.get()
+    return typeof value === 'string' ? value : undefined
+  }
+  return shaped.searchProviderId
+}
+
 test('host apply() hands the selection back to the prior backend when webSearch turns off', async () => {
   // End-to-end over the real plugin boot: the `web` service starts with a
   // sibling's pin. Booting with webSearch on displaces it; flipping the volatile
@@ -406,20 +505,20 @@ test('host apply() hands the selection back to the prior backend when webSearch 
 
   // The settings inject resolves on its own tick, so let the effect run.
   await new Promise((resolve) => setImmediate(resolve))
-  const web = ctx.get('web') as unknown as { searchProviderId?: string }
+  const web = ctx.get('web')
   assert.deepEqual(policies, [{ auto: false }])
-  assert.equal(web.searchProviderId, 'commandcode')
+  assert.equal(selectedSearchProvider(web), 'commandcode')
 
   // The loader notifies the owning fiber; the plugin re-applies what config
   // alone cannot carry.
   config.set('webSearch', false)
   emitVolatileUpdate(ctx)
-  assert.equal(web.searchProviderId, 'modsearch')
+  assert.equal(selectedSearchProvider(web), 'modsearch')
 
   // And back on: the remembered backend is displaced again.
   config.set('webSearch', true)
   emitVolatileUpdate(ctx)
-  assert.equal(web.searchProviderId, 'commandcode')
+  assert.equal(selectedSearchProvider(web), 'commandcode')
 })
 
 test('host apply() leaves a pre-existing commandcode pin alone when webSearch turns off', async () => {
@@ -442,10 +541,10 @@ test('host apply() leaves a pre-existing commandcode pin alone when webSearch tu
   const config = volatileProbeConfig({ webSearch: true })
   apply(ctx, config.plain as never)
 
-  const web = ctx.get('web') as unknown as { searchProviderId?: string }
-  assert.equal(web.searchProviderId, 'commandcode')
+  const web = ctx.get('web')
+  assert.equal(selectedSearchProvider(web), 'commandcode')
 
   config.set('webSearch', false)
   emitVolatileUpdate(ctx)
-  assert.equal(web.searchProviderId, 'commandcode')
+  assert.equal(selectedSearchProvider(web), 'commandcode')
 })

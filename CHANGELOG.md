@@ -4,11 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.5] - 2026-10-18
 
 ### Added
 
 - 问题 #74：新增**单轮输出上限**配置 `maxOutputTokens` 与网页设置页字段（「模型与上下文」分组，紧随自定义上下文长度）。不填（默认）＝沿用既有推导（模型公布或运行时学到的输出上限、网关总上限三者取最小），行为完全不变；填正整数＝与该推导值取最小，永远不会突破模型上限或网关总上限 131 072；填 **`0`＝请求中不发送 `max_tokens` 字段**，把单轮输出规模交回平台自行限制——这是报告者要的「不再被硬切」，因为该字段本身是被动硬限制，单纯调大数值只能把断点往后挪。省略仅对**接受缺省该字段的传输**生效：CLI（`/alpha/generate`）与 OpenAI（`/provider/v1/chat/completions`）；Claude 走的 Anthropic Messages 端点必填该字段（缺失会被上游以 `Invalid input: expected number, received undefined at max_tokens` 直接拒绝），因此那条链路仍按推导值发送，填 `0` 对它无效。宿主显式给定的每次调用预算（如会话标题的 64 词元）同样优先于此设置。`0` 与正整数共用一个数值字段，边界由 Host 与浏览器设置页共用的纯模块 `src/output-budget.ts` 判定；正数取值还会同步压低选择器上宣告的 `defaultMaxTokens`。字段留空＝清除该配置（回到推导默认），而不是写入 0。输入接受 `64K` 简写。设置页的上下文长度与输出预算两个 token 计数字段合并为同一个 `tokenCountField`（简写文法与边界检查只有一份）。
+
+### Changed
+
+- **引擎兼容范围向下兼容地扩展为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-alpha.4`：新增 0.2.1 线的 RC，同时保留上一稳定 RC（官方 npm `latest`）与已验证的 alpha。** 本轮对照 `dsh-v0.2.1-alpha.4` → `dsh-v0.2.1-rc.2`（标签 `86a4022…` → `687f282…`，699 个变更路径、357 份包清单，采集错误为空）：插件直接导入的 `dsh-llm`、`dsh-settings`、`dsh-credentials`、`dsh-commands`、`dsh-web`、`dsh-typert-protocol`、`dsh-timeout`、`dsh-launch-environment` 公开面零变化，`npm run test:engine` 在真实 `0.2.1-rc.2` 上除准入判定外全部通过。`engines.dsh`、`dsh.compatibility.dsh`、`dsh.compatibility.dshReleases`、全部 Harness 对等依赖与开发依赖、`package-lock.json` 同批同步（锁文件精准替换 29 个 dsh 条目与 6 个 Cordis／Schemastery 配对条目，非 dsh 条目零漂移）。**向下兼容的代价与收益**：`0.2.0-rc.2` 用户无需升级即可继续安装新版；`tests/package.test.ts` 的通道约束由「恰好一 RC + 一 alpha」放宽为「至少一 RC + 恰好一 alpha」，但新增分支仍须先通过完整真实引擎矩阵，未验证的邻近版本照样被拒。`@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery` 的声明范围不变：rc.2 配对的正是 `4.0.5` 与 `3.18.5`，已被既有 `~4.0.5-alpha.1`／`~3.18.5-alpha.1` 分支覆盖。alpha 通道本轮不动，`0.2.1-alpha.5` 待下一轮审计。
+
+- **联网搜索的选择写入适配 rc.2 的运行时形状。** dsh 0.2.1-rc.2 把 `WebRuntime` 的私有 `searchProviderId` 字段换成了易变配置引用 `config.searchProvider`（每次搜索通过 `get()` 读取），而宿主仍不提供公开的运行时选择接口。`applyCommandCodeSearchSelection` 现在同时支持两种形状：实例自带 `config` 时通过 cosmokit 的跨副本写协议 `Symbol.for('cosmokit.volatile.write')` 替换引用值（引擎每次调用重新 `get()`，因此立即生效，语义与旧字段一致）；没有 `config` 时沿用旧私有字段；`config` 存在但引用不可写（手工构造或未来加固）时保持「已注册但未选中」并且不抛错。`src/index.ts` 的接线注释与测试同步：新增 6 项新形状用例（启用／关闭恢复／重复启用／预置 `commandcode`／未配置回填 `undefined`／不可写引用），宿主级集成测试改为通过 `selectedSearchProvider()` 按引擎形状读取结果，三个已声明引擎共用同一套断言。
 
 ### Fixed
 

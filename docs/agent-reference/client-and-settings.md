@@ -25,10 +25,11 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `@tanstack/react-virtual`, `@deepseek-ai/dsh-client-store`,
   `@deepseek-ai/dsh-client-ui-slots`,
   `@deepseek-ai/dsh-client-ui-primitives` and
-  `@deepseek-ai/dsh-client-ui-dockkit` (re-read out of the 0.2.1-alpha.4 engine;
-  unchanged from 0.2.1-alpha.3, 0.2.1-alpha.2, 0.2.1-alpha.1, 0.2.0-rc.2 and
-  0.1.7-rc.2 — `zod` and `@tanstack/react-virtual` were seeded all along but
-  missing from this list until the alpha.4 audit). Any other import
+  `@deepseek-ai/dsh-client-ui-dockkit` (re-read out of the 0.2.1-rc.2 engine;
+  unchanged from 0.2.1-alpha.4, 0.2.1-alpha.3, 0.2.1-alpha.2, 0.2.1-alpha.1,
+  0.2.0-rc.2 and 0.1.7-rc.2 — `zod` and `@tanstack/react-virtual` were seeded
+  all along but missing from this list until the alpha.4 audit; rc.2 changed
+  neither `seed.ts` nor `platform.ts`). Any other import
   must be type-only or bundled — `dsh-client-web-react`, `dsh-client-schema-form`
   and `dsh-client-ui-attachment` are NOT seeded and would fail the client
   `require()` audit in `scripts/verify-engine-load.mjs`. This client keeps the

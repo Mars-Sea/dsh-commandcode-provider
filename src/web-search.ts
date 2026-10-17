@@ -31,21 +31,78 @@ export const COMMANDCODE_SEARCH_PROVIDER_ID = 'commandcode'
 export const DEFAULT_WEB_SEARCH_PROVIDER_ID = 'deepseek-official'
 
 /**
- * A structurally-typed view of `WebRuntime`'s private selection field.
- *
- * `searchProviderId` is declared `private readonly` on the class, but the
- * compiled runtime property is a plain writable field read per search call.
- * dsh offers no public API to change the selected search provider at runtime,
- * so this seam mutates the instance field directly — a deliberate, bounded
- * dependency on the runtime shape. If dsh ever makes the field `#private` or
- * caches it in a closure, this write silently stops applying and the plugin
- * falls back to its provider remaining registered-but-unselected (the
- * boot-time `searchProvider: commandcode` cordis patch is the durable
- * alternative).
+ * The cross-copy volatile write protocol cosmokit installs on every parsed
+ * config reference. `Symbol.for` makes the key resolve in a second copy of the
+ * shared library, which lets this bundle replace the value of a reference the
+ * ENGINE created without importing cosmokit (not a peer of this bundle).
  */
-interface WebRuntimeSearchField {
-  /** The selected search provider id; read per call by `search()`. */
-  searchProviderId: string | undefined
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+/** One engine-parsed volatile config value: `get()` is live, the symbol write replaces it. */
+interface VolatileConfigRef {
+  get(): unknown
+  /** The cosmokit write protocol, keyed by {@link VOLATILE_WRITE}. */
+  readonly [key: symbol]: unknown
+}
+
+/**
+ * Structurally-typed views of the `WebRuntime` selection shapes this bundle
+ * supports. dsh offers no public API to change the selected search provider at
+ * runtime, so this seam mutates the instance directly — a deliberate, bounded
+ * dependency on the runtime shape.
+ *
+ * dsh 0.2.1-rc.2 replaced the private `searchProviderId` field with the
+ * volatile config reference `config.searchProvider` (read through `get()` on
+ * every search call), so both shapes are supported: the older field when the
+ * instance still carries it, otherwise the newer reference. If a future engine
+ * hides both (`#private`, a closure cache, or a frozen reference) this write
+ * silently stops applying and the plugin falls back to its provider remaining
+ * registered-but-unselected (the boot-time `searchProvider: commandcode`
+ * cordis patch is the durable alternative).
+ */
+interface WebRuntimeSearchShape {
+  /** dsh ≤ 0.2.0-rc.2 / 0.2.1-alpha.4: the private field read per search call. */
+  searchProviderId?: string | undefined
+  /** dsh ≥ 0.2.1-rc.2: the volatile config reference read per search call. */
+  config?: { searchProvider?: VolatileConfigRef | undefined } | undefined
+}
+
+/** One readable/writable view over whichever selection shape this engine has. */
+interface SearchSelectionField {
+  read(): string | undefined
+  write(value: string | undefined): void
+}
+
+/**
+ * Resolve this engine's selection field, or `undefined` when the runtime shape
+ * is hardened.
+ *
+ * `config` being an own property is the discriminator: 0.2.1-rc.2's
+ * `WebRuntime` owns a `config` field and no `searchProviderId`, while every
+ * older one owns the latter and no `config`. When `config` exists but carries
+ * no writable volatile reference (a hand-constructed runtime, or a future
+ * hardening), this returns `undefined` rather than falling back to mutating the
+ * instance — that write would not be what `search()` reads.
+ */
+function selectionField(web: WebRuntime): SearchSelectionField | undefined {
+  const shaped = web as unknown as WebRuntimeSearchShape
+  if (Object.prototype.hasOwnProperty.call(shaped, 'config')) {
+    const reference = shaped.config?.searchProvider
+    if (reference === undefined || typeof reference.get !== 'function') return undefined
+    const write = reference[VOLATILE_WRITE]
+    if (typeof write !== 'function') return undefined
+    return {
+      read: () => {
+        const value = reference.get()
+        return typeof value === 'string' ? value : undefined
+      },
+      write: (value) => { write.call(reference, value) },
+    }
+  }
+  return {
+    read: () => shaped.searchProviderId,
+    write: (value) => { shaped.searchProviderId = value },
+  }
 }
 
 /**
@@ -99,20 +156,21 @@ export function applyCommandCodeSearchSelection(
   enable: boolean,
 ): void {
   try {
-    const field = web as unknown as WebRuntimeSearchField
+    const field = selectionField(web)
+    if (field === undefined) return
     if (enable) {
       if (state.owner) {
         // Still on across a re-apply: re-assert without forgetting whom we displaced.
-        field.searchProviderId = COMMANDCODE_SEARCH_PROVIDER_ID
+        field.write(COMMANDCODE_SEARCH_PROVIDER_ID)
         return
       }
-      const prior = field.searchProviderId
+      const prior = field.read()
       // Three cases, and `displaced` alone cannot tell the last two apart:
       // a sibling's id (restore it), the field was unset (restore `undefined`),
       // or the field already read OUR id (touch nothing).
       state.preexisting = prior === COMMANDCODE_SEARCH_PROVIDER_ID
       state.displaced = state.preexisting ? undefined : prior
-      field.searchProviderId = COMMANDCODE_SEARCH_PROVIDER_ID
+      field.write(COMMANDCODE_SEARCH_PROVIDER_ID)
       state.owner = true
       return
     }
@@ -120,7 +178,7 @@ export function applyCommandCodeSearchSelection(
       state.owner = false
       // Restore ONLY a selection this plugin actually took over — see the
       // `preexisting` note on {@link CommandCodeSearchSelection}.
-      if (!state.preexisting) field.searchProviderId = state.displaced
+      if (!state.preexisting) field.write(state.displaced)
       state.preexisting = false
       return
     }

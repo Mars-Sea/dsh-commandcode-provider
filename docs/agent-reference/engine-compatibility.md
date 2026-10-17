@@ -73,7 +73,14 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   pairs **exactly the same two versions** — npm publishes no
   `dsh-0-2-1-alpha-4` dist-tag for either package because nothing moved — so
   both declared ranges stay unchanged there too, and the tilde pairing must
-  still be re-read (not assumed) at every engine bump. Leaving this
+  still be re-read (not assumed) at every engine bump. `0.2.1-rc.2` pairs the
+  first STABLE versions of both, `cordis ~4.0.5` and `schemastery ~3.18.5`
+  (the alpha suffix is gone); the same tilde branches already admit them
+  (`4.0.5 > 4.0.5-alpha.1` and `< 4.1.0`, likewise for `3.18.5`), so both
+  declared ranges stay unchanged a third time. The lock file's six
+  Cordis/Schemastery entries did move from `-alpha.2` to the stable versions:
+  the development tree follows the engine pairing even when the declared range
+  would tolerate the older prerelease. Leaving this
   plugin's previous `^4.0.2` / `~3.18.4` in place is an
   immediate `ERESOLVE`, not a silent mismatch: `dsh-agent@0.2.1-alpha.1` demands
   `cordis ~4.0.5-alpha.1` and `dsh-settings@0.2.1-alpha.1` demands
@@ -90,20 +97,29 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   bump that should resolve cleanly still reports `ERESOLVE` against stale rc-era
   packages until the tree is rebuilt; `rm -rf node_modules` before judging a
   genuine conflict.
-- **兼容范围只保留两条通道的最新已验证版本。** 用户于 2026-10-11 确认维护
-  一个 RC（候选发布版）与一个 alpha（早期测试版）；当前为
-  `0.2.0-rc.2 || 0.2.1-alpha.4`，分别与官方 npm `latest`、`alpha` 标签一致
-  （alpha 通道为 2026-10-15 发布的 `0.2.1-alpha.4`，标签 SHA
-  `86a402200d95fecef4529d969836f1fe13c6cb0d`；其前身 `0.2.1-alpha.3` 的标签 SHA 为
-  `2fbf4359b82fb94c03dcce0b831660d87f12ea5c`；RC 通道自 2026-09-29 起未变动）。
-  同通道升级在核对官方发布、接口及验证结果后替换旧版，不累加历史分支。
-  `0.2.1-alpha.1` 至 `0.2.1-alpha.3` 均已退出当前兼容范围，其配置需升级引擎。
+- **兼容范围：已验证的 RC 版本（最新 + 上一稳定）与一个 alpha 版本，向下兼容。**
+  用户于 2026-10-11 确认维护一个 RC（候选发布版）与一个 alpha（早期测试版）；
+  2026-10-18 用户进一步要求「本次兼容也要向下兼容」，因此不再按同通道替换删掉
+  上一稳定 RC，而是保留三个已验证引擎：`0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-alpha.4`。
+  核对事实：`0.2.0-rc.2` 是 npm `latest`（官方默认安装版本，仍覆盖大量用户，
+  本轮为其补跑完整矩阵）；`0.2.1-rc.2` 是 0.2.1 线的候选发布版（npm `next`，
+  2026-10-17 发布，标签 SHA `687f282e8625c6b8d11ff58211a90524be2e4317`）；
+  `0.2.1-alpha.4` 是上一轮已验证的官方 alpha（2026-10-15 发布，标签 SHA
+  `86a402200d95fecef4529d969836f1fe13c6cb0d`，其前身 `0.2.1-alpha.3` 的标签 SHA 为
+  `2fbf4359b82fb94c03dcce0b831660d87f12ea5c`）。npm `alpha` 标签此后已到
+  `0.2.1-alpha.5`，该版本**尚未纳入验证**，待下一轮升级审计。
+  **新增分支的准入规则**：必须先在该引擎上跑完整的 `test:engine`（链接、静态具名
+  导入、种子审计、准入判定、设置契约、22 个流终态场景、网关与历史服务）与
+  `test:install` 隔离安装，才能写进四处声明与 `dshReleases`；
+  已退出当前兼容范围的是 `0.2.1-alpha.1` 至 `0.2.1-alpha.3`，其配置需升级引擎
+  （或继续使用插件 0.13.4）。
   `@deepseek-ai/dsh-*` 的 `peerDependencies`、`devDependencies`、
   `dsh.compatibility.dsh`、`engines.dsh` 及锁文件同批同步，
-  `dsh.compatibility.dshReleases` 只记录这两个版本。
+  `dsh.compatibility.dshReleases` 只记录这三个版本。
   每个分支必须为裸版本号，不能用 `^`、`~` 或 `>=` 放行未验证的相邻版本。
-  `tests/package.test.ts` 约束版本数量、通道与声明一致性；它不联网判断哪个版本最新，
-  该事实由升级审计核对。两个配套的 Cordis、Schemastery 范围仍按引擎配对维护。
+  `tests/package.test.ts` 约束通道构成（至少一条 RC、恰好一条 alpha）与声明一致性；
+  它不联网判断哪个版本最新，该事实由升级审计核对。两个配套的 Cordis、Schemastery
+  范围仍按引擎配对维护。
   **自 `0.2.1-alpha.4` 起，宿主判定插件兼容性时只读 `engines.dsh`**
   （`apps/.../boot/app-boot/src/plugin-compatibility.ts` 的
   `unmetRequirements`）：只要包自带 `engines.dsh` 字符串，`@deepseek-ai/dsh*`
@@ -137,7 +153,14 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   admission verdict: every one of them stages the bundle into the engine's peer
   tree, while since `0.2.1-alpha.4` that verdict reads `engines.dsh` alone and
   ignores the dsh peers. All-green here plus a refused install is precisely how
-  the alpha.4 upgrade would otherwise have shipped broken.
+  the alpha.4 upgrade would otherwise have shipped broken. The rc.2 audit
+  reused exactly that evidence path: before the declaration changed, this
+  script on a real `0.2.1-rc.2` reported only
+  `the host compatibility preflight REJECTS this plugin:
+  {"engines.dsh":"0.2.0-rc.2 || 0.2.1-alpha.4"}` while every other check
+  (link, named imports, seed audit, settings contract, 22 stream scenarios,
+  gateway and history service) was already green — which is what proved the
+  runtime change was limited to the web-search selection field.
   Being the only check with the engine's own peer tree, it is also where the
   Config schema is proven to drive that engine's settings forms (every field
   marked volatile, parsing to a live reference). Run it before publishing and
@@ -150,7 +173,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 
 ## 二、流响应的宿主验证
 
-1. `npm run test:engine` 使用真实 DSH 的 `LlmRuntime`（模型运行时）及 `BlockAssembler`（响应块装配器），对每个已声明引擎（`0.2.0-rc.2`、`0.2.1-alpha.4`）各跑一遍：加载发布产物并交付合成响应。22 个场景覆盖三协议成功、正文截断、纯思考达到上限、工具断流、正文及工具取消、最终标记后多余内容，以及 OpenAI 尾部错误；确认唯一终态、失败关联标识、最终用量和中断工具快照。
+1. `npm run test:engine` 使用真实 DSH 的 `LlmRuntime`（模型运行时）及 `BlockAssembler`（响应块装配器），对每个已声明引擎（`0.2.0-rc.2`、`0.2.1-rc.2`、`0.2.1-alpha.4`）各跑一遍：加载发布产物并交付合成响应。22 个场景覆盖三协议成功、正文截断、纯思考达到上限、工具断流、正文及工具取消、最终标记后多余内容，以及 OpenAI 尾部错误；确认唯一终态、失败关联标识、最终用量和中断工具快照。
 2. 宿主源码在失败或取消终态走请求错误分支，不进入工具执行；验证没有运行完整代理工具链。适配器本地锁和待读释放由回归测试覆盖；真实提供商异常、收费记录及远端连接实际关闭时间尚未实测。
 
 3. 问题 #88 的标题用途通过两个已声明引擎的真实 `LlmRuntime`（模型运行时）传递到发布产物：CLI（命令行协议）与 OpenAI（开放接口协议）均发送 `off`（关闭思考），保留 64 词元预算并交付标题正文。提供商响应为合成数据；本轮 987 项本地测试、类型检查、构建及双引擎验证通过，不代表真实提供商标题质量或完整标题生成插件已验收。
@@ -161,6 +184,19 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 2. 适配方式是**探测**而不是按版本硬编码分支：先探测式加载 `@deepseek-ai/dsh-api-remote-access`（缺失即旧款引擎，跳过该注入），再探测式构造 owner Peer（alpha.2 的 `dsh-client-connection` 只有 `OperatorPeer`、没有 `Peer`，因此旧款返回 `undefined`，调用处据此决定要不要携带）。同一份夹具因此同时适配旧款与新款的已声明引擎。
 3. **区分「运行时零改动」与「夹具适配」**：本轮 alpha.2 → alpha.3 的破坏性变化只落在测试采集脚本上，插件 `src/` 与 `lib/` 运行时未改一行即可工作；夹具的引擎感知改动只是让这套检查能在新引擎上走到被测代码，不代表插件运行时依赖了 alpha.3 的新接口。审计证据：`npm run typecheck`、948 项测试、`npm run build`、`npm run test:engine`（双引擎矩阵）与 `npm run test:install` 全部通过。
 4. **alpha.4 轮次相反：夹具零改动，破坏点恰在本脚本的盲区。**`0.2.1-alpha.3` → `0.2.1-alpha.4` 中，本插件直接依赖的 14 个包 `src/` 逐字节未变（唯一有源码变化的 `@deepseek-ai/dsh-api-remotes` 是纯增量：新增 plugin-market 远端贡献，且该导入在发布产物里已被内联），Web 静态种子表与四个在用插槽的名字、owner props、outlet 渲染调用全部未变，因此既有夹具**一行未改**即全绿。真正的破坏落在宿主准入判定上（见本章前文）：`engines.dsh` 成为唯一判据后，旧声明在新引擎上会让 `test:engine` 全绿而真实安装、行加载与 bundle 装配三条路径全部被拒。处置一是替换 alpha 通道，二是补 `checkEngineAdmission`。红绿对照可复现：`--engine <alpha.4 安装树>` 通过，`--version 0.2.1-alpha.3` 被拒（该版已退出兼容范围）。
+
+5. **rc.2 轮次：一处声明、一处代码，其余零改动。**`0.2.1-alpha.4` → `0.2.1-rc.2`（699 个变更路径、
+   357 份包清单）中，插件直接导入的 17 个包只有 `@deepseek-ai/dsh-web` 的 `WebRuntime` 有实质变化：
+   私有 `searchProviderId` 字段被删，选择改由构造注入的易变配置引用 `config.searchProvider` 承载
+   （`z.string().volatile()`，`search()` 每次调用 `get()`）。旧写入给不存在的属性赋值不会抛错，因此
+   失败是**静默**的——toggle 打开后搜索仍走原后端，关闭后无法恢复。`src/web-search.ts` 新增
+   `selectionField()` 形状解析：有 `config` 自属性时用 cosmokit 的跨副本写协议
+   `Symbol.for('cosmokit.volatile.write')` 替换引用值，否则沿用旧字段；引用不可写时保持
+   「注册但未选中」。准入判定仍是 `engines.dsh` 唯一判据（`packages/boot/` 本轮零源码改动），
+   所以声明必须同批更新。Web 静态种子表、五个在用插槽、`ui-slots` 与 `ui-settings-models` 全部零变化，
+   夹具无需改动。验证：先在不改声明的 rc.2 上复现唯一失败项（准入），改声明后
+   `test:engine` 在三个引擎（`0.2.0-rc.2`、`0.2.1-rc.2`、`0.2.1-alpha.4`）上全绿——
+   向下兼容是在用户要求后补入 `0.2.0-rc.2` 并重新跑完整矩阵的结果，不是口头声明。
 
 ## 四、自定义上下文长度的宿主验证
 

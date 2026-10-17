@@ -37,15 +37,18 @@ See [Screenshots](#screenshots) below for what the UI looks like.
 
 ## Install
 
-This release supports **dsh 0.2.0-rc.2 (RC) and dsh 0.2.1-alpha.4 (alpha)**.
-The compatibility policy keeps the latest verified official release candidate
-and alpha release, one per channel. These match npm's `latest` and `alpha` tags
-as checked on 2026-10-15. The peer range and compatibility records name only
-these two exact versions. Note that **dsh 0.2.1-alpha.4 reads `engines.dsh`
-alone** when it decides whether a plugin is compatible; the dsh peer ranges are
-consulted only when that field is absent, so a build that declares the wrong
-`engines.dsh` is refused outright. A profile on `0.2.1-alpha.3` must upgrade its engine
-before installing this build:
+This release supports **dsh 0.2.0-rc.2 and 0.2.1-rc.2 (RC) and dsh 0.2.1-alpha.4
+(alpha)**, and stays backwards compatible: the previous stable RC
+(`0.2.0-rc.2`, npm's `latest`) is kept alongside the new one (`0.2.1-rc.2`,
+npm's `next` on 2026-10-18). The alpha channel keeps the last verified official
+alpha release, `0.2.1-alpha.4`; npm's `alpha` tag has since moved to
+`0.2.1-alpha.5`, which this build does not claim. The peer range and
+compatibility records name exactly these three versions. Note that **dsh
+0.2.1-alpha.4 and later read `engines.dsh` alone** when deciding whether a
+plugin is compatible; the dsh peer ranges are consulted only when that field is
+absent, so a build that declares the wrong `engines.dsh` is refused outright.
+Profiles on `0.2.1-alpha.3` or older, or on any engine outside these three,
+must upgrade (or stay on plugin 0.13.4) before installing this build:
 
 ```sh
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
@@ -79,7 +82,7 @@ Fresh pnpm 10 marketplace generations are supported directly. Every Harness pack
 Update with the same tag you installed with:
 
 ```sh
-dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2 or 0.2.1-alpha.4
+dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest     # dsh 0.2.0-rc.2, 0.2.1-rc.2 or 0.2.1-alpha.4
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@0.9.1      # older dsh (0.5.0 line, unmaintained)
 ```
 
@@ -158,7 +161,7 @@ cmd login                               # writes ~/.commandcode/auth.json
         cwd: !!js process.cwd()
 ```
 
-**Engine version.** The plugin is maintained against two engines: **dsh 0.2.0-rc.2** and **dsh 0.2.1-alpha.4**. Its `@deepseek-ai/dsh-*` peers use `0.2.0-rc.2 || 0.2.1-alpha.4`, while `@deepseek-ai/cordis` and `@deepseek-ai/schemastery` retain their engine-paired ranges `~4.0.4 || ~4.0.5-alpha.1` and `~3.18.4 || ~3.18.5-alpha.1` (alpha.4 pairs the same Cordis and Schemastery versions as alpha.3, so those ranges do not move). Compatibility records contain exactly these two engines. Each channel upgrade replaces its previous version after verification; it does not accumulate supported releases or admit unverified neighbours. Both `npm run test:engine` and `npm run test:install` check each retained version, and `test:engine` also calls that engine's own `evaluatePluginCompatibility` on the published manifest — from alpha.4 on, that verdict reads `engines.dsh` alone, so a wrong engine declaration fails there instead of only at install time. See [Install](#install) for older engines.
+**Engine version.** The plugin is maintained against three engines, backwards compatible: **dsh 0.2.0-rc.2** (the previous stable RC), **dsh 0.2.1-rc.2** and **dsh 0.2.1-alpha.4**. Its `@deepseek-ai/dsh-*` peers use `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-alpha.4`, while `@deepseek-ai/cordis` and `@deepseek-ai/schemastery` retain their engine-paired ranges `~4.0.4 || ~4.0.5-alpha.1` and `~3.18.4 || ~3.18.5-alpha.1` (rc.2 pairs Cordis `4.0.5` and Schemastery `3.18.5`, which those ranges already admit, so they do not move). Compatibility records contain exactly these three engines. A new engine is admitted only after a full real-engine matrix run on it; the previous stable RC is retained rather than dropped, so an engine upgrade is not forced on existing users. Unverified neighbours are never admitted. Both `npm run test:engine` and `npm run test:install` check each retained version, and `test:engine` also calls that engine's own `evaluatePluginCompatibility` on the published manifest — from alpha.4 on, that verdict reads `engines.dsh` alone, so a wrong engine declaration fails there instead of only at install time. See [Install](#install) for older engines.
 
 ## Usage dashboard
 

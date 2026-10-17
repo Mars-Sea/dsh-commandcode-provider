@@ -74,17 +74,28 @@ test('per-release DSH compatibility lists only verified releases', () => {
   }
 })
 
-test('DSH compatibility keeps one release candidate and one alpha release', () => {
-  // 维护策略只保留两条发布通道；同通道升级须替换旧版，避免验证矩阵不断累加。
-  // 最新版本由升级审计核对官方发布事实；离线测试只约束通道与数量，不请求网络。
+test('DSH compatibility keeps the verified release candidates and one alpha release', () => {
+  // 向下兼容策略：RC 通道保留「最新已验证 + 上一稳定」两条，alpha 通道保留一条；
+  // 每条都必须有一个真实的 `test:engine` 验证记录（由 dshReleases 与 peer 范围逐条对应保证）。
+  // 同通道升级不再删掉上一稳定 RC（0.2.0-rc.2 是官方 npm `latest` 的宿主），
+  // 但也不无限累加历史分支：新增分支前必须先在真实引擎上跑完整矩阵。
+  // 离线测试只约束通道构成，最新版本由升级审计核对官方发布事实。
   const declared = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
-  assert.equal(declared.length, 2, 'keep exactly two declared engine releases')
-  assert.equal(declared.filter((version) => /^\d+\.\d+\.\d+-rc\.\d+$/.test(version)).length, 1)
-  assert.equal(declared.filter((version) => /^\d+\.\d+\.\d+-alpha\.\d+$/.test(version)).length, 1)
+  assert.ok(declared.length >= 2, 'at least one RC and one alpha release')
+  assert.ok(
+    declared.filter((version) => /^\d+\.\d+\.\d+-rc\.\d+$/.test(version)).length >= 1,
+    'at least one release candidate',
+  )
+  assert.equal(
+    declared.filter((version) => /^\d+\.\d+\.\d+-alpha\.\d+$/.test(version)).length,
+    1,
+    'exactly one alpha release',
+  )
+  assert.equal(new Set(declared).size, declared.length, 'no duplicate declarations')
 })
 
 test('the manifest declares the same engine range it supports', () => {
-  // 三处必须逐字相同。**`engines.dsh` 不是装饰**：自 dsh `0.2.1-alpha.4` 起，
+  // 三处必须逐字相同。**`engines.dsh` 不是装饰**：自 dsh `0.2.1-alpha.4`（含 `0.2.1-rc.2`）起，
   // 宿主 `evaluatePluginCompatibility` 在包自带 `engines.dsh` 时**只**看它，
   // 完全忽略 `@deepseek-ai/dsh*` peer（`app-boot/src/plugin-compatibility.ts`）；
   // 判定不通过时插件行被禁用、bundle 层被静默跳过、安装被拒绝。
