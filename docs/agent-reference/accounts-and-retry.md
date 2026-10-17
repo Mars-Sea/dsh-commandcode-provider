@@ -177,11 +177,16 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   dsh-web's auto-select, and make every search throw `WEB_PROVIDER_AMBIGUOUS` as soon as a second provider
   is usable. An `undefined` `displaced` with `preexisting: false` is the OTHER case — the field was unset
   when we took over — and is restored as `undefined`, or the toggle would leave Command Code serving. That
-  write depends on the runtime shape (a plain writable property, not `#private`); the durable alternative is
+  write depends on the runtime shape and supports both live ones: engines before 0.2.1-rc.2 expose a plain
+  writable `searchProviderId` property (not `#private`), while 0.2.1-rc.2 and later expose the volatile config
+  reference `config.searchProvider`, which the plugin updates through cosmokit's cross-copy
+  `Symbol.for('cosmokit.volatile.write')` (the symbol is `Symbol.for`, so a second copy of the shared library
+  matches; cosmokit stays out of this bundle's peer set). A `config` present without a writable reference
+  degrades to registered-but-unselected rather than mutating the instance. The durable alternative is
   the boot-time `searchProvider: commandcode` cordis patch. The deprecated
   `selectCommandCodeSearchProvider()` (which forced the factory default on disable) was DELETED with the
   rest of the generation bridge — `applyCommandCodeSearchSelection()` is the only entry point. `dsh-web` is
-  a peer over every declared engine (`0.2.0-rc.2 || 0.2.1-alpha.4`, kept external in tsdown); `tests/web-search.test.ts` pins the wire body, header,
+  a peer over every declared engine (`0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-alpha.4`, kept external in tsdown); `tests/web-search.test.ts` pins the wire body, header,
   result mapping, the `WEB_ABORTED`/`WEB_PROVIDER_CREDENTIAL_MISSING`/`WEB_PROVIDER_ERROR` taxonomy, and the
   selection-field handoff (sibling-pin restore, re-enable memory, toggle-off through the real host `apply()`
   + `loader/volatile-update`).

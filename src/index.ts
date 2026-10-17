@@ -849,12 +849,14 @@ export function apply(ctx: Context, config: Config): void {
   //
   // Whether `commandcode` WINS over the shipped `deepseek-official` (or a
   // sibling search plugin's pin, e.g. modsearch) is `Config.webSearch`. The
-  // seam has no public runtime selector, so the plugin writes its private
-  // `searchProviderId` field (read per call) via
-  // `applyCommandCodeSearchSelection`; see src/web-search.ts for why that
-  // write is safe. The tracked selection remembers whichever backend was
-  // displaced, so turning the toggle off — and disposing the fiber — hands the
-  // selection back to it (issue #26) instead of forcing the factory default.
+  // seam has no public runtime selector, so the plugin writes the engine's own
+  // selection — the private `searchProviderId` field on engines before
+  // 0.2.1-rc.2, the volatile `config.searchProvider` reference on rc.2 and
+  // later — via `applyCommandCodeSearchSelection`; see src/web-search.ts for
+  // why that write is safe. The tracked selection remembers whichever backend
+  // was displaced, so turning the toggle off — and disposing the fiber — hands
+  // the selection back to it (issue #26) instead of forcing the factory
+  // default.
   const searchSelection = commandCodeSearchSelection()
   const applySearchSelection = (enabled: boolean): void => {
     if (webRuntime !== undefined) {
