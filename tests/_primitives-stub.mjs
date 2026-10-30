@@ -35,3 +35,17 @@ export function StateDot({ state, size, className }) {
     ...(size === undefined ? {} : { 'data-cc-size': String(size) }),
   })
 }
+
+/** Render the switch's button contract: role, state and accessible name. */
+export function Switch({ checked, onChange, label, disabled, title, className }) {
+  return createElement('button', {
+    type: 'button',
+    role: 'switch',
+    'aria-checked': checked,
+    'aria-label': label,
+    title,
+    disabled: disabled === true,
+    className,
+    onClick: () => onChange(!checked),
+  })
+}

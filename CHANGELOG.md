@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **设置页开关改用宿主 `Switch` 组件（#108）。** 五个布尔设置（按套餐过滤模型、零数据保留、网页搜索、侧边栏额度、缓存图片卸载）原先是 `appearance:none` 的 checkbox 加伪元素画出的开关，现在是宿主 primitives 的 `Switch`（`<button role="switch" aria-checked>`），与宿主其他设置页开关同源，读屏读到的状态与画面不会再不一致。外观保持 40×24；底色与滑块改为 160ms 同步过渡，按下时轻微缩小。点开关行的标题文字不再切换开关，需点开关本身。
+
 ## [0.16.0] - 2026-10-30
 
 ### Changed
