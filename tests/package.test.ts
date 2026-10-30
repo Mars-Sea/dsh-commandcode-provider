@@ -133,16 +133,16 @@ test('per-release DSH compatibility lists only verified releases', () => {
 
 test('DSH compatibility records every verified release of the admitted channel range', () => {
   // 用户 2026-10-24 拍板：准入由 `engines.dsh` 的区间负责（同通道已验证下界及以上自动放行），
-  // 本记录只列**实际跑过完整引擎矩阵**的版本 —— 0.2.1 通道的 rc.2（npm `latest`）、
-  // rc.3、rc.4，以及 2026-10-28 用户拍板放开 0.2.2 通道后补入的 alpha.2
-  // （npm `alpha`，`test:engine` 与 `test:install` 均跑过）。
+  // 本记录只列**实际跑过完整引擎矩阵**的版本 —— 0.2.1 通道的 rc.2、rc.3、rc.4、
+  // rc.5（2026-10-30 补入，npm `latest`／`next`），以及 2026-10-28 用户拍板放开
+  // 0.2.2 通道后补入的 alpha.2（npm `alpha`，`test:engine` 与 `test:install` 均跑过）。
   // 未来同通道新版本无需改声明即可准入，但只有补上记录才算已验证；
   // 这份记录同时是 `test:engine` 与 `test:install` 的矩阵来源，加记录就必须先跑通它们。
   const declared = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
-  assert.equal(declared.length, 4, 'keep exactly the verified engine releases')
+  assert.equal(declared.length, 5, 'keep exactly the verified engine releases')
   assert.deepEqual(
     [...declared].sort(),
-    ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.2-alpha.2'],
+    ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2'],
     'one record per channel: the 0.2.1 RC line plus the 0.2.2 alpha line',
   )
 })

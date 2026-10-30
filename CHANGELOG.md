@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **补入 DSH `0.2.1-rc.5` 兼容记录（无代码改动）。** npm `latest` 与 `next` 从 `0.2.1-rc.4` 前进到 `0.2.1-rc.5`，发布说明只有一条社区改进「优化对话中思考内容的展示」。源码 delta 采集到 368 个变更路径、349 份包清单（错误为空）：包清单只有版本号变化，依赖与 peer 区间零变化；19 个非清单文件集中在推理展示——`client/ui-chat` 新增 `reasoning-text.ts` 并给 `conversation.chat.reasoning.body` 的 owner props 加上 `rawText`、`text` 改为显示文本，`experimental/client-ui-cot-translation` 跟随适配，其余是 slot 目录与测试/文档。**破坏面只在该推理插槽，插件不使用它**；插件导入的 16 个宿主包仅版本号变化，`ui-primitives` 的 `Switch` 未变。`dsh.compatibility.dshReleases` 补入 `0.2.1-rc.5`，引擎矩阵 5/5 通过；准入区间不变，用户升级到 rc.5 无需更新插件。
+
 ## [0.16.1] - 2026-10-30
 
 ### Changed

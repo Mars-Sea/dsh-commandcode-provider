@@ -26,6 +26,7 @@
         "0.2.1-rc.2": "compatible",
         "0.2.1-rc.3": "compatible",
         "0.2.1-rc.4": "compatible",
+        "0.2.1-rc.5": "compatible",
         "0.2.2-alpha.2": "compatible"
       },
       "dsh": ">=0.2.1-rc.2 <0.2.2-0 || >=0.2.2-alpha.2 <0.2.3-0"
