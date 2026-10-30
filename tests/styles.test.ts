@@ -370,3 +370,15 @@ test('PAGE_CSS: an invalid field keeps its error border under the pointer', () =
   assert.ok(plain >= 0 && invalid > plain, 'the invalid hover border must follow the plain one at equal specificity')
   assert.ok(block[invalid]!.includes('.cc-unitBoxInvalid:hover'))
 })
+
+test('PAGE_CSS: the settings switch takes its box from the primitive, never from this sheet', () => {
+  // The design canvas's 40x24 track made every switch read fatter than the
+  // host's own settings switches (user report, 2026-10-30); the primitive's
+  // 36x20 track with a 16px thumb is the single source of truth now. Pin that
+  // this sheet styles the switch's motion only, so a future size override
+  // cannot silently reintroduce the mismatch.
+  const boxed = PAGE_RULES.filter(
+    (rule) => /\.cc-switch\b/.test(rule.selector) && /(?:^|;)\s*(?:width|height)\s*:/.test(rule.body),
+  )
+  assert.deepEqual(boxed.map((rule) => rule.selector), [])
+})
