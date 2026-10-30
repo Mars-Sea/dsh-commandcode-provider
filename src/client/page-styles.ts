@@ -213,23 +213,21 @@ export const PAGE_CSS = `
 .cc-check:checked{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
 .cc-check:checked::after{content:'';position:absolute;top:3px;left:5px;width:3px;height:7px;border:solid var(--dsw-alias-label-primary-foreground,#fff);border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
 .cc-checkName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Modelled on the platform's own Switch primitive (ui-primitives
- * Switch.module.css): a 40x24 capsule padding its track by 2px and sliding a
- * 20px thumb across the 36px content box. Three things are load-bearing.
- * (1) corner-shape:round on BOTH track and thumb — the theme sets a global
- * superellipse corner shape, which squares a capsule's ends off around a round
- * thumb. (2) No literal colours: brand-primary INVERTS between the modes, so a
- * hardcoded white thumb vanishes on the checked track in dark mode; the brand
- * foreground is what the platform paints on that fill. (3) border-l3 as the
- * off track — border-l2 leaves it indistinguishable from the page. The track
- * and thumb share one duration so the switch reads as one object. */
-.cc-toggle{box-sizing:border-box;appearance:none;flex-shrink:0;width:40px;height:24px;margin:0;padding:2px;border:0;border-radius:12px;corner-shape:round;background:var(--dsw-alias-border-l3);cursor:pointer;position:relative;transition:background-color .12s ease}
-.cc-toggle:checked{background:var(--dsw-alias-brand-primary)}
-.cc-toggle::after{content:'';display:block;width:20px;height:20px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-primary-foreground);transition:transform .12s ease}
-.cc-toggle:checked::after{transform:translateX(16px)}
-.cc-toggle:not(:checked)::after{background:var(--dsw-alias-switch-thumb,var(--dsw-alias-label-primary-foreground))}
-.cc-toggle:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-.cc-toggle:disabled{cursor:default;opacity:.5}
+/* The settings switches are the platform's Switch primitive (issue #108); its
+ * module CSS owns the colours, capsule shape, focus ring and disabled look.
+ * This layer only adjusts it. (1) Size stays the design canvas's 40x24 with a
+ * 20px thumb, one step up from the primitive's 36x20; the travel is 16px in
+ * both, so the primitive's own translateX still lands the thumb. The
+ * cc-rowControl> qualifier lifts these above the module's single-class rules
+ * whatever order the two sheets load in. (2) Motion joins the page's: the
+ * primitive slides the thumb over 120ms ease and snaps the track colour, so
+ * the thumb and track now share one 160ms strong ease-out and read as one
+ * object, and the switch scales to .95 on press like the other small
+ * pressables. The thumb is targeted as the button's only child because its
+ * module class name is hashed. */
+.cc-rowControl>.cc-switch{width:40px;height:24px;transition:background-color .16s var(--cc-ease-out),transform .16s var(--cc-ease-out)}
+.cc-rowControl>.cc-switch>span{width:20px;height:20px;transition:transform .16s var(--cc-ease-out)}
+.cc-switch:active:not(:disabled){transform:scale(.95)}
 .cc-accountMode{align-items:center;gap:8px;display:flex;margin:12px 16px 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 .cc-accountList{flex-direction:column;gap:8px;display:flex}
 .cc-accountList+.cc-panel{margin:8px 16px 16px}
@@ -426,9 +424,10 @@ export const PAGE_CSS = `
  * changes, which carry meaning without motion. Card entrance keeps its fade
  * (the transform is neutralised), and the fold is already instant. */
 @media (prefers-reduced-motion:reduce){
-.cc-foldChevron,.cc-toggle::after,.cc-usageBarFill,.cc-miniMeterFill{transition:none}
+.cc-foldChevron,.cc-rowControl>.cc-switch>span,.cc-usageBarFill,.cc-miniMeterFill{transition:none}
 .cc-btn,.cc-iconButton,.cc-resetInline,.cc-segItem{transition:background-color .15s ease,color .15s ease}
-.cc-btn:active:not(:disabled),.cc-iconButton:active:not(:disabled),.cc-resetInline:active:not(:disabled),.cc-segItem:active:not(:disabled):not(.cc-segOn){transform:none}
+.cc-rowControl>.cc-switch{transition:background-color .15s ease}
+.cc-btn:active:not(:disabled),.cc-iconButton:active:not(:disabled),.cc-resetInline:active:not(:disabled),.cc-segItem:active:not(:disabled):not(.cc-segOn),.cc-switch:active:not(:disabled){transform:none}
 .cc-notice{transition:opacity .2s ease}
 .cc-group{transition:opacity .2s ease;transform:none!important}
 .cc-saveBar{transition:opacity .16s ease,visibility 0s linear .16s}

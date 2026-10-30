@@ -26,7 +26,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { Menu, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Menu, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry, StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
@@ -487,8 +487,15 @@ function invalidCopy(reason: StagedField['invalidReason'], t: Translate<Settings
  * One boolean field row rendered as a switch. The staged text is `'true'` /
  * `'false'` / `''` (unset → `defaultChecked`); toggling stages the string the
  * boolean field spec parses back into a real boolean on save.
+ *
+ * The control is the harness's own `Switch` primitive (issue #108), not a
+ * restyled checkbox: a `<button role="switch" aria-checked>` whose drawing keys
+ * off `aria-checked`, so what it shows cannot drift from what assistive tech
+ * reads, and it matches the host's other settings switches. It takes no `id`,
+ * so the row title is plain text and the switch carries the label as its
+ * accessible name instead of through `<label htmlFor>`.
  */
-function ToggleField({
+export function ToggleField({
   id,
   label,
   hint,
@@ -513,21 +520,17 @@ function ToggleField({
   return (
     <SettingRow
       title={label}
-      titleFor={id}
+      titleId={id}
       tag={<OverrideTag label={label} state={state} disabled={disabled} t={t} onReset={onReset} />}
       description={hint}
       control={
-        <>
-          <input
-            id={id}
-            className="cc-toggle"
-            type="checkbox"
-            role="switch"
-            checked={checked}
-            disabled={disabled}
-            onChange={(event) => onEdit(event.target.checked ? 'true' : 'false')}
-          />
-        </>
+        <Switch
+          className="cc-switch"
+          checked={checked}
+          label={label}
+          disabled={disabled}
+          onChange={(next) => onEdit(next ? 'true' : 'false')}
+        />
       }
     />
   )
