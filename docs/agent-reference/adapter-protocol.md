@@ -192,6 +192,19 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
       the same structure cannot succeed, and the advice is a new session or fewer messages/images. Only
       the stated number is quoted; the rest of the upstream sentence stays unshown under the display
       rule at the bottom of `generateHttpError()`.
+    - A zero-balance account is a REFUSAL ABOUT THE ACCOUNT, not about the request. Measured
+      2026-10-31: `POST /provider/v1/chat/completions` answers `400` with
+      `{"error":{"message":"You have insufficient credits to make this request…","type":"invalid_request_error","code":"BAD_REQUEST"}}`
+      — the structured code says nothing useful and only the prose names the cause, so the generic copy
+      sent readers to "check the model, plan and request settings", none of which is the problem.
+      `generateHttpError()` therefore claims this shape before the generic fallback and answers
+      "this account has insufficient credits for the request — top up credits or switch to another
+      account". The evidence is the SAME predicate the account pool rotates on
+      (`isInsufficientCreditsText()` plus `INSUFFICIENT_CREDITS`/`PREMIUM_CREDITS_EXHAUSTED`), so
+      rotation and copy cannot disagree about what this refusal is; a single-account profile has nobody
+      to rotate to, and that is exactly when the wording is the only clue the user gets. The failure
+      code still comes from `httpErrorCode(status)`, so retry budget and rotation are unchanged — this
+      is copy, not classification.
     - **An output-ceiling refusal is retried once, at the ceiling the endpoint names.** `streamRequest()`
       wraps `streamAttempt()` and, on failure before the first chunk reaches the host, reads Y out of
       `max_tokens: X > Y`, records it in `learnedOutputLimits` and re-sends. Both refusal shapes are covered

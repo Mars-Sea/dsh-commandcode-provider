@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **账户余额为 0 时提示指向错误方向（2026-10-31 实测）。** 上游对 `POST /provider/v1/chat/completions` 返回 `400`，正文为 `You have insufficient credits to make this request…`、结构化代码只有 `BAD_REQUEST`；插件已能据此把账号轮换掉，但单账号场景没有可换对象，最终只显示通用文案「服务端拒绝了本次请求，请检查模型、套餐和请求设置」——按这三条查一条也查不到点上。现在该形状在通用分支之前被识别，提示为「账户额度不足，无法完成本次请求——请充值额度，或切换到其他账号」。判定复用账号轮换的同一组 pattern（新增 `isInsufficientCreditsText()` 与 `INSUFFICIENT_CREDITS`／`PREMIUM_CREDITS_EXHAUSTED` 代码集），两处不会漂移；失败码仍取 `httpErrorCode(status)`，重试预算与轮换行为不变。**验证**：`typecheck` 退出码 0，`npm test` 1156／1156（新增 3 条：实测正文、仅结构化代码、普通 400 不被吞）。
+
 ## [0.16.3] - 2026-10-31
 
 ### Changed

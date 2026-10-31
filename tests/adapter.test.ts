@@ -6982,6 +6982,68 @@ test('通用 HTTP 错误以中文说明和错误码展示，不回显上游正�
   )
 })
 
+test('账户额度不足时给出可行动文案，不再指向模型与请求设置', async () => {
+  // 2026-10-31 实测：余额为 0 的账号在 /provider/v1/chat/completions 返回 400，
+  // 正文点名 insufficient credits；当时界面只显示通用提示「请检查模型、套餐和
+  // 请求设置」，按那三条查一条也查不到点上。单账号场景没有可轮换的对象，
+  // 这个文案就是用户唯一的线索。
+  const { fetchImpl } = fetchByKey({
+    'key-1': { status: 400, body: JSON.stringify({ error: {
+      message: 'You have insufficient credits to make this request. Please purchase more credits to continue using the service.',
+      type: 'invalid_request_error',
+      code: 'BAD_REQUEST',
+    } }) },
+  })
+  const adapter = makeAdapter({ fetchImpl, resolveApiKey: async () => 'key-1' })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      const actual = error as { code?: string; message: string; failure?: { status?: number } }
+      assert.equal(actual.code, 'PROVIDER_HTTP_ERROR')
+      assert.equal(actual.failure?.status, 400)
+      assert.match(actual.message, /账户额度不足/)
+      assert.match(actual.message, /充值额度，或切换到其他账号/)
+      assert.match(actual.message, /insufficient credits for the request/)
+      // 通用文案会把人引向错误方向，必须让位；上游英文正文仍不回显。
+      assert.doesNotMatch(actual.message, /请检查模型、套餐和请求设置/)
+      assert.doesNotMatch(actual.message, /purchase more credits/)
+      return true
+    },
+  )
+})
+
+test('额度不足只凭结构化代码也识别，无需正文措辞', async () => {
+  // 与账号轮换同一组证据：官方 CLI 的 isInsufficientCreditsRequestError 也读代码。
+  for (const code of ['INSUFFICIENT_CREDITS', 'PREMIUM_CREDITS_EXHAUSTED'] as const) {
+    const { fetchImpl } = fetchByKey({ 'key-1': { status: 400, body: JSON.stringify({ error: { code } }) } })
+    const adapter = makeAdapter({ fetchImpl, resolveApiKey: async () => 'key-1' })
+    await assert.rejects(
+      collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+      (error: unknown) => {
+        const actual = error as { message: string }
+        assert.match(actual.message, /账户额度不足/, code)
+        return true
+      },
+    )
+  }
+})
+
+test('普通 400 不被额度分支吞掉，仍走通用文案', async () => {
+  const { fetchImpl } = fetchByKey({
+    'key-1': { status: 400, body: JSON.stringify({ error: { code: 'validation_error', message: 'bad field' } }) },
+  })
+  const adapter = makeAdapter({ fetchImpl, resolveApiKey: async () => 'key-1' })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      const actual = error as { message: string }
+      assert.match(actual.message, /请检查模型、套餐和请求设置/)
+      assert.doesNotMatch(actual.message, /账户额度不足/)
+      return true
+    },
+  )
+})
+
 for (const protocol of ['cli', 'openai', 'messages'] as const) {
   test(`${protocol}：HTTP 错误分别保留有界代码和类型，拒绝正文及非法标识`, async () => {
     const cases = [

@@ -449,6 +449,26 @@ export function generateHttpError(
       { status: 413 },
     )
   }
+  // 账户额度用尽：上游把唯一可行动的结论写在正文里（实测 2026-10-31，
+  // `/provider/v1/chat/completions` 返回 400 + `You have insufficient credits…`），
+  // 而通用文案会把人引向「模型、套餐和请求设置」——按那三条查，一条也查不到点上。
+  // 判定复用账号轮换的同一组 pattern（见 isInsufficientCreditsText），避免
+  // 「轮换认得出、文案认不出」的漂移；失败码仍取 httpErrorCode(status)，
+  // 重试预算与轮换行为都不因这段文案改变。上游英文正文不回显（同本函数末尾的展示规则）。
+  const creditsCode = providerCode?.toUpperCase()
+  if (
+    (creditsCode !== undefined && INSUFFICIENT_CREDITS_CODES.has(creditsCode))
+    || isInsufficientCreditsText(overflowDetail)
+    || isInsufficientCreditsText(errText)
+  ) {
+    return bilingual(
+      httpErrorCode(status),
+      `Command Code API error ${status}: this account has insufficient credits for the request`
+      + ' — top up credits or switch to another account',
+      `Command Code API 返回 ${status}：账户额度不足，无法完成本次请求——请充值额度，或切换到其他账号`,
+      { status },
+    )
+  }
   // 上游正文可能回显输入或返回整页英文错误；仅展示中文解释和有界错误标识。
   // 分类仍使用上面的原始正文，不能因为收敛展示文案改变重试与压缩行为。
   const safeIdentifier = (value: string | undefined): string | undefined =>
@@ -572,6 +592,41 @@ const ACCOUNT_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
   'MODEL_NOT_IN_PLAN',
 ])
 
+/**
+ * 余额用尽的两种结构化代码（`USAGE_EXCEEDED`／`MODEL_NOT_IN_PLAN` 不属于这一类：
+ * 前者是窗口额度，后者是套餐不含该模型，用户可行动的方向不同）。
+ */
+const INSUFFICIENT_CREDITS_CODES: ReadonlySet<string> = new Set([
+  'INSUFFICIENT_CREDITS',
+  'PREMIUM_CREDITS_EXHAUSTED',
+])
+
+/**
+ * 正文里「额度用尽」的特征。
+ *
+ * 账号轮换判定与用户可见文案共用这一份 pattern：两处各写一份必然漂移，出现
+ * 「轮换认得出、文案认不出」的错位——2026-10-31 的实测就是这样，账号池已经按
+ * 这个原因换号，而单账号场景下用户看到的仍是通用 400 提示。
+ *
+ * 下划线与空格是同一个词：JSON 正文常写 `insufficient_credits`，CLI 自己的
+ * marker 列表写 `insufficient credits`，先归一分隔符再匹配。
+ */
+function isInsufficientCreditsText(text: string): boolean {
+  const lower = text.toLowerCase().replaceAll('_', ' ')
+  return lower.includes('insufficient credits')
+    || lower.includes('premium credits exhausted')
+    || /insufficient (credit|balance)/.test(lower)
+    || /out of credit/.test(lower)
+}
+
+/** 正文里「模型不在本账号套餐内」的特征，与上者同一归一规则。 */
+function isModelOutsidePlanText(text: string): boolean {
+  const lower = text.toLowerCase().replaceAll('_', ' ')
+  return lower.includes('model not in plan')
+    || /not (available|included)[^.]{0,40}plan/.test(lower)
+    || lower.includes('upgrade your plan')
+}
+
 export function classifyAccountRejection(
   status: number,
   errText: string,
@@ -604,19 +659,10 @@ export function classifyAccountRejection(
   // `insufficient_credits` / `model_not_in_plan`, while the CLI's own marker
   // list is written with spaces. Normalizing the separator keeps both wire
   // spellings classified, and the explicit code list above covers a body that
-  // carries a code and no message at all.
-  const lower = errText.toLowerCase().replaceAll('_', ' ')
-  if (
-    lower.includes('insufficient credits')
-    || lower.includes('premium credits exhausted')
-    || lower.includes('model not in plan')
-    || /insufficient (credit|balance)/.test(lower)
-    || /out of credit/.test(lower)
-    || /not (available|included)[^.]{0,40}plan/.test(lower)
-    || lower.includes('upgrade your plan')
-  ) {
-    return { reason: 'unavailable' }
-  }
+  // carries a code and no message at all. The patterns live in the shared
+  // predicates so the user-facing copy in `generateHttpError()` reads exactly
+  // the same evidence.
+  if (isInsufficientCreditsText(errText) || isModelOutsidePlanText(errText)) return { reason: 'unavailable' }
   return undefined
 }
 
