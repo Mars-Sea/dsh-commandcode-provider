@@ -4,7 +4,8 @@
  * The probe is the row's real-time half, so its classification is the part that
  * must not drift: the official monitor's default `expectedStatusCodes` decide
  * what "up" means, a timeout and a transport failure stay distinguishable, and
- * the request always goes to the host root. The wire codec is pinned here too,
+ * the request goes to the CONFIGURED base — path prefix included — instead of
+ * being collapsed to the host root. The wire codec is pinned here too,
  * because the browser trusts `parseProbeResult` to reject anything the Host
  * should never have sent.
  */
@@ -12,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { PROBE_TIMEOUT_MS, probeCommandCode, probeOutcomeForStatus } from '../src/service-probe.ts'
+import { PROBE_TIMEOUT_MS, probeCommandCode, probeOutcomeForStatus, probeTargetOf } from '../src/service-probe.ts'
 import { parseProbeResult } from '../src/service-probe-wire.ts'
 
 /** Minimal Response stand-in; the probe only reads `status` and cancels the body. */
@@ -51,13 +52,37 @@ test('probeCommandCode reports a reachable endpoint with latency', async () => {
   assert.equal(probe.checkedAt, 1234)
 })
 
-test('probeCommandCode always probes the host root, even from a pathed base', async () => {
+test('probeTargetOf keeps the configured path and normalizes only the trailing slash', () => {
+  assert.equal(probeTargetOf('https://api.commandcode.ai'), 'https://api.commandcode.ai/')
+  assert.equal(probeTargetOf('https://example.test/some/path'), 'https://example.test/some/path/')
+  assert.equal(probeTargetOf('https://example.test/some/path/'), 'https://example.test/some/path/')
+  // A prefix reverse proxy routes only inside its prefix: collapsing to `/`
+  // probes the proxy itself and reports a failure for a base that works.
+  assert.equal(
+    probeTargetOf('http://127.0.0.1:18797/bili/https://api.commandcode.ai'),
+    'http://127.0.0.1:18797/bili/https://api.commandcode.ai/',
+  )
+  assert.throws(() => probeTargetOf(''))
+})
+
+test('probeCommandCode probes the configured base itself, path prefix included', async () => {
   const urls: string[] = []
   await probeCommandCode({
-    apiBase: 'https://example.test/some/path//',
+    apiBase: 'https://example.test/some/path',
     fetchImpl: recordingFetch(urls),
   })
-  assert.deepEqual(urls, ['https://example.test/'])
+  assert.deepEqual(urls, ['https://example.test/some/path/'])
+})
+
+test('probeCommandCode keeps a reverse-proxy prefix instead of probing the host root', async () => {
+  const urls: string[] = []
+  const probe = await probeCommandCode({
+    apiBase: 'http://127.0.0.1:18797/bili/https://api.commandcode.ai',
+    fetchImpl: recordingFetch(urls, 404),
+  })
+  assert.deepEqual(urls, ['http://127.0.0.1:18797/bili/https://api.commandcode.ai/'])
+  assert.equal(probe.outcome, 'http-error')
+  assert.equal(probe.status, 404)
 })
 
 test('probeCommandCode keeps an HTTP failure distinct from a transport failure', async () => {

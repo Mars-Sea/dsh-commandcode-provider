@@ -1,6 +1,7 @@
 /** 设置写入过程：同一控制器的意图按顺序执行，配置确认与凭据确认分别保留。
  * 生产使用现有远端设置／凭据，测试替换这些依赖；不提供跨服务事务。 */
 import { readVisibility } from '../model-visibility.ts'
+import { readableErrorText } from '../readable-error.ts'
 import type { SettingsPageApi, SettingsScope, SettingsScopeSnapshot } from './settings.ts'
 import type { SettingsMutationResult, SettingsPathOp } from './settings-scope.ts'
 
@@ -30,6 +31,12 @@ export interface SettingsWriteResult {
   refreshFailed: boolean
   /** 实际发出调用的原引用，仅用于核对；从不包含密钥内容。 */
   credentialRef: string | undefined
+  /**
+   * 配置写入未确认时，宿主给出的原始原因（`atomic-write: timed out waiting
+   * for the writer lock …`、`SETTINGS_CONFLICT`、权限拒绝等）。固定文案无法
+   * 区分这些情况，提示层必须能把原文交给用户自查。
+   */
+  configError?: string
 }
 
 export type SettingsWriteIntent =
@@ -138,7 +145,7 @@ export class SettingsWriter {
         if (task === undefined) break
         let outcome: SettingsWriteResult
         try { outcome = this.closed ? closedResult() : await this.execute(task.command) }
-        catch { outcome = { ...result(), config: 'unconfirmed' } }
+        catch (error: unknown) { outcome = { ...result(), config: 'unconfirmed', configError: readableErrorText(error) } }
         task.resolve(outcome)
       }
     } finally { this.running = false }
@@ -197,19 +204,41 @@ export class SettingsWriter {
     return success
   }
 
-  private async commit(ops: readonly SettingsPathOp[], baseline?: ReadonlyMap<string, FieldBaseline>): Promise<SettingsMutationResult> {
-    if (this.closed) return 'cancelled'
+  /** 一次确认尝试的结果，外加宿主拒绝它时的原始原因（成功或未发出时为空）。 */
+  private async commit(
+    ops: readonly SettingsPathOp[],
+    baseline?: ReadonlyMap<string, FieldBaseline>,
+  ): Promise<{ confirmation: SettingsMutationResult; failure: string | undefined }> {
+    if (this.closed) return { confirmation: 'cancelled', failure: undefined }
     const snapshot = this.scope.getSnapshot()
-    if (!snapshot.writable || this.scope.mutate === undefined) return 'failed'
-    if (baseline && [...baseline].some(([field, before]) => !sameValue(before, fieldBaseline(snapshot, field)))) return 'conflict'
-    try { return await this.scope.mutate(ops, snapshot.revision) }
-    catch { return 'failed' }
+    if (!snapshot.writable) {
+      return { confirmation: 'failed', failure: 'the settings scope is not writable from this page' }
+    }
+    if (this.scope.mutate === undefined) {
+      return { confirmation: 'failed', failure: 'this host does not expose the atomic settings mutation' }
+    }
+    if (baseline && [...baseline].some(([field, before]) => !sameValue(before, fieldBaseline(snapshot, field)))) {
+      return { confirmation: 'conflict', failure: 'a pending field changed under this write' }
+    }
+    try {
+      const confirmation = await this.scope.mutate(ops, snapshot.revision)
+      return {
+        confirmation,
+        failure: confirmation === 'accepted' ? undefined : this.scope.lastMutationFailure?.(),
+      }
+    } catch (error: unknown) {
+      return { confirmation: 'failed', failure: readableErrorText(error) }
+    }
   }
 
   private async configure(outcome: SettingsWriteResult, ops: readonly SettingsPathOp[], baseline?: ReadonlyMap<string, FieldBaseline>): Promise<boolean> {
     if (ops.length === 0) return true
-    const confirmation = await this.commit(ops, baseline)
+    const { confirmation, failure } = await this.commit(ops, baseline)
     outcome.config = confirmation === 'accepted' ? 'confirmed' : confirmation === 'conflict' ? 'conflict' : 'unconfirmed'
+    // A conflict already has actionable copy ("pending fields changed"). Every
+    // other refusal needs the Host verbatim reason, or the user cannot tell a
+    // lock timeout from an authorization refusal.
+    if (failure !== undefined && confirmation !== 'accepted' && confirmation !== 'conflict') outcome.configError = failure
     if (confirmation === 'cancelled' || this.closed) outcome.issue = 'closed'
     return confirmation === 'accepted' && !this.closed
   }

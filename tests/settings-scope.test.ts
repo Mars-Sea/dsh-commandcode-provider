@@ -528,3 +528,19 @@ test('销毁后已发配置的接受结果保留，未发任务明确取消', as
   await closing
   assert.equal(fake.mutateCalls().length, 1)
 })
+
+test('被拒的写入保留宿主原文，下一次成功写入清空', async () => {
+  const fake = fakeContext()
+  fake.answerDescribe({ writable: true, namespaces: [row()] })
+  const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
+  await flush()
+  fake.answerMutate({ error: 'atomic-write: timed out waiting for the writer lock at /home/u/.dsh/package.json.lock' })
+  assert.equal(await scope.mutate([{ op: 'set', path: ['apiBase'], value: 'https://synthetic.example' }]), 'failed')
+  // Issue #110: the Host's own wording is the only actionable part of the
+  // notice, so the scope has to keep it instead of collapsing to 'failed'.
+  assert.match(scope.lastMutationFailure?.() ?? '', /waiting for the writer lock/)
+  fake.answerMutate({ ...row({ revision: 8 }), ns: 'llm-commandcode' })
+  assert.equal(await scope.mutate([{ op: 'set', path: ['apiBase'], value: 'https://synthetic.example' }]), 'accepted')
+  assert.equal(scope.lastMutationFailure?.(), undefined)
+  await scope.dispose()
+})

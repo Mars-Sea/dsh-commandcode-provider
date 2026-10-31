@@ -1,12 +1,17 @@
 /**
  * Host-side connectivity probe behind `commandcode/probe`.
  *
- * Sends one GET to the configured API base root and classifies the answer the
- * way Upptime's monitor does: its default `expectedStatusCodes` are the 2xx
- * family (minus 209+ quirks) plus 3xx redirects, so a 200/301 counts as up and
+ * Sends one GET to the configured API base and classifies the answer the way
+ * Upptime's monitor does: its default `expectedStatusCodes` are the 2xx family
+ * (minus 209+ quirks) plus 3xx redirects, so a 200/301 counts as up and
  * anything else (401, 404, 5xx) is an HTTP-level failure. A timeout or a
  * network error is reported separately, because "cannot reach it" and "it
  * answered 500" are different problems for the user.
+ *
+ * The base is probed AS CONFIGURED, path prefix included: this plugin sends
+ * model requests by concatenating `${apiBase}${path}`, so a base behind a
+ * prefix reverse proxy only answers inside that prefix, and collapsing to the
+ * host root would report a false failure for a base that works.
  *
  * The probe never throws: every failure becomes an outcome the row can render.
  * The request is deliberately unauthenticated and body-less — it must not touch
@@ -38,6 +43,27 @@ export function probeOutcomeForStatus(status: number): ProbeOutcome {
 }
 
 /**
+ * Resolve the URL one probe must hit for a configured base.
+ *
+ * The configured base is an ENDPOINT, not an origin: every model request this
+ * plugin issues is built by string concatenation (`${apiBase}${path}`), so the
+ * base's path prefix is load-bearing. A reverse proxy mounted on a prefix
+ * (`http://127.0.0.1:18797/bili/https://api.commandcode.ai`) routes only
+ * inside that prefix — `new URL('/', base)` targets the proxy's own root
+ * instead and reports an HTTP failure for a base that carries real traffic.
+ * Keep the configured path and only normalize the trailing slash, so the
+ * monitor's body-less GET lands on the same shape the real requests use.
+ *
+ * Throws when `URL` cannot parse the base; the caller turns that into
+ * `unreachable`.
+ */
+export function probeTargetOf(apiBase: string): string {
+  const parsed = new URL(apiBase.trim())
+  if (!parsed.pathname.endsWith('/')) parsed.pathname = `${parsed.pathname}/`
+  return parsed.toString()
+}
+
+/**
  * Probe the configured API base once. Never rejects: an invalid base, a
  * timeout and a transport failure all resolve to an outcome.
  *
@@ -55,9 +81,7 @@ export async function probeCommandCode(options: {
   const now = options.now ?? Date.now
   let url: string
   try {
-    // The monitor probes the host root, not the configured path: a base of
-    // `https://host/v1` still answers on `/` for the official deployment.
-    url = new URL('/', options.apiBase).toString()
+    url = probeTargetOf(options.apiBase)
   } catch {
     return { outcome: 'unreachable', status: 0, latencyMs: 0, checkedAt: now() }
   }

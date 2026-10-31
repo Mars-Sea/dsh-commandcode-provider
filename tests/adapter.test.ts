@@ -7689,7 +7689,32 @@ test('getUsage() classifies an all-transport-failure run as network', async () =
   // an unparseable API base and a per-request timeout, so the card renders
   // these rather than only the generic "check your connection" hint.
   assert.equal(report.failures.length, 4)
-  assert.match(report.failures[0] ?? '', /^\/alpha\/whoami: fetch failed/)
+  // Issue #111: each record names the resolved address, not just the endpoint
+  // path — a path-only record cannot tell a dead proxy port from a wrong path.
+  assert.match(report.failures[0] ?? '', /^https:\/\/api\.commandcode\.ai\/alpha\/whoami: fetch failed/)
+})
+
+test('getUsage() failure records keep a path-prefixed API base intact', async () => {
+  const base = 'http://127.0.0.1:18797/bili/https://api.commandcode.ai'
+  const adapter = makeAdapter({
+    options: () => ({
+      apiBase: base,
+      workingDir: '/tmp/project',
+      modelsCachePath: '/tmp/cc-models-cache.json',
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      protocol: 'cli' as const,
+    }),
+    fetchImpl: (async () => {
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch,
+  })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(report.blocked, 'network')
+  assert.equal(report.failures.length, 4)
+  for (const failure of report.failures) {
+    assert.ok(failure.startsWith(`${base}/alpha/`), failure)
+  }
 })
 
 test('getUsage() asks for identity encoding when a host would otherwise pass raw Brotli', async () => {

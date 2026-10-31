@@ -1862,3 +1862,43 @@ test('首次事实读取失败显示未知，明确确认后才解释配置存�
   assert.equal(controller.state().accounts[0]?.credentialKnown, true)
   controller.dispose()
 })
+
+test('写入被拒的提示带上宿主原文，只有瞬时原因才标可重试', () => {
+  const base = {
+    config: 'unconfirmed' as const,
+    credential: 'none' as const,
+    issue: undefined,
+    refreshFailed: false,
+    credentialRef: undefined,
+  }
+  // Issue #110: "not confirmed" alone cannot separate a lock timeout from an
+  // authorization refusal, so the Host's own wording rides along — and the
+  // stale "the key was not written" claim is gone.
+  const locked = settingsWriteNotice({
+    ...base,
+    configError: 'atomic-write: timed out waiting for the writer lock at /home/u/.dsh/package.json.lock',
+  }, key => en[key])
+  assert.match(locked, /The host reported: atomic-write: timed out waiting for the writer lock/)
+  assert.match(locked, /looks transient/)
+  assert.doesNotMatch(locked, /the key was not written/i)
+
+  const denied = settingsWriteNotice({
+    ...base,
+    configError: 'permission denied: cannot write /home/u/.dsh/profiles/web/package.json',
+  }, key => zh[key])
+  assert.match(denied, /宿主返回：permission denied/)
+  assert.doesNotMatch(denied, /临时的/)
+})
+
+test('写入被拒的提示截断过长的宿主原文', () => {
+  const notice = settingsWriteNotice({
+    config: 'unconfirmed',
+    credential: 'none',
+    issue: undefined,
+    refreshFailed: false,
+    credentialRef: undefined,
+    configError: 'x'.repeat(400),
+  }, key => en[key])
+  assert.ok(notice.includes(`${'x'.repeat(200)}…`))
+  assert.ok(!notice.includes('x'.repeat(201)))
+})

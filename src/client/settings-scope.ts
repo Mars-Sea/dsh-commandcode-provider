@@ -312,6 +312,8 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
   private unsubscribe: (() => void) | undefined
   /** Revision answered by a superseded write still ahead of the mirror. */
   private pendingRevision: number | undefined
+  /** 最近一次被宿主拒绝的写入原因（原始 message）；写入成功后清空。 */
+  private mutationFailure: string | undefined
 
   constructor(
     resolveRemote: SettingsRemoteResolver,
@@ -366,14 +368,20 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
       const revision = expectedRevision ?? this.pendingRevision ?? this.getSnapshot().revision
       const response = await this.mutateRemote(ownedOps, revision)
       if (!response.ok) {
+        // Keep the Host's own words. The fixed client copy ("the key was not
+        // written") cannot tell a lock timeout from an authorization refusal,
+        // so the reason has to survive this far to stay diagnosable.
+        this.mutationFailure = response.error?.message
         await this.recover(generation)
         return response.error?.message?.includes('SETTINGS_CONFLICT') ? 'conflict' : 'failed'
       }
       const row = response.value
       if (row?.ns !== this.namespace || decodeRow(row.value) === undefined || typeof row.revision !== 'number') {
+        this.mutationFailure = 'the settings write answered an unexpected row'
         await this.recover(generation)
         return 'failed'
       }
+      this.mutationFailure = undefined
       if (this.disposed) return 'accepted'
       if (generation === this.writeGeneration) {
         this.pendingRevision = undefined
@@ -383,6 +391,16 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
       }
       return 'accepted'
     })
+  }
+
+  /**
+   * 最近一次被拒绝的写入，宿主给出的原始原因；写入成功后清空。
+   *
+   * 只在诊断提示里使用：固定文案无法区分锁超时、权限拒绝与被拒取值，
+   * 这段原文是用户唯一能自查的证据。
+   */
+  lastMutationFailure(): string | undefined {
+    return this.mutationFailure
   }
 
   private async mutateRemote(
@@ -525,6 +543,7 @@ export function createSettingsScope<T>(
     set: (field, value) => scope.set(field, value),
     unset: (field) => scope.unset(field),
     mutate: (ops, revision) => scope.mutate(ops, revision),
+    lastMutationFailure: () => scope.lastMutationFailure(),
     refresh: () => { void mirror.load() },
     dispose: async () => {
       for (const dispose of disposers.splice(0)) dispose()

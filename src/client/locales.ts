@@ -111,6 +111,8 @@ export type SettingsCommandCodeKey =
   | 'saveFailed'
   | 'writeConflict'
   | 'writeConfigUnconfirmed'
+  | 'writeConfigFailedDetail'
+  | 'writeConfigRetryable'
   | 'writeConfigSaved'
   | 'writeKeyNotIssued'
   | 'writeKeyUnconfirmed'
@@ -367,7 +369,9 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   saved: '设置已保存',
   saveFailed: '保存失败，请重试。',
   writeConflict: '待提交字段已被其他操作修改，配置未写入；请核对后再保存。',
-  writeConfigUnconfirmed: '配置提交未获确认；密钥未写入，请核对宿主状态后重试。',
+  writeConfigUnconfirmed: '配置提交未获确认，请核对宿主状态后重试。',
+  writeConfigFailedDetail: '宿主返回：{error}',
+  writeConfigRetryable: '这条原因看起来是临时的（配置档案被占用或等待写入锁超时），稍后重试通常能成功。',
   writeConfigSaved: '配置已保存。',
   writeKeyNotIssued: '密钥操作尚未发出；请核对后重试。',
   writeKeyUnconfirmed: '密钥操作未获确认；请核对后手动重试。',
@@ -413,7 +417,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   usageServiceUnavailable: 'Command Code 服务暂时不可用',
   usageServiceUnavailableHint: '服务端返回了错误（5xx），稍后点击刷新重试。',
   usageNetworkError: '无法连接 Command Code 服务',
-  usageNetworkHint: '所有请求都没有到达服务端。请检查网络连接或 API 地址设置。',
+  usageNetworkHint: '所有请求都没有到达服务端。每条失败记录都会列出它尝试的地址，请核对其中的主机与端口是否和 API 地址设置一致，并检查网络连接。',
   usageInvalidResponse: 'Command Code 响应无法读取',
   usageInvalidResponseHint: '已收到响应，但正文读取或解析失败。下方详情可区分读取超时、中断与格式异常；可先点击刷新重试。',
   usageUpdated: '更新于',
@@ -642,7 +646,9 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   saved: 'Settings saved',
   saveFailed: 'Save failed, please retry.',
   writeConflict: 'Pending fields were modified by another operation; the configuration was not written. Please review and save again.',
-  writeConfigUnconfirmed: 'The configuration submission was not confirmed; the key was not written. Please check the host state and retry.',
+  writeConfigUnconfirmed: 'The configuration submission was not confirmed. Please check the host state and retry.',
+  writeConfigFailedDetail: 'The host reported: {error}',
+  writeConfigRetryable: 'That reason looks transient (a busy profile or a lock timeout); retrying usually works.',
   writeConfigSaved: 'Configuration saved.',
   writeKeyNotIssued: 'The key operation has not been issued; please review and retry.',
   writeKeyUnconfirmed: 'The key operation was not confirmed; please review and retry manually.',
@@ -688,7 +694,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   usageServiceUnavailable: 'The Command Code service is temporarily unavailable',
   usageServiceUnavailableHint: 'The server returned errors (5xx); try Refresh again later.',
   usageNetworkError: 'Could not reach the Command Code service',
-  usageNetworkHint: 'No request reached the server. Check your network connection or the API base setting.',
+  usageNetworkHint: 'No request reached the server. Each failed attempt lists the address it tried — compare its host and port with the API base setting, and check the network connection.',
   usageInvalidResponse: 'Could not read the Command Code response',
   usageInvalidResponseHint: 'Responses arrived, but reading or parsing their bodies failed. Details below distinguish timeouts, interrupted reads, and invalid formats. Try Refresh again.',
   usageUpdated: 'Updated',
@@ -835,6 +841,15 @@ export function settingsWriteNotice(
   else if (result.credential === 'unconfirmed') key = 'writeKeyUnconfirmed'
   else if (result.credential === 'not-issued') key = 'writeKeyNotIssued'
   const messages = key ? [t(key)] : []
+  if (result.configError !== undefined && result.configError !== '') {
+    // The fixed copy can only say "not confirmed"; the Host's own words are the
+    // only part the user can act on. A wait for `package.json.lock` that timed
+    // out, an authorization refusal and a rejected value must be tellable
+    // apart on the page. Long reasons are clipped so the notice stays a notice.
+    const reason = result.configError.length > 200 ? `${result.configError.slice(0, 200)}…` : result.configError
+    messages.push(t('writeConfigFailedDetail').replace('{error}', reason))
+    if (configErrorLooksTransient(result.configError)) messages.push(t('writeConfigRetryable'))
+  }
   if (result.issue === 'target-changed' && result.credentialRef) {
     messages.push(t(result.credential === 'confirmed' ? 'writeKeyConfirmed' : 'writeKeyUnconfirmed'))
     messages.push(t('writeCredentialRefNote').replace('{ref}', result.credentialRef))
@@ -842,4 +857,17 @@ export function settingsWriteNotice(
   if (key && result.config === 'confirmed' && result.issue !== 'cleanup-pending') messages.unshift(t('writeConfigSaved'))
   if (result.refreshFailed) messages.push(t('writeRefreshFailed'))
   return messages.join(' ')
+}
+
+/**
+ * 宿主拒绝写入的原因是否值得立刻重试。
+ *
+ * 设置写入是“再试一次可能就好了”和“再试一百次也一样”的分界线：配置文件被
+ * 别的进程持有的锁挡住（`atomic-write: timed out waiting for the writer lock
+ * at …`）、宿主报告 `PROFILE_BUSY`、EBUSY/EAGAIN 这类都是前者；权限拒绝、
+ * 结构校验失败是后者。判错的代价只是多一句提示，但少这一句用户只能盲试。
+ */
+function configErrorLooksTransient(message: string): boolean {
+  return /PROFILE_BUSY|EAGAIN|EBUSY|ETIMEDOUT|EAI_AGAIN|writer lock|timed out|timeout|temporarily unavailable|busy/i
+    .test(message)
 }

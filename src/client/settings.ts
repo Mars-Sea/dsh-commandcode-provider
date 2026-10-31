@@ -31,6 +31,8 @@ export interface SettingsScope<T> {
   unset(field: string): Promise<void>
   /** 多字段共用一次宿主版本检查并返回确认；缺少此能力不能提交配置。 */
   mutate?(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationResult>
+  /** 最近一次被拒绝的写入原因（宿主原始 message）；只用于诊断提示。 */
+  lastMutationFailure?(): string | undefined
 }
 
 /** Result envelope returned by one current Typert Remote call. */

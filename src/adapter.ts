@@ -3170,6 +3170,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // Keep received-but-unreadable bodies separate from requests that never
     // received a response. The former used to be counted as "network".
     const failed: UsageEndpointFailure[] = []
+    // Name the address every attempt actually used. A bare `/alpha/whoami`
+    // cannot tell a moved port from a wrong path, and behind a prefix reverse
+    // proxy the prefix is exactly the part that differs — the user's own
+    // ECONNREFUSED diagnosis needs scheme://host:port in the failure text.
+    const targetOf = (path: string): string => `${base.replace(/\/+$/, '')}${path}`
 
     const getJson = async (path: string, share = true): Promise<Record<string, unknown> | undefined> => {
       try {
@@ -3185,13 +3190,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           share,
         )
         if (record === undefined) {
-          failures.push(`${path}: HTTP ${status}${responseFailure ? `；${responseFailure}` : ''}`)
+          failures.push(`${targetOf(path)}: HTTP ${status}${responseFailure ? `；${responseFailure}` : ''}`)
           failed.push(responseFailure ? { kind: 'invalid-response', status } : { kind: 'http', status })
           return undefined
         }
         return record
       } catch (error: unknown) {
-        failures.push(`${path}: ${readableErrorText(error)}`)
+        failures.push(`${targetOf(path)}: ${readableErrorText(error)}`)
         failed.push({ kind: 'transport' })
         return undefined
       }
