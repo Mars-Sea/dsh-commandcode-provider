@@ -178,11 +178,16 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   (`src/service-probe.ts` + `src/service-probe-wire.ts`) runs HOST-side against
   the configured API base, because `api.commandcode.ai` sends no CORS header and
   on a remote-Host setup the browser machine is not the one serving requests.
-  The probe is one unauthenticated GET of the base root (five-second timeout,
-  `redirect: 'manual'`), classified with Upptime's own default expected statuses
-  (2xx/3xx = `ok`, other statuses = `http-error`, with distinct `timeout` and
-  `unreachable` outcomes). It never throws and never claims more than "this Host
-  reached the endpoint just now"; the row renders its own dot and line.
+  The probe is one unauthenticated GET of `{apiBase}/alpha/whoami` — the same
+  endpoint login validation and account queries use, built by the same string
+  concatenation real requests use so a path-prefixed reverse proxy is exercised
+  as-is (issue #111) — with a five-second timeout and `redirect: 'manual'`.
+  Statuses are read as reachability: 2xx/3xx and 401/403 are `ok` (a
+  credential-less GET of that endpoint IS supposed to be answered 401; 403
+  covers gateway-level rejections), everything else is `http-error`, with
+  distinct `timeout` and `unreachable` outcomes. It never throws and never
+  claims more than "this Host reached the endpoint just now"; the row renders
+  its own dot and line.
   **Deliberate limits**: the monitor probes only `https://api.commandcode.ai`'s
   root (HTTP 200), so "operational" does not prove inference works; Upptime's
   `lastUpdated` is the last PUBLISH time, not the last check — the state file is

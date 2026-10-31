@@ -503,10 +503,10 @@ test('变更返回缺失配置行不是确认，且不能污染最后有效镜�
   const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
   await flush()
   fake.answerMutate({ ns: 'llm-commandcode', revision: 7 })
-  assert.equal(await scope.mutate([{ op: 'set', path: ['apiBase'], value: 'https://synthetic.example' }]), 'failed')
+  assert.equal((await scope.mutate([{ op: 'set', path: ['apiBase'], value: 'https://synthetic.example' }])).result, 'failed')
   assert.equal(scope.getSnapshot().revision, 3)
   await scope.dispose()
-  assert.equal(await scope.mutate([{ op: 'unset', path: ['apiBase'] }]), 'cancelled')
+  assert.equal((await scope.mutate([{ op: 'unset', path: ['apiBase'] }])).result, 'cancelled')
 })
 
 test('销毁后已发配置的接受结果保留，未发任务明确取消', async () => {
@@ -523,8 +523,22 @@ test('销毁后已发配置的接受结果保留，未发任务明确取消', as
   await flush()
   const closing = scope.dispose()
   release()
-  assert.equal(await first, 'accepted')
-  assert.equal(await next, 'cancelled')
+  assert.equal((await first).result, 'accepted')
+  assert.equal((await next).result, 'cancelled')
   await closing
   assert.equal(fake.mutateCalls().length, 1)
+})
+
+test('宿主拒绝的原文随报告返回，但不改变确认结论', async () => {
+  const fake = fakeContext()
+  fake.answerDescribe({ writable: true, namespaces: [row()] })
+  const scope = createSettingsScope<Record<string, unknown>>(fake.context, 'llm-commandcode', fake.resolveRemote)
+  await flush()
+  // 报告者命中的是 profile 写锁超时：结论仍是「未确认」，但原文能解释原因。
+  const message = 'atomic-write: timed out waiting for the writer lock at /home/user/.dsh/profiles/web/package.json.lock'
+  fake.answerMutate({ error: message })
+  const report = await scope.mutate([{ op: 'set', path: ['apiBase'], value: 'https://synthetic.example' }])
+  assert.equal(report.result, 'failed')
+  assert.equal(report.message, message)
+  await scope.dispose()
 })

@@ -5,7 +5,7 @@ import { MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS } from '../timeout-limits.ts'
 import { modelIsVisible, readVisibility } from '../model-visibility.ts'
 import { CONTEXT_WINDOW_MAX, CONTEXT_WINDOW_MIN, isValidContextWindow, readContextWindowOverrides } from '../context-window.ts'
 import { MAX_OUTPUT_TOKEN_LIMIT, OMIT_OUTPUT_TOKENS, isValidMaxOutputTokens } from '../output-budget.ts'
-import type { SettingsMutationResult, SettingsPathOp } from './settings-scope.ts'
+import type { SettingsMutationReport, SettingsPathOp } from './settings-scope.ts'
 import { SettingsWriter, DEFAULT_API_KEY_REF, accountModelMap, writeCompleted, type StoredRule, type SettingsWriteIntent, type SettingsWriteResult } from './settings-write.ts'
 export { DEFAULT_API_KEY_REF, accountModelMap } from './settings-write.ts'
 
@@ -30,7 +30,7 @@ export interface SettingsScope<T> {
   set(field: string, value: unknown): Promise<void>
   unset(field: string): Promise<void>
   /** 多字段共用一次宿主版本检查并返回确认；缺少此能力不能提交配置。 */
-  mutate?(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationResult>
+  mutate?(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationReport>
 }
 
 /** Result envelope returned by one current Typert Remote call. */

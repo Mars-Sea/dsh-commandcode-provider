@@ -7689,7 +7689,23 @@ test('getUsage() classifies an all-transport-failure run as network', async () =
   // an unparseable API base and a per-request timeout, so the card renders
   // these rather than only the generic "check your connection" hint.
   assert.equal(report.failures.length, 4)
-  assert.match(report.failures[0] ?? '', /^\/alpha\/whoami: fetch failed/)
+  assert.match(report.failures[0] ?? '', /^\/alpha\/whoami: fetch failed；目标 https:\/\/api\.commandcode\.ai$/)
+})
+
+test('getUsage() names the transport cause when nothing answers the port', async () => {
+  const adapter = makeAdapter({
+    fetchImpl: (async () => {
+      const cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:18797'), { code: 'ECONNREFUSED' })
+      throw new TypeError('fetch failed', { cause })
+    }) as unknown as typeof fetch,
+  })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(report.blocked, 'network')
+  assert.equal(report.failures.length, 4)
+  for (const failure of report.failures) {
+    // 反代换端口/未启动与 API 故障的区别就在这一句里：原因 + 目标主机:端口。
+    assert.match(failure, /；连接被拒绝（ECONNREFUSED）；目标 https:\/\/api\.commandcode\.ai$/)
+  }
 })
 
 test('getUsage() asks for identity encoding when a host would otherwise pass raw Brotli', async () => {

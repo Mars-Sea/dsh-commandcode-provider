@@ -28,6 +28,7 @@ import { modelIsVisible } from './model-visibility.ts'
 import { effectiveContextWindow } from './context-window.ts'
 import { applyMaxOutputTokens, omitOutputTokens, MAX_OUTPUT_TOKEN_LIMIT } from './output-budget.ts'
 import { readableErrorText } from './readable-error.ts'
+import { httpOrigin, transportFailureReason } from './transport-failure.ts'
 import { bilingual, MAX_TRUSTED_RESET_MS, parseProviderError, generateHttpError, parseRetryAfterMs, classifyAccountRejection, isUpgradeRequiredError, isMessagesPermissionRejection, type AccountRotationReason } from './provider-errors.ts'
 export type { AccountRotationReason } from './provider-errors.ts'
 import { ownedResponseStream, settleStreamResponse, responseIdentifiers, failureWithRequestId, type CommandCodeProtocol, type ResponseMetadata } from './stream-response.ts'
@@ -3190,7 +3191,11 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         }
         return record
       } catch (error: unknown) {
-        failures.push(`${path}: ${readableErrorText(error)}`)
+        // 网络层失败带上目标与原因：反代换了端口、代理没起、API 真挂了，在
+        // 这三项信息出现之前都只是同一句 `fetch failed`（issue #111）。
+        const reason = transportFailureReason(error)
+        const origin = httpOrigin(base)
+        failures.push(`${path}: ${readableErrorText(error)}${reason === undefined ? '' : `；${reason}`}${origin === undefined ? '' : `；目标 ${origin}`}`)
         failed.push({ kind: 'transport' })
         return undefined
       }

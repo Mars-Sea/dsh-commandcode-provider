@@ -8,6 +8,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 
 - **账号报告来源**：一次报告固定入口捕获的连接、账号列表与固定账号，窗口探测与所有账号的用量请求使用同一网关。先完成账号池共享恢复，再读取健康标记，避免已恢复账号继续展示探测前的旧状态；不同网关的同一密钥不共享健康或探测节流。
 - **账号响应诊断（问题 #76）**：收到成功状态后分别读取正文、解析 JSON 和校验顶层对象；`failures` 详情区分读取超时／中断、解析失败与结构不符，整组失败仍沿用 `invalid-response`（响应不可用），不扩展严格远端枚举。诊断只保留白名单异常名称、错误码和内容类型／编码，不保存正文、原异常消息或任意响应头。响应头仅是线索，不能据此强制再次解压已解码的正文。设置页、用量面板和命令提示均不再把所有失败归因于代理或解压；真实问题根因仍待反馈者环境验证。见[问题 #76 修复说明](../issue-76-response-review.md)。
+- **传输失败的目标与原因（问题 #111）**：网络层失败在原文后追加中文原因与目标 `scheme://host:port`，由 `src/transport-failure.ts` 从 fetch 的 `error.cause`（含 AggregateError 子项）取错误码映射，原始码入括号（`ECONNREFUSED` →「连接被拒绝（ECONNREFUSED）」；未知码回显「网络错误（<code>）」；无码不猜）。目标只保留协议、主机与端口，路径与查询丢弃，反代前缀或凭据不会因此回显。HTTP 状态失败（有响应）不重复附目标。
 
 - **Plans & quota panel + composer session cost (ported from PR #36)**: two
   client surfaces using Host usage and durable request-cost facts. (1) The sidebar footer

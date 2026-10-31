@@ -12,10 +12,12 @@
  * that serves requests anyway. So the request runs Host-side and crosses the
  * Typert Gateway like every other Command Code Remote.
  *
- * The probe is a plain GET of the configured API base root — the same request
- * Upptime's monitor makes (its default expected statuses). It proves the
- * endpoint answers FROM THIS HOST; it is not an inference test, and the UI copy
- * never claims more than that.
+ * The probe is a plain unauthenticated GET of `{apiBase}/alpha/whoami`, built
+ * with the same string concatenation real requests use so a path-prefixed
+ * reverse proxy is exercised as-is. 2xx/3xx prove the endpoint answered;
+ * 401/403 do too, because a credential-less GET of that endpoint is supposed to
+ * be rejected — the answer still came from the API's auth layer on this Host.
+ * It is not an inference test, and the UI copy never claims more than that.
  *
  * @module dsh-commandcode-provider/service-probe-wire
  */

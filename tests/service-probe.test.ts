@@ -2,10 +2,12 @@
  * Host-side connectivity probe tests (node:test, zero deps). Run with `npm test`.
  *
  * The probe is the row's real-time half, so its classification is the part that
- * must not drift: the official monitor's default `expectedStatusCodes` decide
- * what "up" means, a timeout and a transport failure stay distinguishable, and
- * the request always goes to the host root. The wire codec is pinned here too,
- * because the browser trusts `parseProbeResult` to reject anything the Host
+ * must not drift: it probes the plugin's own authenticated surface
+ * (`/alpha/whoami`), keeps a path-prefixed apiBase intact, counts a
+ * credential-less 401/403 as reachable (that IS the expected answer without a
+ * key), keeps a timeout and a transport failure distinguishable, and rejects an
+ * unparsable base without touching the network. The wire codec is pinned here
+ * too, because the browser trusts `parseProbeResult` to reject anything the Host
  * should never have sent.
  */
 
@@ -28,36 +30,45 @@ function recordingFetch(urls: string[], status = 200): typeof fetch {
   }) as unknown as typeof fetch
 }
 
-test('probeOutcomeForStatus mirrors the monitor default statuses', () => {
-  for (const status of [200, 201, 204, 226, 301, 308]) {
+test('probeOutcomeForStatus counts unauthenticated answers as reachable', () => {
+  for (const status of [200, 201, 204, 226, 301, 308, 401, 403]) {
     assert.equal(probeOutcomeForStatus(status), 'ok', String(status))
   }
-  for (const status of [0, 401, 404, 429, 500, 503]) {
+  for (const status of [0, 404, 429, 500, 503]) {
     assert.equal(probeOutcomeForStatus(status), 'http-error', String(status))
   }
 })
 
-test('probeCommandCode reports a reachable endpoint with latency', async () => {
+test('probeCommandCode probes the endpoint real requests use and reports latency', async () => {
   const urls: string[] = []
   const probe = await probeCommandCode({
     apiBase: 'https://api.commandcode.ai',
     fetchImpl: recordingFetch(urls),
     now: () => 1234,
   })
-  assert.deepEqual(urls, ['https://api.commandcode.ai/'])
+  assert.deepEqual(urls, ['https://api.commandcode.ai/alpha/whoami'])
   assert.equal(probe.outcome, 'ok')
   assert.equal(probe.status, 200)
   assert.ok(probe.latencyMs >= 0)
   assert.equal(probe.checkedAt, 1234)
 })
 
-test('probeCommandCode always probes the host root, even from a pathed base', async () => {
+test('probeCommandCode keeps a path-prefixed api base intact', async () => {
   const urls: string[] = []
   await probeCommandCode({
-    apiBase: 'https://example.test/some/path//',
+    apiBase: 'http://127.0.0.1:18797/bili/https://api.commandcode.ai',
     fetchImpl: recordingFetch(urls),
   })
-  assert.deepEqual(urls, ['https://example.test/'])
+  assert.deepEqual(urls, ['http://127.0.0.1:18797/bili/https://api.commandcode.ai/alpha/whoami'])
+})
+
+test('probeCommandCode treats a credential-less 401 as a reachable host', async () => {
+  const probe = await probeCommandCode({
+    apiBase: 'https://api.commandcode.ai',
+    fetchImpl: recordingFetch([], 401),
+  })
+  assert.equal(probe.outcome, 'ok')
+  assert.equal(probe.status, 401)
 })
 
 test('probeCommandCode keeps an HTTP failure distinct from a transport failure', async () => {

@@ -27,7 +27,7 @@ import { DEFAULT_REQUEST_TIMEOUT_MS } from '../src/adapter.ts'
 import { en, zh, settingsWriteNotice, type SettingsCommandCodeKey } from '../src/client/locales.ts'
 import { PANEL_COPY_EN } from '../src/client/panel-copy.ts'
 import { ANALYTICS_COPY_EN, ANALYTICS_COPY_ZH } from '../src/client/analytics-copy.ts'
-import type { SettingsPathOp } from '../src/client/settings-scope.ts'
+import type { SettingsMutationReport, SettingsPathOp } from '../src/client/settings-scope.ts'
 import { modelIsVisible } from '../src/model-visibility.ts'
 
 // Helpers
@@ -73,8 +73,8 @@ function makeScope(init: {
       state.user = user
       for (const fn of listeners) fn()
     },
-    async mutate(ops: readonly SettingsPathOp[], revision?: number) {
-      if (revision !== undefined && revision !== state.revision) return 'conflict' as const
+    async mutate(ops: readonly SettingsPathOp[], revision?: number): Promise<SettingsMutationReport> {
+      if (revision !== undefined && revision !== state.revision) return { result: 'conflict' as const }
       const value = { ...state.value }
       const user = { ...(state.user ?? {}) }
       for (const op of ops) {
@@ -86,7 +86,7 @@ function makeScope(init: {
       state.user = user
       state.revision += 1
       for (const fn of listeners) fn()
-      return 'accepted' as const
+      return { result: 'accepted' as const }
     },
   }
 }
@@ -1861,4 +1861,55 @@ test('首次事实读取失败显示未知，明确确认后才解释配置存�
   assert.equal(controller.state().apiKeyConfigured, false)
   assert.equal(controller.state().accounts[0]?.credentialKnown, true)
   controller.dispose()
+})
+
+test('配置未获确认时附宿主原因，未提交密钥就不再提密钥', async () => {
+  const scope = makeScope({})
+  const message = 'atomic-write: timed out waiting for the writer lock at /home/user/.dsh/profiles/web/package.json.lock'
+  scope.mutate = async () => ({ result: 'failed' as const, message })
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  controller.edit('requestTimeoutMs', '2')
+  await controller.save()
+  const state = controller.state()
+  assert.equal(state.saveResult?.config, 'unconfirmed')
+  assert.equal(state.saveResult?.credential, 'none')
+  assert.equal(state.saveResult?.hostError, message)
+  const notice = settingsWriteNotice(state.saveResult, key => zh[key])
+  // 这次保存没碰密钥，提示里就不能出现「密钥」——否则会把人引到错误方向。
+  assert.doesNotMatch(notice, /密钥/)
+  assert.match(notice, /未写入宿主/)
+  assert.match(notice, /宿主返回：atomic-write: timed out waiting for the writer lock/)
+  controller.dispose()
+})
+
+test('保存带密钥且配置未获确认时，同时说明配置与密钥都未写入', async () => {
+  const scope = makeScope({})
+  scope.mutate = async () => ({ result: 'failed' as const, message: 'profile is busy' })
+  const api = makeApi({})
+  const { controller } = makeController({ scope, api })
+  controller.edit('requestTimeoutMs', '2')
+  controller.edit('apiKey', 'synthetic-key')
+  await controller.save()
+  const state = controller.state()
+  assert.equal(state.saveResult?.credential, 'not-issued')
+  const notice = settingsWriteNotice(state.saveResult, key => zh[key])
+  assert.match(notice, /配置与密钥均未写入宿主/)
+  assert.match(notice, /宿主返回：profile is busy/)
+  controller.dispose()
+})
+
+test('宿主原文折叠成一行并限长后进入提示', () => {
+  const notice = settingsWriteNotice({
+    config: 'unconfirmed',
+    credential: 'none',
+    issue: undefined,
+    refreshFailed: false,
+    credentialRef: undefined,
+    hostError: `第一段\n第二段 ${'长'.repeat(300)}`,
+  }, key => zh[key])
+  assert.doesNotMatch(notice, /\n/)
+  assert.match(notice, /…$/)
+  assert.ok(notice.length < 340)
+  assert.match(notice, /宿主返回：第一段 第二段/)
 })

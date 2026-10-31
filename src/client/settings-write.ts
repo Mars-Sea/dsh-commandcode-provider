@@ -1,8 +1,9 @@
 /** 设置写入过程：同一控制器的意图按顺序执行，配置确认与凭据确认分别保留。
  * 生产使用现有远端设置／凭据，测试替换这些依赖；不提供跨服务事务。 */
 import { readVisibility } from '../model-visibility.ts'
+import { readableErrorText } from '../readable-error.ts'
 import type { SettingsPageApi, SettingsScope, SettingsScopeSnapshot } from './settings.ts'
-import type { SettingsMutationResult, SettingsPathOp } from './settings-scope.ts'
+import type { SettingsMutationReport, SettingsPathOp } from './settings-scope.ts'
 
 export const DEFAULT_API_KEY_REF = 'COMMANDCODE_API_KEY'
 export interface StoredRule { models: string[]; account: string }
@@ -30,6 +31,8 @@ export interface SettingsWriteResult {
   refreshFailed: boolean
   /** 实际发出调用的原引用，仅用于核对；从不包含密钥内容。 */
   credentialRef: string | undefined
+  /** 宿主（或传输层）拒绝配置写入时的原始 message，只用于提示里的诊断，不参与判定。 */
+  hostError?: string
 }
 
 export type SettingsWriteIntent =
@@ -197,21 +200,23 @@ export class SettingsWriter {
     return success
   }
 
-  private async commit(ops: readonly SettingsPathOp[], baseline?: ReadonlyMap<string, FieldBaseline>): Promise<SettingsMutationResult> {
-    if (this.closed) return 'cancelled'
+  private async commit(ops: readonly SettingsPathOp[], baseline?: ReadonlyMap<string, FieldBaseline>): Promise<SettingsMutationReport> {
+    if (this.closed) return { result: 'cancelled' }
     const snapshot = this.scope.getSnapshot()
-    if (!snapshot.writable || this.scope.mutate === undefined) return 'failed'
-    if (baseline && [...baseline].some(([field, before]) => !sameValue(before, fieldBaseline(snapshot, field)))) return 'conflict'
+    if (!snapshot.writable || this.scope.mutate === undefined) return { result: 'failed' }
+    if (baseline && [...baseline].some(([field, before]) => !sameValue(before, fieldBaseline(snapshot, field)))) return { result: 'conflict' }
     try { return await this.scope.mutate(ops, snapshot.revision) }
-    catch { return 'failed' }
+    catch (error: unknown) { return { result: 'failed', message: readableErrorText(error) } }
   }
 
   private async configure(outcome: SettingsWriteResult, ops: readonly SettingsPathOp[], baseline?: ReadonlyMap<string, FieldBaseline>): Promise<boolean> {
     if (ops.length === 0) return true
     const confirmation = await this.commit(ops, baseline)
-    outcome.config = confirmation === 'accepted' ? 'confirmed' : confirmation === 'conflict' ? 'conflict' : 'unconfirmed'
-    if (confirmation === 'cancelled' || this.closed) outcome.issue = 'closed'
-    return confirmation === 'accepted' && !this.closed
+    outcome.config = confirmation.result === 'accepted' ? 'confirmed' : confirmation.result === 'conflict' ? 'conflict' : 'unconfirmed'
+    // 只有「失败」带诊断原文：冲突有专门文案，成功不需要。原文从不参与上面的判定。
+    if (confirmation.result === 'failed' && confirmation.message !== undefined) outcome.hostError = confirmation.message
+    if (confirmation.result === 'cancelled' || this.closed) outcome.issue = 'closed'
+    return confirmation.result === 'accepted' && !this.closed
   }
 
   private async changeCredential(outcome: SettingsWriteResult, ref: string, value: string | undefined, defaultRef?: string): Promise<void> {
@@ -311,8 +316,14 @@ export class SettingsWriter {
     // 最后一步失败不能抹掉前面已经确认的账号移除／凭据清理事实。
     const cleanup = result()
     if (!(await this.configure(cleanup, [{ op: 'set', path: ['credentialCleanupRefs'], value: this.cleanupRefs().filter(entry => entry !== ref) }]))) {
-      if (outcome.config === 'none') outcome.config = cleanup.config
+      if (outcome.config === 'none') {
+        outcome.config = cleanup.config
+        if (cleanup.hostError !== undefined) outcome.hostError = cleanup.hostError
+      }
       outcome.issue = cleanup.issue ?? 'cleanup-pending'
-    } else if (outcome.config === 'none') outcome.config = cleanup.config
+    } else if (outcome.config === 'none') {
+      outcome.config = cleanup.config
+      if (cleanup.hostError !== undefined) outcome.hostError = cleanup.hostError
+    }
   }
 }

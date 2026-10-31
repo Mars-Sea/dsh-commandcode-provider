@@ -32,6 +32,23 @@ export interface SettingsPathOp {
 /** 本地确认结果，不改宿主远端载体；恢复快照不能冒充本次写入成功。 */
 export type SettingsMutationResult = 'accepted' | 'conflict' | 'failed' | 'cancelled'
 
+/**
+ * 一次写入的确认结论加宿主诊断原文。
+ *
+ * `result` 仍是唯一的判定依据；`message` 只在宿主或传输层拒绝时出现，用来把
+ * 「写锁超时」「版本冲突」「远端未挂载」区分开（issue #110）。它从不参与任何
+ * 判定分支——提示文案不能反过来改变写入语义。
+ */
+export interface SettingsMutationReport {
+  result: SettingsMutationResult
+  message?: string
+}
+
+/** 组装报告；没有原文时不带 `message` 键（`exactOptionalPropertyTypes`）。 */
+function mutationReport(result: SettingsMutationResult, message?: string): SettingsMutationReport {
+  return message === undefined ? { result } : { result, message }
+}
+
 /** One entry's row inside a `settings.describe()` view — `SettingsNamespaceView`. */
 interface SettingsNamespaceRow {
   ns?: unknown
@@ -359,7 +376,7 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
    * in directly — unless a newer write already superseded it, in which case
    * that answer's revision becomes the next write's fence.
    */
-  mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationResult> {
+  mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationReport> {
     const ownedOps = structuredClone(ops)
     const generation = ++this.writeGeneration
     return this.enqueue(async () => {
@@ -367,21 +384,22 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
       const response = await this.mutateRemote(ownedOps, revision)
       if (!response.ok) {
         await this.recover(generation)
-        return response.error?.message?.includes('SETTINGS_CONFLICT') ? 'conflict' : 'failed'
+        const message = response.error?.message
+        return message?.includes('SETTINGS_CONFLICT') ? mutationReport('conflict', message) : mutationReport('failed', message)
       }
       const row = response.value
       if (row?.ns !== this.namespace || decodeRow(row.value) === undefined || typeof row.revision !== 'number') {
         await this.recover(generation)
-        return 'failed'
+        return mutationReport('failed')
       }
-      if (this.disposed) return 'accepted'
+      if (this.disposed) return mutationReport('accepted')
       if (generation === this.writeGeneration) {
         this.pendingRevision = undefined
         this.mirror.acceptView(row)
       } else {
         this.pendingRevision = typeof row.revision === 'number' ? row.revision : undefined
       }
-      return 'accepted'
+      return mutationReport('accepted')
     })
   }
 
@@ -456,10 +474,10 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
   }
 
   /** Queue operations one at a time; disposal makes the queue inert. */
-  private enqueue(operation: () => Promise<SettingsMutationResult>): Promise<SettingsMutationResult> {
-    if (this.disposed) return Promise.resolve('cancelled')
+  private enqueue(operation: () => Promise<SettingsMutationReport>): Promise<SettingsMutationReport> {
+    if (this.disposed) return Promise.resolve(mutationReport('cancelled'))
     const task = this.tail.then(async () => {
-      if (this.disposed) return 'cancelled' as const
+      if (this.disposed) return mutationReport('cancelled')
       return operation()
     })
     this.tail = task.then(() => {}, () => {})
@@ -477,7 +495,7 @@ class RemoteSettingsScope<T> implements SettingsScope<T> {
 
 /** The scope plus the handles the plugin entry wires into its fiber lifecycle. */
 export interface ManagedSettingsScope<T> extends SettingsScope<T> {
-  mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationResult>
+  mutate(ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<SettingsMutationReport>
   /** Re-read the Host — used when the `remote.settings` namespace mounts after boot. */
   refresh(): void
   /** Stop deriving, drop the forwarded-event subscriptions, and settle in-flight work. */

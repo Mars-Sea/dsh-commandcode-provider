@@ -111,6 +111,8 @@ export type SettingsCommandCodeKey =
   | 'saveFailed'
   | 'writeConflict'
   | 'writeConfigUnconfirmed'
+  | 'writeConfigUnconfirmedKey'
+  | 'writeHostError'
   | 'writeConfigSaved'
   | 'writeKeyNotIssued'
   | 'writeKeyUnconfirmed'
@@ -367,7 +369,9 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   saved: '设置已保存',
   saveFailed: '保存失败，请重试。',
   writeConflict: '待提交字段已被其他操作修改，配置未写入；请核对后再保存。',
-  writeConfigUnconfirmed: '配置提交未获确认；密钥未写入，请核对宿主状态后重试。',
+  writeConfigUnconfirmed: '配置提交未获确认，未写入宿主；请核对后重试。',
+  writeConfigUnconfirmedKey: '配置与密钥均未写入宿主；请核对后重试。',
+  writeHostError: '宿主返回：{message}',
   writeConfigSaved: '配置已保存。',
   writeKeyNotIssued: '密钥操作尚未发出；请核对后重试。',
   writeKeyUnconfirmed: '密钥操作未获确认；请核对后手动重试。',
@@ -642,7 +646,9 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   saved: 'Settings saved',
   saveFailed: 'Save failed, please retry.',
   writeConflict: 'Pending fields were modified by another operation; the configuration was not written. Please review and save again.',
-  writeConfigUnconfirmed: 'The configuration submission was not confirmed; the key was not written. Please check the host state and retry.',
+  writeConfigUnconfirmed: 'The configuration submission was not confirmed and was not written. Please review and retry.',
+  writeConfigUnconfirmedKey: 'Neither the configuration nor the key was written. Please review and retry.',
+  writeHostError: 'Host returned: {message}',
   writeConfigSaved: 'Configuration saved.',
   writeKeyNotIssued: 'The key operation has not been issued; please review and retry.',
   writeKeyUnconfirmed: 'The key operation was not confirmed; please review and retry manually.',
@@ -831,7 +837,9 @@ export function settingsWriteNotice(
   else if (result.issue === 'target-changed') key = result.credential === 'not-issued' ? 'writeTargetBefore' : 'writeTargetAfter'
   else if (result.issue === 'cleanup-pending') key = 'writeCleanupPending'
   else if (result.config === 'conflict') key = 'writeConflict'
-  else if (result.config === 'unconfirmed') key = 'writeConfigUnconfirmed'
+  // 只有本次保存带了密钥（`not-issued`）才说密钥：配置写入失败与密钥无关
+  // 时提「密钥未写入」会把人引到错误的方向（issue #110）。
+  else if (result.config === 'unconfirmed') key = result.credential === 'not-issued' ? 'writeConfigUnconfirmedKey' : 'writeConfigUnconfirmed'
   else if (result.credential === 'unconfirmed') key = 'writeKeyUnconfirmed'
   else if (result.credential === 'not-issued') key = 'writeKeyNotIssued'
   const messages = key ? [t(key)] : []
@@ -841,5 +849,19 @@ export function settingsWriteNotice(
   }
   if (key && result.config === 'confirmed' && result.issue !== 'cleanup-pending') messages.unshift(t('writeConfigSaved'))
   if (result.refreshFailed) messages.push(t('writeRefreshFailed'))
+  // 宿主原文放在最后：固定文案回答「怎么办」，原文只补「为什么」。
+  const hostError = result.hostError
+  if (hostError !== undefined && hostError.trim() !== '') {
+    messages.push(t('writeHostError').replace('{message}', () => hostErrorText(hostError)))
+  }
   return messages.join(' ')
+}
+
+/**
+ * 宿主原文压成一行并限长：锁超时、写权限这类诊断足够；换行会撑高提示区，
+ * 超长正文（整页 HTML、大对象）也不该被原样铺到设置页上。
+ */
+function hostErrorText(message: string): string {
+  const oneLine = message.replace(/\s+/g, ' ').trim()
+  return oneLine.length > 240 ? `${oneLine.slice(0, 240)}…` : oneLine
 }
