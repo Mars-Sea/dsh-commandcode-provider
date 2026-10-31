@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.1), the
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.2), the
  * live model catalog (`GET /provider/v1/models?view=client`, the authority for
  * capability fields since 1.82.4), and the official plan/pricing/model docs; see
  * the dsh-commandcode-upstream skill for the extraction procedures. The
@@ -26,7 +26,11 @@
  * step and `$2/$7.5` beyond. The 2026-10-28 check moves the constant to 1.88.1,
  * whose registry now names both catalog-only rows (Kimi K3.1 Pro and GPT-6.1
  * Terra) with efforts and context identical to this snapshot, so no table
- * changes. Keeping the snapshot in its own module
+ * changes. The 2026-10-31 check moves it to 1.88.2 — the npm package's own
+ * CHANGELOG names its sole change as a launch-crash fix after a fresh install
+ * or update — and again leaves every table here identical; that round's only
+ * data change is two per-model allowances in ./model-prices.ts. Keeping the
+ * snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
  * wire/runtime logic. The read helpers live here too, for the same reason.
  *
@@ -39,7 +43,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.88.1 model table. From
+  // Re-verified against the authoritative command-code@1.88.2 model table. From
   // 1.82.4 the CLI no longer keeps this map bundled: `getSupportedEfforts()`
   // resolves it through the model catalog (`reasoningEfforts`), served live at
   // `GET /provider/v1/models?view=client` and falling back to an embedded
@@ -115,7 +119,7 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // command-code@1.39.3; it previously reasoned automatically with no levels.
   'moonshotai/Kimi-K3': ['low', 'high', 'max'],
   // 2026-10-24 (catalog-only sync): the 1.88.0 artifact does not name Kimi K3.1
-  // Pro (1.88.1 does, with the same levels), and `?view=client` serves
+  // Pro (1.88.2 does, with the same levels), and `?view=client` serves
   // `reasoningEfforts:["low","high","max"]` and the pricing page carries
   // `caps.reasoning: true`. Same three-level set as its K3 predecessor; do not
   // inherit future levels from it without re-checking.
@@ -201,7 +205,7 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // 2026-10-27 (catalog-only sync): `?view=client` serves
   // `reasoningEfforts:["low","medium","high","xhigh","max"]` and the pricing
   // page carries `caps.reasoning: true`; the 1.88.0 artifact does not name the
-  // row (1.88.1 does, with the same levels). Same five-level set as its
+  // row (1.88.2 does, with the same levels). Same five-level set as its
   // `gpt-6.1-sol` predecessor; do not inherit future levels without
   // re-checking the catalog.
   'gpt-6.1-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -851,7 +855,7 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.88.1 (2026-10-28) against the
+ * Provider-tier. Re-verified at command-code@1.88.2 (2026-10-31) against the
  * live `?view=client` catalog: 106 ids, still a strict superset chain. Mistral
  * Large 4 (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
  * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.

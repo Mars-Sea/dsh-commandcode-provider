@@ -17,7 +17,7 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.1)', () => {
+test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.2)', () => {
   // command-code@1.82.4 moved the authority for this verdict out of the CLI
   // artifact: `knownModelSupportsZdr` no longer negates a bundled Set, it reads
   // `resolveKnownCatalogModel({model,catalog})?.zdr ?? false`. So this list is

@@ -6669,7 +6669,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.88.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.88.2')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

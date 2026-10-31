@@ -88,18 +88,17 @@ export { DEFAULT_MAX_OUTPUT_TOKENS, MODEL_CATALOG_TTL_MS } from './gateway-facts
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-// Rides every request as `x-command-code-version`. The 1.88.1 bump is a pure
-// header sync: the 1.88.0 -> 1.88.1 artifacts add no runtime contract this
-// plugin consumes. The release is silent upstream — the official changelog's
-// newest CLI entry is still 1.88.0 — so the conclusion is artifact-level: the
-// endpoint paths, custom request headers, environment variables, the
+// Rides every request as `x-command-code-version`. The 1.88.2 bump is a pure
+// header sync: the 1.88.1 -> 1.88.2 artifacts add no runtime contract this
+// plugin consumes. The CLI does keep a release log after all — inside the npm
+// package's own CHANGELOG.md, while https://commandcode.ai/changelog only
+// covers the Desktop app — and its sole 1.88.2 entry is "no longer crashes on
+// launch after a fresh install or update". The conclusion is artifact-level as
+// usual: endpoint paths, custom request headers, environment variables, the
 // `/alpha/generate` call site, the `promptCache` / `reasoning_effort` /
-// `max_tokens` literal counts, the subscription tables and the ZDR exception
-// set are identical. The only registry change is that it now names
-// `gpt-6.1-terra` and `moonshotai/Kimi-K3.1-Pro` — both rows the snapshots
-// already carried from the server catalog (see ./capabilities.ts and
-// ./model-prices.ts), with matching efforts and context.
-export const COMMAND_CODE_CLI_VERSION = '1.88.1'
+// `max_tokens` literal counts, the registry, subscription tables and the ZDR
+// exception set are identical.
+export const COMMAND_CODE_CLI_VERSION = '1.88.2'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**

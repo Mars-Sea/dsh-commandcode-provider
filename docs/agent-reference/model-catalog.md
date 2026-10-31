@@ -102,6 +102,22 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `ornith/ornith-1.5-122b` → `ornith-1.5-122b`) are supplied via `--aliases`; with them it is
   `review-required` with no errors and an empty `candidateDiffs`. No snapshot table changed.
 
+  **Follow-up check (2026-10-31, CLI 1.88.1 → 1.88.2):** npm `latest` reached `1.88.2`
+  (10-29T02:05Z). The CLI does keep a release log after all — inside the npm package's own
+  `CHANGELOG.md`, while the website changelog covers only the Desktop app — and its sole 1.88.2
+  entry is "no longer crashes on launch after a fresh install or update". Artifact comparison:
+  the tarball's 80 files change only in `CHANGELOG.md`, `dist/cli.mjs`, `package.json` (version)
+  and the VSIX, with dependencies untouched; endpoint paths (193), custom headers (13) and
+  environment variables (48) are identical sets, the `/alpha/generate` call site is identical
+  once minified identifiers are masked, the `promptCache` / `reasoning_effort` / `max_tokens` /
+  `cache_control` literal counts match, and `cliDiff` (registry, efforts, subscriptions, ZDR
+  exceptions) is empty. The catalog did not move (`?view=client` `catalogVersion` still
+  `7f405e24…`, default 94 / client 106). Every capability table is unchanged; the round's only
+  data change is two allowances in `src/model-prices.ts`: `deepseek-v4.1-flash` and
+  `glm-5.3-flash` both go GOAT `$80` → `$100` / Pro `$90` → `$110` (Go `$10` unchanged), while
+  per-token rates and peak windows stay put. The audit reused the two verified pricing aliases
+  and stayed `review-required` with no errors and an empty `candidateDiffs`.
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot

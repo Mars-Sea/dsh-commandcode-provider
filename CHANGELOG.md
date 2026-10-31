@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **同步 Command Code CLI `1.88.1` → `1.88.2`（纯请求头同步）。** npm `latest` 于 `2026-10-29T02:05Z` 前进到 `1.88.2`。CLI 的变更日志在 npm 包内 `CHANGELOG.md`（官网 `/changelog` 只覆盖 Desktop 应用），该版本只有一条 patch：「修复全新安装或更新后启动崩溃」。产物级比对：包内 80 个文件只有 `CHANGELOG.md`、`dist/cli.mjs`、`package.json`（仅版本号）与 VSIX 变化，依赖零变化；请求路径（193）、自定义请求头（13）、环境变量（48）集合相同，`/alpha/generate` 调用点在屏蔽混淆标识符后相似度 1.0，`promptCache`（5）／`reasoning_effort`（7）／`max_tokens`（12）／`cache_control`（1）计数相同，审计 `cliDiff`（模型、档位、订阅、ZDR 例外集）为空。服务端目录未动（`?view=client` 的 `catalogVersion` 仍 `7f405e24…`，默认 94、client 106 行），所有能力快照零变化，`COMMAND_CODE_CLI_VERSION` 只随请求头更新，运行时行为不变。
+- **同步定价页两条模型额度（`planAllowanceUsd`）。** 官网把 DeepSeek V4.1 Flash 与 GLM-5.3 Flash 的加成月度额度从 GOAT `$80`／Pro `$90` 上调到 GOAT `$100`／Pro `$110`（Go `$10` 不变），per-token 价格、Peak 时段与套餐可用性均未变；设置页「模型额度」随之显示新值。价格表由 `node scripts/sync-model-prices.mjs` 重新生成，全表只有这两行变化。GLM-5.3 Flash 仍标注 `while capacity lasts`；V4.1 Flash 的文案从「with no end date」改为「comes with bigger monthly credits」，官方未给结束时间，若之后回调按同一脚本再同步。**验证**：`typecheck` 退出码 0，`npm test` 1142／1142，`build` 两段 `Build complete`；未做真实账号登录与付费生成验证。
+
 ## [0.16.2] - 2026-10-30
 
 ### Changed
