@@ -118,6 +118,26 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   per-token rates and peak windows stay put. The audit reused the two verified pricing aliases
   and stayed `review-required` with no errors and an empty `candidateDiffs`.
 
+  **Follow-up check (2026-11-02, CLI stays 1.88.2):** npm `latest` is still `1.88.2`
+  (10-29T02:05Z), so the artifact comparison is the previous round's `cliDiff`-empty
+  conclusion again. The server catalog moved `catalogVersion` `7f405e24…` → `f3a51355…`:
+  the default view went 94 → 95 and `?view=client` 106 → 107 with exactly one added row,
+  `inclusionai/ling-3.1-flash-1019:free` (Ling 3.1 Flash 1019) — 1,000,000 context,
+  262,144 output ceiling, text-only input, efforts `low`/`medium`/`high`, Go tier, ZDR
+  covered, `/chat/completions` endpoint, 100% off from `2026-10-29T16:00Z` to
+  `2026-11-03T16:00Z` with a 100-requests-a-day cap. The models docs page, the pricing page
+  and the go/goat/pro/max plan pages all list it; the `1.88.2` artifact registry does not
+  name it yet — the audit reports `absent from CLI registry` as an `incomplete` error, and
+  the capability fields come from `?view=client` as usual. Snapshots: plans 94 → 95,
+  efforts 67 → 68, deals 4 → 5 (the new entry carries `expiresAt` and lapses
+  automatically); image 73, thinking 16, ZDR 18, subscriptions 9, peak rows 5, vendored
+  price rows 94 and output-limit rows 79 all stay put (a free row never enters the price
+  table). The two known pricing aliases (`minimax/minimax-m3.1-flash`,
+  `ornith/ornith-1.5-122b`) still surface as `incomplete` errors until `--aliases` is
+  supplied; they are not catalog changes — their paid rows share a name with the
+  2026-10-22-lapsed free twin still carried in the page data, which is what makes the
+  mapping ambiguous.
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot

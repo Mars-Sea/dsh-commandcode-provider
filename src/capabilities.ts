@@ -216,6 +216,14 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // this file any more. Three selectable levels, text-only input, Go tier —
   // like its `mistral-large-4` neighbour, and unlike the free stealth previews.
   'inclusionai/ling-3.1-flash': ['low', 'medium', 'high'],
+  // 2026-11-02 (catalog-only sync; the 1.88.2 artifact's registry does not name
+  // the row yet): `inclusionai/ling-3.1-flash-1019:free`, the free 1M-context
+  // twin of `ling-3.1-flash`. The `:free` suffix does NOT flatten the levels —
+  // this promo is served with `reasoningEfforts:["low","medium","high"]`, unlike
+  // the retired `ling-3.1-flash:free` — and its capability fields come from
+  // `?view=client` as usual. Text-only input (see `KNOWN_IMAGE_MODELS`) and Go
+  // tier (see `KNOWN_PLANS`).
+  'inclusionai/ling-3.1-flash-1019:free': ['low', 'medium', 'high'],
   // command-code@1.75.0 ("Add Mistral Large 4") — the only model the 1.74.3 ->
   // 1.77.0 train added. A three-level set; Vision per the official registry and
   // the CLI's inputModalities:["text","image"] (see `KNOWN_IMAGE_MODELS`), and
@@ -927,6 +935,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // grants every tier (individual-go through teams-pro) — the "all":true shape
   // shared with its `ling-3.0-flash-sante:free` predecessor.
   'inclusionai/ling-3.1-flash': 'go',
+  // 2026-11-02; the free 1019 promo row is Go on every source — `minimumPlan:
+  // "individual-go"` in `?view=client` and the pricing page's embedded
+  // availability grants every tier (the same "all":true shape as its sibling).
+  'inclusionai/ling-3.1-flash-1019:free': 'go',
   // command-code@1.44.0; on every plan including Go, like its 1.2 Contributor
   // sibling.
   'meta/muse-spark-1.2-contributor': 'go',
@@ -1250,6 +1262,18 @@ export interface KnownDeal {
 
 export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
+  // 2026-11-02 (catalog-only sync): `inclusionai/ling-3.1-flash-1019:free` is
+  // 100% off through `2026-11-03T16:00Z` ("until 16:00 UTC on November 3") with
+  // a 100-requests-a-day cap. Unlike the retired `ling-3.1-flash:free`, the row
+  // is served by the default catalog view, the pricing page and every plan page,
+  // so it gets a badge — and because this promo publishes its end date, it is
+  // left to lapse through `expiresAt` instead of being deleted like the undated
+  // previews.
+  'inclusionai/ling-3.1-flash-1019:free': {
+    label: 'FREE',
+    free: true,
+    expiresAt: '2026-11-03T16:00:00Z',
+  },
   // `minimax/minimax-m3.1-flash:free` (the 2026-10-20 dated launch promo, 100%
   // off through `2026-10-22T10:45Z`) left this map on 2026-10-23: the promo
   // lapsed, the row went `hidden` in `?view=client`, and it is gone from the

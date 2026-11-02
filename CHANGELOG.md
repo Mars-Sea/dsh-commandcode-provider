@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **新增免费模型 Ling 3.1 Flash 1019（`inclusionai/ling-3.1-flash-1019:free`，服务端目录先行）。** `?view=client` 的 `catalogVersion` 由 `7f405e24…` 变为 `f3a51355…`，默认目录 94 → 95、client 视图 106 → 107，唯一新增行是 Ling 3.1 Flash 1019：1,000,000 上下文、262,144 输出上限、纯文本输入、推理档位 `low`／`medium`／`high`、Go 档、ZDR 覆盖、`/chat/completions` 端点；100% 免费促销自 `2026-10-29T16:00Z` 起至 `2026-11-03T16:00Z`（北京时间 11-04 00:00 到期），每账号每天 100 次请求。官方 models、pricing 与 go／goat／pro／max 计划页均已上架；`1.88.2` 产物注册表尚未收录该行（审计报 `absent from CLI registry`，与 `gpt-6.1-terra` 的目录先行形态一致）。快照 +1：`KNOWN_PLANS` 94 → 95、`KNOWN_EFFORTS` 67 → 68、`KNOWN_DEALS` 4 → 5（带 `expiresAt`，到期后 FREE 徽标自动消失，不跟随下架）；`KNOWN_IMAGE_MODELS`（73）、`KNOWN_THINKING_MODELS`（16）、`KNOWN_NON_ZDR_MODELS`（18）、订阅表（9）、峰值定价（5）、内置价格行（94）与输出上限表（79）均不变——免费行照旧不进价格表，`MODEL_OUTPUT_TOKEN_LIMITS` 也不含 Ling 行（走 chat/completions）。`COMMAND_CODE_CLI_VERSION` 保持 `1.88.2`。**验证**：`typecheck` 退出码 0，`npm test` 1156／1156（扩展既有快照断言，未新增用例），`build` 两段 `Build complete`；本轮仅公开 GET 采集（14 个源全部 HTTP 200），未做真实账号登录、付费生成与服务端协议验证。
+
 ### Fixed
 
 - **账户余额为 0 时提示指向错误方向（2026-10-31 实测）。** 上游对 `POST /provider/v1/chat/completions` 返回 `400`，正文为 `You have insufficient credits to make this request…`、结构化代码只有 `BAD_REQUEST`；插件已能据此把账号轮换掉，但单账号场景没有可换对象，最终只显示通用文案「服务端拒绝了本次请求，请检查模型、套餐和请求设置」——按这三条查一条也查不到点上。现在该形状在通用分支之前被识别，提示为「账户额度不足，无法完成本次请求——请充值额度，或切换到其他账号」。判定复用账号轮换的同一组 pattern（新增 `isInsufficientCreditsText()` 与 `INSUFFICIENT_CREDITS`／`PREMIUM_CREDITS_EXHAUSTED` 代码集），两处不会漂移；失败码仍取 `httpErrorCode(status)`，重试预算与轮换行为不变。**验证**：`typecheck` 退出码 0，`npm test` 1156／1156（新增 3 条：实测正文、仅结构化代码、普通 400 不被吞）。

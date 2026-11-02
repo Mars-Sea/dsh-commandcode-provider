@@ -6171,6 +6171,11 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.equal(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash:free'), false)
   assert.deepEqual(KNOWN_EFFORTS['inclusionai/ling-3.1-flash'], ['low', 'medium', 'high'])
   assert.equal(KNOWN_EFFORTS['inclusionai/ling-3.1-flash:free'], undefined)
+  // 2026-11-02: the 1019 free promo keeps the three selectable levels — the
+  // `:free` suffix is a pricing row, not an effort downgrade — so it belongs in
+  // KNOWN_EFFORTS and not in the automatic-reasoning set.
+  assert.deepEqual(KNOWN_EFFORTS['inclusionai/ling-3.1-flash-1019:free'], ['low', 'medium', 'high'])
+  assert.equal(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash-1019:free'), false)
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
   assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0'])
@@ -6248,6 +6253,9 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-wonder-1.0'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('meituan/LongCat-2.0'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
+  // 2026-11-02: the 1019 free promo is text-only per `?view=client`
+  // `inputModalities: ["text"]`, so it carries no Image marker.
+  assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.1-flash-1019:free'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Both 1.67.0/1.68.0 additions declare inputModalities ["text","image"] and carry
@@ -6385,6 +6393,11 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash'], 'go')
   assert.equal(planLabel('inclusionai/ling-3.1-flash'), 'Go')
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash:free'], undefined)
+  // 2026-11-02: the free 1019 promo row is the first Ling row served by the
+  // default catalog view since the 1.82.2 retirement; `minimumPlan:
+  // "individual-go"` puts it on Go.
+  assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash-1019:free'], 'go')
+  assert.equal(planLabel('inclusionai/ling-3.1-flash-1019:free'), 'Go')
   // 2026-10-24: Kimi K3.1 Pro is Go on every source — `minimumPlan:
   // "individual-go"` in the live catalog and `"all": true` in the pricing page's
   // embedded availability, so it appears on the go/goat/pro plan pages alike.
@@ -6435,6 +6448,14 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash:free'], undefined)
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash'], undefined)
   assert.equal(isFreeModel('inclusionai/ling-3.1-flash'), false)
+  // 2026-11-02: the Ling 3.1 Flash 1019 free promo is the first dated Ling deal
+  // since the 1.82.2 retirement — it publishes `2026-11-03T16:00Z` as its end,
+  // so it is left to lapse via `expiresAt` rather than deleted; it is also
+  // served by the default catalog view, unlike the hidden retired row.
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019:free']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019:free']?.free, true)
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019:free']?.expiresAt, '2026-11-03T16:00:00Z')
+  assert.equal(isFreeModel('inclusionai/ling-3.1-flash-1019:free'), true)
   // command-code@1.79.0; the free Glyph Cluster preview carries the same
   // permanent-style terms as its Ling predecessors — 100% off "Free while the
   // preview lasts" with no published end date, so no `expiresAt` to lapse.
@@ -8518,6 +8539,9 @@ test('every new-arrival model carries an output ceiling or is left to runtime le
   // no longer generated for it at all.
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash'), undefined)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash:free'), undefined)
+  // 2026-11-02: the 1019 free row is a chat/completions model like its sibling,
+  // so it stays out of the Messages ceiling table too.
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash-1019:free'), undefined)
   // A ceiling is a CEILING, not a window: both are far below their own context,
   // which is the whole point of the table — deriving `max_tokens` from
   // `context_length` is exactly what produced #71.
