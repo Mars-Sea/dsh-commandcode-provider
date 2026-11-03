@@ -384,6 +384,44 @@ test('an abort during the retry wait stops it instead of making another request'
   assert.equal(calls, 1, '取消后不得再发请求')
 })
 
+test('the default retry wait (no injected seam) is abortable', { timeout: 5000 }, async (t) => {
+  // The injected-seam test above proves the cancellation semantics of the
+  // production wait; this one keeps the `retryWait ?? searchRetryWait` default
+  // itself covered. Timers are faked so the 500 ms wait cannot fire, and a
+  // captured real timer guards against a regression that would hang instead.
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const stub = makeFetch(() => { calls += 1; throw fetchFailure('ECONNRESET') })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'cc-key-123',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+  })
+  const controller = new AbortController()
+  const pending = provider.search({ query: 'q' }, controller.signal)
+  // Let the first rejection reach the default wait and arm the faked timer.
+  await new Promise(resolve => setImmediate(resolve))
+  let guardTimer: ReturnType<typeof setTimeout> | undefined
+  const guard = new Promise<never>((_, reject) => {
+    guardTimer = realSetTimeout(() => reject(new Error('默认等待未响应取消')), 1000)
+  })
+  try {
+    controller.abort()
+    await assert.rejects(
+      () => Promise.race([pending, guard]),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'WEB_ABORTED')
+        return true
+      },
+    )
+  } finally {
+    if (guardTimer !== undefined) realClearTimeout(guardTimer)
+  }
+  assert.equal(calls, 1, '取消后不得再发请求')
+})
+
 test('retry backoff doubles from 500 ms and stays inside the jitter bound', () => {
   for (let round = 0; round < 50; round += 1) {
     const first = searchRetryDelayMs(1)

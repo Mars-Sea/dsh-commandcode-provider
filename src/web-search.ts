@@ -24,7 +24,7 @@
  * read-only and idempotent, and the failure the issue observed arrived before
  * any HTTP status — a network-level `fetch failed`, not a plan/credential
  * verdict. This provider therefore repeats a fetch that never received a
- * response, up to {@link SEARCH_MAX_ATTEMPTS} attempts with jittered
+ * response, up to SEARCH_MAX_ATTEMPTS attempts with jittered
  * exponential backoff, and leaves every received status (401/403/429/…) and
  * every response-body failure untouched: a received status is the server's
  * answer, and a body failure means the request was already accepted and may
@@ -468,16 +468,11 @@ const SEARCH_ROUTE = '/alpha/web-search'
  * dsh fans a multi-query call out concurrently and aborts the siblings of the
  * first failure, so retrying HERE is what keeps one connection blip from
  * discarding a four-query research step (issue #117). Two retries cover the
- * common transient cases. The arithmetic is deliberately close to the web
- * tool's default cooperative budget (30 s): undici's connect timeout is ~10 s,
- * so three connect-timeout attempts plus the two waits come to ~31.5–33 s — a
- * slow failure can therefore hit the tool deadline mid-retry and end as
- * `WEB_ABORTED`, with the terminal transport diagnosis never produced. The
- * reported 21.7 s first failure leaves only ~8 s for the retry, which is why a
- * fresh connection can still succeed but a sustained outage cannot be
- * diagnosed by the tool. Keeping the retry below the deadline would require a
- * per-attempt timeout (a new user-visible contract) or an elapsed-time rule
- * that would skip the very slow failure this issue reported.
+ * common transient cases. The budget deliberately brushes the web tool's
+ * default 30 s cooperative deadline, so a slow connect-timeout failure can hit
+ * that deadline mid-retry and surface as `WEB_ABORTED` instead of the terminal
+ * diagnosis; the full arithmetic and the rejected alternatives live in
+ * docs/agent-reference/accounts-and-retry.md.
  */
 export const SEARCH_MAX_ATTEMPTS = 3
 
@@ -510,7 +505,7 @@ export function searchRetryDelayMs(attempt: number): number {
  * wait it no longer needs; this keeps the abort responsive and preserves the
  * `WEB_ABORTED` taxonomy.
  *
- * Exported so the cancellation behavior is pinned without depending on a real
+ * Exported so the cancellation behavior is pinned without waiting out a real
  * 500 ms timer: tests can either await this helper directly or wrap it to learn
  * when the wait started.
  */
@@ -534,7 +529,7 @@ export function searchRetryWait(delayMs: number, signal?: AbortSignal): Promise<
  *
  * `fetch failed` alone cannot distinguish a reset from a connect timeout from
  * a dead proxy (issue #117), so the cause code, target origin and elapsed time
- * ride along. The origin comes from {@link httpOrigin}, which drops paths and
+ * ride along. The origin comes from `httpOrigin()`, which drops paths and
  * query strings, so a reverse proxy prefix or a credential never leaks here.
  */
 function transportFailureMessage(
@@ -561,7 +556,7 @@ export interface CommandCodeSearchProviderDeps {
   apiBase(): string
   /** Injectable fetch for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch
-  /** Injectable retry wait for tests; defaults to {@link searchRetryWait}. */
+  /** Injectable retry wait for tests; defaults to the module's abortable retry wait. */
   retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>
 }
 
