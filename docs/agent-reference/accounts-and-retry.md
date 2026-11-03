@@ -224,13 +224,25 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   up to `SEARCH_MAX_ATTEMPTS` (3 = the first try plus two retries) with jittered exponential backoff
   (500 ms then 1 s, ±20%), resolving the account once before the first attempt; the wait listens to the
   caller's signal, so a user stop or the tool's cooperative deadline still ends as `WEB_ABORTED` instead of
-  sleeping through. A received HTTP status — 401/403/429 included — and every response-body failure are NEVER
-  retried: those are answers, and replaying a plan/credential rejection helps nobody. The terminal error
+  sleeping through. Every non-cancel fetch rejection counts as transient: the runtime does not classify
+  `error.cause` for us, and a deterministic failure (an expired certificate, an argument the runtime rejects)
+  only costs the bounded backoff before the same error surfaces — cheaper than a code allowlist that could
+  drop an unlisted blip. A received HTTP status — 401/403/429 included — is never retried: it is the server's
+  answer, and replaying a plan/credential rejection helps nobody. A **response-body** failure is not retried
+  either, but for the opposite reason: the headers arrived, so the request was already accepted and may have
+  been executed; replaying it risks duplicate billing, and the failure is reported as-is. The terminal error
   appends the fetch cause code (`UND_ERR_CONNECT_TIMEOUT`, `ECONNRESET`, …), the target origin from
   `httpOrigin()` (path and query dropped, so a reverse-proxy prefix or a credential cannot leak) plus elapsed
   time and attempt count, so `fetch failed` alone no longer has to cover DNS, proxy and connect-timeout
   causes. Partial results for a multi-query call are still impossible here: the abort-on-first-failure policy
   lives in dsh's `dsh-tool-web`, not in this provider.
+  **The retry budget deliberately brushes the tool's own deadline.** undici's connect timeout is ~10 s, so
+  three connect-timeout attempts plus the two waits span ~31.5–33 s — past `dsh-tool-web`'s default 30 s
+  `searchTimeoutMs`. In that slow-failure case the tool deadline fires mid-retry and the call ends as
+  `WEB_ABORTED`, so the terminal transport diagnosis above is never produced; the reporter's 21.7 s first
+  failure leaves only ~8 s for the retry, which a fresh connection can still use but a sustained outage
+  cannot. A shorter per-attempt timeout is not added (it would be a new user-visible contract), and an
+  elapsed-time rule is not used (it would skip the very slow failure this issue reported).
   `tests/web-search.test.ts` pins the retry, the once-only key resolution, the no-retry-on-status rule, the
   abortable wait and the diagnostic suffix.
 - **`TRANSPORT` carries its own bounded budget, and the route policy cannot express it**

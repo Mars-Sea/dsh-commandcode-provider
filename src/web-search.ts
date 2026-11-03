@@ -26,9 +26,17 @@
  * verdict. This provider therefore repeats a fetch that never received a
  * response, up to {@link SEARCH_MAX_ATTEMPTS} attempts with jittered
  * exponential backoff, and leaves every received status (401/403/429/…) and
- * every parsed body untouched: those are answers, not connection blips.
- * Cancellation always wins — an aborted call (including the tool's cooperative
- * deadline) stops before the next attempt and still reports `WEB_ABORTED`.
+ * every response-body failure untouched: a received status is the server's
+ * answer, and a body failure means the request was already accepted and may
+ * have been executed, so replaying it risks duplicate billing. Cancellation
+ * always wins — an aborted call (including the tool's cooperative deadline)
+ * stops before the next attempt and still reports `WEB_ABORTED`.
+ *
+ * Every non-cancel `fetch` rejection counts as retryable: the engine does not
+ * classify the `error.cause` for us, and a deterministic failure (an expired
+ * certificate, an argument the runtime rejects) merely costs the bounded
+ * backoff before the same error surfaces. That is cheaper than maintaining a
+ * transient-code allowlist that silently drops an unlisted blip.
  *
  * @module dsh-commandcode-provider/web-search
  */
@@ -460,9 +468,16 @@ const SEARCH_ROUTE = '/alpha/web-search'
  * dsh fans a multi-query call out concurrently and aborts the siblings of the
  * first failure, so retrying HERE is what keeps one connection blip from
  * discarding a four-query research step (issue #117). Two retries cover the
- * common transient cases without pushing a failing search far past the web
- * tool's cooperative budget; the caller's deadline still wins (see
- * {@link waitForRetry}).
+ * common transient cases. The arithmetic is deliberately close to the web
+ * tool's default cooperative budget (30 s): undici's connect timeout is ~10 s,
+ * so three connect-timeout attempts plus the two waits come to ~31.5–33 s — a
+ * slow failure can therefore hit the tool deadline mid-retry and end as
+ * `WEB_ABORTED`, with the terminal transport diagnosis never produced. The
+ * reported 21.7 s first failure leaves only ~8 s for the retry, which is why a
+ * fresh connection can still succeed but a sustained outage cannot be
+ * diagnosed by the tool. Keeping the retry below the deadline would require a
+ * per-attempt timeout (a new user-visible contract) or an elapsed-time rule
+ * that would skip the very slow failure this issue reported.
  */
 export const SEARCH_MAX_ATTEMPTS = 3
 
@@ -494,8 +509,12 @@ export function searchRetryDelayMs(attempt: number): number {
  * cancellation. A plain `setTimeout` would let an aborted tool call sit out a
  * wait it no longer needs; this keeps the abort responsive and preserves the
  * `WEB_ABORTED` taxonomy.
+ *
+ * Exported so the cancellation behavior is pinned without depending on a real
+ * 500 ms timer: tests can either await this helper directly or wrap it to learn
+ * when the wait started.
  */
-function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+export function searchRetryWait(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted === true) return Promise.reject(searchAborted(signal, signal.reason))
   return new Promise((resolve, reject) => {
     const onAbort = (): void => {
@@ -542,7 +561,7 @@ export interface CommandCodeSearchProviderDeps {
   apiBase(): string
   /** Injectable fetch for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch
-  /** Injectable retry wait for tests; defaults to {@link waitForRetry}. */
+  /** Injectable retry wait for tests; defaults to {@link searchRetryWait}. */
   retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>
 }
 
@@ -643,10 +662,12 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
       } catch (error: unknown) {
         // Cancellation is never retried, and a received-response path below is
         // never reached: this catch only covers a fetch that got no response.
+        // Every such rejection counts as transient; see the module comment for
+        // why a code allowlist would be worse.
         if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
         lastError = error
         if (attempt === SEARCH_MAX_ATTEMPTS) break
-        await (this.deps.retryWait ?? waitForRetry)(searchRetryDelayMs(attempt), signal)
+        await (this.deps.retryWait ?? searchRetryWait)(searchRetryDelayMs(attempt), signal)
       }
     }
     if (response === undefined) {

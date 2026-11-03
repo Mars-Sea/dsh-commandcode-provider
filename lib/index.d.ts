@@ -2220,7 +2220,7 @@ interface CommandCodeSearchProviderDeps {
   apiBase(): string;
   /** Injectable fetch for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
-  /** Injectable retry wait for tests; defaults to {@link waitForRetry}. */
+  /** Injectable retry wait for tests; defaults to {@link searchRetryWait}. */
   retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
 /**

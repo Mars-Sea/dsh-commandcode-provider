@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { WebRuntime } from '@deepseek-ai/dsh-web'
 import {
-  CommandCodeSearchProvider, SEARCH_MAX_ATTEMPTS, createCommandCodeSearchSelection, searchRetryDelayMs,
+  CommandCodeSearchProvider, SEARCH_MAX_ATTEMPTS, createCommandCodeSearchSelection, searchRetryDelayMs, searchRetryWait,
 } from '../src/web-search.ts'
 import type { WebSelectionSettings } from '../src/web-search.ts'
 import { volatileWrite } from '../src/config-volatile.ts'
@@ -354,17 +354,26 @@ test('does not retry once an HTTP status arrived: a 403 is an answer, not a blip
   assert.equal(calls, 1)
 })
 
-test('an abort during the retry wait stops it instead of sleeping through', async () => {
-  const stub = makeFetch(() => { throw fetchFailure('ECONNRESET') })
+test('an abort during the retry wait stops it instead of making another request', async () => {
+  let calls = 0
+  const stub = makeFetch(() => { calls += 1; throw fetchFailure('ECONNRESET') })
+  const controller = new AbortController()
+  let waitStarted!: () => void
+  const started = new Promise<void>(resolve => { waitStarted = resolve })
   const provider = new CommandCodeSearchProvider({
     resolveKey: async () => 'cc-key-123',
     apiBase: () => 'https://api.commandcode.ai',
     fetchImpl: stub.fetchImpl,
+    // Delegate to the production wait and signal when it is armed, so the test
+    // never races a real 500 ms timer against a short abort timer.
+    retryWait: async (delayMs, signal) => {
+      waitStarted()
+      return searchRetryWait(delayMs, signal)
+    },
   })
-  const controller = new AbortController()
-  const startedAt = Date.now()
   const pending = provider.search({ query: 'q' }, controller.signal)
-  setTimeout(() => controller.abort(), 50)
+  await started
+  controller.abort()
   await assert.rejects(
     () => pending,
     (error: unknown) => {
@@ -372,9 +381,7 @@ test('an abort during the retry wait stops it instead of sleeping through', asyn
       return true
     },
   )
-  // The default first wait is 500 ms; a timer that ignores the signal would
-  // have waited it out and then made a second request.
-  assert.ok(Date.now() - startedAt < 450, '取消应打断退避等待')
+  assert.equal(calls, 1, '取消后不得再发请求')
 })
 
 test('retry backoff doubles from 500 ms and stays inside the jitter bound', () => {
@@ -384,6 +391,23 @@ test('retry backoff doubles from 500 ms and stays inside the jitter bound', () =
     assert.ok(first >= 400 && first <= 600, `first wait ${first}`)
     assert.ok(second >= 800 && second <= 1200, `second wait ${second}`)
   }
+})
+
+test('the retry wait receives the 500 ms then 1 s sequence, not a fixed delay', async () => {
+  let calls = 0
+  const delays: number[] = []
+  const stub = makeFetch(() => { calls += 1; throw fetchFailure('ECONNRESET') })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'cc-key-123',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+    retryWait: async (delayMs) => { delays.push(delayMs) },
+  })
+  await assert.rejects(() => provider.search({ query: 'q' }))
+  assert.equal(calls, SEARCH_MAX_ATTEMPTS)
+  assert.equal(delays.length, SEARCH_MAX_ATTEMPTS - 1)
+  assert.ok(delays[0]! >= 400 && delays[0]! <= 600, `first wait ${delays[0]}`)
+  assert.ok(delays[1]! >= 800 && delays[1]! <= 1200, `second wait ${delays[1]}`)
 })
 
 test('available() is false for a blank or non-parseable apiBase', async () => {
