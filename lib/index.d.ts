@@ -2220,6 +2220,8 @@ interface CommandCodeSearchProviderDeps {
   apiBase(): string;
   /** Injectable fetch for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
+  /** Injectable retry wait for tests; defaults to {@link waitForRetry}. */
+  retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
 /**
  * A `ctx.web` search provider backed by the Command Code Provider API, reusing

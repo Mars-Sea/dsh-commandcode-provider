@@ -16,6 +16,20 @@
  * engine range (`engines.dsh`) starts at rc.2, so that reference is the only
  * shape this module serves — see {@link createCommandCodeSearchSelection}.
  *
+ * ## Search retries
+ *
+ * `dsh-tool-web` fans several queries out concurrently and aborts the whole
+ * batch on the FIRST failure (it rethrows that failure; issue #117), so one
+ * transient connection failure used to discard every result. The endpoint is
+ * read-only and idempotent, and the failure the issue observed arrived before
+ * any HTTP status — a network-level `fetch failed`, not a plan/credential
+ * verdict. This provider therefore repeats a fetch that never received a
+ * response, up to {@link SEARCH_MAX_ATTEMPTS} attempts with jittered
+ * exponential backoff, and leaves every received status (401/403/429/…) and
+ * every parsed body untouched: those are answers, not connection blips.
+ * Cancellation always wins — an aborted call (including the tool's cooperative
+ * deadline) stops before the next attempt and still reports `WEB_ABORTED`.
+ *
  * @module dsh-commandcode-provider/web-search
  */
 
@@ -26,6 +40,7 @@ import { COMMAND_CODE_CLI_VERSION } from './adapter.ts'
 import { isVolatileRef, volatileWrite } from './config-volatile.ts'
 import { readableErrorText } from './readable-error.ts'
 import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
+import { httpOrigin, transportFailureReason } from './transport-failure.ts'
 
 /** Stable id this provider registers under in `ctx.web`. */
 export const COMMANDCODE_SEARCH_PROVIDER_ID = 'commandcode'
@@ -439,6 +454,86 @@ const DEFAULT_NUM_RESULTS = 5
 /** The endpoint the search POST goes to; `{apiBase}` is prepended. */
 const SEARCH_ROUTE = '/alpha/web-search'
 
+/**
+ * Attempts per search: the first try plus two retries.
+ *
+ * dsh fans a multi-query call out concurrently and aborts the siblings of the
+ * first failure, so retrying HERE is what keeps one connection blip from
+ * discarding a four-query research step (issue #117). Two retries cover the
+ * common transient cases without pushing a failing search far past the web
+ * tool's cooperative budget; the caller's deadline still wins (see
+ * {@link waitForRetry}).
+ */
+export const SEARCH_MAX_ATTEMPTS = 3
+
+/** Base wait before the second attempt; each later wait doubles. */
+const SEARCH_RETRY_BASE_DELAY_MS = 500
+
+/** ±fraction applied to each wait so concurrent queries do not retry in lockstep. */
+const SEARCH_RETRY_JITTER_RATIO = 0.2
+
+/**
+ * Wait before the next attempt, doubling from 500 ms with ±20% jitter.
+ *
+ * The jitter matters here more than on the model path: a four-query fan-out
+ * that shares one network hiccup would otherwise reconnect all four at the
+ * same instant. Exported so the cadence is pinned without waiting on real
+ * timers.
+ *
+ * @param attempt - the failed attempt number, starting at 1.
+ * @returns the delay in milliseconds.
+ */
+export function searchRetryDelayMs(attempt: number): number {
+  const base = SEARCH_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1)
+  const jitter = 1 + (Math.random() * 2 - 1) * SEARCH_RETRY_JITTER_RATIO
+  return Math.round(base * jitter)
+}
+
+/**
+ * Sleep before a retry, resolving early only by rejecting with the caller's
+ * cancellation. A plain `setTimeout` would let an aborted tool call sit out a
+ * wait it no longer needs; this keeps the abort responsive and preserves the
+ * `WEB_ABORTED` taxonomy.
+ */
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(searchAborted(signal, signal.reason))
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(searchAborted(signal, signal?.reason))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * The failure a search ends with once every attempt has failed.
+ *
+ * `fetch failed` alone cannot distinguish a reset from a connect timeout from
+ * a dead proxy (issue #117), so the cause code, target origin and elapsed time
+ * ride along. The origin comes from {@link httpOrigin}, which drops paths and
+ * query strings, so a reverse proxy prefix or a credential never leaks here.
+ */
+function transportFailureMessage(
+  error: unknown,
+  apiBase: string,
+  attempts: number,
+  elapsedMs: number,
+): string {
+  const origin = httpOrigin(apiBase)
+  const details = [
+    transportFailureReason(error),
+    origin === undefined ? undefined : `目标 ${origin}`,
+    `耗时 ${elapsedMs}ms`,
+    `已尝试 ${attempts} 次`,
+  ].filter((detail): detail is string => detail !== undefined)
+  return `Command Code web search request failed: ${readableErrorText(error)}（${details.join('；')}）`
+}
+
 /** Per-request facts the provider needs, all injected so the class stays cordis-free and testable. */
 export interface CommandCodeSearchProviderDeps {
   /** 使用搜索已捕获的网关解析账号，探测不能在等待后转到另一个网关。 */
@@ -447,6 +542,8 @@ export interface CommandCodeSearchProviderDeps {
   apiBase(): string
   /** Injectable fetch for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch
+  /** Injectable retry wait for tests; defaults to {@link waitForRetry}. */
+  retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>
 }
 
 /**
@@ -523,27 +620,40 @@ export class CommandCodeSearchProvider implements WebSearchProvider {
       numResults: clampNumResults(request.maxResults),
     }
 
-    let response: Response
-    try {
-      response = await (this.deps.fetchImpl ?? fetch)(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...IDENTITY_ENCODING_HEADER,
-          Authorization: `Bearer ${key}`,
-          'x-command-code-version': COMMAND_CODE_CLI_VERSION,
-          'x-cli-environment': 'production',
-          ...attributionHeaders(),
-        },
-        body: JSON.stringify(body),
-        ...signal !== undefined ? { signal } : {},
-      })
-    } catch (error: unknown) {
-      if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
+    let response: Response | undefined
+    let lastError: unknown
+    const startedAt = Date.now()
+    for (let attempt = 1; attempt <= SEARCH_MAX_ATTEMPTS; attempt += 1) {
+      throwIfAborted(signal)
+      try {
+        response = await (this.deps.fetchImpl ?? fetch)(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...IDENTITY_ENCODING_HEADER,
+            Authorization: `Bearer ${key}`,
+            'x-command-code-version': COMMAND_CODE_CLI_VERSION,
+            'x-cli-environment': 'production',
+            ...attributionHeaders(),
+          },
+          body: JSON.stringify(body),
+          ...signal !== undefined ? { signal } : {},
+        })
+        break
+      } catch (error: unknown) {
+        // Cancellation is never retried, and a received-response path below is
+        // never reached: this catch only covers a fetch that got no response.
+        if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
+        lastError = error
+        if (attempt === SEARCH_MAX_ATTEMPTS) break
+        await (this.deps.retryWait ?? waitForRetry)(searchRetryDelayMs(attempt), signal)
+      }
+    }
+    if (response === undefined) {
       throw new WebError(
-        `Command Code web search request failed: ${readableErrorText(error)}`,
+        transportFailureMessage(lastError, apiBase, SEARCH_MAX_ATTEMPTS, Date.now() - startedAt),
         'WEB_PROVIDER_ERROR',
-        { cause: error },
+        { cause: lastError },
       )
     }
 

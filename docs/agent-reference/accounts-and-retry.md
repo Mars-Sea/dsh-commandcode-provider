@@ -217,6 +217,22 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   actually reads (take/restore/re-take, foreign pin, `preexisting`, refused write → memory fallback, a missing
   settings service, and unload not writing). A frozen runtime that offers no writable selection surface must
   neither throw nor change anything.
+  **Transient network failures are retried inside the provider (issue #117).** `dsh-tool-web` runs the queries
+  of one call concurrently and aborts every sibling as soon as the first fails, so one pre-response
+  `fetch failed` used to discard the whole multi-query step (the reporter's 4-query calls failed 2/2 while
+  retrying the same single query by hand succeeded). `search()` now repeats a fetch that received NO response
+  up to `SEARCH_MAX_ATTEMPTS` (3 = the first try plus two retries) with jittered exponential backoff
+  (500 ms then 1 s, ±20%), resolving the account once before the first attempt; the wait listens to the
+  caller's signal, so a user stop or the tool's cooperative deadline still ends as `WEB_ABORTED` instead of
+  sleeping through. A received HTTP status — 401/403/429 included — and every response-body failure are NEVER
+  retried: those are answers, and replaying a plan/credential rejection helps nobody. The terminal error
+  appends the fetch cause code (`UND_ERR_CONNECT_TIMEOUT`, `ECONNRESET`, …), the target origin from
+  `httpOrigin()` (path and query dropped, so a reverse-proxy prefix or a credential cannot leak) plus elapsed
+  time and attempt count, so `fetch failed` alone no longer has to cover DNS, proxy and connect-timeout
+  causes. Partial results for a multi-query call are still impossible here: the abort-on-first-failure policy
+  lives in dsh's `dsh-tool-web`, not in this provider.
+  `tests/web-search.test.ts` pins the retry, the once-only key resolution, the no-retry-on-status rule, the
+  abortable wait and the diagnostic suffix.
 - **`TRANSPORT` carries its own bounded budget, and the route policy cannot express it**
   (`src/transport-retry.ts` + the `agent/request-error` listener in `src/index.ts`; issue #39's second
   report). `providerRetryPolicy()` is captured once per route, so every code in its whitelist shares one
