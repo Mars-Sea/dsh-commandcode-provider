@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **网页搜索遇到连接层瞬时失败会整批失败，且 `fetch failed` 无法定位原因（#117）。** 报告者在 10 分钟内 14 次 `web_search` 失败 3 次：一次 4 个 query 的调用 2 次全部失败，单 query 12 次失败 1 次，失败后立即重试同一 query 全部成功；失败在拿到 HTTP 状态之前发生，面板记录约 21.7 秒。根因是同一链路上的两个独立事实：undici 的 `fetch` 只在连接/读取阶段失败后抛出裸的 `TypeError: fetch failed`（真实原因在 `error.cause`，本机对不可达地址实测 10.5 秒后为 `UND_ERR_CONNECT_TIMEOUT`，双地址族各等一轮可达约 20 秒），而插件的搜索只发一次、失败即抛；DSH 的 `dsh-tool-web` 在多 query 时又会在第一个失败时中止同批其余请求并整体抛出。现在 `CommandCodeSearchProvider.search()` 对「已收到 HTTP 响应」之外的连接层失败重试：最多 3 次尝试（首发 + 2 次），退避 500 ms／1 s 且带 ±20% 抖动，账号只在进入重试前解析一次；等待过程监听调用方信号，用户取消或工具协程超时仍按 `WEB_ABORTED` 结束，不会睡满退避。所有非取消的 fetch 拒绝都按瞬时处理（含证书、参数类确定性错误），代价是最多约 1.5 秒后抛出同一错误；收到 HTTP 状态（含 401/403/429）不重试——那是服务端的答案——响应体失败也不重试，因为响应头已到、请求已被接受并可能执行，重放有重复计费的代价。最终错误追加原因码（`UND_ERR_CONNECT_TIMEOUT`、`ECONNRESET` 等，复用 `transportFailureReason()`）、目标 origin（`httpOrigin()` 丢弃路径与查询，不回显反代前缀或凭据）、耗时与尝试次数，`fetch failed` 不再同时承担 DNS、代理、超时三种解释。**边界**：多 query 的部分成功仍由 DSH 的 `dsh-tool-web` 决定，不在本插件；重试只覆盖「未收到响应」，因此一次上游已处理但响应丢失的搜索可能被重放（搜索本身只读且幂等）。慢失败时 3 次尝试可能超过 `dsh-tool-web` 默认 30 秒预算，最终只看到 `WEB_ABORTED`；完整算术与取舍见 `docs/agent-reference/accounts-and-retry.md`。**验证**：`tests/web-search.test.ts` 新增 7 条用例（第二次尝试成功且密钥只解析一次、3 次后停止并在错误串带原因/目标/次数、403 不重试、注入生产等待函数的取消用例、默认 `retryWait ?? searchRetryWait` 接线的取消用例、退避基数与抖动边界、传给等待函数的延迟序列）；`typecheck` 退出码 0，`npm test` 全量通过，`build` 两段 `Build complete`。未做真实账号的并发搜索复验（需要报告者的网络条件）。
+
 ## [0.16.4] - 2026-11-02
 
 ### Added

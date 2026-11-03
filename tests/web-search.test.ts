@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { WebRuntime } from '@deepseek-ai/dsh-web'
 import {
-  CommandCodeSearchProvider, createCommandCodeSearchSelection,
+  CommandCodeSearchProvider, SEARCH_MAX_ATTEMPTS, createCommandCodeSearchSelection, searchRetryDelayMs, searchRetryWait,
 } from '../src/web-search.ts'
 import type { WebSelectionSettings } from '../src/web-search.ts'
 import { volatileWrite } from '../src/config-volatile.ts'
@@ -273,6 +273,179 @@ test('throws WEB_ABORTED when the caller aborts mid-flight', async () => {
       return true
     },
   )
+})
+
+/** Node's `fetch` rejection shape: a bare `TypeError` with the real code one level down. */
+function fetchFailure(code: string): TypeError {
+  return new TypeError('fetch failed', {
+    cause: Object.assign(new Error(`synthetic ${code}`), { code }),
+  })
+}
+
+test('retries a fetch that got no response and resolves the key only once', async () => {
+  // issue #117: one transient connection failure used to fail the whole
+  // multi-query batch, and the same query succeeded when retried by hand.
+  let calls = 0
+  let resolves = 0
+  const stub = makeFetch(() => {
+    calls += 1
+    if (calls === 1) throw fetchFailure('UND_ERR_CONNECT_TIMEOUT')
+    return asResponse(okBody([{ title: 'T', url: 'https://a.example', snippet: 'S' }]))
+  })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => { resolves += 1; return 'cc-key-123' },
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+    retryWait: async () => {},
+  })
+  const result = await provider.search({ query: 'q' })
+
+  assert.equal(calls, 2)
+  assert.equal(resolves, 1, '账号解析只在进入重试前做一次')
+  assert.deepEqual(result.sources, [{ url: 'https://a.example', title: 'T', snippet: 'S' }])
+})
+
+test('stops at SEARCH_MAX_ATTEMPTS and names the cause, target and attempt count', async () => {
+  let calls = 0
+  const stub = makeFetch(() => {
+    calls += 1
+    throw fetchFailure('UND_ERR_CONNECT_TIMEOUT')
+  })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'cc-key-123',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+    retryWait: async () => {},
+  })
+  await assert.rejects(
+    () => provider.search({ query: 'q' }),
+    (error: unknown) => {
+      const e = error as { code?: string; message?: string }
+      assert.equal(e.code, 'WEB_PROVIDER_ERROR')
+      assert.equal(calls, SEARCH_MAX_ATTEMPTS)
+      assert.match(e.message ?? '', /Command Code web search request failed: fetch failed/)
+      assert.match(e.message ?? '', /连接超时（UND_ERR_CONNECT_TIMEOUT）/)
+      assert.match(e.message ?? '', /目标 https:\/\/api\.commandcode\.ai/)
+      assert.match(e.message ?? '', new RegExp(`已尝试 ${SEARCH_MAX_ATTEMPTS} 次`))
+      return true
+    },
+  )
+})
+
+test('does not retry once an HTTP status arrived: a 403 is an answer, not a blip', async () => {
+  let calls = 0
+  const stub = makeFetch(() => {
+    calls += 1
+    return asResponse({ status: 403, body: { error: 'upgrade_required' } })
+  })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'cc-key-123',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+    retryWait: async () => { throw new Error('a received response must never be retried') },
+  })
+  await assert.rejects(
+    () => provider.search({ query: 'q' }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'WEB_PROVIDER_ERROR')
+      return true
+    },
+  )
+  assert.equal(calls, 1)
+})
+
+test('an abort during the retry wait stops it instead of making another request', async () => {
+  let calls = 0
+  const stub = makeFetch(() => { calls += 1; throw fetchFailure('ECONNRESET') })
+  const controller = new AbortController()
+  let waitStarted!: () => void
+  const started = new Promise<void>(resolve => { waitStarted = resolve })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'cc-key-123',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+    // Delegate to the production wait and signal when it is armed, so the test
+    // never races a real 500 ms timer against a short abort timer.
+    retryWait: async (delayMs, signal) => {
+      waitStarted()
+      return searchRetryWait(delayMs, signal)
+    },
+  })
+  const pending = provider.search({ query: 'q' }, controller.signal)
+  await started
+  controller.abort()
+  await assert.rejects(
+    () => pending,
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'WEB_ABORTED')
+      return true
+    },
+  )
+  assert.equal(calls, 1, '取消后不得再发请求')
+})
+
+test('the default retry wait (no injected seam) is abortable', { timeout: 5000 }, async (t) => {
+  // The injected-seam test above proves the cancellation semantics of the
+  // production wait; this one keeps the `retryWait ?? searchRetryWait` default
+  // itself covered. Timers are faked so the 500 ms wait cannot fire, and a
+  // captured real timer guards against a regression that would hang instead.
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const stub = makeFetch(() => { calls += 1; throw fetchFailure('ECONNRESET') })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'cc-key-123',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+  })
+  const controller = new AbortController()
+  const pending = provider.search({ query: 'q' }, controller.signal)
+  // Let the first rejection reach the default wait and arm the faked timer.
+  await new Promise(resolve => setImmediate(resolve))
+  let guardTimer: ReturnType<typeof setTimeout> | undefined
+  const guard = new Promise<never>((_, reject) => {
+    guardTimer = realSetTimeout(() => reject(new Error('默认等待未响应取消')), 1000)
+  })
+  try {
+    controller.abort()
+    await assert.rejects(
+      () => Promise.race([pending, guard]),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'WEB_ABORTED')
+        return true
+      },
+    )
+  } finally {
+    if (guardTimer !== undefined) realClearTimeout(guardTimer)
+  }
+  assert.equal(calls, 1, '取消后不得再发请求')
+})
+
+test('retry backoff doubles from 500 ms and stays inside the jitter bound', () => {
+  for (let round = 0; round < 50; round += 1) {
+    const first = searchRetryDelayMs(1)
+    const second = searchRetryDelayMs(2)
+    assert.ok(first >= 400 && first <= 600, `first wait ${first}`)
+    assert.ok(second >= 800 && second <= 1200, `second wait ${second}`)
+  }
+})
+
+test('the retry wait receives the 500 ms then 1 s sequence, not a fixed delay', async () => {
+  let calls = 0
+  const delays: number[] = []
+  const stub = makeFetch(() => { calls += 1; throw fetchFailure('ECONNRESET') })
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'cc-key-123',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: stub.fetchImpl,
+    retryWait: async (delayMs) => { delays.push(delayMs) },
+  })
+  await assert.rejects(() => provider.search({ query: 'q' }))
+  assert.equal(calls, SEARCH_MAX_ATTEMPTS)
+  assert.equal(delays.length, SEARCH_MAX_ATTEMPTS - 1)
+  assert.ok(delays[0]! >= 400 && delays[0]! <= 600, `first wait ${delays[0]}`)
+  assert.ok(delays[1]! >= 800 && delays[1]! <= 1200, `second wait ${delays[1]}`)
 })
 
 test('available() is false for a blank or non-parseable apiBase', async () => {
