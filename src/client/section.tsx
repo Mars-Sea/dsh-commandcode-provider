@@ -38,7 +38,7 @@ import type { LoginPageState } from './login.ts'
 import { loginHint, loginStateForTarget } from './login.ts'
 import { allowlistedModels, buildModelSelectOptions, catalogIsReady, groupModelSelectOptions, staleModelIds, tierHeadingFor, toggleModelSelection } from './model-select.ts'
 import type { UsagePageState } from './usage.ts'
-import { usageCardState } from './usage.ts'
+import { USAGE_AUTO_RETRY_LIMIT, USAGE_AUTO_RETRY_MS, usageCardState } from './usage.ts'
 import { compactCountTitle, formatCompactCount, formatMoney, formatMoneyExact, formatResetAtShort, formatSuccessRate, formatTokensCompact, windowRatio, formatUsageBillingPeriod } from '../display-format.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
 import { checkForUpdate, localStorageUpdateStore } from './update.ts'
@@ -164,9 +164,10 @@ export interface CommandCodeSettingsProps {
   discard(): void
   refreshUsage(): void
   /**
-   * The automatic half: first paint only. Nobody clicked anything, so this may
-   * coalesce with a read another surface just made; efreshUsage above is the
-   * user's own request and always goes to the wire.
+   * The automatic half: first paint, and the card's own 30-second re-check
+   * loop while the report is still missing something. Nobody clicked anything,
+   * so this may coalesce with a read another surface just made; refreshUsage
+   * above is the user's own request and always goes to the wire.
    */
   refreshUsageAuto(): void
   openAnalytics?(): void
@@ -2277,9 +2278,44 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
   const { loading, shouldRefresh } = usageCardState(usage)
   // Ask the Host on first paint: CLI auth and composition keys are not
   // represented by browser credential references.
+  //
+  // The same seam now keeps a re-check loop while the card still owes an
+  // answer: `shouldRefresh` also covers `error` and a `ready` report whose
+  // endpoints partly failed, so a blip no longer sits there until the user
+  // presses refresh. The interval mirrors the controller's
+  // `USAGE_AUTO_RETRY_MS` cooldown, which is what actually rate-limits the
+  // requests — this effect only decides WHEN to ask, never how often the wire
+  // is hit. A clean report turns `shouldRefresh` false, tearing the loop down.
+  //
+  // The budget ({@link USAGE_AUTO_RETRY_LIMIT}) lives here, not in the
+  // controller: the sidebar panel shares `refresh({ auto: true })` on its own
+  // two-minute tick and must keep running, while this fast loop is the one a
+  // permanent refusal could turn into a storm. A remount starts a fresh budget.
+  //
+  // `onRefreshAuto` is a fresh closure on every render, so it lives in a ref:
+  // listing it as a dependency would rebuild the interval on every render and
+  // let it never fire.
+  const refreshAuto = useRef(onRefreshAuto)
+  useEffect(() => { refreshAuto.current = onRefreshAuto })
+  const autoAttempts = useRef(0)
   useEffect(() => {
-    if (shouldRefresh) onRefreshAuto()
-  }, [shouldRefresh, onRefreshAuto])
+    if (!shouldRefresh) {
+      autoAttempts.current = 0
+      return
+    }
+    if (autoAttempts.current >= USAGE_AUTO_RETRY_LIMIT) return
+    autoAttempts.current += 1
+    refreshAuto.current()
+    const timer = setInterval(() => {
+      if (autoAttempts.current >= USAGE_AUTO_RETRY_LIMIT) {
+        clearInterval(timer)
+        return
+      }
+      autoAttempts.current += 1
+      refreshAuto.current()
+    }, USAGE_AUTO_RETRY_MS)
+    return () => clearInterval(timer)
+  }, [shouldRefresh])
   const rows = accountRows(state, usage, t).filter((row) => row.ref === undefined || !state.accountEnrollmentRefs.includes(row.ref))
   const multi = rows.length > 1
   const pinnedRow = rows.find((row) => row.id === state.activeAccount)

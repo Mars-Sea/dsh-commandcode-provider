@@ -13,6 +13,7 @@ import {
   CommandCodeUsageController,
   usageCardState,
   USAGE_AUTO_REFRESH_COALESCE_MS,
+  USAGE_AUTO_RETRY_MS,
   compactCountTitle,
   formatCompactCount,
   formatMoney,
@@ -253,7 +254,69 @@ test('usage card fetches Host facts without browser credentials and keeps manual
   assert.equal(absent.loading, false, 'refresh stays enabled even after a no-key report')
   const failed = usageCardState({ ...controller.state(), report: undefined, status: 'error' })
   assert.equal(failed.noKey, false)
-  assert.equal(failed.shouldRefresh, false, 'a failure must not cause an automatic request loop')
+  assert.equal(failed.shouldRefresh, true,
+    '失败之后卡片要能自愈；限速由 controller 的 30 秒冷却窗负责，不是靠永不重试')
   assert.equal(failed.loading, false)
   controller.dispose()
 })
+
+test('失败后的自动刷新按 30 秒冷却重试，显式刷新不受限制', async (t) => {
+  // 设置卡片靠一条订阅 While 循环复检；如果失败后 auto 还能随时发请求，
+  // 每帧渲染都会打一次上游。冷却窗是这条自愈路径的硬约束。
+  const originalNow = Date.now
+  let now = originalNow()
+  Date.now = () => now
+  t.after(() => { Date.now = originalNow })
+  let calls = 0
+  const controller = new CommandCodeUsageController(makeRemote(async () => {
+    calls++
+    return { ok: false as const, error: { message: 'boom' } }
+  }))
+  await controller.refresh({ auto: true })
+  assert.equal(calls, 1)
+  assert.equal(controller.state().status, 'error')
+  assert.equal(usageCardState(controller.state()).shouldRefresh, true)
+
+  // 冷却窗内：自动路径被挡住，状态保持不变。
+  await controller.refresh({ auto: true })
+  assert.equal(calls, 1, '冷却窗内的自动刷新不能打到上游')
+
+  now += USAGE_AUTO_RETRY_MS - 1
+  await controller.refresh({ auto: true })
+  assert.equal(calls, 1, '窗口差 1 毫秒仍然挡住')
+
+  now += 1
+  await controller.refresh({ auto: true })
+  assert.equal(calls, 2, '冷却结束后自动路径会真的重试一次')
+
+  // 用户点刷新属于显式路径：冷却不生效，必须立刻去读。
+  await controller.refresh()
+  assert.equal(calls, 3, '显式刷新不受冷却窗限制')
+  controller.dispose()
+})
+
+test('部分端点失败的报告仍算待复检，重试窗口按 30 秒计', async (t) => {
+  const originalNow = Date.now
+  let now = originalNow()
+  Date.now = () => now
+  t.after(() => { Date.now = originalNow })
+  let calls = 0
+  const partial = makeReport()
+  partial.accounts[0]!.report.failures = ['/alpha/usage/summary: HTTP 503']
+  const controller = new CommandCodeUsageController(makeRemote(async () => {
+    calls++
+    return { ok: true, value: partial }
+  }))
+  await controller.refresh({ auto: true })
+  assert.equal(calls, 1)
+  assert.equal(controller.state().status, 'ready', '报告本身是可用状态，只是不完整')
+  assert.equal(usageCardState(controller.state()).shouldRefresh, true, '不完整的报告值得再要一次')
+
+  await controller.refresh({ auto: true })
+  assert.equal(calls, 1, '失败窗口内不重复请求')
+  now += USAGE_AUTO_RETRY_MS
+  await controller.refresh({ auto: true })
+  assert.equal(calls, 2, '窗口过后重试一次')
+  controller.dispose()
+})
+

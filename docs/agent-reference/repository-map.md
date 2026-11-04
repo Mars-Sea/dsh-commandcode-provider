@@ -28,8 +28,10 @@ src/capabilities.ts   Static capability snapshot (model efforts/vision/thinking,
                       plan tiers, subscription plans, deals, peak pricing) +
                       its read helpers — the sync-only surface for upstream
                       CLI/doc updates; imported by src/adapter.ts and re-exported
-                      from src/index.ts. Also holds the Messages-route model set
-                      and the per-model output ceilings the catalog omits.
+                      from src/index.ts. Also holds the Messages-route model set,
+                      the per-model output ceilings the catalog omits, and the
+                      model-selector promo badge (`modelBadge()`, DSH
+                      `LlmModelInfo.badge`: free/discount copy + deal expiry).
 src/accounts.ts       CommandCodeAccountPool — 固定账号定义的调用作用域，
                       按网关与密钥共享健康及节流，凭据实时解析与窗口恢复。
 src/image-request.ts  Request-image target: the long-edge (1568 px) / byte
@@ -143,6 +145,16 @@ src/client/session-cost-view.tsx  The dock entry that feeds the injected cost.
 src/client/session-cost-display.ts  DOM injection into the harness's token-usage
                       pill and usage dialog (browser only).
 src/client/session-cost-slots.ts  SlotMap merge for `conversation.composer.dock`.
+src/client/settings-nav-glyph.tsx  The settings-nav glyph rendered through the
+                      host's `settings.section.icon` slot (dsh 0.2.2-alpha.3+),
+                      keyed by the section id (`commandcode`).
+src/client/settings-nav-icon.ts  Fallback glyph injection for hosts that predate
+                      the slot: find the settings nav row by its localized
+                      label, hide the shell's gear, insert the same mark
+                      (browser only; self-healing, restores on disposal).
+src/client/settings-nav-slot.ts  SlotMap merge for `settings.section.icon`,
+                      restated while the dev engine (0.2.1-rc.3) does not
+                      declare the seat; delete once dev types reach alpha.3.
 src/cost-facts.ts      JSON-only billing facts shared by the Host projection and
                       the browser readout (groups, peak/hour rule, pricing key).
 src/cost-projection.ts  Durable `commandCodeCost` session projection: folds each
@@ -208,6 +220,9 @@ tests/adapter.test.ts Core adapter unit tests (node:test + tsx), including the
                       usage mapping, per-block thinking-signature replay, native
                       tool-result images, the three rejection shapes, and
                       `supported_endpoints` routing.
+tests/model-badge.test.ts Model-selector promo badges: free/discount copy,
+                      expiry on the same clock as the description marker, no
+                      deal, and the English fallback for an unmapped label.
 tests/accounts.test.ts Account-pool rotation tests.
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/settings.test.ts settings-page controller tests.
@@ -267,6 +282,10 @@ tests/session-cost-display.test.ts  DOM-injection tests for the pill and the
                       usage dialog, driven through the real class and its
                       `doc`/`observe` seams against a fake DOM (confirmation,
                       self-heal, hide/restore, disposal).
+tests/settings-nav-icon.test.ts  Settings-nav glyph tests: row identified by
+                      label (not position), the same contract on the pre- and
+                      post-alpha.3 row shapes, self-heal after a re-render, and
+                      disposal restoring the shell's gear.
 tests/cost-projection.test.ts  durable cost-fact fold tests against the real
                       projection registry (v1/v2 settlements, retries, history
                       restore, tier boundaries, free/unpriced subtotals).

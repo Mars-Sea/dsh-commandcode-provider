@@ -76,6 +76,7 @@ import {
   KNOWN_IMAGE_MODELS,
   capabilityDescription,
   compareByPlan,
+  modelBadge,
   modelVisibleForAnyAccount,
   requiresMessagesEndpoint,
   subscriptionPlanInfo,
@@ -125,6 +126,14 @@ export const BILLING_ACCESS_TTL_MS = 5 * 60_000
  * fail-open advisory data, so a miss costs one round trip and nothing else.
  */
 const ACCOUNT_FACTS_TTL_MS = 30_000
+/**
+ * How long `accountJsonGet` waits before the ONE retry it may spend on the
+ * account report. Short on purpose: the retry exists to ride out a transport
+ * blip, not to turn a slow endpoint into a second budget — a failure that took
+ * longer than this keeps its single attempt (and a TIMEOUT is never retried;
+ * see `accountJsonGet`).
+ */
+const ACCOUNT_ENDPOINT_RETRY_DELAY_MS = 500
 /**
  * How long a learned CLI-only protocol preference stays cached per account.
  * After this TTL a request may probe Provider API again, so an upgraded Go
@@ -284,6 +293,21 @@ function periodTimestampValue(value: unknown): number {
   if (asString === undefined) return 0
   const parsed = Date.parse(asString)
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+/**
+ * Whether a failed fetch already exhausted the caller's budget. `AbortSignal
+ * .timeout()` rejects with a `TimeoutError`, and re-sending after that would
+ * double a wait the user is already sitting through — the one failure the
+ * account report's single retry deliberately does NOT cover.
+ */
+function isRequestTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError'
+}
+
+/** The pause before `accountJsonGet`'s one retry; see `ACCOUNT_ENDPOINT_RETRY_DELAY_MS`. */
+function accountRetryDelay(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ACCOUNT_ENDPOINT_RETRY_DELAY_MS))
 }
 
 /**
@@ -2690,6 +2714,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     }
     const toInfo = (model: (typeof catalog)[number]) => {
       const vision = KNOWN_IMAGE_MODELS.has(model.id)
+      const badge = modelBadge(model.id)
       return {
         provider,
         id: model.id,
@@ -2699,6 +2724,12 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         // the CUSTOM one when a context-length override applies (issue #86).
         description: capabilityDescription(model.id, effectiveContextWindow(model.contextWindow, model.id, connection)),
         inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
+        // The composer model selector renders `LlmModelInfo.badge` as a Tag
+        // beside the name (before it in the trigger, after it in menu rows);
+        // engines from 0.2.1-rc.4 read it, older ones simply ignore the field.
+        // Only promo markers go here — plan/peak/Image/context stay in the
+        // description, which those same older engines also render.
+        ...(badge === undefined ? {} : { badge }),
       }
     }
     // Unfiltered: the settings page's catalog endpoint serves the full catalog
@@ -2994,6 +3025,17 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * cached copy with the current time would misreport when they were read.
    * Identity and billing facts are the opposite: a plan tier or an org id that
    * is 30 s old is still the truth, and those are what the picker duplicates.
+   *
+   * `retryOnce` adds ONE more GET after a fast failure — a transport drop or a
+   * 5xx. The account report has no retry/rotation chain of its own (unlike the
+   * chat path), so a single blip used to become a permanent-looking
+   * "部分端点数据不可用" note on the settings card. A TIMEOUT is deliberately not
+   * retried: the first attempt already spent the caller's whole budget (up to
+   * `requestTimeoutMs`), and re-sending would only double a hang the user is
+   * already staring at. 4xx is not retried either — an expired key or a bad
+   * `since` answers the same way the second time. The picker's fail-open reads
+   * keep the old single-attempt behaviour: they are advisory and a retry there
+   * would only slow the model list down.
    */
   private async accountJsonGet(
     apiBase: string,
@@ -3001,6 +3043,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     path: string,
     timeoutMs: number,
     share = true,
+    retryOnce = false,
   ): Promise<{ status: number; record?: Record<string, unknown>; responseFailure?: string }> {
     const cacheKey = JSON.stringify([apiBase, apiKey, path])
     if (share) {
@@ -3009,7 +3052,22 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         return { status: 200, record: hit.record }
       }
     }
-    const answer = await this.fetchJson(`${apiBase}${path}`, this.accountHeadersFor(apiKey), timeoutMs)
+    const url = `${apiBase}${path}`
+    const headers = this.accountHeadersFor(apiKey)
+    const fetchOnce = (): Promise<{ status: number; record?: Record<string, unknown>; responseFailure?: string }> =>
+      this.fetchJson(url, headers, timeoutMs)
+    let answer: { status: number; record?: Record<string, unknown>; responseFailure?: string }
+    try {
+      answer = await fetchOnce()
+    } catch (error: unknown) {
+      if (!retryOnce || isRequestTimeout(error)) throw error
+      await accountRetryDelay()
+      answer = await fetchOnce()
+    }
+    if (retryOnce && answer.record === undefined && answer.status >= 500) {
+      await accountRetryDelay()
+      answer = await fetchOnce()
+    }
     if (share && answer.record !== undefined) {
       this.accountJson.set(cacheKey, { record: answer.record, at: Date.now() })
     }
@@ -3177,12 +3235,16 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
         // whichever surface asked for this exact URL most recently already paid
         // for it, and a 30 s old org id or plan tier is still the truth. The
         // CARD's own budget is still the one a real fetch runs under.
+        // `retryOnce`: the card is the one surface with no retry chain behind
+        // it, so a fast transport/5xx failure gets one more GET before the
+        // report books it (see `accountJsonGet`).
         const { status, record, responseFailure } = await this.accountJsonGet(
           base,
           key,
           path,
           connection.requestTimeoutMs,
           share,
+          true,
         )
         if (record === undefined) {
           failures.push(`${path}: HTTP ${status}${responseFailure ? `；${responseFailure}` : ''}`)

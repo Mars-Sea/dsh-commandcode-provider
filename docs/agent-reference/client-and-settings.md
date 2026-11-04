@@ -15,7 +15,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
 - **凭据事实与销毁**：凭据返回成功即为写入确认，描述仅提供存在性；描述失败或缺失保留最后确认事实，首次尚无确认时明确显示状态未知，重试入口只读状态。按引用及读取世代屏蔽迟到描述。普通切页不关闭共享控制器；插件销毁停止未开始任务，已发调用自然收束，不进入后续阶段。
 - **凭据写入不再被环境变量遮蔽（alpha.3）**：凭据服务的 `describe()` 恒返回 `writable: true`，写入不再因环境变量遮蔽而被拒，服务内部的层序同步反转为「托管存储 → 继承环境 → 项目 `.env` → `$DSH_HOME/.env`」。**headless（无头）profile 有意不挂载 `credentials`／`authorization`／`deepseek-account` 三行**，没有凭据服务可读写，一次性任务只认启动环境与 `.env`。密钥解析侧见[账号与重试](accounts-and-retry.md)。
 - **自动轮换**：取消固定账号时基础层仍固定账号，则显式写 `activeAccount: ''`；仅清除用户覆盖会重新露出基础层固定账号，不等于自动轮换。普通字段重置仍恢复继承。
-- **用量读取的自动与显式路径**：一份用量报告是四次上游调用，而面板与账户卡片都会在无人操作时各自读取。`CommandCodeUsageController.refresh({ auto: true })` 标记「没人点过」的刷新，只有它在 `USAGE_AUTO_REFRESH_COALESCE_MS`（5 秒）内复用刚刚读取的结果；首屏 effect 与面板 tick 都走这条路径。按钮、保存、换/清凭据等显式调用不传 `auto`，不查合并窗口，永远真的去读（请求在途时仍按既有 `inFlight` 规则折叠，不会因点击再发一份）。窗口刻意很小，`fetchedAt` 因此仍如实反映数字被读取的时刻。首屏接线的真实渲染用例见 `tests/accounts-card-render.test.ts`：首屏必须调 `onRefreshAuto()`，刷新按钮必须调 `onRefresh()`。
+- **用量读取的自动与显式路径**：一份用量报告是四次上游调用，而面板与账户卡片都会在无人操作时各自读取。`CommandCodeUsageController.refresh({ auto: true })` 标记「没人点过」的刷新，由**按结果分档的冷却窗**限速：干净报告后 `USAGE_AUTO_REFRESH_COALESCE_MS`（5 秒）内复用刚读到的结果；整次失败或**部分端点失败**（`ready` 但 `report.failures` 非空）后改为 `USAGE_AUTO_RETRY_MS`（30 秒）才允许下一次自动读取。因此 `usageCardState().shouldRefresh` 不只在 `idle` 为真，`error` 与「不完整报告」也算待复检：账户卡片在它为真时立即 auto 读一次，并每 30 秒重试一次，直到报告干净（`shouldRefresh` 变 false 即清理定时器）——一次网络抖动不会再永久留在卡片上。复检预算 `USAGE_AUTO_RETRY_LIMIT`（5 次）用完后停下，交回手动刷新／保存／重新挂载（重新挂载重新计数）；该上限只约束卡片这条快循环，侧边栏面板的 2 分钟 tick 不受影响（上限在 surface 层而非 controller，正因为两者共用 `refresh({ auto: true })`）。按钮、保存、换/清凭据等显式调用不传 `auto`，不查冷却窗，永远真的去读（请求在途时仍按既有 `inFlight` 规则折叠，不会因点击再发一份）。`fetchedAt` 因此仍如实反映数字被读取的时刻。接线由 `tests/accounts-card-render.test.ts` 钉住（首屏走 `onRefreshAuto()`、按钮走 `onRefresh()`、error/部分失败会进入复检循环、干净报告不建循环），冷却窗与 `shouldRefresh` 的三种来源由 `tests/usage-client.test.ts` 钉住。
 - **隐藏页面不轮询**：`startPanelAutoRefresh()` 的 tick 先问 `AutoRefreshVisibility.isVisible()`（默认读 `document.visibilityState` 并订阅 `visibilitychange`），隐藏时跳过读取但照旧重排定时器；重新可见立即补读一次（该补读走 `auto`，5 秒内仍可能被合并）。首屏那次无条件读取 —— 那一刻没有数据可显示。可见性是可注入接缝，非浏览器环境视为始终可见。监听句柄与循环状态同层（模块级），因此启动循环的 surface 先卸载时也照样解绑，任意卸载顺序都不泄漏。
 - **运行中请求的配置生效**：已确认的网关、账号列表、固定账号和模型规则用于新调用，已经开始的适配器调用继续使用自己的快照。引用凭据每次账号选择仍重新解析；清除后可能按既有优先级使用默认账号的授权文件兜底，不撤回已发请求或当前尝试已取得的密钥。
 - **账户移除与清理**：`accounts`、`modelAccountRules`、固定账户及 `credentialCleanupRefs` 在一次带版本检查的 `remote.settings.mutate` 中提交，再清理凭据。失败队列持久化，页面刷新后仍显示重试；重新引用、继承配置和默认密钥受保护。无法确认凭据事实时保留队列。宿主配置与凭据服务并无共同事务，不能承诺任意外部并发重建与凭据删除跨服务原子化。
@@ -121,8 +121,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     load-bearing. (a) The mount callback re-reads the USAGE report (`refreshUsage?.()` — a seam declared
     before the effect, because the inject callback can run before the controller's own `const` and a
     temporal-dead-zone read would THROW): a surface that asked before the namespace landed (the quota card's
-    first paint does, every boot) stored the synthetic "remote is not mounted" failure as `status: 'error'`,
-    and `shouldRefresh` only fires from `idle`, so nothing else would ever retry it. (b)
+    first paint does, every boot) stored the synthetic "remote is not mounted" failure as `status: 'error'`;
+    the card's re-check loop would eventually replace it, but only after its `USAGE_AUTO_RETRY_MS` cooldown,
+    so the mount callback re-reads at once instead. (b)
     `SettingsDescribeMirror` retries a FIRST describe failure on a bounded 1/2/4 s ladder
     (`SETTINGS_DESCRIBE_RETRY_MS`, injectable timer): with nothing ever held the scope keeps its initial
     `loading`/`writable: false` snapshot, which the settings page renders as a fully disabled form behind a
@@ -307,6 +308,18 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   淡入并上移 8px（过渡而非关键帧，重渲染不重播）；`prefers-reduced-motion` 下只剩淡入。行间细线是有意
   推翻 2026-10-21「行间不画线」的决定：卡片内无分界时行与行会粘在一起。动效与悬停策略统一见
   「设置页动效与悬停（2026-10-29）」条目。
+- **设置页导航图标（2026-11-03）**：`commandcode` 这一行在设置导航里的图标分两层。宿主声明
+  `settings.section.icon`（`0.2.2-alpha.3` 起；list 插槽、按 section id 过滤、props `size`／`active`）时，
+  `src/client/settings-nav-glyph.tsx` 按 id `commandcode` 注册品牌标记（16px、单色线性、`stroke=currentColor`、
+  1.3px，图形与 `icon.svg` 同一个 command 符号）；未声明的旧宿主没有这个座位，`src/client/settings-nav-icon.ts`
+  在设置弹窗（`[data-shortcut-modal="settings"]` → `nav`）里按本地化标签找到本站那一行，把宿主齿轮
+  `display:none` 并在标签前插入同形 SVG。`MutationObserver` 只监听 body 的 `childList`（不用 `subtree`，
+  流式正文不会唤醒它）以感知弹窗开合；React 重渲染扔掉注入节点会自愈，行节点被替换会重新装饰，销毁时移除
+  节点并还原齿轮，官方注册生效时兜底自动拆除——任何宿主上都只画一个图形。判据：`tests/settings-nav-icon.test.ts`
+  （按标签识别而非位置、两种宿主行形状、弹窗开合、自愈、行替换、复原）与 `tests/client-boot.test.ts`
+  （宿主声明／不声明两条注册分支）。`src/client/settings-nav-slot.ts` 只是 SlotMap 的临时重述，dev 引擎升到
+  `0.2.2-alpha.3` 后必须删除；届时 `src/client/settings-nav-icon.ts` 也可一并删除，只留插槽注册。
+
 - **自定义上下文长度（issue #86）**：`Config.contextWindow`（全局值）与 `Config.contextWindowOverrides`
   （按模型，键为目录 id）覆盖宣告给宿主的上下文窗口，解析顺序为按模型 → 全局 → 目录。页面上是
   「模型与上下文」分组内平铺的两段内容（`ContextCard` 渲染，直接排在「隐藏套餐外模型」开关与可见模型

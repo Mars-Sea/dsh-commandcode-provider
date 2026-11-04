@@ -16,6 +16,12 @@ you need to locate an unfamiliar module.
 - Preserve unrelated tracked and untracked worktree changes. Keep changes focused on the request.
 - Do not commit, tag, push, publish, or create a GitHub Release unless the user explicitly asks. The
   [release procedure](docs/agent-reference/releasing.md) applies only after that authorization.
+- Before implementing a fix for a reported issue, check whether someone is already working on it: run
+  `gh pr list --state open` (and `gh pr list --state all --search "<issue number>"`) for the issues in
+  scope. A contributor PR that lands while the work is in progress is the expensive case — the duplicate
+  gets implemented, released, and then has to be closed against a contributor who did the same diagnosis.
+  Check once when picking up the issue and again before releasing. If a PR exists, review it and either
+  build on it or say why the shipped approach differs; never silently supersede it.
 - Do not reintroduce pi/OMP auth-file scanning. Preserve the API-key resolution order documented under
   [accounts and retry](docs/agent-reference/accounts-and-retry.md); keep literal keys secret and out of
   settings documents and diagnostics.

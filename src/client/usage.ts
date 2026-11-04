@@ -126,6 +126,35 @@ const IDLE: UsagePageState = { status: 'idle', report: undefined, error: undefin
 export const USAGE_AUTO_REFRESH_COALESCE_MS = 5_000
 
 /**
+ * How soon an AUTO refresh may try again after a FAILED or PARTIAL report.
+ *
+ * The settings card used to ask the Host exactly once per mount (`idle` only),
+ * so one blip — a dropped connection, a 5xx — stayed on the card until the user
+ * pressed refresh, which read as "it errors all the time". The card now keeps a
+ * re-check loop while it still has something to fix (`usageCardState()
+ * .shouldRefresh`), and this window is what keeps that loop from becoming a
+ * request storm: a report costs four upstream calls, and the failure it retries
+ * is usually a moment-old transient. Success keeps the much smaller
+ * {@link USAGE_AUTO_REFRESH_COALESCE_MS} window, because there is nothing to
+ * retry there — only a duplicate to collapse.
+ */
+export const USAGE_AUTO_RETRY_MS = 30_000
+
+/**
+ * How many AUTO attempts the CARD's re-check loop may spend before it gives up.
+ *
+ * The loop exists to clear a blip, not to hammer a permanent refusal: an
+ * expired key or a rejected request answers the same way every 30 seconds, and
+ * each attempt is four upstream calls. After this many attempts the card keeps
+ * its error and waits for the user (the refresh button, a save, or a fresh
+ * mount — a remount starts a new loop). The limit lives at the SURFACE rather
+ * than in the controller on purpose: the sidebar panel's two-minute tick shares
+ * `refresh({ auto: true })` and must keep running; only the card's fast loop is
+ * what a permanent failure could turn into a storm.
+ */
+export const USAGE_AUTO_RETRY_LIMIT = 5
+
+/**
  * Controller bridging the `commandcode/report` Remote onto the card. Public
  * API mirrors {@link CommandCodeSettingsController}: `state()` projections,
  * `subscribe`, and one `refresh()` action.
@@ -137,8 +166,14 @@ export class CommandCodeUsageController {
   private generation = 0
   private inFlight = false
   private disposed = false
-  /** When the last fetch SETTLED successfully, for {@link USAGE_AUTO_REFRESH_COALESCE_MS}. */
-  private settledAt: number | undefined
+  /**
+   * Earliest instant the next AUTO refresh may reach the Host. Set after every
+   * settle: `USAGE_AUTO_REFRESH_COALESCE_MS` after a clean report (only a
+   * duplicate to collapse), {@link USAGE_AUTO_RETRY_MS} after a failure or a
+   * partial one (a real retry, deliberately slower). Explicit refreshes never
+   * consult it — the user asked, so the answer must be new.
+   */
+  private autoCooldownUntil = 0
 
   constructor(remote: UsageRemote) {
     this.remote = remote
@@ -166,20 +201,17 @@ export class CommandCodeUsageController {
    * Fetch (or refetch) the report. Concurrent refreshes collapse onto one
    * request; a superseded fetch's late result is dropped, never published.
    *
-   * `auto` marks a refresh nobody asked for — a surface appearing, or the
-   * background tick. Those also reuse a result fetched within
-   * {@link USAGE_AUTO_REFRESH_COALESCE_MS}, because two surfaces mounting a
-   * second apart are asking the same question. Every other caller is a user
-   * action and always goes to the wire.
+   * `auto` marks a refresh nobody asked for — a surface appearing, the card's
+   * own re-check loop, or the panel's background tick. Those are held back by
+   * {@link CommandCodeUsageController.autoCooldownUntil}: a duplicate of a
+   * report fetched a moment ago is skipped (nothing new to learn), and a retry
+   * after a failure is spaced by {@link USAGE_AUTO_RETRY_MS} so one broken
+   * endpoint cannot turn the card's re-check into a request loop. Every other
+   * caller is a user action and always goes to the wire.
    */
   async refresh(options?: { auto?: boolean }): Promise<void> {
     if (this.disposed || this.inFlight) return
-    if (
-      options?.auto === true
-      && this.current.status === 'ready'
-      && this.settledAt !== undefined
-      && Date.now() - this.settledAt < USAGE_AUTO_REFRESH_COALESCE_MS
-    ) return
+    if (options?.auto === true && Date.now() < this.autoCooldownUntil) return
     const generation = ++this.generation
     this.inFlight = true
     this.current = { ...this.current, status: 'loading', error: undefined }
@@ -189,10 +221,13 @@ export class CommandCodeUsageController {
       if (this.disposed || generation !== this.generation) return
       if (response.ok) {
         const fetchedAt = Date.now()
-        this.settledAt = fetchedAt
         this.current = { status: 'ready', report: response.value, error: undefined, fetchedAt }
+        this.autoCooldownUntil = fetchedAt + (reportIncomplete(response.value)
+          ? USAGE_AUTO_RETRY_MS
+          : USAGE_AUTO_REFRESH_COALESCE_MS)
       } else {
         this.current = { ...this.current, status: 'error', error: response.error.message }
+        this.autoCooldownUntil = Date.now() + USAGE_AUTO_RETRY_MS
       }
     } catch (error: unknown) {
       if (this.disposed || generation !== this.generation) return
@@ -201,6 +236,7 @@ export class CommandCodeUsageController {
         status: 'error',
         error: readableErrorText(error),
       }
+      this.autoCooldownUntil = Date.now() + USAGE_AUTO_RETRY_MS
     } finally {
       if (generation === this.generation) this.inFlight = false
     }
@@ -213,12 +249,23 @@ export class CommandCodeUsageController {
   }
 }
 
+/** Whether a report arrived but some endpoint did not (a retry is worth spending). */
+function reportIncomplete(report: CommandCodeAccountsReport): boolean {
+  return report.accounts.some(account => account.report.failures.length > 0)
+}
+
 /** Host facts drive the usage card, including keys invisible to browser credentials. */
 export function usageCardState(usage: UsagePageState) {
   const accounts = usage.report?.accounts ?? []
   return {
     loading: usage.status === 'loading',
-    shouldRefresh: usage.status === 'idle',
+    // Three states still owe the card a read: never fetched (idle), the last
+    // whole call failed (error), and the report arrived with failed endpoints
+    // (ready + failures). All three feed the card's re-check loop; the
+    // controller's cooldown is what keeps the failed ones from looping.
+    shouldRefresh: usage.status === 'idle'
+      || usage.status === 'error'
+      || (usage.status === 'ready' && reportIncomplete(usage.report ?? { accounts: [] })),
     noKey: accounts.length > 0 && !accounts.some(account => account.configured),
   }
 }

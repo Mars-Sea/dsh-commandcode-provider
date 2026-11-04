@@ -2566,6 +2566,49 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   )
 })
 
+test('listModels() advertises active deal badges and leaves paid models unbadged', async () => {
+  const cachePath = join(tmpdir(), `cc-badge-${process.pid}-${Date.now()}.json`)
+  try {
+    const catalog = {
+      object: 'list',
+      data: [
+        { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1', context_length: 256_000 },
+        { id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3', context_length: 1_000_000 },
+        { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
+      ],
+    }
+    const adapter = makeAdapter({
+      fetchImpl: fetchReturning(200, JSON.stringify(catalog)),
+      options: () => ({
+        apiBase: 'https://api.commandcode.ai',
+        workingDir: '/tmp/project',
+        modelsCachePath: cachePath,
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+        protocol: 'cli' as const,
+      }),
+    })
+    const byId = new Map((await adapter.listModels('commandcode')).map((model) => [model.id, model]))
+    const badgeOf = (id: string): unknown => (byId.get(id) as { badge?: unknown }).badge
+    // A free promo: the selector renders a `success`-toned FREE Tag and the host
+    // resolves the localized text through its own locale service.
+    assert.deepEqual(badgeOf('poolside/laguna-s-2.1-free'), {
+      text: { en: 'FREE', zh: '免费' },
+      tone: 'success',
+    })
+    // A percentage-off promo: same tone, the discount itself as the text.
+    assert.deepEqual(badgeOf('MiniMaxAI/MiniMax-M3'), {
+      text: { en: '50% off', zh: '5折' },
+      tone: 'success',
+    })
+    // No deal, no field at all — an explicit `undefined` would still be carried
+    // through the catalog projection and would render an empty Tag.
+    assert.equal(Object.hasOwn(byId.get('deepseek/deepseek-v4-pro')!, 'badge'), false)
+  } finally {
+    rmSync(cachePath, { force: true })
+  }
+})
+
 test('resolveModel() and listModels() honor custom context lengths (issue #86)', async () => {
   // A dedicated cache path keeps this test free of any on-disk catalog cache.
   const cachePath = join(tmpdir(), `cc-ctx-${process.pid}-${Date.now()}.json`)
@@ -6171,11 +6214,18 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.equal(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash:free'), false)
   assert.deepEqual(KNOWN_EFFORTS['inclusionai/ling-3.1-flash'], ['low', 'medium', 'high'])
   assert.equal(KNOWN_EFFORTS['inclusionai/ling-3.1-flash:free'], undefined)
-  // 2026-11-02: the 1019 free promo keeps the three selectable levels — the
-  // `:free` suffix is a pricing row, not an effort downgrade — so it belongs in
-  // KNOWN_EFFORTS and not in the automatic-reasoning set.
-  assert.deepEqual(KNOWN_EFFORTS['inclusionai/ling-3.1-flash-1019:free'], ['low', 'medium', 'high'])
+  // 2026-11-04: the 1019 promo lapsed and the paid row graduated in place, so
+  // the three selectable levels moved to the paid id and the `:free` sibling is
+  // named nowhere any more.
+  assert.deepEqual(KNOWN_EFFORTS['inclusionai/ling-3.1-flash-1019'], ['low', 'medium', 'high'])
+  assert.equal(KNOWN_EFFORTS['inclusionai/ling-3.1-flash-1019:free'], undefined)
+  assert.equal(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash-1019'), false)
   assert.equal(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash-1019:free'), false)
+  // 2026-11-04 (catalog-only sync): the Crouton Alpha stealth preview serves five
+  // levels (`?view=client` `reasoningEfforts`), the widest stealth set — and it
+  // is a selectable-effort row, not an automatic-reasoning one.
+  assert.deepEqual(KNOWN_EFFORTS['stealth/crouton-alpha'], ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.equal(KNOWN_THINKING_MODELS.has('stealth/crouton-alpha'), false)
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
   assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0'])
@@ -6253,9 +6303,12 @@ test('known image models snapshot has stable anchor entries', () => {
   assert.ok(KNOWN_IMAGE_MODELS.has('meta/muse-wonder-1.0'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('meituan/LongCat-2.0'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.0-flash-sante:free'))
-  // 2026-11-02: the 1019 free promo is text-only per `?view=client`
-  // `inputModalities: ["text"]`, so it carries no Image marker.
+  // 2026-11-04: the 1019 generation stays text-only on both ids per
+  // `?view=client` `inputModalities: ["text"]`, so neither carries an Image
+  // marker; its Crouton Alpha neighbour is the first stealth row that does.
+  assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.1-flash-1019'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.1-flash-1019:free'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/crouton-alpha'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Both 1.67.0/1.68.0 additions declare inputModalities ["text","image"] and carry
@@ -6393,11 +6446,16 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash'], 'go')
   assert.equal(planLabel('inclusionai/ling-3.1-flash'), 'Go')
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash:free'], undefined)
-  // 2026-11-02: the free 1019 promo row is the first Ling row served by the
-  // default catalog view since the 1.82.2 retirement; `minimumPlan:
-  // "individual-go"` puts it on Go.
-  assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash-1019:free'], 'go')
-  assert.equal(planLabel('inclusionai/ling-3.1-flash-1019:free'), 'Go')
+  // 2026-11-04: the free 1019 promo lapsed and the paid row graduated in place;
+  // `minimumPlan: "individual-go"` puts it on Go, and the retired `:free` id is
+  // gone from the map.
+  assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash-1019'], 'go')
+  assert.equal(planLabel('inclusionai/ling-3.1-flash-1019'), 'Go')
+  assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash-1019:free'], undefined)
+  // 2026-11-04 (catalog-only sync): Crouton Alpha's `"all": true` embedded
+  // availability puts the stealth preview on Go too.
+  assert.equal(KNOWN_PLANS['stealth/crouton-alpha'], 'go')
+  assert.equal(planLabel('stealth/crouton-alpha'), 'Go')
   // 2026-10-24: Kimi K3.1 Pro is Go on every source — `minimumPlan:
   // "individual-go"` in the live catalog and `"all": true` in the pricing page's
   // embedded availability, so it appears on the go/goat/pro plan pages alike.
@@ -6448,14 +6506,21 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash:free'], undefined)
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash'], undefined)
   assert.equal(isFreeModel('inclusionai/ling-3.1-flash'), false)
-  // 2026-11-02: the Ling 3.1 Flash 1019 free promo is the first dated Ling deal
-  // since the 1.82.2 retirement — it publishes `2026-11-03T16:00Z` as its end,
-  // so it is left to lapse via `expiresAt` rather than deleted; it is also
-  // served by the default catalog view, unlike the hidden retired row.
-  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019:free']?.label, 'FREE')
-  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019:free']?.free, true)
-  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019:free']?.expiresAt, '2026-11-03T16:00:00Z')
-  assert.equal(isFreeModel('inclusionai/ling-3.1-flash-1019:free'), true)
+  // 2026-11-04: the Ling 3.1 Flash 1019 free promo ended at `2026-11-03T16:00Z`,
+  // the row went `hidden` and the pricing page dropped it, so the deal is
+  // removed outright (the same path its MiniMax and Ornith siblings took) and
+  // `isFreeModel` stops ranking the retired id as free.
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019:free'], undefined)
+  assert.equal(isFreeModel('inclusionai/ling-3.1-flash-1019:free'), false)
+  // The paid graduation is priced normally and carries no deal.
+  assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019'], undefined)
+  // 2026-11-04 (catalog-only sync): Crouton Alpha is the fourth live free
+  // preview, with the undated "while the stealth preview lasts" terms — no
+  // `expiresAt`, so the badge never lapses on a clock.
+  assert.equal(KNOWN_DEALS['stealth/crouton-alpha']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['stealth/crouton-alpha']?.free, true)
+  assert.equal(KNOWN_DEALS['stealth/crouton-alpha']?.expiresAt, undefined)
+  assert.equal(isFreeModel('stealth/crouton-alpha'), true)
   // command-code@1.79.0; the free Glyph Cluster preview carries the same
   // permanent-style terms as its Ling predecessors — 100% off "Free while the
   // preview lasts" with no published end date, so no `expiresAt` to lapse.
@@ -8539,9 +8604,17 @@ test('every new-arrival model carries an output ceiling or is left to runtime le
   // no longer generated for it at all.
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash'), undefined)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash:free'), undefined)
-  // 2026-11-02: the 1019 free row is a chat/completions model like its sibling,
-  // so it stays out of the Messages ceiling table too.
+  // 2026-11-04: the 1019 row graduated to the paid id, and the generator now
+  // records its `maxOutputTokens` ceiling (262 144, from `?view=client`)
+  // against that id; the retired `:free` key is gone. The Crouton Alpha stealth
+  // preview publishes the same 943 718 ceiling, so it is recorded rather than
+  // deferred to runtime learning. `gpt-6.1-terra` and `Kimi-K3.1-Pro` were both
+  // carried in `KNOWN_PLANS` before this sync but never got their ceiling rows.
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash-1019'), 262_144)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash-1019:free'), undefined)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('stealth/crouton-alpha'), 943_718)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('gpt-6.1-terra'), 128_000)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('moonshotai/Kimi-K3.1-Pro'), 1_048_576)
   // A ceiling is a CEILING, not a window: both are far below their own context,
   // which is the whole point of the table — deriving `max_tokens` from
   // `context_length` is exactly what produced #71.
@@ -8601,4 +8674,87 @@ test('预算与缓存门同时超限只报一次，且报两者较大的缺数',
   // 旧实现先报预算门、重试后才报缓存门 61；一次算全时直接报两者的最大值 61。
   assert.match((result.error as { message?: string }).message ?? '', /61 already-seen oldest image/
   )
+})
+
+// ---------------------------------------------------------------------------
+// getUsage(): the one fast retry behind the account card
+// ---------------------------------------------------------------------------
+
+test('getUsage() 对 5xx 重试一次：第二次成功就不把瞬时故障写进失败明细', async () => {
+  // 账户卡片没有聊天路径那套重试/轮换，一次 5xx 曾直接变成「部分端点数据不可用」。
+  let whoamiCalls = 0
+  const adapter = makeAdapter({ fetchImpl: (async (input) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/alpha/whoami') {
+      whoamiCalls += 1
+      if (whoamiCalls === 1) return new Response('{}', { status: 503 })
+      return Response.json({ user: { id: 'u1' }, org: null })
+    }
+    if (url.pathname === '/alpha/billing/credits') return Response.json({ credits: { monthlyCredits: 5 } })
+    if (url.pathname === '/alpha/billing/subscriptions') {
+      return Response.json({ data: { planId: 'individual-go', status: 'active' } })
+    }
+    assert.equal(url.pathname, '/alpha/usage/summary')
+    return Response.json({ totalCount: 3 })
+  }) as typeof fetch })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(whoamiCalls, 2, '第一次 5xx 之后再试一次')
+  assert.equal(report.failures.length, 0, '重试成功后不得留下失败记录')
+  assert.equal(report.usage?.totalCount, 3, '汇总仍是真实读取的结果')
+})
+
+test('getUsage() 不对 4xx 重试：失效密钥只答一次', async () => {
+  // 401/400 的第二次答案不会不同，重试只会让卡片多等一拍。
+  let whoamiCalls = 0
+  const adapter = makeAdapter({ fetchImpl: (async (input) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/alpha/whoami') {
+      whoamiCalls += 1
+      return new Response('{}', { status: 401 })
+    }
+    if (url.pathname === '/alpha/billing/credits') return Response.json({ credits: { monthlyCredits: 5 } })
+    if (url.pathname === '/alpha/billing/subscriptions') return Response.json({ data: {} })
+    return Response.json({ totalCount: 0 })
+  }) as typeof fetch })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(whoamiCalls, 1, '4xx 不重试')
+  assert.equal(report.failures.length, 1)
+  assert.match(report.failures[0] ?? '', /HTTP 401/)
+})
+
+test('getUsage() 对传输失败重试一次，第二次成功即恢复', async () => {
+  let whoamiCalls = 0
+  const adapter = makeAdapter({ fetchImpl: (async (input) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/alpha/whoami') {
+      whoamiCalls += 1
+      if (whoamiCalls === 1) throw new TypeError('fetch failed')
+      return Response.json({ user: { id: 'u1' }, org: null })
+    }
+    if (url.pathname === '/alpha/billing/credits') return Response.json({ credits: { monthlyCredits: 5 } })
+    if (url.pathname === '/alpha/billing/subscriptions') return Response.json({ data: {} })
+    return Response.json({ totalCount: 1 })
+  }) as typeof fetch })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(whoamiCalls, 2)
+  assert.deepEqual(report.failures, [])
+})
+
+test('getUsage() 对超时不重试：调用方预算已经花完，再发一次只会让等待翻倍', async () => {
+  let whoamiCalls = 0
+  const adapter = makeAdapter({ fetchImpl: (async (input) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/alpha/whoami') {
+      whoamiCalls += 1
+      const timeout = new Error('The operation was aborted due to timeout')
+      timeout.name = 'TimeoutError'
+      throw timeout
+    }
+    if (url.pathname === '/alpha/billing/credits') return Response.json({ credits: { monthlyCredits: 5 } })
+    if (url.pathname === '/alpha/billing/subscriptions') return Response.json({ data: {} })
+    return Response.json({ totalCount: 0 })
+  }) as typeof fetch })
+  const report = await adapter.getUsage('user_test_key')
+  assert.equal(whoamiCalls, 1, '超时不重试')
+  assert.equal(report.failures.length, 1)
 })

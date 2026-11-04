@@ -603,3 +603,28 @@ test('设置页与模型卡共享确认结果，部分成功刷新用量；事�
   assert.equal(credentialCalls.unset, 0)
   assert.equal(page.hooks.commandCodeSettings.getSnapshot().apiKey.text, 'synthetic-key')
 })
+
+test('导航图标：宿主声明 settings.section.icon 时按 section id 注册，旧宿主不注册', async () => {
+  // alpha.3 把设置导航图标改成插槽驱动（列表、按 section id 过滤）；旧宿主没有
+  // 这个座位，注册回调不会触发，插件靠 DOM 补丁换掉宿主给的齿轮。两条分支的
+  // 注册面都要钉住：多注册一个不存在的插槽是静默的，少了注册则图标退回齿轮。
+  const declared = new Set([
+    'settings.section',
+    'settings.models.provider-card',
+    'main',
+    'sidebar.footer.action',
+    'conversation.composer.dock',
+    'settings.section.icon',
+  ])
+  const withSlot = await boot({ declaredSlots: declared })
+  const glyph = withSlot.registered.get('commandcode')!.find(entry => entry.name === 'settings.section.icon')
+  assert.ok(glyph !== undefined, 'declared slot must be registered')
+  assert.equal(glyph.id, 'commandcode', 'keyed by the section id the shell filters on')
+
+  const withoutSlot = await boot()
+  assert.equal(
+    withoutSlot.registered.get('commandcode')!.some(entry => entry.name === 'settings.section.icon'),
+    false,
+    'no declaration, no registration',
+  )
+})

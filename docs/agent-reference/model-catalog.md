@@ -138,6 +138,27 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   2026-10-22-lapsed free twin still carried in the page data, which is what makes the
   mapping ambiguous.
 
+  **Follow-up check (2026-11-04, CLI stays 1.88.2):** npm `latest` is still `1.88.2` and the
+  artifact is unchanged, so `cliDiff` stays empty. The server catalog moved `catalogVersion`
+  `f3a51355…` → `449ff6a3…`: the default view went 95 → 96 and `?view=client` 107 → 109 with
+  two net adds. `stealth/crouton-alpha` (Crouton Alpha) is a new free stealth preview —
+  1,048,576 context, 943,718 output ceiling, text+image input, efforts
+  `low`/`medium`/`high`/`xhigh`/`max`, Go tier, `/chat/completions` endpoint, 100% off
+  "while the stealth preview lasts" with 1,000 requests a day, and **not** ZDR-covered (the
+  pricing tip says so outright and `?view=client` serves `zdr:false`); it is the first stealth
+  preview with image input. The free 1019 promo lapsed at its published `2026-11-03T16:00Z`,
+  the row went `hidden` in `?view=client`, and its paid graduation
+  `inclusionai/ling-3.1-flash-1019` took the slot — $0.30/$0.90, cache read $0.06, the same
+  1,000,000 context and 262,144 ceiling, still text-only / three efforts / Go, with the page's
+  boosted allowance go `$6` / GOAT `$100` / Pro `$110`. Snapshots: plans 95 → 96, efforts
+  68 → 69 (the retired `:free` id re-keyed to its paid graduation, plus Crouton), image
+  73 → 74, ZDR 18 → 19, vendored price rows 94 → 95 (only the Ling 1019 row is new),
+  output-limit rows 79 → 83 (Ling 1019, Crouton Alpha, plus `gpt-6.1-terra` and
+  `Kimi-K3.1-Pro`, which had been carried in `KNOWN_PLANS` without their ceiling rows);
+  thinking 16, subscriptions 9 and peak rows 5 stay put. The two known pricing aliases still
+  surface as `incomplete` errors, and both new rows report `absent from CLI registry` —
+  correctly, because the artifact predates them.
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot

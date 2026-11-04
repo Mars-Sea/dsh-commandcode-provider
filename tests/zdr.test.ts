@@ -63,6 +63,12 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
   // V2.6 Flash/Pro, GLM-5.2 Fast) plus `stealth/cat-jam:free`, which no source
   // serves any more — removed by explicit decision (decision record, chapter 7
   // item 13), not by inferring coverage from its absence.
+  //
+  // 2026-11-04 (catalog-only sync) adds `stealth/crouton-alpha`: the pricing
+  // page states "Not routed under ZDR" and `?view=client` serves `zdr:false`,
+  // while the 1.88.2 artifact is older than the row and names it nowhere — so
+  // the two sources are a union again (19) rather than an exact match (the
+  // artifact still names the same 18).
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
@@ -76,6 +82,7 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
     'poolside/laguna-s-2.1-free',
     'reflection/beam:free',
     'sakana/fugu-ultra',
+    'stealth/crouton-alpha',
     'stealth/glyph-cluster:free',
     'stepfun/Step-3.7-Flash',
     'stepfun/Step-5-Preview',

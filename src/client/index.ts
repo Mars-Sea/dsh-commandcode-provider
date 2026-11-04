@@ -43,6 +43,10 @@ import type { SessionCostInjected } from './session-cost-view.tsx'
 import { startPanelAutoRefresh } from './panel.ts'
 import { PAGE_CSS, PAGE_CSS_ID } from './page-styles.ts'
 import { PANEL_CSS, PANEL_CSS_ID } from './panel-styles.ts'
+import { SettingsNavIcon } from './settings-nav-icon.ts'
+import { CommandCodeNavGlyph } from './settings-nav-glyph.tsx'
+// Type-only: pulls in the SlotMap merge for `settings.section.icon`.
+import type {} from './settings-nav-slot.ts'
 // Type-only: pulls in the SlotMap merge for the composer dock
 // (`./session-cost-slots.ts`). The sidebar-foot / center-column merge rides the
 // `./panel-view.tsx` value import above, which imports `./panel-slots.ts`.
@@ -436,6 +440,46 @@ function applyClientSurfaces(
     locale: 'settings.commandcode',
     inject: injected,
   }, CommandCodeSettingsPage))
+
+  // The settings nav glyph for that page, in two layers because the host offers
+  // two contracts:
+  //
+  // 1. `settings.section.icon` (dsh 0.2.2-alpha.3+) is the sanctioned seat: the
+  //    shell renders each row's icon from this list slot, keyed by section id,
+  //    and falls back to its own glyph only when nothing matches.
+  // 2. Older hosts have no such seat. They pick the icon from a SECTION ID
+  //    table in `ui-settings-general` and hand every unknown id a gear, so the
+  //    plugin swaps the gear in its own row from the outside. That patch is a
+  //    stopgap: once the registration below fires, it is torn down so exactly
+  //    one glyph is drawn.
+  //
+  // Both layers draw the same artwork (`./settings-nav-icon.ts` owns the path,
+  // `./settings-nav-glyph.tsx` renders it through the slot).
+  let officialGlyph = false
+  let fallbackGlyph: SettingsNavIcon | undefined
+
+  ctx.effect(() => {
+    if (typeof document === 'undefined' || officialGlyph) return () => {}
+    fallbackGlyph = new SettingsNavIcon({
+      doc: document,
+      label: () => ctx.locale.bind('settings.commandcode')('nav'),
+    })
+    fallbackGlyph.start()
+    return () => {
+      fallbackGlyph?.dispose()
+      fallbackGlyph = undefined
+    }
+  }, 'dsh-commandcode-provider: settings nav glyph fallback')
+
+  ctx.slots.inject('settings.section.icon', () => {
+    officialGlyph = true
+    fallbackGlyph?.dispose()
+    fallbackGlyph = undefined
+    return ctx.slots.register({
+      name: 'settings.section.icon',
+      id: 'commandcode',
+    }, CommandCodeNavGlyph)
+  })
 
   // The Models-page provider card: a keyed slot the Models section dispatches
   // with `entryKey = settingsNs` on every provider row of an adapter family, so

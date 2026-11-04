@@ -3,6 +3,7 @@
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
 - **官方账期汇总**：`getUsage()` 先读取账号组织，再按同一 `orgId`（组织标识）并行读取余额和订阅，最后以订阅原始 `currentPeriodStart`（账期起点）作为 `since`（统计起点）读取汇总。订阅失败时汇总独立降级，不补本地自然月。严格远端可选保留汇总 `periodStart` 与订阅 `currentPeriodStart`；只有两者相等且截止日有效时，设置页和额度面板展示完整官方账期；否则额度面板提示周期未确认，设置页退回订阅截止日。请求数采用 `totalCount`（请求总数），成功和失败另列。官网三条 `/internal/usage*` 明细接口用浏览器登录会话；2026-10-14 同一真实账号的既有密钥查询全部返回 401，未新增浏览器凭据读取。接口盘点、验证与边界见[官方账期用量](../官方账期用量.md)。
+- **账户端点的单次重试**：卡片是唯一没有重试/轮换链兜底的读取面，`accountJsonGet(..., retryOnce)` 在传输失败或 5xx 后等 500 毫秒再发**一次** GET，成功即不写 `failures`。**超时不重试**——第一次已花掉调用方全部预算（`requestTimeoutMs`），再发只会让等待翻倍；4xx 也不重试（失效密钥、坏 `since` 第二次答案相同）。选择器的套餐过滤等 fail-open 读取不传该开关，保持单次尝试。`tests/adapter.test.ts` 钉住四种结果。
 
 模型历史分析（问题 #79）：`src/analytics.ts` 按逐请求时间与上下文折叠，不使用已合并的会话费用桶；`src/analytics-history.ts` 可选绑定 `sessionQuery.listSessions/readSession`，包含关闭会话、排除分支继承用量，每次限 500 会话和 200000 事件。`src/analytics-wire.ts` 提供双方共享严格远端，浏览器只收到汇总数字与能力；设置页和既有面板均可打开，不依赖额度卡片开关、不轮询历史。试算固定原词元与时间，不能推断换模型后的缓存、输出或质量。成本按当前价，不是账单或积分；只有完整且全部计价的至少一天日期范围才折算 30 天成本。全部接口、文档盘点与验证边界见 [实现说明](../模型成本与性能分析.md)。
 
@@ -162,9 +163,13 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   secret and the official CLI auth file is not in the credentials store, so both
   are invisible to the browser while the Host happily serves requests with them
   — `state.anyAccountConfigured` must not gate this card or the post-save
-  refresh trigger (`src/client/index.ts`). `shouldRefresh` is true only in
-  `status === 'idle'`, so a failed fetch never becomes an automatic request
-  loop, and the button stays enabled for a manual retry.
+  refresh trigger (`src/client/index.ts`). `shouldRefresh` covers "never fetched"
+  (`idle`), "the whole call failed" (`error`) and "the report arrived but an
+  endpoint failed" (`ready` + `report.failures`); the card's re-check loop uses
+  it (30 s per attempt, budgeted by `USAGE_AUTO_RETRY_LIMIT`), and the
+  controller's `USAGE_AUTO_RETRY_MS` cooldown keeps those from
+  becoming an automatic request loop. The refresh button stays enabled for a
+  manual retry.
 - **Per-model allowance (same rows, different unit)**: each price row also
   carries the page's `planAllowanceUsd` as `allowance: { go?, goat, pro }` — dollars
   per MONTH, not per million tokens, so it never enters the price table.

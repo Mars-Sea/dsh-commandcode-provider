@@ -204,6 +204,7 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'kimi-k3', rates: [3, 15, 0.3], allowance: { go: 8, goat: 20, pro: 30 } },
   { id: 'kimi-k3.1-pro', rates: [2, 10, 0.2], allowance: { go: 6, goat: 20, pro: 30 } },
   { id: 'ling-3.1-flash', rates: [0.3, 0.9, 0.06], allowance: { go: 6, goat: 100, pro: 110 } },
+  { id: 'ling-3.1-flash-1019', rates: [0.3, 0.9, 0.06], allowance: { go: 6, goat: 100, pro: 110 } },
   { id: 'longcat-2.0', rates: [0.3, 1.2, 0.006], allowance: { go: 10, goat: 50, pro: 60 } },
   { id: 'mimo-v2.6-flash', rates: [0.14, 0.28, 0.0028], allowance: { go: 6, goat: 20, pro: 30 } },
   { id: 'mimo-v2.6-pro', rates: [0.435, 0.87, 0.0036], allowance: { go: 6, goat: 20, pro: 30 } },

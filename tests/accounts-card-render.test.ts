@@ -26,7 +26,8 @@ import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 
 import type { SettingsCommandCodeKey } from '../src/client/locales.ts'
 import type { SettingsPageState, StagedField } from '../src/client/settings.ts'
-import type { UsagePageState } from '../src/client/usage.ts'
+import { USAGE_AUTO_RETRY_LIMIT, USAGE_AUTO_RETRY_MS, type UsagePageState } from '../src/client/usage.ts'
+import type { CommandCodeAccountsReport } from '../src/usage-wire.ts'
 import type { LoginPageState } from '../src/client/login.ts'
 import type { AccountEnrollmentController } from '../src/client/enrollment.ts'
 
@@ -174,5 +175,75 @@ test('账户卡片的刷新按钮走显式路径，不调用自动路径', () =>
   calls.length = 0
   act(() => { refreshButton(root).props.onClick({}) })
   assert.deepEqual(calls, ['explicit'], '用户点刷新必须走显式路径，永远重新读取')
+  act(() => { root.unmount() })
+})
+
+/** 一份最小的可用报告；`failures` 非空即「读到了但有的端点没读到」。 */
+function makeReport(failures: string[] = []): CommandCodeAccountsReport {
+  return {
+    accounts: [{
+      id: 'default',
+      label: 'Default',
+      configured: true,
+      active: true,
+      mark: '',
+      cooldownUntil: 0,
+      report: { failures },
+    }],
+  }
+}
+
+test('错误状态首屏会复检，并按 30 秒节奏继续重试', (t) => {
+  // 旧行为是只在 idle 时读一次：一次失败就永久挂在卡片上（用户读作「经常出错」）。
+  // 现在 error 也算待复检，节奏由 USAGE_AUTO_RETRY_MS 约束、由 controller 的冷却窗兜底。
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const calls: string[] = []
+  let root!: ReactTestRenderer
+  const props = makeProps(calls)
+  props.usage = { status: 'error', report: undefined, error: 'boom', fetchedAt: undefined }
+  act(() => { root = create(createElement(AccountsCard, props)) })
+  assert.deepEqual(calls, ['auto'], '错误状态首屏就要重新读取，而不是继续显示旧错误')
+  act(() => { t.mock.timers.tick(USAGE_AUTO_RETRY_MS) })
+  assert.deepEqual(calls, ['auto', 'auto'], '间隔到点再试一次')
+  act(() => { root.unmount() })
+})
+
+test('部分端点失败的报告同样会进入复检循环', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const calls: string[] = []
+  let root!: ReactTestRenderer
+  const props = makeProps(calls)
+  props.usage = { status: 'ready', report: makeReport(['/alpha/usage/summary: HTTP 503']), error: undefined, fetchedAt: 1 }
+  act(() => { root = create(createElement(AccountsCard, props)) })
+  assert.deepEqual(calls, ['auto'], '不完整的报告值得再要一次')
+  act(() => { t.mock.timers.tick(USAGE_AUTO_RETRY_MS) })
+  assert.deepEqual(calls, ['auto', 'auto'])
+  act(() => { root.unmount() })
+})
+
+test('干净的报告不会启动复检循环，也不会额外请求', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const calls: string[] = []
+  let root!: ReactTestRenderer
+  const props = makeProps(calls)
+  props.usage = { status: 'ready', report: makeReport(), error: undefined, fetchedAt: 1 }
+  act(() => { root = create(createElement(AccountsCard, props)) })
+  assert.deepEqual(calls, [], '数据完整时不该再请求')
+  act(() => { t.mock.timers.tick(USAGE_AUTO_RETRY_MS * 3) })
+  assert.deepEqual(calls, [], '没有待修的事就没有循环')
+  act(() => { root.unmount() })
+})
+
+test('复检预算耗尽后停下，把决定权交回用户', (t) => {
+  // 循环为抖动而设，不为永久性拒绝而设：失效密钥每 30 秒打一轮（每轮四次上游调用）
+  // 没有意义。上限在卡片层，侧边栏面板的 2 分钟 tick 不受影响。
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const calls: string[] = []
+  let root!: ReactTestRenderer
+  const props = makeProps(calls)
+  props.usage = { status: 'error', report: undefined, error: 'boom', fetchedAt: undefined }
+  act(() => { root = create(createElement(AccountsCard, props)) })
+  act(() => { t.mock.timers.tick(USAGE_AUTO_RETRY_MS * (USAGE_AUTO_RETRY_LIMIT + 3)) })
+  assert.equal(calls.length, USAGE_AUTO_RETRY_LIMIT, '预算耗尽后不再安排自动请求')
   act(() => { root.unmount() })
 })

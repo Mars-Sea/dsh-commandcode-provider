@@ -574,6 +574,17 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * cached copy with the current time would misreport when they were read.
    * Identity and billing facts are the opposite: a plan tier or an org id that
    * is 30 s old is still the truth, and those are what the picker duplicates.
+   *
+   * `retryOnce` adds ONE more GET after a fast failure — a transport drop or a
+   * 5xx. The account report has no retry/rotation chain of its own (unlike the
+   * chat path), so a single blip used to become a permanent-looking
+   * "部分端点数据不可用" note on the settings card. A TIMEOUT is deliberately not
+   * retried: the first attempt already spent the caller's whole budget (up to
+   * `requestTimeoutMs`), and re-sending would only double a hang the user is
+   * already staring at. 4xx is not retried either — an expired key or a bad
+   * `since` answers the same way the second time. The picker's fail-open reads
+   * keep the old single-attempt behaviour: they are advisory and a retry there
+   * would only slow the model list down.
    */
   private accountJsonGet;
   /**
