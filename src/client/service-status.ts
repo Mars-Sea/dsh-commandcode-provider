@@ -13,9 +13,11 @@
  * - `history/command-code.yml` carries the monitor's own `lastUpdated`, which
  *   is the ONLY honest freshness signal: the workflow cron is every five
  *   minutes, but GitHub throttles scheduled runs (observed gaps of two to six
- *   hours), and the summary file is regenerated only once a day. A surface that
- *   printed "live" here would routinely lie, so the view always shows the
- *   monitor's last check time instead.
+ *   hours, and stalls of several days when the summary/response workflows
+ *   fail), and the summary file is regenerated only once a day. A surface that
+ *   printed "live" here would routinely lie, so the view shows the record's own
+ *   age — and past a day it stops reporting the verdict at all, replacing it
+ *   with "official data is N days old" (see `SERVICE_STATUS_STALE_MS`).
  *
  * `raw.githubusercontent.com` is the freshest source and serves
  * `access-control-allow-origin: *`; jsDelivr mirrors the same files for
@@ -70,6 +72,16 @@ export const SERVICE_STATUS_FETCH_TIMEOUT_MS = 5_000
  * the local probe below is the real-time half.
  */
 export const SERVICE_STATUS_LAG_WARN_MS = 2 * 60 * 60 * 1000
+
+/**
+ * How old the published record may get before its verdict stops being shown as
+ * a live one. A day is the monitor's own cadence, so anything older means the
+ * publication pipeline itself stalled: a green "operational" then misreports
+ * the present, and the row says "official data is N days old" in a neutral tone
+ * instead. Uptime aggregates keep rendering (labelled with their date) — only
+ * the verdict stops claiming to describe right now.
+ */
+export const SERVICE_STATUS_STALE_MS = 24 * 60 * 60 * 1000
 
 /** The `localStorage` key holding the last successful snapshot. */
 export const SERVICE_STATUS_CACHE_KEY = '@mars-sea/dsh-commandcode-provider/service-status'
@@ -133,8 +145,64 @@ export type ServiceProbe =
   | { kind: 'unavailable' }
   | { kind: 'result'; result: CommandCodeProbeResult }
 
-/** The tone of the local-connectivity dot. */
-export type ServiceLocalTone = 'muted' | 'ok' | 'error'
+/** One Host-side probe call, as the page's injected `probeService` answers it. */
+export type ServiceProbeCall = () => Promise<
+  | { ok: true; value: CommandCodeProbeResult }
+  | { ok: false; error: { message: string } }
+>
+
+/**
+ * How many times the row asks the Host to probe before it settles on an answer.
+ * The probe is a single 10-second GET, so a hiccup (cold DNS, a network switch,
+ * a Host that was busy for a moment) used to stick on the page as a red
+ * "timed out" until the settings page was reopened; one retry costs at most one
+ * probe and removes that false alarm.
+ */
+export const SERVICE_PROBE_ATTEMPTS = 2
+
+/** Pause before that retry; short, the row is already waiting. */
+export const SERVICE_PROBE_RETRY_DELAY_MS = 500
+
+/**
+ * Run the Host probe until it answers or the attempts run out.
+ *
+ * `ok` stops immediately; a real failure (timeout / unreachable / HTTP error)
+ * is retried once and then reported as the last result so its cause survives;
+ * a call the Host itself refuses (no probe endpoint, gateway failure) ends as
+ * `unavailable` — the row must not claim a network verdict it never measured.
+ * Never rejects, like every other path behind this row.
+ */
+export async function runServiceProbeWithRetry(
+  call: ServiceProbeCall,
+  options: {
+    attempts?: number
+    retryDelayMs?: number
+    sleep?: (ms: number) => Promise<void>
+  } = {},
+): Promise<ServiceProbe> {
+  const attempts = Math.max(1, options.attempts ?? SERVICE_PROBE_ATTEMPTS)
+  const retryDelayMs = options.retryDelayMs ?? SERVICE_PROBE_RETRY_DELAY_MS
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  let last: CommandCodeProbeResult | undefined
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let response: Awaited<ReturnType<ServiceProbeCall>> | undefined
+    try {
+      response = await call()
+    } catch {
+      // A rejected gateway call is not a probe result; retry once, then give up.
+      response = undefined
+    }
+    if (response !== undefined && response.ok) {
+      if (response.value.outcome === 'ok') return { kind: 'result', result: response.value }
+      last = response.value
+    }
+    if (attempt + 1 < attempts) await sleep(retryDelayMs)
+  }
+  return last === undefined ? { kind: 'unavailable' } : { kind: 'result', result: last }
+}
+
+/** The tone of the local-connectivity dot: `warn` marks a probe that ran and did not get through. */
+export type ServiceLocalTone = 'muted' | 'ok' | 'warn'
 
 /** A verdict's dot tone, mapped onto the harness StateDot by the page. */
 export type ServiceTone = 'checking' | 'ok' | 'warn' | 'error' | 'idle'
@@ -144,30 +212,48 @@ export interface ServiceStatusView {
   level: ServiceLevel
   /** The first published-data check has not finished yet (no cache to paint from). */
   checking: boolean
-  /** The published verdict: `服务正常` / `部分降级` / `服务中断` / `状态未知` / `正在检查…`. */
+  /**
+   * The published record is older than {@link SERVICE_STATUS_STALE_MS}: its
+   * verdict no longer describes the present, so the row reports the data's date
+   * instead and the heading carries a short staleness badge.
+   */
+  officialStale: boolean
+  /**
+   * The published verdict: `服务正常` / `部分降级` / `服务中断` / `状态未知` /
+   * `正在检查…`, or once stale `数据停在 2026-11-01` — the date replaces the
+   * verdict so an old "operational" can never read as current.
+   */
   label: string
   /** The published verdict's dot tone. */
   officialTone: ServiceTone
   /**
-   * The one verdict the group heading shows. A failed local probe outranks the
-   * published record — the page cannot reach the service from here, whatever
-   * the status page says — and reads as a warning; otherwise it is the
-   * published verdict.
+   * The one verdict the group heading shows: the published verdict, or the
+   * short staleness badge (`数据过期 4 天`) once the record is stale. A failed
+   * local probe deliberately does NOT outrank it — "this host could not reach
+   * the API just now" is not a service verdict and used to make a healthy page
+   * read as broken.
    */
   badge: { label: string; tone: ServiceTone }
   /**
    * Compact aggregates as separate segments (`可用率 7 天 100% / 30 天 99.98%`,
    * `平均响应 114 ms`) so the page can keep each one whole when it wraps; empty
-   * when none were published.
+   * when none were published. A stale record keeps only the 7-day uptime here
+   * (the rest moves to `hiddenDetail`) so the compact row still fits one line.
    */
   detailParts: string[]
-  /** The published record's age (`8 小时前更新`), not a live check. */
+  /**
+   * The aggregates the compact row hides while stale (`可用率 7 天 100% / 30 天
+   * 99.98% · 平均响应 114 ms`), rendered as the date's tooltip; absent when
+   * nothing was hidden.
+   */
+  hiddenDetail?: string | undefined
+  /** The published record's age (`8 小时前更新`), not a live check; absent once the record is stale. */
   updated?: string | undefined
   /** The publication-lag explanation, once the record is old enough; the page shows it as the age's tooltip. */
   lag?: string | undefined
   /** The Host probe of the configured API base, run just now (`连通正常 · 188 ms`). */
   local: string
-  /** Which colour the local-connectivity dot takes. */
+  /** Which colour the local-connectivity dot takes; a failed probe is `warn`, not `error`. */
   localTone: ServiceLocalTone
   /** The local probe is still in flight (dot breathes instead of sitting idle). */
   localChecking: boolean
@@ -377,15 +463,33 @@ export async function checkServiceStatus(options: {
   return { level: 'unknown', live: false, stale: false, fetchedAt: now }
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How many whole days the published record is past its freshness window, or
+ * `undefined` while its verdict still describes the present (also when the
+ * monitor never published a timestamp — an unknown age is not a stale one).
+ */
+function staleDaysOf(checkedAt: number | undefined, now: number): number | undefined {
+  if (checkedAt === undefined) return undefined
+  const age = Math.max(0, now - checkedAt)
+  return age >= SERVICE_STATUS_STALE_MS ? Math.floor(age / DAY_MS) : undefined
+}
+
+/** The publish date for a stale record (`2026-11-01`), in the monitor's own UTC. */
+function publishedDate(checkedAt: number): string {
+  return new Date(checkedAt).toISOString().slice(0, 10)
+}
+
 /** The published record's age: `官方数据更新：刚刚` / N minutes / hours / days. */
 function updatedCopy(checkedAt: number, now: number, t: Translate<SettingsCommandCodeKey>): string {
   const age = Math.max(0, now - checkedAt)
   if (age < 60_000) return t('serviceStatusUpdatedJustNow')
   const minutes = Math.floor(age / 60_000)
   if (minutes < 60) return t('serviceStatusUpdatedMinutes', { count: minutes })
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return t('serviceStatusUpdatedHours', { count: hours })
-  return t('serviceStatusUpdatedDays', { count: Math.floor(hours / 24) })
+  // Callers only pass records younger than a day: anything older is handled by
+  // the staleness branch, which reports a publish date instead of an age.
+  return t('serviceStatusUpdatedHours', { count: Math.floor(minutes / 60) })
 }
 
 /** The publication-lag explanation, shown once the record is old enough. */
@@ -409,11 +513,13 @@ function localCopy(
   if (result.outcome === 'ok') {
     return { text: t('serviceStatusLocalOk', { latency: result.latencyMs }), tone: 'ok' }
   }
+  // A probe that ran and did not get through is a warning, not an error: it
+  // measures this Host's moment, not the service, and the row carries a retry.
   if (result.outcome === 'http-error') {
-    return { text: t('serviceStatusLocalHttp', { status: result.status }), tone: 'error' }
+    return { text: t('serviceStatusLocalHttp', { status: result.status }), tone: 'warn' }
   }
-  if (result.outcome === 'timeout') return { text: t('serviceStatusLocalTimeout'), tone: 'error' }
-  return { text: t('serviceStatusLocalUnreachable'), tone: 'error' }
+  if (result.outcome === 'timeout') return { text: t('serviceStatusLocalTimeout'), tone: 'warn' }
+  return { text: t('serviceStatusLocalUnreachable'), tone: 'warn' }
 }
 
 /**
@@ -429,41 +535,37 @@ export function compactUptime(value: string): string {
   return fraction === '' ? `${match[1]}%` : `${match[1]}.${fraction}%`
 }
 
-/** The aggregate segments; empty when this check carried no aggregates. */
-function detailCopy(snapshot: ServiceStatusSnapshot, t: Translate<SettingsCommandCodeKey>): string[] {
+/**
+ * The aggregate segments; empty when this check carried no aggregates.
+ *
+ * `scope: 'week'` narrows a stale record's compact line to the 7-day uptime —
+ * the 30-day window and the average response move to the date's tooltip, so the
+ * row still fits one line instead of wrapping mid-aggregate.
+ */
+function detailCopy(
+  snapshot: ServiceStatusSnapshot,
+  t: Translate<SettingsCommandCodeKey>,
+  scope: 'all' | 'week' = 'all',
+): string[] {
   const parts: string[] = []
   const uptimes: string[] = []
   if (snapshot.uptimeWeek !== undefined) {
     uptimes.push(t('serviceStatusUptimeWeek', { value: compactUptime(snapshot.uptimeWeek) }))
   }
-  if (snapshot.uptimeMonth !== undefined) {
+  if (scope === 'all' && snapshot.uptimeMonth !== undefined) {
     uptimes.push(t('serviceStatusUptimeMonth', { value: compactUptime(snapshot.uptimeMonth) }))
   }
   if (uptimes.length > 0) parts.push(t('serviceStatusUptime', { value: uptimes.join(' / ') }))
-  if (snapshot.responseTimeWeekMs !== undefined) {
+  if (scope === 'all' && snapshot.responseTimeWeekMs !== undefined) {
     parts.push(t('serviceStatusResponseWeek', { value: `${Math.round(snapshot.responseTimeWeekMs)} ms` }))
   }
   return parts
 }
 
-/** The heading verdict: a failed local probe first, else the published one. */
-function badgeOf(
-  probe: ServiceProbe,
-  official: { label: string; tone: ServiceTone },
-  t: Translate<SettingsCommandCodeKey>,
-): { label: string; tone: ServiceTone } {
-  if (probe.kind !== 'result' || probe.result.outcome === 'ok') return official
-  const { outcome } = probe.result
-  const label = outcome === 'http-error' ? t('serviceStatusBadgeLocalHttp')
-    : outcome === 'timeout' ? t('serviceStatusBadgeLocalTimeout')
-      : t('serviceStatusBadgeLocalUnreachable')
-  return { label, tone: 'warn' }
-}
-
 /**
  * Project a snapshot + the live probe into the row's copy. Pure and React-free
- * so the labels, the age buckets, the lag rule and the failure wording are
- * pinned by node tests rather than by rendering.
+ * so the labels, the age buckets, the staleness rule and the failure wording
+ * are pinned by node tests rather than by rendering.
  *
  * `snapshot === undefined` means the first published-data check is still in
  * flight (the hook paints the cache first, so this only shows on a cold cache).
@@ -484,9 +586,10 @@ export function serviceStatusView(
     return {
       level: 'unknown',
       checking: true,
+      officialStale: false,
       label,
       officialTone: 'checking',
-      badge: badgeOf(probe, { label, tone: 'checking' }, t),
+      badge: { label, tone: 'checking' },
       detailParts: [],
       local: local.text,
       localTone: local.tone,
@@ -496,30 +599,46 @@ export function serviceStatusView(
     }
   }
 
-  const label = snapshot.level === 'up' ? t('serviceStatusUp')
-    : snapshot.level === 'degraded' ? t('serviceStatusDegraded')
-      : snapshot.level === 'down' ? t('serviceStatusDown')
-        : t('serviceStatusUnknown')
+  const checkedAt = snapshot.checkedAt
+  const staleDays = staleDaysOf(checkedAt, now)
+  const officialStale = staleDays !== undefined && checkedAt !== undefined
+  const staleDate = officialStale ? publishedDate(checkedAt) : undefined
+  // Once stale, the date replaces the verdict: a green "operational" from days
+  // ago would describe a service nobody measured today. The underlying level
+  // stays in `level` for the tone-mapping tests and the status strip's dot.
+  const label = staleDate !== undefined
+    ? t('serviceStatusStaleAt', { date: staleDate })
+    : snapshot.level === 'up' ? t('serviceStatusUp')
+      : snapshot.level === 'degraded' ? t('serviceStatusDegraded')
+        : snapshot.level === 'down' ? t('serviceStatusDown')
+          : t('serviceStatusUnknown')
+  // The heading gets the short badge; the compact line keeps only the 7-day
+  // uptime and the rest moves to the date's tooltip.
+  const badgeLabel = officialStale ? t('serviceStatusBadgeStale', { count: staleDays }) : label
+  const fullDetail = officialStale ? detailCopy(snapshot, t) : []
 
   const notice = snapshot.live
     ? undefined
     : snapshot.stale ? t('serviceStatusStale') : t('serviceStatusUnavailable')
-  const officialTone: ServiceTone = snapshot.level === 'up' ? 'ok'
-    : snapshot.level === 'degraded' ? 'warn'
-      : snapshot.level === 'down' ? 'error'
-        : 'idle'
+  const officialTone: ServiceTone = officialStale ? 'idle'
+    : snapshot.level === 'up' ? 'ok'
+      : snapshot.level === 'degraded' ? 'warn'
+        : snapshot.level === 'down' ? 'error'
+          : 'idle'
 
   return {
     level: snapshot.level,
     checking: false,
+    officialStale,
     label,
     officialTone,
-    badge: badgeOf(probe, { label, tone: officialTone }, t),
-    detailParts: detailCopy(snapshot, t),
-    updated: snapshot.checkedAt === undefined
-      ? t('serviceStatusUpdatedUnknown')
-      : updatedCopy(snapshot.checkedAt, now, t),
-    lag: lagCopy(snapshot.checkedAt, now, t),
+    badge: { label: badgeLabel, tone: officialTone },
+    detailParts: detailCopy(snapshot, t, officialStale ? 'week' : 'all'),
+    hiddenDetail: fullDetail.length > 0 ? fullDetail.join(' · ') : undefined,
+    updated: officialStale
+      ? undefined
+      : checkedAt === undefined ? t('serviceStatusUpdatedUnknown') : updatedCopy(checkedAt, now, t),
+    lag: officialStale ? undefined : lagCopy(checkedAt, now, t),
     local: local.text,
     localTone: local.tone,
     localChecking: probe.kind === 'checking',

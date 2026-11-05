@@ -30,6 +30,12 @@ function recordingFetch(urls: string[], status = 200): typeof fetch {
   }) as unknown as typeof fetch
 }
 
+test('PROBE_TIMEOUT_MS tolerates a cold first connection', () => {
+  // Five seconds turned a cold DNS/TLS start after sleep or a network switch
+  // into a false "timed out" on the status row; the cap is ten seconds now.
+  assert.equal(PROBE_TIMEOUT_MS, 10_000)
+})
+
 test('probeOutcomeForStatus counts unauthenticated answers as reachable', () => {
   for (const status of [200, 201, 204, 226, 301, 308, 401, 403]) {
     assert.equal(probeOutcomeForStatus(status), 'ok', String(status))

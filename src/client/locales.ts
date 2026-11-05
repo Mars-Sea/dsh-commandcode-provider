@@ -248,16 +248,14 @@ export type SettingsCommandCodeKey =
   | 'serviceStatusOfficial'
   | 'serviceStatusLocal'
   | 'serviceStatusUptime'
-  | 'serviceStatusBadgeLocalHttp'
-  | 'serviceStatusBadgeLocalTimeout'
-  | 'serviceStatusBadgeLocalUnreachable'
   | 'serviceStatusUptimeWeek'
   | 'serviceStatusUptimeMonth'
   | 'serviceStatusResponseWeek'
+  | 'serviceStatusStaleAt'
+  | 'serviceStatusBadgeStale'
   | 'serviceStatusUpdatedJustNow'
   | 'serviceStatusUpdatedMinutes'
   | 'serviceStatusUpdatedHours'
-  | 'serviceStatusUpdatedDays'
   | 'serviceStatusUpdatedUnknown'
   | 'serviceStatusLag'
   | 'serviceStatusLocalChecking'
@@ -266,6 +264,7 @@ export type SettingsCommandCodeKey =
   | 'serviceStatusLocalTimeout'
   | 'serviceStatusLocalUnreachable'
   | 'serviceStatusLocalUnavailable'
+  | 'serviceStatusLocalRetry'
   | 'serviceStatusStale'
   | 'serviceStatusUnavailable'
   | 'serviceStatusOpen'
@@ -495,34 +494,33 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   privacyTitle: '隐私与安全',
   integrationsTitle: '集成与显示',
   serviceStatusTitle: '服务状态',
-  serviceStatusHint: '官方数据来自状态页的公开记录，仅在状态变化或每日汇总时发布；本机连通由宿主刚探测。',
+  serviceStatusHint: '官方数据来自状态页的公开记录，仅在状态变化或每日汇总时发布；超过一天未更新会标记为已过期。本机连通由宿主刚探测，失败可重试。',
   serviceStatusChecking: '正在检查…',
   serviceStatusUp: '服务正常',
   serviceStatusDegraded: '部分降级',
   serviceStatusDown: '服务中断',
   serviceStatusUnknown: '状态未知',
-  // 服务状态行分「官方」「本机」两行；分组头徽标在本机连不上时改报本机。
+  // 服务状态行分「官方」「本机」两行；分组头徽标只报官方判定，本机探测失败不抢占。
   serviceStatusOfficial: '官方',
   serviceStatusLocal: '本机',
   serviceStatusUptime: '可用率 {value}',
-  serviceStatusBadgeLocalHttp: '本机连接异常',
-  serviceStatusBadgeLocalTimeout: '本机连接超时',
-  serviceStatusBadgeLocalUnreachable: '本机无法连接',
   serviceStatusUptimeWeek: '7 天 {value}',
   serviceStatusUptimeMonth: '30 天 {value}',
   serviceStatusResponseWeek: '平均响应 {value}',
+  serviceStatusStaleAt: '数据停在 {date}',
+  serviceStatusBadgeStale: '数据过期 {count} 天',
   serviceStatusUpdatedJustNow: '刚刚更新',
   serviceStatusUpdatedMinutes: '{count} 分钟前更新',
   serviceStatusUpdatedHours: '{count} 小时前更新',
-  serviceStatusUpdatedDays: '{count} 天前更新',
   serviceStatusUpdatedUnknown: '更新时间未知',
   serviceStatusLag: '官方数据仅在状态变化或每日汇总时发布，可能滞后数小时。',
   serviceStatusLocalChecking: '正在探测…',
   serviceStatusLocalOk: '连通正常 · {latency} ms',
-  serviceStatusLocalHttp: '连接异常（HTTP {status}）',
-  serviceStatusLocalTimeout: '连接超时',
-  serviceStatusLocalUnreachable: '无法连接',
+  serviceStatusLocalHttp: '本次探测未成功（HTTP {status}）',
+  serviceStatusLocalTimeout: '本次探测未成功（超时）',
+  serviceStatusLocalUnreachable: '本次探测未成功（无法连接）',
   serviceStatusLocalUnavailable: '未知（宿主未提供探测）',
+  serviceStatusLocalRetry: '重新探测',
   serviceStatusStale: '无法获取状态数据，以下为上次成功获取的结果。',
   serviceStatusUnavailable: '无法获取状态数据。',
   serviceStatusOpen: '打开状态页',
@@ -772,7 +770,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   privacyTitle: 'Privacy & security',
   integrationsTitle: 'Integrations & display',
   serviceStatusTitle: 'Service status',
-  serviceStatusHint: 'Published data comes from the official status page and is only written on a status change or the daily summary; local connectivity is probed by the host just now.',
+  serviceStatusHint: 'Published data comes from the official status page and is only written on a status change or the daily summary; anything older than a day is flagged as expired. Local connectivity is probed by the host just now and can be retried.',
   serviceStatusChecking: 'Checking…',
   serviceStatusUp: 'Operational',
   serviceStatusDegraded: 'Degraded performance',
@@ -781,24 +779,23 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   serviceStatusOfficial: 'Official',
   serviceStatusLocal: 'This device',
   serviceStatusUptime: 'uptime {value}',
-  serviceStatusBadgeLocalHttp: 'Connection error here',
-  serviceStatusBadgeLocalTimeout: 'Timing out here',
-  serviceStatusBadgeLocalUnreachable: 'Unreachable here',
   serviceStatusUptimeWeek: '7d {value}',
   serviceStatusUptimeMonth: '30d {value}',
   serviceStatusResponseWeek: 'avg {value}',
+  serviceStatusStaleAt: 'Data stops at {date}',
+  serviceStatusBadgeStale: 'Stale {count} days',
   serviceStatusUpdatedJustNow: 'updated just now',
   serviceStatusUpdatedMinutes: 'updated {count} min ago',
   serviceStatusUpdatedHours: 'updated {count} h ago',
-  serviceStatusUpdatedDays: 'updated {count} d ago',
   serviceStatusUpdatedUnknown: 'update time unknown',
   serviceStatusLag: 'Official data is only published on a status change or the daily summary, so it may lag by hours.',
   serviceStatusLocalChecking: 'Probing…',
   serviceStatusLocalOk: 'Reachable · {latency} ms',
-  serviceStatusLocalHttp: 'Error (HTTP {status})',
-  serviceStatusLocalTimeout: 'Timed out',
-  serviceStatusLocalUnreachable: 'Unreachable',
+  serviceStatusLocalHttp: 'Probe failed (HTTP {status})',
+  serviceStatusLocalTimeout: 'Probe failed (timed out)',
+  serviceStatusLocalUnreachable: 'Probe failed (unreachable)',
   serviceStatusLocalUnavailable: 'Unknown (host provides no probe)',
+  serviceStatusLocalRetry: 'Probe again',
   serviceStatusStale: 'Status data unavailable; showing the last known result.',
   serviceStatusUnavailable: 'Status data unavailable.',
   serviceStatusOpen: 'Open status page',

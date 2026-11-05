@@ -47,6 +47,7 @@ import {
   checkServiceStatus,
   localStorageServiceStatusStore,
   readCachedServiceStatus,
+  runServiceProbeWithRetry,
   serviceStatusView,
 } from './service-status.ts'
 import type { ServiceProbe, ServiceStatusSnapshot, ServiceStatusView, ServiceTone } from './service-status.ts'
@@ -996,11 +997,9 @@ function StatusStrip({ t, state, usage, snapshot, probe }: {
           <span className="cc-statusLabel">{t('serviceStatusTitle')}</span>
         </span>
         <span className="cc-statusStripValue">{view.badge.label}</span>
-        {view.updated !== undefined ? (
-          <span className="cc-statusSub">{view.updated}</span>
-        ) : (
-          <span className="cc-statusSub">{view.local}</span>
-        )}
+        {/* A stale record has no age line, so it falls back to its publish date
+            (`detailParts[0]`) before the local probe text. */}
+        <span className="cc-statusSub">{view.updated ?? view.detailParts[0] ?? view.local}</span>
       </div>
       <div className="cc-statusCell">
         <span className="cc-statusHead">
@@ -1355,12 +1354,18 @@ function PrivacyCard({ state, disabled, t, onEdit, onReset, expanded, onToggle }
  * degradation path live there). It is display-only — it writes no setting and
  * never blocks Save; the link opens the page for the full history.
  */
-function ServiceStatusRow({ view, t }: { view: ServiceStatusView; t: Translate<SettingsCommandCodeKey> }) {
+function ServiceStatusRow({ view, t, onRetry }: {
+  view: ServiceStatusView
+  t: Translate<SettingsCommandCodeKey>
+  onRetry: () => void
+}) {
   // Two sources, one line each, so the published record and this machine's
   // own probe never read as one fact: "Official" carries the verdict, the
-  // aggregates and the record's age (the lag explanation is that age's
-  // tooltip, not a standing line); "This device" carries the probe. The
-  // verdict is not repeated as a tag here — the group heading already shows it.
+  // aggregates and the record's age (or, once the record is stale, its publish
+  // date in place of the verdict, with the hidden aggregates behind that
+  // date's tooltip); "This device" carries the probe and offers a retry when it
+  // did not get through. The verdict is not repeated as a tag here — the group
+  // heading already shows it.
   return (
     <SettingRow
       title={t('serviceStatusTitle')}
@@ -1378,7 +1383,7 @@ function ServiceStatusRow({ view, t }: { view: ServiceStatusView; t: Translate<S
             <span className="cc-statusKey">{t('serviceStatusOfficial')}</span>
             <span className="cc-statusValue">
               <StateDot state={toneDot(view.officialTone)} size={8} />
-              <span className="cc-statusVerdict">{view.label}</span>
+              <span className="cc-statusVerdict" title={view.hiddenDetail}>{view.label}</span>
               {view.detailParts.length > 0 || view.updated !== undefined ? (
                 // Each segment is unbreakable (cc-statusPart) and carries the
                 // "·" after it behind a no-break space, so a narrow panel wraps
@@ -1403,7 +1408,15 @@ function ServiceStatusRow({ view, t }: { view: ServiceStatusView; t: Translate<S
             <span className="cc-statusKey">{t('serviceStatusLocal')}</span>
             <span className="cc-statusValue">
               <StateDot state={localDotState(view)} size={8} />
-              <span className={view.localTone === 'error' ? 'cc-statusVerdict cc-statusBad' : 'cc-statusVerdict'}>{view.local}</span>
+              <span className={view.localTone === 'warn' ? 'cc-statusVerdict cc-statusBad' : 'cc-statusVerdict'}>{view.local}</span>
+              {view.localTone === 'warn' ? (
+                // The probe already retried itself once; this is the user's own
+                // second chance after a transient failure, not a standing control.
+                <button type="button" className="cc-statusRetry" onClick={onRetry}>
+                  <Icon name="refresh" className="cc-icon cc-iconInline" />
+                  {t('serviceStatusLocalRetry')}
+                </button>
+              ) : null}
             </span>
           </div>
           {view.notice !== undefined ? <p className="cc-statusNotice">{view.notice}</p> : null}
@@ -1437,12 +1450,14 @@ function toneDot(tone: ServiceTone): StateDotState {
 }
 
 /**
- * The local probe's dot: done/error once it answered, breathing while the
- * request is in flight, idle when the Host offers no probe at all.
+ * The local probe's dot: done once it got through, warning when it ran and did
+ * not, breathing while the request is in flight, idle when the Host offers no
+ * probe at all. A failed probe is a warning rather than an error: it reports
+ * this Host's moment, never the service's health.
  */
 function localDotState(view: ServiceStatusView): StateDotState {
   if (view.localTone === 'ok') return 'done'
-  if (view.localTone === 'error') return 'error'
+  if (view.localTone === 'warn') return 'warning'
   return view.localChecking ? 'ongoing' : 'idle'
 }
 
@@ -1451,9 +1466,10 @@ function localDotState(view: ServiceStatusView): StateDotState {
  * status snapshot comes from the page, which probes once per open even while
  * this group is folded — its heading shows the verdict either way.
  */
-function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onToggle, status, probe }: FormCardProps & FoldProps & {
+function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onToggle, status, probe, onRetryProbe }: FormCardProps & FoldProps & {
   status: ServiceStatusSnapshot | undefined
   probe: ServiceProbe
+  onRetryProbe: () => void
 }) {
   const view = serviceStatusView(status, probe, t, Date.now())
   return (
@@ -1471,7 +1487,7 @@ function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onTog
     >
       {/* Status first: it is the row a user opens this page to check when
           requests start failing, before the two opt-in display switches. */}
-      <ServiceStatusRow view={view} t={t} />
+      <ServiceStatusRow view={view} t={t} onRetry={onRetryProbe} />
       <ToggleField
         id="cc-web-search"
         label={t('webSearch')}
@@ -2532,36 +2548,52 @@ function usePluginUpdate(): string | undefined {
  * throttled check per page open (the TTL and every failure path live in
  * ./service-status.ts, which never rejects). The Host probe runs alongside it
  * and is the row's real-time half — the published record only moves on a status
- * change or the daily summary, so it can legitimately be hours old.
+ * change or the daily summary, so it can legitimately be hours old (and is
+ * reported as stale past a day).
+ *
+ * The probe retries itself once before the row shows a failure, and `retry`
+ * re-runs it from the row's button: a single transient miss must not stick on
+ * the page until the settings page is reopened.
  */
 function useServiceStatus(probeService: CommandCodeSettingsProps['probeService']): {
   snapshot: ServiceStatusSnapshot | undefined
   probe: ServiceProbe
+  retry: () => void
 } {
   const [snapshot, setSnapshot] = useState<ServiceStatusSnapshot | undefined>(
     () => readCachedServiceStatus(localStorageServiceStatusStore()),
   )
   const [probe, setProbe] = useState<ServiceProbe>({ kind: 'checking' })
+  // The injected method may arrive as a fresh function on every render; pinning
+  // it in a ref keeps the mount probe from re-running on each paint.
+  const probeRef = useRef(probeService)
+  probeRef.current = probeService
+  const cancelled = useRef(false)
+  const runProbe = useCallback(() => {
+    setProbe({ kind: 'checking' })
+    void runServiceProbeWithRetry(() => probeRef.current()).then((next) => {
+      if (!cancelled.current) setProbe(next)
+    })
+  }, [])
   useEffect(() => {
-    let cancelled = false
+    cancelled.current = false
+    runProbe()
+    return () => {
+      cancelled.current = true
+    }
+  }, [runProbe])
+  useEffect(() => {
+    let cancelledSnapshot = false
     void checkServiceStatus({ store: localStorageServiceStatusStore() }).then((next) => {
-      if (!cancelled) setSnapshot(next)
+      if (!cancelledSnapshot) setSnapshot(next)
       // A rejection here would be a bug — checkServiceStatus catches every
       // source failure — but the settings page must never break on a probe.
     }, () => {})
-    void probeService().then((result) => {
-      if (cancelled) return
-      // A Host older than the probe endpoint answers the failure branch; the
-      // row renders that as "unknown" instead of borrowing the published state.
-      setProbe(result.ok ? { kind: 'result', result: result.value } : { kind: 'unavailable' })
-    }, () => {
-      if (!cancelled) setProbe({ kind: 'unavailable' })
-    })
     return () => {
-      cancelled = true
+      cancelledSnapshot = true
     }
   }, [])
-  return { snapshot, probe }
+  return { snapshot, probe, retry: runProbe }
 }
 
 /**
@@ -2755,7 +2787,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onOverrides={props.editContextWindowOverrides}
       />
       <PrivacyCard {...form} {...foldProps('privacy')} />
-      <IntegrationsCard {...form} {...foldProps('integrations')} status={status.snapshot} probe={status.probe} />
+      <IntegrationsCard {...form} {...foldProps('integrations')} status={status.snapshot} probe={status.probe} onRetryProbe={status.retry} />
       <AdvancedSection {...form} {...foldProps('advanced')} />
       <p className="cc-version">
         Command Code Provider v{PLUGIN_VERSION}

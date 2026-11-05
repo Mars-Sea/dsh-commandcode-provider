@@ -29,8 +29,15 @@
 
 import type { CommandCodeProbeResult, ProbeOutcome } from './service-probe-wire.ts'
 
-/** Abort a hung probe; the settings row must not wait on a dead endpoint. */
-export const PROBE_TIMEOUT_MS = 5_000
+/**
+ * Abort a hung probe; the settings row must not wait on a dead endpoint.
+ *
+ * Ten seconds, not five: the request is one small GET, but the first call
+ * after a cold DNS lookup or a network switch (Wi-Fi → proxy, sleep resume)
+ * can spend several seconds before the TLS handshake even starts, and a
+ * five-second cap turned that into a false "timed out" on the status row.
+ */
+export const PROBE_TIMEOUT_MS = 10_000
 
 /** The endpoint whose answer proves the API's auth layer is reachable. */
 const PROBE_PATH = '/alpha/whoami'

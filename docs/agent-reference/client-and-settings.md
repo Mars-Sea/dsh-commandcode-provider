@@ -182,22 +182,33 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   The probe is one unauthenticated GET of `{apiBase}/alpha/whoami` — the same
   endpoint login validation and account queries use, built by the same string
   concatenation real requests use so a path-prefixed reverse proxy is exercised
-  as-is (issue #111) — with a five-second timeout and `redirect: 'manual'`.
+  as-is (issue #111) — with a ten-second timeout (`PROBE_TIMEOUT_MS`) and
+  `redirect: 'manual'`.
   Statuses are read as reachability: 2xx/3xx and 401/403 are `ok` (a
   credential-less GET of that endpoint IS supposed to be answered 401; 403
   covers gateway-level rejections), everything else is `http-error`, with
   distinct `timeout` and `unreachable` outcomes. It never throws and never
   claims more than "this Host reached the endpoint just now"; the row renders
-  its own dot and line.
+  its own dot and line. A failed attempt is retried once
+  (`runServiceProbeWithRetry`, 500 ms apart) before the row reports it, and a
+  failure renders as a neutral "probe did not succeed (…)" warning with a
+  "Probe again" button — never as a red service error, and never in place of
+  the published verdict in the group heading (`badge` is always official).
   **Deliberate limits**: the monitor probes only `https://api.commandcode.ai`'s
   root (HTTP 200), so "operational" does not prove inference works; Upptime's
   `lastUpdated` is the last PUBLISH time, not the last check — the state file is
   only rewritten when the status changes or when the daily `response-time`
   workflow forces a commit, and GitHub throttles the five-minute cron into runs
-  every few hours. The row therefore says "official data updated N ago" (never
+  every few hours (observed stalls of several days when the summary/response
+  workflows fail). The row therefore says "official data updated N ago" (never
   "last check"), adds a publication-lag note past two hours
   (`SERVICE_STATUS_LAG_WARN_MS`), and leaves real-time answers to the Host
-  probe. Past incidents are GitHub issues, not data files, and are left to the
+  probe. Past a day (`SERVICE_STATUS_STALE_MS`) the verdict stops being shown
+  as live at all: the row line becomes "data stops at YYYY-MM-DD" (monitor-side
+  UTC) in a neutral tone, the heading gets a short "N days stale" badge, and
+  only the 7-day uptime stays on that line — the 30-day window and the average
+  response ride the date's tooltip (`hiddenDetail`) so the row still fits two
+  compact lines. Past incidents are GitHub issues, not data files, and are left to the
   page itself (the row links to it). Pinned by `tests/service-status.test.ts`,
   `tests/service-probe.test.ts` and the probe codec cases there.
 - **Browser login (`commandcode/loginBegin|loginStatus|loginCancel`)**: the

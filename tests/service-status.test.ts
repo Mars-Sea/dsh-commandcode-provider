@@ -17,8 +17,11 @@ import assert from 'node:assert/strict'
 
 import { zh, type SettingsCommandCodeKey } from '../src/client/locales.ts'
 import {
+  SERVICE_PROBE_ATTEMPTS,
+  SERVICE_PROBE_RETRY_DELAY_MS,
   SERVICE_STATUS_CACHE_KEY,
   SERVICE_STATUS_LAG_WARN_MS,
+  SERVICE_STATUS_STALE_MS,
   SERVICE_STATUS_TTL_MS,
   STATUS_PAGE_URL,
   compactUptime,
@@ -26,6 +29,7 @@ import {
   localStorageServiceStatusStore,
   parseStateFile,
   parseSummary,
+  runServiceProbeWithRetry,
   serviceStatusView,
 } from '../src/client/service-status.ts'
 import type { ServiceProbe, ServiceStatusSnapshot, ServiceStatusStore } from '../src/client/service-status.ts'
@@ -311,9 +315,11 @@ test('serviceStatusView buckets the published age and tolerates a missing timest
     serviceStatusView(upSnapshot({ checkedAt: NOW - 3 * 60 * 60_000 }), PROBE_OK, t, NOW).updated,
     t('serviceStatusUpdatedHours', { count: 3 }),
   )
+  // Under a day the age still renders; at a day the staleness branch takes over
+  // (pinned separately), so this bucket stops at 23 hours.
   assert.equal(
-    serviceStatusView(upSnapshot({ checkedAt: NOW - 2 * 24 * 60 * 60_000 }), PROBE_OK, t, NOW).updated,
-    t('serviceStatusUpdatedDays', { count: 2 }),
+    serviceStatusView(upSnapshot({ checkedAt: NOW - 23 * 60 * 60_000 }), PROBE_OK, t, NOW).updated,
+    t('serviceStatusUpdatedHours', { count: 23 }),
   )
   assert.equal(serviceStatusView(upSnapshot({ checkedAt: undefined }), PROBE_OK, t, NOW).updated, zh.serviceStatusUpdatedUnknown)
 })
@@ -328,15 +334,15 @@ test('serviceStatusView renders every local probe outcome', () => {
 
   const httpError = at({ kind: 'result', result: { outcome: 'http-error', status: 503, latencyMs: 12, checkedAt: NOW } })
   assert.equal(httpError.local, t('serviceStatusLocalHttp', { status: 503 }))
-  assert.equal(httpError.localTone, 'error')
+  assert.equal(httpError.localTone, 'warn')
 
   const timeout = at({ kind: 'result', result: { outcome: 'timeout', status: 0, latencyMs: 0, checkedAt: NOW } })
   assert.equal(timeout.local, zh.serviceStatusLocalTimeout)
-  assert.equal(timeout.localTone, 'error')
+  assert.equal(timeout.localTone, 'warn')
 
   const unreachable = at({ kind: 'result', result: { outcome: 'unreachable', status: 0, latencyMs: 0, checkedAt: NOW } })
   assert.equal(unreachable.local, zh.serviceStatusLocalUnreachable)
-  assert.equal(unreachable.localTone, 'error')
+  assert.equal(unreachable.localTone, 'warn')
 
   const unavailable = at({ kind: 'unavailable' })
   assert.equal(unavailable.local, zh.serviceStatusLocalUnavailable)
@@ -374,25 +380,124 @@ test('compactUptime drops padding zeros and leaves anything else as published', 
   assert.equal(compactUptime('n/a'), 'n/a')
 })
 
-test('serviceStatusView: a failed local probe outranks the published verdict on the heading', () => {
+test('serviceStatusView: a failed local probe never replaces the published verdict on the heading', () => {
   const at = (probe: ServiceProbe) => serviceStatusView(upSnapshot(), probe, t, NOW)
-  // The published record still reads "operational" on its own line …
+  // A probe that did not get through says so on its own line (with a retry),
+  // but the heading keeps reporting the published verdict: "this Host could not
+  // reach the API just now" is not a service verdict.
   const unreachable = at({ kind: 'result', result: { outcome: 'unreachable', status: 0, latencyMs: 0, checkedAt: NOW } })
   assert.equal(unreachable.label, zh.serviceStatusUp)
   assert.equal(unreachable.officialTone, 'ok')
-  // … but the heading reports that this machine cannot get through.
-  assert.deepEqual(unreachable.badge, { label: zh.serviceStatusBadgeLocalUnreachable, tone: 'warn' })
-  assert.deepEqual(
-    at({ kind: 'result', result: { outcome: 'timeout', status: 0, latencyMs: 0, checkedAt: NOW } }).badge,
-    { label: zh.serviceStatusBadgeLocalTimeout, tone: 'warn' },
-  )
-  assert.deepEqual(
-    at({ kind: 'result', result: { outcome: 'http-error', status: 503, latencyMs: 12, checkedAt: NOW } }).badge,
-    { label: zh.serviceStatusBadgeLocalHttp, tone: 'warn' },
-  )
-  // A probe still running, or a Host without one, leaves the published verdict.
-  assert.deepEqual(at({ kind: 'checking' }).badge, { label: zh.serviceStatusUp, tone: 'ok' })
-  assert.deepEqual(at({ kind: 'unavailable' }).badge, { label: zh.serviceStatusUp, tone: 'ok' })
+  assert.deepEqual(unreachable.badge, { label: zh.serviceStatusUp, tone: 'ok' })
+  for (const probe of [
+    { kind: 'result', result: { outcome: 'timeout', status: 0, latencyMs: 0, checkedAt: NOW } },
+    { kind: 'result', result: { outcome: 'http-error', status: 503, latencyMs: 12, checkedAt: NOW } },
+    { kind: 'checking' },
+    { kind: 'unavailable' },
+  ] as ServiceProbe[]) {
+    assert.deepEqual(at(probe).badge, { label: zh.serviceStatusUp, tone: 'ok' })
+  }
+})
+
+test('serviceStatusView reports a published record older than a day as stale', () => {
+  const checked = NOW - 3 * 24 * 60 * 60_000
+  const view = serviceStatusView(upSnapshot({ checkedAt: checked }), PROBE_OK, t, NOW)
+  assert.equal(view.officialStale, true)
+  // The publish date replaces the verdict: no green "operational" from days ago.
+  assert.equal(view.label, t('serviceStatusStaleAt', { date: '2026-10-18' }))
+  assert.equal(view.officialTone, 'idle')
+  // The heading badge is short; the row's label carries the date.
+  assert.deepEqual(view.badge, { label: t('serviceStatusBadgeStale', { count: 3 }), tone: 'idle' })
+  // The compact line keeps only the 7-day uptime …
+  assert.deepEqual(view.detailParts, ['可用率 7 天 100%'])
+  // … and the 30-day window plus the average response move to the date tooltip.
+  assert.equal(view.hiddenDetail, '可用率 7 天 100% / 30 天 99.98% · 平均响应 114 ms')
+  // No repeated age line and no lag tooltip: the label already says it.
+  assert.equal(view.updated, undefined)
+  assert.equal(view.lag, undefined)
+})
+
+test('serviceStatusView: the staleness boundary is one day, and stale keeps the local half intact', () => {
+  const justUnder = serviceStatusView(upSnapshot({ checkedAt: NOW - SERVICE_STATUS_STALE_MS + 1 }), PROBE_OK, t, NOW)
+  assert.equal(justUnder.officialStale, false)
+  assert.equal(justUnder.label, zh.serviceStatusUp)
+  assert.equal(justUnder.officialTone, 'ok')
+  assert.equal(justUnder.detailParts[0], '可用率 7 天 100% / 30 天 99.98%')
+
+  const exactly = serviceStatusView(upSnapshot({ checkedAt: NOW - SERVICE_STATUS_STALE_MS }), PROBE_OK, t, NOW)
+  assert.equal(exactly.officialStale, true)
+  assert.equal(exactly.label, t('serviceStatusStaleAt', { date: '2026-10-20' }))
+  assert.equal(exactly.local, t('serviceStatusLocalOk', { latency: 129 }))
+  assert.deepEqual(exactly.badge, { label: t('serviceStatusBadgeStale', { count: 1 }), tone: 'idle' })
+})
+
+test('serviceStatusView: a stale record still reports a live verdict when re-fetched, without inventing freshness', () => {
+  // The snapshot's own `fetchedAt` is irrelevant: freshness is the monitor's
+  // publish time, so a successful fetch of old data stays marked stale.
+  const view = serviceStatusView(upSnapshot({ checkedAt: NOW - 4 * 24 * 60 * 60_000, fetchedAt: NOW }), PROBE_OK, t, NOW)
+  assert.equal(view.officialStale, true)
+  assert.equal(view.notice, undefined)
+  assert.equal(view.updated, undefined)
+})
+
+// ---- Host probe retry ----
+
+/** One probe answer, already shaped like the row's result. */
+const PROBE_RESULT_OK = { outcome: 'ok', status: 200, latencyMs: 90, checkedAt: NOW } as const
+const PROBE_RESULT_TIMEOUT = { outcome: 'timeout', status: 0, latencyMs: 0, checkedAt: NOW } as const
+
+test('runServiceProbeWithRetry returns a first-attempt success and does not retry it', async () => {
+  let calls = 0
+  const probe = await runServiceProbeWithRetry(async () => {
+    calls += 1
+    return { ok: true, value: { ...PROBE_RESULT_OK } }
+  }, { sleep: async () => {} })
+  assert.deepEqual(probe, { kind: 'result', result: PROBE_RESULT_OK })
+  assert.equal(calls, 1)
+})
+
+test('runServiceProbeWithRetry retries a failed probe once and returns the second answer', async () => {
+  let calls = 0
+  const sleeps: number[] = []
+  const probe = await runServiceProbeWithRetry(async () => {
+    calls += 1
+    return calls === 1
+      ? { ok: true, value: { ...PROBE_RESULT_TIMEOUT } }
+      : { ok: true, value: { ...PROBE_RESULT_OK } }
+  }, { sleep: async (ms) => { sleeps.push(ms) } })
+  assert.deepEqual(probe, { kind: 'result', result: PROBE_RESULT_OK })
+  assert.equal(calls, 2)
+  assert.deepEqual(sleeps, [SERVICE_PROBE_RETRY_DELAY_MS])
+})
+
+test('runServiceProbeWithRetry reports the last measured failure after both attempts', async () => {
+  let calls = 0
+  const probe = await runServiceProbeWithRetry(async () => {
+    calls += 1
+    return { ok: true, value: { ...PROBE_RESULT_TIMEOUT } }
+  }, { sleep: async () => {} })
+  assert.deepEqual(probe, { kind: 'result', result: PROBE_RESULT_TIMEOUT })
+  assert.equal(calls, SERVICE_PROBE_ATTEMPTS)
+})
+
+test('runServiceProbeWithRetry degrades to unavailable when the Host refuses the call', async () => {
+  let calls = 0
+  const probe = await runServiceProbeWithRetry(async () => {
+    calls += 1
+    throw new Error('gateway not mounted')
+  }, { sleep: async () => {} })
+  assert.deepEqual(probe, { kind: 'unavailable' })
+  assert.equal(calls, SERVICE_PROBE_ATTEMPTS)
+})
+
+test('runServiceProbeWithRetry keeps a measured failure when a later call is refused', async () => {
+  let calls = 0
+  const probe = await runServiceProbeWithRetry(async () => {
+    calls += 1
+    if (calls === 1) return { ok: true, value: { ...PROBE_RESULT_TIMEOUT } }
+    throw new Error('gateway dropped')
+  }, { sleep: async () => {} })
+  assert.deepEqual(probe, { kind: 'result', result: PROBE_RESULT_TIMEOUT })
 })
 
 test('serviceStatusView maps every published level to its dot tone', () => {

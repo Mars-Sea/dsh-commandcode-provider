@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] - 2026-11-05
+
+### Changed
+
+- **服务状态行不再把陈旧的官方数据报成「服务正常」，本机探测失败也不再是红色告警。** 2026-11-05 实测：上游状态仓库 `CommandCodeAI/commandcode-status` 的 `history/command-code.yml` 停在 `2026-11-01T01:33:42Z`（4 天前），`summary.json` 停在 `10-31`，GitHub Actions 里 `Summary CI`／`Response Time CI`／`Graphs CI` 自 11-01 起连续失败，`Uptime CI` 虽 success 但无新提交——状态页自身停更，插件如实显示却与绿色「服务正常」并排，用户读到的信息互相矛盾；同时本机到 `https://api.commandcode.ai/alpha/whoami` 连续 20 次探测（curl + Node fetch）均为 0.19–0.94 s、HTTP 401，说明「连接超时」不是网络不可达，而是宿主侧那一次 5 秒探测偶发失败后**不重试、无刷新入口**，一次失败就红到重开页面。**改动**：① 官方记录超过 24 小时（`SERVICE_STATUS_STALE_MS`）不再显示判定与绿色：行内改为灰色「数据停在 YYYY-MM-DD」（监测端 UTC 发布日），分组头徽标用短文案「数据过期 N 天」，行内只保留 7 天可用率，30 天可用率与平均响应移到该日期的悬停提示；② 分组头徽标只报官方判定（含过期态），本机探测失败不再抢占（原 `badgeOf` 删除）；③ 本机失败文案改中性（「本次探测未成功（超时）／（无法连接）／（HTTP N）」），颜色由 error 降为 warn，失败时行内出现「重新探测」按钮（`cc-statusRetry`）；④ 宿主探测超时 `5 s → 10 s`（`PROBE_TIMEOUT_MS`），行内探测失败自动重试 1 次（间隔 500 ms，`runServiceProbeWithRetry`，宿主拒绝调用时仍报「未知」而非网络结论）。文案：删除 `serviceStatusUpdatedDays`（陈旧分支接管后不可达）与三个 `serviceStatusBadgeLocal*`，新增 `serviceStatusStaleAt`／`serviceStatusBadgeStale`／`serviceStatusLocalRetry`。**排版（同日第二轮，用户贴渲染截图反馈陈旧态排版「有点丑」并选定方案 B「极简两行」）**：徽标改「数据过期 N 天」，官方行 `数据停在 YYYY-MM-DD · 可用率 7 天 100%`，30 天可用率与平均响应收进日期悬停提示，官方行不再折行，与本机行长短一致。**验证**：`npm run typecheck` 退出码 0，`npm test` **1201／1201**（新增陈旧阈值/边界、徽标不再抢占、四种探测文案与 tone、重试状态机 5 条），`npm run build` 两段 `Build complete`；未在运行中的 dsh web 宿主内做浏览器实测。
+
 ## [0.17.1] - 2026-11-05
 
 ### Changed

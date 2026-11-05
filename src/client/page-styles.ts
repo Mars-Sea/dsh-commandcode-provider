@@ -378,6 +378,11 @@ export const PAGE_CSS = `
 .cc-statusTitleLink{align-items:center;gap:4px;display:inline-flex;margin-left:auto}
 .cc-statusBad{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-state-warn-primary,#b45309))}
 .cc-statusLink{color:var(--dsw-alias-link,var(--dsw-alias-brand-primary));text-decoration:none;font-size:12px;line-height:18px;white-space:nowrap}
+/* The row's own retry, shown only after a failed probe: a text button on the
+ * value line (not the control column), styled like the status-page link. */
+.cc-statusRetry{align-items:center;gap:4px;display:inline-flex;padding:0;background:0 0;border:0;color:var(--dsw-alias-link,var(--dsw-alias-brand-primary));cursor:pointer;font-size:12px;line-height:18px;white-space:nowrap}
+.cc-statusRetry:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;border-radius:4px}
+.cc-statusRetry>.cc-iconInline{width:12px;height:12px}
 .cc-loginDone{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary))}
 .cc-loginError{color:var(--dsw-alias-state-error-primary)}
 /* The floating save bar: a centered bar pinned to the bottom of the
@@ -418,7 +423,7 @@ export const PAGE_CSS = `
  * target by lifting its chevron; a fill would weigh too much across the row. */
 .cc-disclosure:hover .cc-foldChevron,.cc-accountToggle:hover .cc-foldChevron{color:var(--dsw-alias-label-primary)}
 .cc-versionLink:hover{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-position:under}
-.cc-loginLink:hover,.cc-statusLink:hover{text-decoration:underline;text-underline-position:under}
+.cc-loginLink:hover,.cc-statusLink:hover,.cc-statusRetry:hover{text-decoration:underline;text-underline-position:under}
 }
 /* Reduced motion drops movement and scale but keeps the fades and colour
  * changes, which carry meaning without motion. Card entrance keeps its fade
