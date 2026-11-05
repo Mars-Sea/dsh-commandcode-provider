@@ -90,17 +90,21 @@ export { DEFAULT_MAX_OUTPUT_TOKENS, MODEL_CATALOG_TTL_MS } from './gateway-facts
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-// Rides every request as `x-command-code-version`. The 1.88.2 bump is a pure
-// header sync: the 1.88.1 -> 1.88.2 artifacts add no runtime contract this
-// plugin consumes. The CLI does keep a release log after all — inside the npm
-// package's own CHANGELOG.md, while https://commandcode.ai/changelog only
-// covers the Desktop app — and its sole 1.88.2 entry is "no longer crashes on
-// launch after a fresh install or update". The conclusion is artifact-level as
-// usual: endpoint paths, custom request headers, environment variables, the
-// `/alpha/generate` call site, the `promptCache` / `reasoning_effort` /
-// `max_tokens` literal counts, the registry, subscription tables and the ZDR
-// exception set are identical.
-export const COMMAND_CODE_CLI_VERSION = '1.88.2'
+// Rides every request as `x-command-code-version`. The 1.88.3 bump is a pure
+// header sync as well: the npm package's own CHANGELOG.md — the website
+// https://commandcode.ai/changelog covers only the Desktop app — names its
+// sole entry as "chore: bump deps to latest versions", and package.json moves
+// only the version plus `glob ^13.0.5 -> ^14.0.3`. The artifact tables still
+// moved because they are built from the catalog pipeline, not from this
+// release: +3 registry rows (Ling 3.1 Flash 1019, its retired `:free` twin and
+// Crouton Alpha), a ZDR exception set of 18 -> 19, and an embedded
+// `catalogVersion` `7f405e24…` -> `449ff6a3…`. The contract this plugin
+// consumes is unchanged: the effort source, `buildModelGroups` / `getPlanInfo`,
+// the `/alpha/generate` call site and the `promptCache` / `reasoning_effort` /
+// `max_tokens` / `cache_control` counts all match, and the only removed custom
+// header is the CLI-internal `x-cmd-provider-deepseek-internal` (environment
+// variable `CMD_PROVIDER_DEEPSEEK_INTERNAL`), which this plugin has never sent.
+export const COMMAND_CODE_CLI_VERSION = '1.88.3'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**

@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.2), the
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.3), the
  * live model catalog (`GET /provider/v1/models?view=client`, the authority for
  * capability fields since 1.82.4), and the official plan/pricing/model docs; see
  * the dsh-commandcode-upstream skill for the extraction procedures. The
@@ -29,7 +29,11 @@
  * changes. The 2026-10-31 check moves it to 1.88.2 — the npm package's own
  * CHANGELOG names its sole change as a launch-crash fix after a fresh install
  * or update — and again leaves every table here identical; that round's only
- * data change is two per-model allowances in ./model-prices.ts. Keeping the
+ * data change is two per-model allowances in ./model-prices.ts. The 2026-11-05
+ * check moves it to 1.88.3, whose npm CHANGELOG only bumps dependencies while
+ * its artifact tables catch up with the catalog rows already synced here (Ling
+ * 1019 and Crouton Alpha) and its ZDR exception set finally equals the
+ * catalog's verdict, 19 == 19; no table below changes. Keeping the
  * snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
  * wire/runtime logic. The read helpers live here too, for the same reason.
@@ -43,7 +47,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.88.2 model table. From
+  // Re-verified against the authoritative command-code@1.88.3 model table. From
   // 1.82.4 the CLI no longer keeps this map bundled: `getSupportedEfforts()`
   // resolves it through the model catalog (`reasoningEfforts`), served live at
   // `GET /provider/v1/models?view=client` and falling back to an embedded
@@ -205,7 +209,7 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // 2026-10-27 (catalog-only sync): `?view=client` serves
   // `reasoningEfforts:["low","medium","high","xhigh","max"]` and the pricing
   // page carries `caps.reasoning: true`; the 1.88.0 artifact does not name the
-  // row (1.88.2 does, with the same levels). Same five-level set as its
+  // row (1.88.3 does, with the same levels). Same five-level set as its
   // `gpt-6.1-sol` predecessor; do not inherit future levels without
   // re-checking the catalog.
   'gpt-6.1-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -216,12 +220,13 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // this file any more. Three selectable levels, text-only input, Go tier —
   // like its `mistral-large-4` neighbour, and unlike the free stealth previews.
   'inclusionai/ling-3.1-flash': ['low', 'medium', 'high'],
-  // 2026-11-04 (catalog-only sync; the 1.88.2 artifact's registry still does not
-  // name the row): the free 1019 promo lapsed at `2026-11-03T16:00Z`, the
-  // catalog flipped that row `hidden`, and the paid
-  // `inclusionai/ling-3.1-flash-1019` took over the same three selectable levels
-  // — the 1019 generation is the 1M-context sibling of `ling-3.1-flash`.
-  // Text-only input (see `KNOWN_IMAGE_MODELS`) and Go tier (see `KNOWN_PLANS`).
+  // 2026-11-04 (catalog-first sync, confirmed by the 1.88.3 artifact, whose
+  // registry now names both the paid row and its retired `:free` twin): the
+  // free 1019 promo lapsed at `2026-11-03T16:00Z`, the catalog flipped that row
+  // `hidden`, and the paid `inclusionai/ling-3.1-flash-1019` took over the same
+  // three selectable levels — the 1019 generation is the 1M-context sibling of
+  // `ling-3.1-flash`. Text-only input (see `KNOWN_IMAGE_MODELS`) and Go tier
+  // (see `KNOWN_PLANS`).
   'inclusionai/ling-3.1-flash-1019': ['low', 'medium', 'high'],
   // 2026-11-04 (catalog-only sync): `stealth/crouton-alpha`, the newest stealth
   // preview — and the widest effort set of the stealth rows at five levels
@@ -530,11 +535,12 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // 100 requests a day. Not routed under ZDR." The CLI's own exclusion set
   // carries the same membership.
   'stealth/glyph-cluster:free',
-  // 2026-11-04 (catalog-only sync). Catalog-only evidence again: `?view=client`
-  // serves `zdr:false` for the Crouton Alpha stealth preview while the 1.88.2
-  // artifact names it nowhere (the row is newer than the artifact). The pricing
-  // page states it in prose too — "Not routed under ZDR" — so both the catalog
-  // and the page agree, unlike the artifact-only Glyph Cluster entry above.
+  // 2026-11-04 (catalog-only sync, resolved by the 1.88.3 artifact).
+  // `?view=client` served `zdr:false` for the Crouton Alpha stealth preview
+  // while the 1.88.2 artifact named it nowhere (the row was newer than the
+  // artifact); the 1.88.3 exclusion set lists it now, and the pricing page
+  // states it in prose too — "Not routed under ZDR" — so the artifact and the
+  // catalog agree again (19 == 19, the first exact match since 1.86.1).
   'stealth/crouton-alpha',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
@@ -885,8 +891,8 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.88.2 (2026-10-31) against the
- * live `?view=client` catalog: 106 ids, still a strict superset chain. Mistral
+ * Provider-tier. Re-verified at command-code@1.88.3 (2026-11-05) against the
+ * live `?view=client` catalog: 109 ids, still a strict superset chain. Mistral
  * Large 4 (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
  * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.
  * 1.79.2 lowers Haiku 5.5's minimum plan to GOAT; 1.80.0 adds Muse Wonder at
@@ -897,7 +903,11 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * tier is unchanged. The 1.86.1 sync (2026-10-21) adds only the Ornith 1.5 122B
  * launch pair at Go; the 1.87.1 check (2026-10-22) adds no model and moves no
  * tier, the 2026-10-24 check adds only Kimi K3.1 Pro at Go, and the 2026-10-27
- * check adds only GPT-6.1 Terra at Pro.
+ * check adds only GPT-6.1 Terra at Pro. The 2026-11-04 catalog-only sync adds
+ * Ling 3.1 Flash 1019 and the free Crouton Alpha preview at Go; the 2026-11-05
+ * check finds `?view=client` flipping `poolside/laguna-s-2.1-free` to `hidden`
+ * and withdrawing it from the models/pricing/plan pages, while this snapshot
+ * keeps that row pending observation.
  * The only removals since 1.49.0 are the two retired stealth previews (Pixel
  * Canary at 1.73.1, Space Bunny Alpha at 1.74.3), Ling 3.0 Flash Sante
  * (2026-10-16) and the retired Cat Jam preview (2026-10-20). Per-entry tags

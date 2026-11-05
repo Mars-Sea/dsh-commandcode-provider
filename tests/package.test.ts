@@ -134,17 +134,18 @@ test('per-release DSH compatibility lists only verified releases', () => {
 test('DSH compatibility records every verified release of the admitted channel range', () => {
   // 用户 2026-10-24 拍板：准入由 `engines.dsh` 的区间负责（同通道已验证下界及以上自动放行），
   // 本记录只列**实际跑过完整引擎矩阵**的版本 —— 0.2.1 通道的 rc.2、rc.3、rc.4、
-  // rc.5（2026-10-30 补入，npm `latest`／`next`），以及 2026-10-28 用户拍板放开
-  // 0.2.2 通道后补入的 alpha.2 与 alpha.3（npm `alpha`，`test:engine` 与
-  // `test:install` 均逐版本跑过）。
+  // rc.5（2026-10-30 补入，npm `latest`／`next`），2026-10-28 用户拍板放开
+  // 0.2.2 通道后补入的 alpha.2 与 alpha.3（npm `alpha`），以及 2026-11-05 补入的
+  // rc.1（`0.2.2` 首个 RC，npm `next`；alpha.3 到 rc.1 的源码 delta 只有 package.json，
+  // 但补记录后仍须逐版本跑 `test:engine` 与 `test:install`）。
   // 未来同通道新版本无需改声明即可准入，但只有补上记录才算已验证；
   // 这份记录同时是 `test:engine` 与 `test:install` 的矩阵来源，加记录就必须先跑通它们。
   const declared = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
-  assert.equal(declared.length, 6, 'keep exactly the verified engine releases')
+  assert.equal(declared.length, 7, 'keep exactly the verified engine releases')
   assert.deepEqual(
     [...declared].sort(),
-    ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2', '0.2.2-alpha.3'],
-    'one record per channel: the 0.2.1 RC line plus the 0.2.2 alpha line',
+    ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2', '0.2.2-alpha.3', '0.2.2-rc.1'],
+    'one record per channel: the 0.2.1 RC line plus the verified 0.2.2 prereleases',
   )
 })
 

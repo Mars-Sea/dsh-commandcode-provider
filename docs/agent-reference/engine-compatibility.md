@@ -2,6 +2,9 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
+- **2026-11-05 准入 `0.2.2-rc.1`（同通道，无运行代码改动）。** npm `next` 于 `2026-11-04T09:20:32Z` 发布 `0.2.2-rc.1`（`latest` 仍 `0.2.1-rc.5`、`alpha` 仍 `0.2.2-alpha.3`）；GitHub 轻量 tag `dsh-v0.2.2-rc.1`（`66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db`，基线 `dsh-v0.2.2-alpha.3` 为 `05b1cae8`）为 prerelease，published `2026-11-04T13:07:14Z`，发布说明的对比区间是 `rc.5 → rc.1`。**源码 delta 只有清单文件**：387 个变更路径、387 份包清单**全部是 `package.json`、源文件 0 个**，采集错误为空；378 个 `@deepseek-ai/dsh-*` 包升到 rc.1，9 个 vendor 包换稳定号（`cordis 4.0.6-alpha.2 → 4.1.0`、`schemastery 3.18.6-alpha.2 → 3.19.0`、`cosmokit 1.8.7-alpha.2 → 1.9.0`、`loader`／`include`／`hmr`／`group`／`logger-console → 1.1.0`、`timer 1.1.8-alpha.2 → 1.2.0`），npm 产物逐文件比对显示这些 vendor **除 `package.json` 外完全相同**（代码本来就一样，只是换号）。**插件导入面零变化**：16 个宿主包源码变化 0 文件，已发布 `lib/` 与 `.d.ts` 除版本行外相同；五个既用插槽声明与 `packages/client/web/src/seed.ts` 在两个 tag 间 sha256 一致，`lib/client.js` 的 3 个 `require()` 仍全在预置模块表内。**声明**：区间本就放行 rc.1（semver 实测 `satisfies('0.2.2-rc.1', '>=0.2.2-alpha.2 <0.2.3-0') = true`），`engines.dsh`、`dsh.compatibility.dsh` 与 `engines.node` 均不改；rc.1 的宿主包把 `@deepseek-ai/cordis` 的 peer 声明与 `@deepseek-ai/schemastery` 的依赖声明换成 `~4.1.0`／`~3.19.0`，现行声明对这两个版本 `satisfies=false` 且 `semver.intersects` 为空（隔离安装仿真：npm `ERESOLVE` 失败、pnpm 带 peer 警告通过），故给两个 vendor 声明各追加 `|| ~4.1.0` / `|| ~3.19.0`（peer 与 `devDependencies` 各一处，共 4 行），`package-lock.json` 同批同步；**用 `~` 而不是精确值**，因为上游自身声明就是 `~4.1.0`／`~3.19.0`，精确值会拒绝上游允许的 4.1.x／3.19.x 补丁版本，写成 caret 又会放行 4.2.x／3.20.x 未验证邻居；旧 `~4.0.5`、`4.0.6-alpha.1`、`4.0.6-alpha.2` 与 `~3.18.5`、`3.18.6-alpha.1`、`3.18.6-alpha.2` 分支全部保留——`0.2.1` 的 RC、alpha.2、alpha.3 仍在记录里，补分支后它们仍解析 `4.0.5`／`4.0.6-alpha.2` 旧配对（隔离安装锁文件实测）。`dsh.compatibility.dshReleases` 补入 `0.2.2-rc.1`（**七条**），`tests/package.test.ts` 的清单断言 6 → 7。**发布说明的新能力在基线里已存在**：对比区间是 `rc.5 → rc.1`，所列 0.2.2 能力（移动端适配、引用插入、Markdown 导出、插件更新与回滚、`apply_patch`、变更请求与工作树、Session API、PTC 改造、统一右键菜单、`settings.section.icon` 等）在 alpha.3 已存在，本轮 delta 内没有新能力缺口；与插件相关的只有既有的设置页导航图标，v0.17.0 已接入。**迁移项**：release notes 的迁移提示逐条核对后插件均未触及——Session Projection 异步注册属 deprecated 兼容路径，插件仍用同步 `ctx.effect(() => register(...))`，本轮实测可用，是否迁移单独立项；`tools.resolve`／`executable` 与提示词组装、`tools.mode`／`DSH_TOOLS_MODE`、`agent/request` 改路由、`dsh-official-bundles` 导入、SDK／PTC／SSH 协议升级插件都不使用。**验证**：`node scripts/verify-engine-load.mjs --version 0.2.2-rc.1` 退出码 0（宿主准入 preflight、静态具名导入审计、client `require()` 与预置模块表、Config volatile、工具历史、费用投影、三协议 22 场景、上下文 12 场景），末行 `engine-load smoke passed against dsh 0.2.2-rc.1`；补记录后 `test:engine` 与 `test:install` 覆盖 **7/7**，末行分别为 `engine-load smoke passed on all 7 declared-compatible engines (0.2.1-rc.2, 0.2.1-rc.3, 0.2.1-rc.4, 0.2.1-rc.5, 0.2.2-alpha.2, 0.2.2-alpha.3, 0.2.2-rc.1)` 与 `engine matrix verified: 0.2.1-rc.2, …, 0.2.2-rc.1`，退出码均为 0。**证据边界**：引擎加载级与隔离安装级验证通过不等于完整运行验证；未做真实账号登录、付费生成与浏览器渲染；16 个宿主包运行时 diff 未逐行通读（按已发布产物比对，插槽与预置表按 sha256）；证据在 `/tmp/dsh-release-audit-20261105-rc1`（含两棵浅克隆树）与 `/tmp/dsh-release-audit-20261105-evidence`，不随插件发布。完整清单见[对接说明](../对接说明.md)第一章第 8 条。
+
+
 - **2026-11-03 准入 `0.2.2-alpha.3`（同通道，无运行代码改动；用户拍板「全部落地」）。** npm `alpha` 于 `2026-11-03T07:56:48Z` 发布 `0.2.2-alpha.3`（`latest`／`next` 仍 `0.2.1-rc.5`），GitHub tag `dsh-v0.2.2-alpha.3`（`05b1cae8`，基线 `dsh-v0.2.2-alpha.2` 为 `f3803c96`）与发布说明齐备。源码 delta 采集到 **2315 个变更路径、387 份包清单，采集错误为空**。**插件导入的 16 个宿主包只有 4 个源文件变化，均非破坏**：`dsh-llm/src/types.ts` 的 `GenerateOptions` 加 `Purpose` 泛型（`abstract stream` 签名逐字未变）、`dsh-settings/src/index.ts` 的 `configure()` 内部改读 `owner.ctx.fiber`、`dsh-session-projection/src/index.ts` 新增 `onEventChanged` 与「释放后保留最后 cell」语义（插件用同步 `ctx.effect` 注册且不读 `stateOf`）、`dsh-commands/src/builtin.ts` 新增第一方命令身份（精确名优先，与 `commandcode`／`llm-commandcode` 无冲突）；`dsh-web`／`dsh-attachment`／`dsh-typert-protocol`／`dsh-api-remotes` 等源码零改动。**vendor 配对升到 `cordis 4.0.6-alpha.2`／`schemastery 3.18.6-alpha.2`**：cordis 自身有 4 类对第三方插件的破坏性变化（`fiber.store` 移除、`fiber._config` 移除且 `fiber.config` 变为原始输入、`internal/update`／`internal/config` 改签名、`LoggerLevel` 数值互换），插件逐符号 grep 零使用；schemastery／cosmokit 源码零改动，volatile 链路完整；`include` 重写要求 insert 行有显式 id，插件 bundle 行已是 `llm-commandcode`。**客户端面零必改**：五个既用插槽与 owner props、`ConfigForms` 契约、Web 预置模块表、`Menu`／`StateDot`／`Button`／`Switch`／`locale.register` 全部未变；新增的 `settings.section.icon`、`contextMenu.*` 等可选插槽与插件 id 无冲突；三处行为 delta（窄屏 `selectPanel` 收起抽屉、`main` 外包 `.mainPanel`、Menu 定位重写与 dock 最小高度）不破坏插件。**声明**：区间本就放行 alpha.3（准入函数未变），只把 vendor 精确析取追加 `|| 4.0.6-alpha.2` / `|| 3.18.6-alpha.2`（原第二分支是精确等值，semver 实测 `satisfies=false`；`alpha.1` 分支必须保留）并补 `dshReleases` 记录。**验证**：`verify-engine-load --version 0.2.2-alpha.3` 退出码 0、`typecheck` 0、`npm test` 全绿（0 失败）；补记录后 `test:engine` 与 `test:install` 覆盖 6/6 引擎。**未采纳**：设置页导航图标、右键菜单扩展、插件安装失败诊断（均属可选能力）。**真实宿主复核（2026-11-03 21:00）**：本机宿主已切到 `0.2.2-alpha.3`，`verify-engine-load --engine <全局 dsh 安装>`（直指运行中的引擎）退出码 0，且同一宿主上本会话以真实账号经 `commandcode` 路由完成 123 次生成（升级后）。**证据边界**：浏览器渲染与设置页/导航图标视觉未验证；`0.2.1` 各 RC 的 vendor 配对按 `~4.0.5` 分支推断；证据在 `/tmp/dsh-release-audit-20261103-alpha3`，不随插件发布。完整清单见[对接说明](../对接说明.md)第一章第 7 条与[《决策记录》第八章第 18 条](../决策记录.md#八dsh-引擎兼容范围与验证边界)。
 
 - **2026-10-30 核验并准入 `0.2.1-rc.5`（同通道，无代码改动）**：npm `latest`／`next` 从 `0.2.1-rc.4` 前进到 `0.2.1-rc.5`（`0.2.2-alpha.2` 仍是 `alpha`），GitHub tag `dsh-v0.2.1-rc.5`（`b830ec95`，基线 `dsh-v0.2.1-rc.4` 为 `504a01a9`）与发布说明齐备，发布说明只有一条社区改进「优化对话中思考内容的展示」。源码 delta 采集到 **368 个变更路径、349 份包清单，采集错误为空**：349 份包清单**只有版本号**变化，依赖与 peer 区间零变化，`cordis 4.0.5`／`schemastery 3.18.5` 配对不变；19 个非清单文件全部集中在推理展示——`client/ui-chat` 新增 `reasoning-text.ts`（剥掉 `<signature>` 前缀）、`ReasoningBodyOwnerProps` 新增 `rawText`（`text` 改为显示文本）并更新 slot 文档与测试，`experimental/client-ui-cot-translation` 跟随适配，`extensions/cordis-client-runner` 的 slot 目录只更新行号与文案，另有一条 Web e2e 测试与新增的推理 Body Slot 升级指南。**唯一破坏面**是 `conversation.chat.reasoning.body` 单占插槽的 owner props；插件不使用该插槽（只声明 `settings.section`、`settings.models.provider-card`、`main`、`sidebar.footer.action`、`conversation.composer.dock`，五个在 rc.5 的 slot 目录里都在）。插件导入的 16 个宿主包只有版本号变化，`ui-primitives` 的 `Switch` 样式与签名未变（0.16.1 的开关修复不受影响）。**验证**：`node scripts/verify-engine-load.mjs --version 0.2.1-rc.5` 通过（准入 preflight、`lib/index.js` 静态导入审计、`lib/client.js` 的 `require()` 与 Web 预置模块表核对、Config volatile、工具历史、enrollment、费用投影、模型运行时 22+12 个场景、图片卸载契约）；`dshReleases` 补入 rc.5 后 `test:engine` 与 `test:install` 均 **5/5**。**证据边界**：引擎加载级验证通过不等于完整运行验证；未做真实账号登录、付费生成与浏览器渲染；证据在 `/tmp/dsh-release-audit-20261030-rc5`（不随插件发布）。
@@ -114,15 +117,18 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   admits the `-alpha.1` prerelease nor excludes the neighbour.
   `react ^18.2.0` is unchanged by the bump and stays as it is.
   **写法随支持矩阵走：配对相同时用单分支，配对不同才写析取。**
-  本轮矩阵是区间 `>=0.2.1-rc.2 <0.2.2-0`，rc.2 与 rc.3 的 vendor 配对实测
+  2026-10-24 轮次的矩阵是区间 `>=0.2.1-rc.2 <0.2.2-0`，rc.2 与 rc.3 的 vendor 配对实测
   都是 `cordis 4.0.5` / `schemastery 3.18.5`，配对相同，因此收敛为单分支
   `~4.0.5` / `~3.18.5`。上一轮的析取式 `~4.0.4 || ~4.0.5` / `~3.18.4 || ~3.18.5`
   是因为当时还要覆盖 `0.2.0-rc.2` 的 `~4.0.4` / `~3.18.4` 配对；该引擎已退出
   npm `latest` 并落在区间之外，`~4.0.4` / `~3.18.4` 分支随之退出。
   双通道时代的 `~4.0.4 || ~4.0.5-alpha.1` / `~3.18.4 || ~3.18.5-alpha.1` 属历史写法
   （`-alpha` 分支随正式版配对退出）。
-  无论几个分支，都必须用 `~` 且逐字对应同批发布的引擎配对，
-  不可写成 `^`（会放行 `4.1.x` / `3.19.x` 这些未验证邻居）。
+  无论几个分支，都不可写成 `^`（会放行 `4.2.x` / `3.20.x` 这些未验证邻居）。
+  **稳定配对写 `~`、预发布配对写精确值**：`0.2.2-rc.1`（2026-11-05）配 `cordis 4.1.0`／
+  `schemastery 3.19.0`，上游自身就把 `cordis` 的 peer 声明为 `~4.1.0`、把 `schemastery` 依赖声明为 `~3.19.0`，因此追加
+  `~4.1.0`／`~3.19.0` 分支（与上游同形；写精确 `4.1.0` 会拒绝上游允许的 4.1.x 补丁版本）；
+  `0.2.2-alpha.2`／`0.2.2-alpha.3` 这类预发布配对不同，仍用精确值，避免放行没有引擎配对的号。
   注意这两个名字**不**匹配 `@deepseek-ai/dsh` /
   `@deepseek-ai/dsh-*` 前缀，宿主 `evaluatePluginCompatibility` 根本不检查它们
   ——判定层只看 dsh 包，这两个只在 pnpm 解析层起作用：范围写窄到解析不到引擎
@@ -149,7 +155,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   单分支时期的形态，作为历史证据保留。
   `dsh.compatibility.dshReleases` 在 2026-10-24 轮次保留**三条实测记录**
   `{"0.2.1-rc.2", "0.2.1-rc.3", "0.2.1-rc.4"}`，此后随每轮核验增补：`0.2.1-rc.5`（2026-10-30）、
-  `0.2.2-alpha.2`（2026-10-28 放开 `0.2.2` 通道）与 `0.2.2-alpha.3`（2026-11-03），**现为六条**。
+  `0.2.2-alpha.2`（2026-10-28 放开 `0.2.2` 通道）、`0.2.2-alpha.3`（2026-11-03）与
+  `0.2.2-rc.1`（2026-11-05），**现为七条**。
   准入由区间负责，记录只列跑过完整引擎矩阵的版本，并充当 `test:engine`／`test:install` 的矩阵来源。
   **alpha 通道与 `0.2.0-rc.2` 都不保留**：前者自 `0.2.1-alpha.5` 之后没有新版本，后者已退出
   npm `latest` 并落在区间下界之下；`0.2.1-rc.1`、`0.2.1-alpha.*` 与 `0.2.0-rc.*` 的配置需升级引擎。
@@ -159,10 +166,10 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `engines.dsh` 及锁文件同批同步。
   `tests/package.test.ts` 约束区间形状（逐分支校验 `>=<RC> <下一 patch>-0`）、下界、
   「每条记录都落在某分支内且不早于该分支下界」，并逐字钉住记录清单（2026-10-24 时为两条；
-  2026-10-28 起改为逐分支校验，现为六条）；它不联网判断哪个版本最新，该事实由升级审计核对。
-  两个配套的 Cordis、Schemastery 范围按已登记引擎的配对写成精确析取
-  `~4.0.5 || 4.0.6-alpha.1 || 4.0.6-alpha.2` / `~3.18.5 || 3.18.6-alpha.1 || 3.18.6-alpha.2`
-  （2026-10-24 单分支 `~4.0.5` / `~3.18.5` 只覆盖当时的 RC 配对，见上一条）。
+  2026-10-28 起改为逐分支校验，现为七条）；它不联网判断哪个版本最新，该事实由升级审计核对。
+  两个配套的 Cordis、Schemastery 范围按已登记引擎的配对写成析取（稳定配对用 `~`、预发布配对用精确值）
+  `~4.0.5 || 4.0.6-alpha.1 || 4.0.6-alpha.2 || ~4.1.0` / `~3.18.5 || 3.18.6-alpha.1 || 3.18.6-alpha.2 || ~3.19.0`
+  （2026-10-24 单分支 `~4.0.5` / `~3.18.5` 只覆盖当时的 RC 配对；2026-11-05 补入 rc.1 的 `~4.1.0`／`~3.19.0`，见上一条）。
   **自 `0.2.1-alpha.4` 起，宿主判定插件兼容性时只读 `engines.dsh`**
   （`packages/boot/app-boot/src/plugin-compatibility.ts` 的
   `unmetRequirements`）：只要包自带 `engines.dsh` 字符串，`@deepseek-ai/dsh*`

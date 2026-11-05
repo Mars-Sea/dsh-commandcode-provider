@@ -18,7 +18,7 @@
 
 | | |
 |---|---|
-| 已验证引擎 | dsh `0.2.1-rc.2`、`0.2.1-rc.3`、`0.2.1-rc.4`、`0.2.1-rc.5`、`0.2.2-alpha.2` |
+| 已验证引擎 | dsh `0.2.1-rc.2`、`0.2.1-rc.3`、`0.2.1-rc.4`、`0.2.1-rc.5`、`0.2.2-alpha.2`、`0.2.2-alpha.3`、`0.2.2-rc.1` |
 | Node.js | **`>=24.9`** —— 0.16.0 起从 22 提高，见[需要 Node.js 24.9 或更高版本](#需要-nodejs-249-或更高版本) |
 | 安装 —— 网页端 | `dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest` |
 | 安装 —— 终端端 | `dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@latest` |
@@ -62,7 +62,7 @@
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
-本构建准入 **dsh `>=0.2.1-rc.2 <0.2.2-0`** —— `0.2.1` 通道中 `0.2.1-rc.2` 及以后的每个 RC —— **以及 `>=0.2.2-alpha.2 <0.2.3-0`**，即 `0.2.2` 通道从当前 alpha 起的每个版本。`0.2.1-rc.5` 是 npm `latest` 与 `next` 指向的版本，`0.2.2-alpha.3` 挂在 `alpha`；这六个版本都跑过完整引擎矩阵（`npm run test:engine`、`npm run test:install`）。两个通道中更晚的版本无需更新插件即可准入，但在 `dsh.compatibility.dshReleases` 补上记录之前不算已验证。`0.2.3` 及以后被刻意排除 —— 两个区间上界分别写成 `<0.2.2-0` 与 `<0.2.3-0` 正是为了这一点。使用 `0.2.0-rc.2`、`0.2.1-alpha.5` 或更早版本的配置需先升级引擎，再安装本构建。兼容性细节 —— `engines.dsh` 准入规则、按引擎配对的包版本、验证证据 —— 见[引擎兼容](docs/agent-reference/engine-compatibility.md)。
+本构建准入 **dsh `>=0.2.1-rc.2 <0.2.2-0`** —— `0.2.1` 通道中 `0.2.1-rc.2` 及以后的每个 RC —— **以及 `>=0.2.2-alpha.2 <0.2.3-0`**，即 `0.2.2` 通道从当前 alpha 起的每个版本。`0.2.1-rc.5` 是 npm `latest` 指向的版本，`0.2.2-rc.1` 挂在 `next`、`0.2.2-alpha.3` 挂在 `alpha`；这七个版本都跑过完整引擎矩阵（`npm run test:engine`、`npm run test:install`）。两个通道中更晚的版本无需更新插件即可准入，但在 `dsh.compatibility.dshReleases` 补上记录之前不算已验证。`0.2.3` 及以后被刻意排除 —— 两个区间上界分别写成 `<0.2.2-0` 与 `<0.2.3-0` 正是为了这一点。使用 `0.2.0-rc.2`、`0.2.1-alpha.5` 或更早版本的配置需先升级引擎，再安装本构建。兼容性细节 —— `engines.dsh` 准入规则、按引擎配对的包版本、验证证据 —— 见[引擎兼容](docs/agent-reference/engine-compatibility.md)。
 
 ### 需要 Node.js 24.9 或更高版本
 

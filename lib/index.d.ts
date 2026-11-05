@@ -61,7 +61,7 @@ type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 //#endregion
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.88.2";
+declare const COMMAND_CODE_CLI_VERSION = "1.88.3";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.
@@ -1243,8 +1243,8 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.88.2 (2026-10-31) against the
- * live `?view=client` catalog: 106 ids, still a strict superset chain. Mistral
+ * Provider-tier. Re-verified at command-code@1.88.3 (2026-11-05) against the
+ * live `?view=client` catalog: 109 ids, still a strict superset chain. Mistral
  * Large 4 (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
  * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.
  * 1.79.2 lowers Haiku 5.5's minimum plan to GOAT; 1.80.0 adds Muse Wonder at
@@ -1255,7 +1255,11 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * tier is unchanged. The 1.86.1 sync (2026-10-21) adds only the Ornith 1.5 122B
  * launch pair at Go; the 1.87.1 check (2026-10-22) adds no model and moves no
  * tier, the 2026-10-24 check adds only Kimi K3.1 Pro at Go, and the 2026-10-27
- * check adds only GPT-6.1 Terra at Pro.
+ * check adds only GPT-6.1 Terra at Pro. The 2026-11-04 catalog-only sync adds
+ * Ling 3.1 Flash 1019 and the free Crouton Alpha preview at Go; the 2026-11-05
+ * check finds `?view=client` flipping `poolside/laguna-s-2.1-free` to `hidden`
+ * and withdrawing it from the models/pricing/plan pages, while this snapshot
+ * keeps that row pending observation.
  * The only removals since 1.49.0 are the two retired stealth previews (Pixel
  * Canary at 1.73.1, Space Bunny Alpha at 1.74.3), Ling 3.0 Flash Sante
  * (2026-10-16) and the retired Cat Jam preview (2026-10-20). Per-entry tags
