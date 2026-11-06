@@ -17,7 +17,7 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.3)', () => {
+test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.4)', () => {
   // command-code@1.82.4 moved the authority for this verdict out of the CLI
   // artifact: `knownModelSupportsZdr` no longer negates a bundled Set, it reads
   // `resolveKnownCatalogModel({model,catalog})?.zdr ?? false`. So this list is
@@ -69,6 +69,10 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
   // The 1.88.3 artifact's exclusion set now names it too, so the artifact and
   // the catalog carry the same 19 ids — the first exact match since 1.86.1
   // (18 -> 19, Crouton being the only addition).
+  //
+  // 2026-11-06 (command-code@1.88.4) retires the free Laguna S 2.1 picker row,
+  // but membership is unchanged: both sources still serve `zdr:false` for the
+  // id, and retirement alone is not coverage evidence, so it stays (19 == 19).
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',

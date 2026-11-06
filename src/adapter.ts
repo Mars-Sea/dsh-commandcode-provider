@@ -90,21 +90,24 @@ export { DEFAULT_MAX_OUTPUT_TOKENS, MODEL_CATALOG_TTL_MS } from './gateway-facts
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-// Rides every request as `x-command-code-version`. The 1.88.3 bump is a pure
-// header sync as well: the npm package's own CHANGELOG.md — the website
-// https://commandcode.ai/changelog covers only the Desktop app — names its
-// sole entry as "chore: bump deps to latest versions", and package.json moves
-// only the version plus `glob ^13.0.5 -> ^14.0.3`. The artifact tables still
-// moved because they are built from the catalog pipeline, not from this
-// release: +3 registry rows (Ling 3.1 Flash 1019, its retired `:free` twin and
-// Crouton Alpha), a ZDR exception set of 18 -> 19, and an embedded
-// `catalogVersion` `7f405e24…` -> `449ff6a3…`. The contract this plugin
-// consumes is unchanged: the effort source, `buildModelGroups` / `getPlanInfo`,
-// the `/alpha/generate` call site and the `promptCache` / `reasoning_effort` /
-// `max_tokens` / `cache_control` counts all match, and the only removed custom
-// header is the CLI-internal `x-cmd-provider-deepseek-internal` (environment
-// variable `CMD_PROVIDER_DEEPSEEK_INTERNAL`), which this plugin has never sent.
-export const COMMAND_CODE_CLI_VERSION = '1.88.3'
+// Rides every request as `x-command-code-version`. The 1.88.4 bump is a pure
+// header sync: the npm package's own CHANGELOG.md — the website
+// https://commandcode.ai/changelog covers only the Desktop app — names three
+// entries, "feat: Set DeepSeek V4.1 Flash as default model", "fix: retire the
+// free Laguna S 2.1 model" and "refactor: improve cli login instructions".
+// package.json moves only the version; the VSIX and the two bundled knowledge
+// docs follow those model changes. In the artifact, the
+// `poolside/laguna-s-2.1-free` registry row gains `hidden` plus the
+// "Laguna S 2.1 (Free)" display name, and the embedded `catalogVersion` moves
+// `449ff6a3…` -> `b21583db…`. The contract this plugin consumes is unchanged:
+// endpoint-path and custom-header / environment-variable sets, the ZDR
+// exception set (19), `buildModelGroups` / `getPlanInfo`, the `/alpha/generate`
+// call site and the `promptCache` / `reasoning_effort` / `max_tokens` /
+// `cache_control` counts all match. The only literal changes are the version,
+// that catalog hash, the Laguna row and one diagnostic-URL typo fix
+// (`cond.dev` -> `cmnd.dev`); "improve cli login instructions" is CLI-side UX
+// copy this plugin never renders — its login flow is its own device-code flow.
+export const COMMAND_CODE_CLI_VERSION = '1.88.4'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**
@@ -2543,7 +2546,13 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
 
   constructor(private readonly deps: CommandCodeAdapterDeps<C>) {
     super()
-    this.fetchImpl = deps.fetchImpl ?? fetch
+    // Late-bind the default instead of capturing the constructor-time function:
+    // a host plugin may patch `globalThis.fetch` AFTER this adapter is built
+    // (billion-context installs its prompt-compression interceptor during DSH
+    // startup), and a captured reference silently bypassed it — long sessions
+    // then overflowed the model window on the uncompressed history (issue #119).
+    // Explicit injection is unchanged; it remains the test/custom seam.
+    this.fetchImpl = deps.fetchImpl ?? ((input, init) => globalThis.fetch(input, init))
     this.resolveAttachments = deps.resolveAttachments
     this.surfaceOffload = deps.imageOffload ?? ENGINE_IMAGE_POLICY
   }

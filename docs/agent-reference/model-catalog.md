@@ -192,6 +192,42 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `COMMAND_CODE_CLI_VERSION` to `1.88.3` and updates comments/tests; with the two verified
   pricing aliases the audit is `review-required` with 0 errors.
 
+  **Follow-up check (2026-11-06, CLI 1.88.3 → 1.88.4):** npm `latest` reached `1.88.4`
+  (11-05T23:20:37Z, Beijing 11-06 07:20). The npm package's `CHANGELOG.md` names three entries
+  for it — "feat: Set DeepSeek V4.1 Flash as default model", "fix: retire the free Laguna S 2.1
+  model" and "refactor: improve cli login instructions". The 80 tarball file names are unchanged;
+  contents differ in `CHANGELOG.md`, `dist/cli.mjs`, `package.json` (version only), the VSIX and
+  the two bundled knowledge docs (`reference/models.md`, `reference/product-help.md`). In
+  `cli.mjs` the only changes are the version string, the embedded `catalogVersion`
+  (`449ff6a3…` → `b21583db…`), the Laguna registry row (`hidden` plus the "Laguna S 2.1 (Free)"
+  display name) and a diagnostic-URL typo fix (`cond.dev` → `cmnd.dev`); the endpoint-path,
+  custom-header and environment-variable sets and the `promptCache` (5) / `reasoning_effort` (7)
+  / `max_tokens` (12) / `cache_control` (1) counts are identical, and the login-instruction item
+  is CLI-side UX copy this plugin never renders. The live catalog moved to the same
+  `catalogVersion`: the default view still serves 95 ids and `?view=client` 109, field-for-field
+  unchanged, and the only difference is `roles` — `default`, `features.titleGeneration` and
+  `features.toolDescription` switch `deepseek/deepseek-v4-flash` →
+  `deepseek/deepseek-v4.1-flash` (`tasteOnboarding` stays on V4 Flash), which the models docs
+  page's default-model sentence now mirrors. Snapshot sync (user decision): the retired
+  `poolside/laguna-s-2.1-free` leaves `KNOWN_PLANS` (96 → 95), `KNOWN_THINKING_MODELS` (16 → 15)
+  and `KNOWN_DEALS` (5 → 4), and the generated output-limit table follows `KNOWN_PLANS` and
+  drops its 32768 row (82 rows); `KNOWN_NON_ZDR_MODELS` keeps the id because both sources still
+  serve `zdr:false` (19 == 19) — retirement alone is not coverage evidence. Efforts 69, image
+  74, subscriptions 9, peak rows 5 and vendored price rows 95 are unchanged.
+  `COMMAND_CODE_CLI_VERSION` moves to `1.88.4`; with the two verified pricing aliases the audit
+  is `review-required` with 0 errors and no `candidateDiffs`. `sync-output-limits.mjs --check`
+  still exits 1 on the pre-existing models.dev provenance comment only (Crouton Alpha
+  `1 → 2 provider(s), unanimous`, value 943718 unchanged), recorded last round and not part of
+  this sync.
+
+  **Same-day pricing-page drift (2026-11-06, ~10:12, not part of this sync):** `sync-model-prices.mjs
+  --check` exited 0 (95 rows) at the 08:1x check, but a later run exits 1: the pricing page
+  dropped `claude-opus-4-6` from its estimator record array (the second array, with
+  `availability`/`tiers`, still carries the id), so the regenerated table is 94 rows with that
+  one line removed. The id is a `docsOnly` row — it is in neither the catalog nor `KNOWN_PLANS` —
+  and has no connection to the Laguna retirement; it is an independent upstream data change that
+  this sync deliberately leaves for a separate decision (CI does not run this check).
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot

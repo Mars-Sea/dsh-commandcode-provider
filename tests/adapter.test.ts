@@ -127,6 +127,78 @@ test('调用等待目录后取消，不开始凭据解析或网络生成', async
   assert.equal(fetched, false)
 })
 
+// 默认 fetch 必须在每次请求时读取 globalThis.fetch（issue #119）。宿主插件
+// （billion-context 的压缩拦截器）可能在本适配器构造之后才安装全局 fetch 钩子；
+// 构造时捕获函数引用会让该钩子看不到任何请求，长会话因此绕过压缩。
+test('默认 fetch 晚绑定：构造后安装的全局拦截器必须看到请求（#119）', async () => {
+  const original = globalThis.fetch
+  const calls: string[] = []
+  const stub = (tag: string) => (async () => {
+    calls.push(tag)
+    return new Response(settlementFrames('openai').join(''), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+  const options = () => ({
+    apiBase: DEFAULT_API_BASE,
+    workingDir: '/tmp',
+    modelsCachePath: '',
+    protocol: 'openai' as const,
+    requestTimeoutMs: 1000,
+    streamIdleTimeoutMs: 1000,
+  })
+  try {
+    globalThis.fetch = stub('构造时')
+    // 不注入 fetchImpl：线上 apply() 也不注入，必须覆盖这条默认路径。
+    const adapter = makeAdapter({ options })
+    globalThis.fetch = stub('后装')
+    const chunks = await collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      messages: [userMessage('hi')],
+    }))
+    assert.deepEqual(calls, ['后装'])
+    assert.deepEqual(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['first', 'second'])
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+// 注入的 fetchImpl 是测试/自定义接缝：晚绑定只改默认路径，不能改变显式注入的语义。
+test('显式注入的 fetchImpl 优先于全局 fetch，且不受其后续替换影响', async () => {
+  const original = globalThis.fetch
+  const calls: string[] = []
+  const stub = (tag: string) => (async () => {
+    calls.push(tag)
+    return new Response(settlementFrames('openai').join(''), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }) as unknown as typeof fetch
+  const options = () => ({
+    apiBase: DEFAULT_API_BASE,
+    workingDir: '/tmp',
+    modelsCachePath: '',
+    protocol: 'openai' as const,
+    requestTimeoutMs: 1000,
+    streamIdleTimeoutMs: 1000,
+  })
+  try {
+    globalThis.fetch = stub('全局')
+    const adapter = makeAdapter({ options, fetchImpl: stub('注入') })
+    globalThis.fetch = stub('替换后的全局')
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      messages: [userMessage('hi')],
+    }))
+    assert.deepEqual(calls, ['注入'])
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
 /** 三种线上协议各自的终止顺序；这些回归通过适配器入口观察完整响应过程。 */
 function settlementFrames(protocol: 'cli' | 'openai' | 'messages'): string[] {
   const sse = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`
@@ -2534,7 +2606,7 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', context_length: 1_000_000 },
       { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
       { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', context_length: 1_000_000 },
-      { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1', context_length: 256_000 },
+      { id: 'reflection/beam:free', name: 'Beam 1.0', context_length: 1_048_576 },
     ],
   }
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify(catalog)) })
@@ -2552,13 +2624,13 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   assert.deepEqual(v4Flash.inputModalities, ['text'])
   assert.ok(v4Flash.description !== undefined)
   assert.match(v4Flash.description, /^Go · (?:Peak|Half) · 1M$/)
-  assert.equal(byId.get('poolside/laguna-s-2.1-free')!.description, 'Go · FREE · 256K')
+  assert.equal(byId.get('reflection/beam:free')!.description, 'Go · FREE · 1M')
   // Picker order: free models, then Go, then Pro, alphabetically within a tier
   // (the fixture's input order is deliberately shuffled).
   assert.deepEqual(
     models.map((m) => m.id),
     [
-      'poolside/laguna-s-2.1-free',
+      'reflection/beam:free',
       'deepseek/deepseek-v4-flash',
       'deepseek/deepseek-v4-pro',
       'claude-sonnet-5',
@@ -2572,7 +2644,7 @@ test('listModels() advertises active deal badges and leaves paid models unbadged
     const catalog = {
       object: 'list',
       data: [
-        { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1', context_length: 256_000 },
+        { id: 'reflection/beam:free', name: 'Beam 1.0', context_length: 1_048_576 },
         { id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3', context_length: 1_000_000 },
         { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
       ],
@@ -2592,7 +2664,7 @@ test('listModels() advertises active deal badges and leaves paid models unbadged
     const badgeOf = (id: string): unknown => (byId.get(id) as { badge?: unknown }).badge
     // A free promo: the selector renders a `success`-toned FREE Tag and the host
     // resolves the localized text through its own locale service.
-    assert.deepEqual(badgeOf('poolside/laguna-s-2.1-free'), {
+    assert.deepEqual(badgeOf('reflection/beam:free'), {
       text: { en: 'FREE', zh: '免费' },
       tone: 'success',
     })
@@ -3329,7 +3401,7 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
 test('compareByPlan() sorts free models first, then plan tier, then name', () => {
   // Free models (KNOWN_DEALS free: true) lead the list regardless of tier.
   assert.ok(compareByPlan(
-    { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
+    { id: 'reflection/beam:free', name: 'Beam 1.0 (CC)' },
     { id: 'claude-opus-5', name: 'Claude Opus 5 (CC)' },
   ) < 0)
   // A paid Go model sorts before a higher tier, but after every free model.
@@ -3338,16 +3410,16 @@ test('compareByPlan() sorts free models first, then plan tier, then name', () =>
     { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
   ) < 0)
   assert.ok(compareByPlan(
-    { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
+    { id: 'reflection/beam:free', name: 'Beam 1.0 (CC)' },
     { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
   ) < 0)
-  // Both are Go-tier free models, so the tie falls through to the name and the
-  // Glyph Cluster preview leads. (The 2026-10-20 catalog sync dropped the
-  // `stealth/cat-jam:free` deal when the live catalog delisted that preview; it
-  // stays in `KNOWN_NON_ZDR_MODELS` on artifact evidence.)
+  // Both are Go-tier free models, so the tie falls through to the name and
+  // Beam leads its Glyph Cluster sibling. (The 2026-10-20 catalog sync dropped
+  // the `stealth/cat-jam:free` deal when the live catalog delisted that
+  // preview; it stays in `KNOWN_NON_ZDR_MODELS` on artifact evidence.)
   assert.ok(compareByPlan(
+    { id: 'reflection/beam:free', name: 'Beam 1.0 (CC)' },
     { id: 'stealth/glyph-cluster:free', name: 'Glyph Cluster (CC)' },
-    { id: 'poolside/laguna-s-2.1-free', name: 'Laguna S 2.1 (CC)' },
   ) < 0)
   assert.ok(compareByPlan(
     { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro (CC)' },
@@ -6476,7 +6548,7 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // DeepSeek V4 Pro's 75% off deal lapsed on 2026-08-16 16:00 UTC when DeepSeek moved
   // to peak/off-peak pricing, so it left the snapshot (see KNOWN_PEAK_PRICING).
   assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'], undefined)
-  assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free']?.free, true)
+  assert.equal(KNOWN_DEALS['reflection/beam:free']?.free, true)
   // Neither the retired stealth/ox-alpha nor its z-ai/glm-5.3-flash successor has a deal.
   assert.equal(KNOWN_DEALS['stealth/ox-alpha'], undefined)
   assert.equal(KNOWN_DEALS['z-ai/glm-5.3-flash'], undefined)
@@ -6490,8 +6562,12 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // than left to badge a model the catalog now serves paid.
   assert.equal(KNOWN_DEALS['meituan/LongCat-2.0:free'], undefined)
   assert.equal(KNOWN_DEALS['meituan/LongCat-2.0'], undefined)
-  // Laguna S 2.1 is still the permanent-style free deal.
-  assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free']?.free, true)
+  // 2026-11-06: the free Laguna S 2.1 row was retired in command-code@1.88.4
+  // (`hidden` in `?view=client`, dropped from the models/pricing/plan pages and
+  // the deal list), so its FREE entry is removed and `isFreeModel` stops
+  // ranking it — the same path the Ling/MiniMax/Ornith free twins took.
+  assert.equal(KNOWN_DEALS['poolside/laguna-s-2.1-free'], undefined)
+  assert.equal(isFreeModel('poolside/laguna-s-2.1-free'), false)
   // Ling 3.0 Flash Sante's free deal went with the model on 2026-10-16 (see the
   // plan snapshot above); its paid graduation `ling-3.1-flash` carries no deal.
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.0-flash-sante:free'], undefined)
@@ -6555,7 +6631,10 @@ test('dealLabel() hides a deal after its expiry date', () => {
   // DeepSeek V4 Pro's deal was removed after it lapsed; the model is peak/off-peak priced now.
   assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
   // Free label survives until capacity ends (treated as permanent here).
-  assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  assert.equal(dealLabel('reflection/beam:free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  // Laguna S 2.1's free promo was retired on 2026-11-06, so there is no label at
+  // any time (see KNOWN_DEALS).
+  assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), undefined)
   // Grok 4.7's 40% off launch deal lapsed 2026-09-27T23:59:59.999Z and was then
   // removed from the page, so there is no label at any time.
   assert.equal(dealLabel('xai/grok-4.7', Date.parse('2026-09-21T00:00:00Z')), undefined)
@@ -6585,7 +6664,7 @@ test('formatContext() renders compact human sizes', () => {
 
 test('capabilityDescription() composes plan, deal, Image, context', () => {
   // Free model without Vision: no Image marker.
-  assert.equal(capabilityDescription('poolside/laguna-s-2.1-free', 256_000), 'Go · FREE · 256K')
+  assert.equal(capabilityDescription('reflection/beam:free', 1_048_576), 'Go · FREE · 1M')
   // LongCat 2.0 has been paid since its promo ended — text-only, 1M, so no deal and no Image marker.
   assert.equal(capabilityDescription('meituan/LongCat-2.0', 1_048_576), 'Go · 1M')
   // Discounted Image model with context.
@@ -6755,7 +6834,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.88.3')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.88.4')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

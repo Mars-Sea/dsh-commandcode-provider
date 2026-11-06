@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **同步 Command Code CLI `1.88.3` → `1.88.4`，并按官方退役处理免费 Laguna S 2.1（用户选定「版本号 + 退役处置」）。** npm `latest` 于 `2026-11-05T23:20:37Z`（北京时间 11-06 07:20）前进到 `1.88.4`，包内 `CHANGELOG.md` 三条：默认模型切到 DeepSeek V4.1 Flash、退役免费 Laguna S 2.1、重构 CLI 登录引导。80 个产物文件名不变、内容变化 6 个（`CHANGELOG.md`、`dist/cli.mjs`、`package.json` 仅版本、VSIX、两份内置知识文档）；`cli.mjs` 的实质变化只有版本串、内嵌目录版本 `449ff6a3…` → `b21583db…`、Laguna 行加 `hidden` 与 "(Free)" 显示名，以及 `cond.dev` → `cmnd.dev` 诊断域名修正——端点/请求头/环境变量集合与 `promptCache`(5)／`reasoning_effort`(7)／`max_tokens`(12)／`cache_control`(1) 计数均未变，登录引导属 CLI 自身文案、插件不渲染。服务端目录随之到同一 `catalogVersion`：默认 95／`?view=client` 109 行逐字段不变，唯一差异是 `roles` 的 `default`、`titleGeneration`、`toolDescription` 从 V4 Flash 换成 V4.1 Flash（`tasteOnboarding` 不动）。快照同步：`KNOWN_PLANS` 96 → 95、`KNOWN_THINKING_MODELS` 16 → 15、`KNOWN_DEALS` 5 → 4，生成表 `MODEL_OUTPUT_TOKEN_LIMITS` 随 `KNOWN_PLANS` 删去该行（82 行）；`KNOWN_NON_ZDR_MODELS` 保留该 id——1.88.4 产物排除集与 `?view=client` 仍判 `zdr:false`，退役本身不构成「已覆盖」的正面证据。**验证**：`npm run typecheck` 退出码 0、`npm test` 1203／1203、`npm run build` 两段通过、`lib/` 已重建；审计（14 源 200、两条已验证定价别名）`errors 0`、`candidateDiffs` 为空；`sync-output-limits.mjs --check` 仍退出 1，差异仅为既有 models.dev 来源注释（Crouton Alpha `1 → 2 provider(s), unanimous`，数值 943718 未变），与上一轮记录相同。**同日稍后的独立上游漂移（未纳入本轮）**：`sync-model-prices.mjs --check` 在 08:1x 核查时退出 0（95 行），10:12 重跑退出 1——官方定价页撤下了 `claude-opus-4-6` 的估价器记录（页面另一数组仍残留该 id），生成表降为 94 行；该 id 本就不在目录与 `KNOWN_PLANS`（`docsOnly`），与本次 Laguna 退役无关，属独立上游数据变化，留待单独决定（CI 未调用该检查）。**未做**：真实账号登录、付费生成与浏览器渲染；未 bump 版本、未提交、未发布。
+
+### Fixed
+
+- **适配器的默认 `fetch` 改为「调用时晚绑定」，宿主在插件加载后安装的全局 `fetch` 拦截器不再被构造时捕获的原生函数绕过（#119）。** 报告人 `closerex` 在 0.17.1 指出（当前 HEAD 仍在）：`CommandCodeAdapter` 构造时执行 `this.fetchImpl = deps.fetchImpl ?? fetch`，而插件 `apply()` 不注入 `fetchImpl`，所以线上永远持有构造那一刻的全局 `fetch`；billion-context 若在 DSH 启动稍后安装全局 `fetch` 钩子（压缩与窗口检查），这之后的聊天请求会完整绕过它——报告人用运行中对象取证（`fetchImpl !== globalThis.fetch`）与隔离链路对照验证，表现为长会话在宿主重启/更新后报 `400 the request exceeds the model's context window`。**改动**：默认路径改为 `(input, init) => globalThis.fetch(input, init)`，每次请求读取当时的全局实现；显式注入 `fetchImpl` 的语义不变（测试/自定义接缝）。**影响面（知情接受）**：适配器的所有 HTTP——聊天、`/provider/v1/models`、`/alpha/whoami`、计费、用量——此后都走宿主当前 `fetch`，与 `web-search`／`login`／`service-probe` 等模块原本的行为一致；副作用是非聊天端点也会首次经过 billion-context 的钩子。**边界**：修的是「插件不再缓存原生 `fetch`」，不等于修复 billion-context 自身；是否压缩仍由它决定。**验证**：`tests/adapter.test.ts` 新增 2 条（构造后替换 `globalThis.fetch` 的默认路径必须命中后装实现、显式注入优先且不受后续替换影响），改前红（实际调用构造时实现）改后绿；`npm run typecheck` 退出码 0、`npm test` 全绿、`npm run build` 通过、`lib/` 已重建。**未做**：本地无 billion-context 原生插件（macOS），没有做「真实拦截器 + 真实适配器」的整链路 A/B；未提交、未发布。
+
 ## [0.17.2] - 2026-11-05
 
 ### Changed

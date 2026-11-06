@@ -289,7 +289,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   - Web search: `POST {apiBase}/alpha/web-search` — body `{ query, numResults, allowedDomains?,
     blockedDomains? }` → `{ results: [{ title, url, snippet }] }`; same `Authorization: Bearer <key>` +
     `x-command-code-version` as generate.
-  - Defaults: `apiBase = https://api.commandcode.ai`, `COMMAND_CODE_CLI_VERSION = '1.68.0'`.
+  - Defaults: `apiBase = https://api.commandcode.ai`, and `COMMAND_CODE_CLI_VERSION` — the pinned
+    official CLI version sent as `x-command-code-version` (see `src/adapter.ts`).
   - **Request image budget (issue #37)**: the gateway caps a whole request body at a measured ~50.17 MB
     (undocumented — their Error Codes page has no 413). All three transports inline every historical image as
     base64 and the harness never reclaims history, so a long session (a vision self-check loop reading back
@@ -478,4 +479,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   peers alone cannot expose this contract drift.
 - **Adapter is cordis-free** by design: `src/adapter.ts` takes a per-request `options()` thunk +
   `resolveApiKey()` from the plugin entry, so settings changes reach the next request without
-  re-registration. It also accepts an injectable `fetchImpl` for tests.
+  re-registration. It also accepts an injectable `fetchImpl` for tests. Without one it late-binds:
+  every request calls the CURRENT `globalThis.fetch`, never a function captured at construction, so a
+  host/plugin interceptor installed after `apply()` (billion-context prompt compression) still sees
+  the request. Capturing the constructor-time function made that interceptor invisible and let
+  uncompressed long histories overflow the model window (issue #119).

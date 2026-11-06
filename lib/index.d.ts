@@ -61,7 +61,7 @@ type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 //#endregion
 //#region src/adapter.d.ts
-declare const COMMAND_CODE_CLI_VERSION = "1.88.3";
+declare const COMMAND_CODE_CLI_VERSION = "1.88.4";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.
@@ -1243,7 +1243,7 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.88.3 (2026-11-05) against the
+ * Provider-tier. Re-verified at command-code@1.88.4 (2026-11-06) against the
  * live `?view=client` catalog: 109 ids, still a strict superset chain. Mistral
  * Large 4 (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
  * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.
@@ -1258,12 +1258,15 @@ declare const KNOWN_THINKING_MODELS: ReadonlySet<string>;
  * check adds only GPT-6.1 Terra at Pro. The 2026-11-04 catalog-only sync adds
  * Ling 3.1 Flash 1019 and the free Crouton Alpha preview at Go; the 2026-11-05
  * check finds `?view=client` flipping `poolside/laguna-s-2.1-free` to `hidden`
- * and withdrawing it from the models/pricing/plan pages, while this snapshot
- * keeps that row pending observation.
- * The only removals since 1.49.0 are the two retired stealth previews (Pixel
- * Canary at 1.73.1, Space Bunny Alpha at 1.74.3), Ling 3.0 Flash Sante
- * (2026-10-16) and the retired Cat Jam preview (2026-10-20). Per-entry tags
- * below name the releases that added or moved each row.
+ * and withdrawing it from the models/pricing/plan pages, and the 2026-11-06
+ * check retires that row outright — command-code@1.88.4 names "retire the free
+ * Laguna S 2.1 model" and the catalog serves it `hidden` only. It therefore
+ * leaves this map (with its thinking and deal entries), and the map is now
+ * exactly the default view's 95 ids, 58 of them Go. The only removals since
+ * 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1, Space
+ * Bunny Alpha at 1.74.3), Ling 3.0 Flash Sante (2026-10-16), the retired Cat
+ * Jam preview (2026-10-20) and the free Laguna S 2.1 row (2026-11-06).
+ * Per-entry tags below name the releases that added or moved each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to

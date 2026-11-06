@@ -15,8 +15,9 @@ import assert from 'node:assert/strict'
 import { KNOWN_DEALS, dealBadgeText, modelBadge } from '../src/capabilities.ts'
 
 test('a free promo advertises a localized FREE badge', () => {
-  // `poolside/laguna-s-2.1-free` is a permanent free row in the snapshot.
-  assert.deepEqual(modelBadge('poolside/laguna-s-2.1-free'), {
+  // `reflection/beam:free` is a permanent free row in the snapshot (the free
+  // Laguna S 2.1 row was retired in command-code@1.88.4 and left `KNOWN_DEALS`).
+  assert.deepEqual(modelBadge('reflection/beam:free'), {
     text: { en: 'FREE', zh: '免费' },
     tone: 'success',
   })

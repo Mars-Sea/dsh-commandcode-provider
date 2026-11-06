@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.3), the
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.4), the
  * live model catalog (`GET /provider/v1/models?view=client`, the authority for
  * capability fields since 1.82.4), and the official plan/pricing/model docs; see
  * the dsh-commandcode-upstream skill for the extraction procedures. The
@@ -33,7 +33,18 @@
  * check moves it to 1.88.3, whose npm CHANGELOG only bumps dependencies while
  * its artifact tables catch up with the catalog rows already synced here (Ling
  * 1019 and Crouton Alpha) and its ZDR exception set finally equals the
- * catalog's verdict, 19 == 19; no table below changes. Keeping the
+ * catalog's verdict, 19 == 19; no table below changes. The 2026-11-06 check
+ * moves it to 1.88.4, whose npm CHANGELOG names DeepSeek V4.1 Flash as the
+ * default model, the retirement of the free Laguna S 2.1 row and a CLI
+ * login-instruction refactor. Only the retirement reaches this file: the
+ * `poolside/laguna-s-2.1-free` id leaves four maps (`KNOWN_PLANS`,
+ * `KNOWN_THINKING_MODELS`, `KNOWN_DEALS` and the generated
+ * `MODEL_OUTPUT_TOKEN_LIMITS`, which follows `KNOWN_PLANS`), while
+ * `KNOWN_NON_ZDR_MODELS` keeps it: both sources still serve its `zdr:false`
+ * verdict, and retirement alone is not coverage evidence. The catalog's model
+ * rows are unchanged; only its `roles` map switches the default,
+ * title-generation and tool-description roles from DeepSeek V4 Flash to V4.1
+ * Flash. Keeping the
  * snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
  * wire/runtime logic. The read helpers live here too, for the same reason.
@@ -47,7 +58,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.88.3 model table. From
+  // Re-verified against the authoritative command-code@1.88.4 model table. From
   // 1.82.4 the CLI no longer keeps this map bundled: `getSupportedEfforts()`
   // resolves it through the model catalog (`reasoningEfforts`), served live at
   // `GET /provider/v1/models?view=client` and falling back to an embedded
@@ -519,6 +530,13 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // Muse Wonder 1.0 to `zdr:true`, and the artifact dropped them too.
   'meta/muse-spark-1.2-contributor',
   'meta/muse-spark-1.3-contributor',
+  // `minimax/minimax-m3-free` and `poolside/laguna-s-2.1-free` are catalog or
+  // artifact rows whose verdict still stands: both sources serve `zdr:false`
+  // (the `?view=client` row exists for Laguna even though it is `hidden`, and
+  // the 1.88.4 exclusion set names it), so neither leaves this union. Laguna's
+  // picker-facing entries were retired on 2026-11-06 (see `KNOWN_PLANS`); that
+  // retirement alone is not coverage evidence, so the negative verdict stays
+  // for stale sessions and cached catalogs.
   'minimax/minimax-m3-free',
   'poolside/laguna-s-2.1-free',
   // 2026-10-16 (1.84.0 sync). Catalog-only evidence: `?view=client` serves
@@ -591,7 +609,10 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   'nvidia/nemotron-3-ultra-550b-a55b',
   'thinkingmachines/inkling',
   'thinkingmachines/inkling-small',
-  'poolside/laguna-s-2.1-free',
+  // `poolside/laguna-s-2.1-free` left this map on 2026-11-06 with the free
+  // Laguna S 2.1 retirement (command-code@1.88.4): the row is `hidden` in
+  // `?view=client` and gone from the models/pricing/plan pages, and the
+  // picker-facing maps (`KNOWN_PLANS`, `KNOWN_DEALS`) dropped it too.
   // LongCat 2.0 (command-code@1.42.0, Meituan's trillion-parameter coding
   // model, 1M context) is text-only with automatic reasoning. The free promo
   // ended 2026-09-19 and the backend catalog renamed it from
@@ -674,9 +695,12 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
  * **Generated — do not hand-edit.** `scripts/sync-output-limits.mjs` rewrites
  * this literal from models.dev; run it after a catalog sync, and use its
  * `--check` in CI. Command Code resells these models through their VENDOR's own
- * API, so the vendor's published ceiling is the value recorded: 83 of the 96
- * catalog ids as of 2026-11-04. Each row carries a comment naming the entry it
- * came from.
+ * API, so the vendor's published ceiling is the value recorded: 82 of the 95
+ * ids in `KNOWN_PLANS` as of 2026-11-06. Each row carries a comment naming the
+ * entry it came from. The table follows that map, so a row retired from it —
+ * `poolside/laguna-s-2.1-free` (32768) on 2026-11-06 — leaves this literal
+ * too; a stale session asking for it falls back to the learned ceiling (one
+ * refused request), per the paragraph below.
  *
  * No row needs a hand-recorded pin as of 2026-10-16: the one that did
  * (`inclusionai/ling-3.0-flash-sante:free`, pinned at 32768 because it had lost
@@ -807,8 +831,6 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['moonshotai/Kimi-K3.1-Pro', 1048576],
   // nvidia
   ['nvidia/nemotron-3-ultra-550b-a55b', 65536],
-  // poolside
-  ['poolside/laguna-s-2.1-free', 32768],
   // alibaba
   ['Qwen/Qwen3.6-Max-Preview', 65536],
   // alibaba
@@ -891,7 +913,7 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.88.3 (2026-11-05) against the
+ * Provider-tier. Re-verified at command-code@1.88.4 (2026-11-06) against the
  * live `?view=client` catalog: 109 ids, still a strict superset chain. Mistral
  * Large 4 (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
  * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.
@@ -906,12 +928,15 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * check adds only GPT-6.1 Terra at Pro. The 2026-11-04 catalog-only sync adds
  * Ling 3.1 Flash 1019 and the free Crouton Alpha preview at Go; the 2026-11-05
  * check finds `?view=client` flipping `poolside/laguna-s-2.1-free` to `hidden`
- * and withdrawing it from the models/pricing/plan pages, while this snapshot
- * keeps that row pending observation.
- * The only removals since 1.49.0 are the two retired stealth previews (Pixel
- * Canary at 1.73.1, Space Bunny Alpha at 1.74.3), Ling 3.0 Flash Sante
- * (2026-10-16) and the retired Cat Jam preview (2026-10-20). Per-entry tags
- * below name the releases that added or moved each row.
+ * and withdrawing it from the models/pricing/plan pages, and the 2026-11-06
+ * check retires that row outright — command-code@1.88.4 names "retire the free
+ * Laguna S 2.1 model" and the catalog serves it `hidden` only. It therefore
+ * leaves this map (with its thinking and deal entries), and the map is now
+ * exactly the default view's 95 ids, 58 of them Go. The only removals since
+ * 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1, Space
+ * Bunny Alpha at 1.74.3), Ling 3.0 Flash Sante (2026-10-16), the retired Cat
+ * Jam preview (2026-10-20) and the free Laguna S 2.1 row (2026-11-06).
+ * Per-entry tags below name the releases that added or moved each row.
  *
  * The Provider API exposes no plan metadata, so this snapshot is the source of
  * truth for the picker's plan annotation — it answers "which plan do I need to
@@ -922,7 +947,7 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (57 paid + 4 free) ---
+  // --- Go (55 paid + 3 free) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -1012,7 +1037,12 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // every tier true in the pricing page's embedded availability. The `:free`
   // twin left this map on 2026-10-23 (promo lapsed, row hidden).
   'ornith/ornith-1.5-122b': 'go',
-  'poolside/laguna-s-2.1-free': 'go',
+  // `poolside/laguna-s-2.1-free` left this map on 2026-11-06 with the free
+  // Laguna S 2.1 retirement (command-code@1.88.4); `?view=client` still serves
+  // the row but only as `hidden`, and this map tracks the default view.
+  // KNOWN_DEALS drops the matching FREE badge and the generated output-limit
+  // table follows this map, so its 32768 row goes too. KNOWN_NON_ZDR_MODELS
+  // keeps the id: both sources still serve its `zdr:false` verdict.
   // 2026-10-16, first seen at the 1.84.0 sync: the free Beam preview was the one
   // new id the DEFAULT catalog view served then (93 ids). This map tracks that
   // view: the `hidden:true` rows of `?view=client` do not belong here, unlike
@@ -1327,7 +1357,16 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   // map on the same check: MiMo V2.6 took over their rates as regular ones, both
   // rows went `hidden`, and the pricing page dropped the whole Xiaomi
   // collaboration block, so there is no deal left to display.
-  'poolside/laguna-s-2.1-free': { label: 'FREE', free: true },
+  // 2026-11-06 (command-code@1.88.4): the free Laguna S 2.1 row is RETIRED —
+  // the npm CHANGELOG names "retire the free Laguna S 2.1 model", the row is
+  // `hidden` in `?view=client`, and the models/pricing/plan pages plus the
+  // pricing page's deal list no longer carry it — so the FREE entry is removed
+  // rather than left to badge a model the catalog no longer serves (the same
+  // path the MiniMax/Ornith/Ling free twins took). `isFreeModel()` therefore
+  // stops ranking it, and `KNOWN_PLANS` dropped its plan entry in the same
+  // check. `KNOWN_NON_ZDR_MODELS` keeps the id because both sources still serve
+  // its `zdr:false` verdict; the generated output-limit table follows
+  // `KNOWN_PLANS` and loses its row with it.
   // 2026-10-16 (1.84.0 sync); the third live free preview in this map.
   // "Free while capacity lasts", no daily request limit, and — unlike its Glyph
   // Cluster sibling — the page states outright that it is "Not routed under
