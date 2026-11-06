@@ -65,7 +65,14 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   - `POST {apiBase}/provider/v1/chat/completions` — documented OpenAI-format transport with a flat body `{
     model, messages, tools?, max_tokens, temperature, stream, reasoning_effort? }`. Used for every account
     with Provider API access whose model the catalog does not route to `/messages`; historical reasoning is
-    replayed as `reasoning_content`.
+    replayed as `reasoning_content`. `temperature` starts from the caller's value and defaults to 0.3, but a
+    model whose own upstream pins it to 1 gets NO field: `moonshotai/Kimi-K3.1-Pro` refuses 0.3 with HTTP 400
+    `temperature must be 1 for kimi-k3.1-pro` (measured 2026-11-06; 1 and an absent field both answer 200),
+    and the refusal names nothing the error mapping recognises, so it surfaced as the generic "服务端拒绝了
+    本次请求" for every turn. The same omission is applied to the CLI transport — the constraint belongs to the
+    model, not the wire — and the pin lives in `PINNED_TEMPERATURE_MODELS` (`./capabilities.ts`). Omitting
+    rather than writing 1 matches the Messages transport: the endpoint owns the number, so a caller's value is
+    dropped instead of being silently replaced.
   - `POST {apiBase}/provider/v1/messages` — **Anthropic Messages transport, the only Provider API route the
     Claude family answers** (see the routing bullet below). Every clause below was measured live on
     2026-09-29 against `claude-sonnet-5-5`; the shapes differ from `dsh-llm-deepseek`'s Messages API in two

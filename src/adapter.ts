@@ -78,6 +78,7 @@ import {
   compareByPlan,
   modelBadge,
   modelVisibleForAnyAccount,
+  pinsTemperature,
   requiresMessagesEndpoint,
   subscriptionPlanInfo,
   type CommandCodeBillingAccess,
@@ -2106,6 +2107,21 @@ function markLastUserCacheControl(messages: unknown[]): void {
   }
 }
 
+/**
+ * The `temperature` field for one chat body — or nothing when the model pins
+ * the value itself.
+ *
+ * Both chat transports spread the result, so the rule lives in one place:
+ * {@link pinsTemperature} names the models whose upstream accepts only 1 (see
+ * `PINNED_TEMPERATURE_MODELS` in `./capabilities.ts` for the measured refusal),
+ * and for those the field is omitted rather than rewritten, matching the
+ * Messages transport's handling of the same constraint.
+ */
+function temperatureField(options: GenerateOptions): Record<string, number> {
+  if (pinsTemperature(options.model)) return {}
+  return { temperature: options.temperature ?? 0.3 }
+}
+
 /** Build the legacy CLI (`/alpha/generate`) request body for one call. */
 async function buildCliBody(
   options: GenerateOptions,
@@ -2151,7 +2167,7 @@ async function buildCliBody(
       // field leaves the per-turn output size to the platform, which is the
       // only way to stop the passive ceiling from cutting an answer short.
       ...(facts.omitMaxTokens ? {} : { max_tokens: facts.maxTokens }),
-      temperature: options.temperature ?? 0.3,
+      ...temperatureField(options),
       stream: true,
       ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
     },
@@ -2181,7 +2197,7 @@ async function buildOpenAIBody(
     messages: openAiMessages,
     ...(openAiTools.length > 0 ? { tools: openAiTools } : {}),
     ...(facts.omitMaxTokens ? {} : { max_tokens: facts.maxTokens }),
-    temperature: options.temperature ?? 0.3,
+    ...temperatureField(options),
     stream: true,
     ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
   }

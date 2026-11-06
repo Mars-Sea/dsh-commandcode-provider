@@ -4591,6 +4591,66 @@ test('Messages drops an explicit temperature, which adaptive thinking constrains
   }
 })
 
+/** Capture one chat transport's request body from a call answered with `ok`. */
+async function captureChatBody(
+  protocol: 'cli' | 'openai',
+  model: string,
+  temperature?: number,
+): Promise<Record<string, unknown>> {
+  let capturedBody: Record<string, unknown> | undefined
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body))
+    return protocol === 'openai'
+      ? new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      : new Response('data: {"type":"text-delta","text":"ok"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n', { status: 200 })
+  }) as unknown as typeof fetch
+  const adapter = makeAdapter({
+    fetchImpl,
+    ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+  })
+  await collect(adapter.stream({
+    provider: 'commandcode',
+    model,
+    ...(temperature === undefined ? {} : { temperature }),
+    messages: [userMessage('hi')],
+  }))
+  assert.ok(capturedBody, 'the adapter must issue a request')
+  return protocol === 'cli' ? (capturedBody!.params as Record<string, unknown>) : capturedBody!
+}
+
+test('chat transports omit temperature for a model whose upstream pins it to 1', async () => {
+  // Live failure, 2026-11-06: `moonshotai/Kimi-K3.1-Pro` answers HTTP 400
+  // `{"error":{"message":"{\"message\":\"temperature must be 1 for
+  // kimi-k3.1-pro…\"}"}}` to the 0.3 default both chat transports sent, so every
+  // turn on that model failed while the catalogue served it. Omission is what
+  // the endpoint accepts (a 1 and an absent field both answer 200), and
+  // dropping the caller's number is the trade the Messages transport already
+  // makes for adaptive thinking.
+  for (const protocol of ['cli', 'openai'] as const) {
+    for (const temperature of [undefined, 0, 0.3, 1, 2]) {
+      const body = await captureChatBody(protocol, 'moonshotai/Kimi-K3.1-Pro', temperature)
+      assert.equal(body.model, 'moonshotai/Kimi-K3.1-Pro')
+      assert.equal(body.temperature, undefined, `${protocol} temperature=${temperature} must not be sent`)
+    }
+  }
+})
+
+test('chat transports keep the 0.3 default for models that accept a temperature', async () => {
+  // The control for the pin above: the neighbouring Moonshot id and an
+  // unrelated model keep their sampling field, so the rule stays a per-model
+  // exception rather than a blanket drop.
+  for (const protocol of ['cli', 'openai'] as const) {
+    for (const model of ['moonshotai/Kimi-K3', 'deepseek/deepseek-v4.1-flash']) {
+      assert.equal((await captureChatBody(protocol, model)).temperature, 0.3, `${protocol} ${model} default`)
+      assert.equal((await captureChatBody(protocol, model, 0.5)).temperature, 0.5, `${protocol} ${model} explicit`)
+      assert.equal((await captureChatBody(protocol, model, 0)).temperature, 0, `${protocol} ${model} zero`)
+    }
+  }
+})
+
 test('Messages omits the thinking switch for a model that publishes no effort levels', async () => {
   // `claude-haiku-4-5-20201001`'s sibling case: the official CLI marks
   // `claude-haiku-4-5-20251001` neither `reasoning_effort` (no levels, so absent
