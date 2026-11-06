@@ -664,6 +664,47 @@ export function requiresMessagesEndpoint(modelId: string): boolean {
 }
 
 /**
+ * Models whose own upstream refuses every `temperature` except 1, so neither
+ * chat transport may send the 0.3 default this adapter otherwise applies.
+ *
+ * Measured 2026-11-06 against `moonshotai/Kimi-K3.1-Pro` on the Provider API
+ * (`POST /provider/v1/chat/completions`, the transport a GOAT-tier account is
+ * routed to by default): `temperature: 0.3` is refused with HTTP 400
+ *
+ * ```
+ * {"error":{"message":"{\"message\":\"temperature must be 1 for kimi-k3.1-pro
+ *  trace_id: …\",\"type\":\"invalid_request_error\"}","type":"invalid_request_error"}}
+ * ```
+ *
+ * while `temperature: 1` and an absent field both answer 200. Because the
+ * refusal names no field the adapter's error mapping knows, every turn surfaced
+ * as the generic "服务端拒绝了本次请求" diagnostic, which reads as a dead model
+ * even though the catalogue serves it. `moonshotai/Kimi-K3` — the neighbouring
+ * id — accepts 0.3, so this is a per-model pin rather than a Moonshot-wide one.
+ *
+ * `/alpha/generate` tolerates the field (a 0.3 request answers 200 there), but
+ * the constraint belongs to the MODEL, not the transport: keeping both chat
+ * builders on the same rule means switching protocol cannot silently change
+ * sampling — or reintroduce the 400.
+ *
+ * The value is OMITTED rather than rewritten to 1, following the Messages
+ * transport's precedent (`buildMessagesBody`): the endpoint, not this adapter,
+ * owns the number, so a caller that asked for 0.5 has it dropped instead of
+ * silently replaced by a value it never requested, and a vendor that moves the
+ * pin is followed automatically by the absence.
+ *
+ * Keep in sync when models ship (see the dsh-commandcode-upstream skill).
+ */
+export const PINNED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
+  'moonshotai/Kimi-K3.1-Pro',
+])
+
+/** True when the model's own endpoint pins `temperature` to 1 (send none). */
+export function pinsTemperature(modelId: string): boolean {
+  return PINNED_TEMPERATURE_MODELS.has(modelId)
+}
+
+/**
  * Per-model output ceilings, which `/provider/v1/models` does NOT publish (it
  * carries `context_length` and `supported_endpoints` only) while every endpoint
  * refuses a larger `max_tokens` per model. Sending the context window as the
