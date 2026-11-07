@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.4), the
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.5), the
  * live model catalog (`GET /provider/v1/models?view=client`, the authority for
  * capability fields since 1.82.4), and the official plan/pricing/model docs; see
  * the dsh-commandcode-upstream skill for the extraction procedures. The
@@ -44,7 +44,13 @@
  * verdict, and retirement alone is not coverage evidence. The catalog's model
  * rows are unchanged; only its `roles` map switches the default,
  * title-generation and tool-description roles from DeepSeek V4 Flash to V4.1
- * Flash. Keeping the
+ * Flash. The 2026-11-07 check moves the pinned constant to 1.88.5 (one CLI
+ * login fix, no protocol change) and picks up the catalog's single new row,
+ * `deepseek/deepseek-v4.1-flash-ultrafast`: GOAT tier, 1M context, text + image,
+ * efforts `off/low/high/max`, `zdr:true`, no deal and no peak schedule. It
+ * enters `KNOWN_PLANS`, `KNOWN_EFFORTS`, `KNOWN_IMAGE_MODELS` and the vendored
+ * price table; `KNOWN_NON_ZDR_MODELS` stays at 19 and every other map is
+ * unchanged. Keeping the
  * snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
  * wire/runtime logic. The read helpers live here too, for the same reason.
@@ -58,7 +64,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.88.4 model table. From
+  // Re-verified against the authoritative command-code@1.88.5 model table. From
   // 1.82.4 the CLI no longer keeps this map bundled: `getSupportedEfforts()`
   // resolves it through the model catalog (`reasoningEfforts`), served live at
   // `GET /provider/v1/models?view=client` and falling back to an embedded
@@ -109,6 +115,9 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // command-code@1.67.0; the same four-level set as its `deepseek-v4.1-flash`
   // sibling, whose throughput-focused variant this is.
   'deepseek/deepseek-v4.1-flash-fast': ['off', 'low', 'high', 'max'],
+  // 2026-11-07 (catalog-only sync): the "High throughput V4.1 Flash" sibling is
+  // `minimumPlan: individual-goat` with the same four levels and text + image.
+  'deepseek/deepseek-v4.1-flash-ultrafast': ['off', 'low', 'high', 'max'],
   // command-code@1.73.3 added `off` ("Allow disabling thinking for DeepSeek
   // models") to the DeepSeek V4 line and the 4.1 pair above - but NOT to
   // `deepseek-v4-flash-fast`, which the 1.74.3 table still ships at three.
@@ -318,6 +327,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'deepseek/deepseek-v4.1-flash',
   // command-code@1.67.0; Vision per the official registry and inputModalities.
   'deepseek/deepseek-v4.1-flash-fast',
+  // 2026-11-07 (catalog-only sync): inputModalities:["text","image"] in
+  // `?view=client` and on the models docs page.
+  'deepseek/deepseek-v4.1-flash-ultrafast',
   // command-code@1.82.0; Vision per the official registry, the CLI's
   // inputModalities:["text","image"] and the docs page's "Text input, Vision,
   // Reasoning" capability label.
@@ -892,7 +904,7 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['Qwen/Qwen3.8-Omni-Flash', 131072],
   // sakana
   ['sakana/fugu-ultra', 1000000],
-  // 1 provider(s), unanimous
+  // 2 provider(s), unanimous
   ['stealth/crouton-alpha', 943718],
   // stepfun
   ['stepfun/Step-3.5-Flash', 256000],
@@ -954,8 +966,8 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.88.4 (2026-11-06) against the
- * live `?view=client` catalog: 109 ids, still a strict superset chain. Mistral
+ * Provider-tier. Re-verified at command-code@1.88.5 (2026-11-07) against the
+ * live `?view=client` catalog: 110 ids, still a strict superset chain. Mistral
  * Large 4 (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
  * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.
  * 1.79.2 lowers Haiku 5.5's minimum plan to GOAT; 1.80.0 adds Muse Wonder at
@@ -972,8 +984,9 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * and withdrawing it from the models/pricing/plan pages, and the 2026-11-06
  * check retires that row outright — command-code@1.88.4 names "retire the free
  * Laguna S 2.1 model" and the catalog serves it `hidden` only. It therefore
- * leaves this map (with its thinking and deal entries), and the map is now
- * exactly the default view's 95 ids, 58 of them Go. The only removals since
+ * leaves this map (with its thinking and deal entries). The 2026-11-07 check
+ * then adds the GOAT-tier `deepseek/deepseek-v4.1-flash-ultrafast`, so the map
+ * tracks the default view's 96 ids, 58 of them Go. The only removals since
  * 1.49.0 are the two retired stealth previews (Pixel Canary at 1.73.1, Space
  * Bunny Alpha at 1.74.3), Ling 3.0 Flash Sante (2026-10-16), the retired Cat
  * Jam preview (2026-10-20) and the free Laguna S 2.1 row (2026-11-06).
@@ -1135,7 +1148,11 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'zai-org/GLM-5.2': 'go',
   'zai-org/GLM-5.2-Fast': 'go',
   'zai-org/GLM-5.3': 'go',
-  // --- GOAT (10 more) ---
+  // --- GOAT (11 more) ---
+  // 2026-11-07 (catalog-only sync): `minimumPlan: "individual-goat"` in
+  // `?view=client`, and the pricing page's embedded availability has
+  // `individual-go: false`; the go/goat/pro/max plan pages all list the row.
+  'deepseek/deepseek-v4.1-flash-ultrafast': 'goat',
   // command-code@1.79.2 lowers the 1.78.0 Pro gate to GOAT: individual-go
   // remains false, individual-goat and all higher tiers are true.
   'claude-haiku-5-5': 'goat',

@@ -31,6 +31,7 @@ import {
   KNOWN_IMAGE_MODELS,
   KNOWN_THINKING_MODELS,
   KNOWN_PLANS,
+  KNOWN_NON_ZDR_MODELS,
   KNOWN_DEALS,
   KNOWN_PEAK_PRICING,
   MODEL_OUTPUT_TOKEN_LIMITS,
@@ -6288,6 +6289,14 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   // command-code@1.73.3 added `off` to both DeepSeek V4.1 models, taking them to
   // four levels; `deepseek-v4-flash-fast` alone stayed at three.
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash-fast'], ['off', 'low', 'high', 'max'])
+  // 2026-11-07 (1.88.5 / catalog-only): the "High throughput V4.1 Flash"
+  // sibling carries the same four DeepSeek levels; it is not an automatic-
+  // reasoning model despite `reasoning:true` in the artifact registry.
+  assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4.1-flash-ultrafast'], ['off', 'low', 'high', 'max'])
+  assert.ok(!KNOWN_THINKING_MODELS.has('deepseek/deepseek-v4.1-flash-ultrafast'))
+  assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash-ultrafast'], 'goat')
+  assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash-ultrafast'))
+  assert.equal(KNOWN_NON_ZDR_MODELS.has('deepseek/deepseek-v4.1-flash-ultrafast'), false)
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'], ['off', 'high', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-pro'], ['off', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('claude-sonnet-5-5'))
@@ -6894,7 +6903,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.88.4')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.88.5')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 

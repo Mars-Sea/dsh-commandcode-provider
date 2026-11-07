@@ -91,24 +91,23 @@ export { DEFAULT_MAX_OUTPUT_TOKENS, MODEL_CATALOG_TTL_MS } from './gateway-facts
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-// Rides every request as `x-command-code-version`. The 1.88.4 bump is a pure
+// Rides every request as `x-command-code-version`. The 1.88.5 bump is a pure
 // header sync: the npm package's own CHANGELOG.md — the website
-// https://commandcode.ai/changelog covers only the Desktop app — names three
-// entries, "feat: Set DeepSeek V4.1 Flash as default model", "fix: retire the
-// free Laguna S 2.1 model" and "refactor: improve cli login instructions".
-// package.json moves only the version; the VSIX and the two bundled knowledge
-// docs follow those model changes. In the artifact, the
-// `poolside/laguna-s-2.1-free` registry row gains `hidden` plus the
-// "Laguna S 2.1 (Free)" display name, and the embedded `catalogVersion` moves
-// `449ff6a3…` -> `b21583db…`. The contract this plugin consumes is unchanged:
-// endpoint-path and custom-header / environment-variable sets, the ZDR
+// https://commandcode.ai/changelog covers only the Desktop app — has one entry,
+// "fix: cmd login and /login start a new login if API key is wrong, deleted or
+// expired", which is CLI-side login UX this plugin never renders (its login
+// flow is its own device-code flow). Static artifact comparison against 1.88.4
+// finds no protocol change: 26 endpoint paths, 13 custom headers, the ZDR
 // exception set (19), `buildModelGroups` / `getPlanInfo`, the `/alpha/generate`
 // call site and the `promptCache` / `reasoning_effort` / `max_tokens` /
-// `cache_control` counts all match. The only literal changes are the version,
-// that catalog hash, the Laguna row and one diagnostic-URL typo fix
-// (`cond.dev` -> `cmnd.dev`); "improve cli login instructions" is CLI-side UX
-// copy this plugin never renders — its login flow is its own device-code flow.
-export const COMMAND_CODE_CLI_VERSION = '1.88.4'
+// `cache_control` counts all match; the subscription map and ZDR diff are empty.
+// The only new literal is `DEEPSEEK_V4_1_FLASH_ULTRAFAST`, bound to the model
+// the server catalog added first: `catalogVersion` moves `b21583db…` ->
+// `d4517aa3…`, the default view 95 -> 96 and `?view=client` 109 -> 110 with
+// `deepseek/deepseek-v4.1-flash-ultrafast` (1M context, text + image, efforts
+// `off/low/high/max`, `individual-goat`, `zdr:true`, $2.40/$9.60/$0.048). That
+// row is a capabilities-snapshot sync, not a runtime change.
+export const COMMAND_CODE_CLI_VERSION = '1.88.5'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**

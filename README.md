@@ -80,12 +80,20 @@ dsh `0.2.2-alpha.2` declares `engines.node >=24.9.0` and this plugin admits that
 
 > **pnpm 11 holds back new releases.** `minimumReleaseAge` defaults to 1440 minutes, so a version published less than a day ago is skipped and `@latest` resolves to the *previous* release — silently, with a success exit code. To install a release from the last 24 hours, name it exactly: `@mars-sea/dsh-commandcode-provider@0.11.15`. This applies to every profile, including the terminal UI below.
 
-**Updating** — same tag, then restart the web app. Each profile updates separately, because the terminal UI owns its own plugin list:
+### Updating
+
+**Prefer the Web plugin page.** A profile that installed this plugin from the npm registry is marked updatable by dsh: sidebar **Plugins** → open this plugin → the **Versions** section below its rows lists newer releases, and **Update** replaces the installed one. An available update also shows an **Updatable** badge on the card and **Update to** in the detail header. The host checks the target first, then removes the old version and installs the target, rolling back to the previous version if that install fails. With HMR the new version starts immediately; without HMR dsh reports that a restart is required. API keys live in the dsh credential store and settings in the profile's `cordis.patch.yml`, so neither is lost when the package is replaced.
+
+**Only registry installs under their own package name get a Versions section.** Bundles installed from `link:` / a local path, a Git address, or a tarball (for example `dsh plugin add /path/to/dsh-commandcode-provider` during development), and bundles shipped with the installation, do not show it. Use the CLI below for those, or remove the bundle and reinstall with the registry command above. The section recommends the newest non-prerelease, non-deprecated version whose `engines.dsh` admits the running dsh; prereleases can be revealed manually.
+
+**CLI (fallback)** — same tag as the install, then restart the web app. Each profile updates separately, because the terminal UI owns its own plugin list:
 
 ```sh
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest
 dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@latest
 ```
+
+> `dsh plugin update` is a pnpm passthrough, not the host's plugin-update path; `minimumReleaseAge` above can silently skip a fresh release there too, so name an exact version when needed.
 
 ## Get an API key and verify it works
 

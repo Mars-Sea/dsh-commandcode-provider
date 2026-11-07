@@ -5,7 +5,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 interface PackageManifest {
+  name?: string
+  version?: string
+  files?: string[]
   dsh?: {
+    bundle?: { patch?: string }
     client?: { platform?: string; inject?: string[] }
     compatibility?: { dshReleases?: Record<string, string>; dsh?: string }
   }
@@ -219,5 +223,23 @@ test('only the client-seeded UI peers are optional, and each stays a development
       pkg.devDependencies?.[name] !== undefined,
       `${name} is an optional peer, so no package manager installs it: keep it in devDependencies`,
     )
+  }
+})
+
+test('the published manifest keeps the bundle eligible for dsh plugin updates', () => {
+  // dsh 的「插件更新」不是插件实现的接口，而是宿主 `pluginManager` 的资格判定：
+  // `updateRefusal()` 要求已安装的第三方 profile 依赖、合法 semver 版本、以自身包名
+  // 保存的注册表 spec；`listVersions` / `updateBundle` 再用
+  // `pnpm view <name>@<version> name version engines peerDependencies deprecated dsh`
+  // 读目标版本，缺 `dsh.bundle` 或 `engines.dsh` 不接纳当前引擎时更新停在 `check`。
+  // 安装方式（registry / link:）属于用户 profile，仓库无法断言；这里只钉死发布清单
+  // 能守住的字段，避免改清单时静默失去「可更新」资格。依据：dsh-plugin-manager
+  // `updateRefusal` / `versionFacts` 与 `listVersions` / `updateBundle`。
+  assert.equal(pkg.name, '@mars-sea/dsh-commandcode-provider')
+  assert.match(pkg.version ?? '', BARE_VERSION, 'version must be a bare semver for updateRefusal')
+  assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml')
+  assert.ok(pkg.engines?.dsh, 'engines.dsh decides whether a newer version can be installed')
+  for (const file of ['cordis.patch.yml', 'icon.svg', 'locale']) {
+    assert.ok(pkg.files?.includes(file), `files must ship ${file} so an updated bundle still loads`)
   }
 })

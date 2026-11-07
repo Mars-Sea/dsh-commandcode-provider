@@ -15,6 +15,7 @@ npm run build                      # 生成实际发布的 lib/ 文件
 npm run test:engine                # 逐个验证全部声明兼容的 DSH 引擎能加载插件
 npm run test:install               # 逐个验证兼容引擎的隔离安装
 npm run test:pack                  # 核对真实发布包中的全部导出入口
+npm run test:update                # 隔离 home 验证插件更新资格（见下文「插件更新资格」）
 npm pack --dry-run --ignore-scripts # 查看实际发布文件清单
 ```
 
@@ -93,6 +94,19 @@ npm pack --dry-run --ignore-scripts # 查看实际发布文件清单
    发布说明须简短、面向用户、双语：先 `## 中文`，再 `---` 分隔线与对应英文译文。
    每条用一两句话说明变化与用户收益，不写文件名、内部机制或调试过程。
    技术细节保留在 `CHANGELOG.md`；不能用仅推送标签代替发布记录。
+7. **核对新版本能被 dsh 插件更新读到。** 宿主 `pluginManager.listVersions` / `updateBundle`
+   用 `pnpm view <name>@<version> name version engines peerDependencies deprecated dsh`
+   判定目标版本；缺 `dsh.bundle` 或 `engines.dsh` 不接纳当前引擎时，更新停在 `check`
+   且 profile 不变。发版后在能访问注册表的机器上核对（`<版本>` 换成实际版本号）：
+
+   ```sh
+   npm view @mars-sea/dsh-commandcode-provider@<版本> version engines.dsh dsh.bundle.patch --json
+   npm view @mars-sea/dsh-commandcode-provider dist-tags --json
+   ```
+
+   前者字段必须齐全且 `engines.dsh` 覆盖用户当前 dsh，后者确认 `dist-tags` 的 `latest`
+   （或本次预发布对应的 tag）已指向新版本。这些字段由 `tests/package.test.ts` 的更新资格
+   断言在提交前守住；本步骤验证的是**已上传的注册表副本**，不是工作区清单。
 
 ## 四、验证边界
 
@@ -102,3 +116,12 @@ npm pack --dry-run --ignore-scripts # 查看实际发布文件清单
    未上传到 GitHub、未完成 npm 绑定、未成功执行真实发布时，不能报告可信发布已经验证。
 3. 工作流首次「仅检查」可使用已有的发布标签；实际发布必须使用尚未发布的新版本。
    完整检查需要 npm 网络，但不需要账户凭据或付费模型请求；只有真实上传使用 OIDC。
+4. `npm run test:update`（[scripts/verify-plugin-update.mjs](../../scripts/verify-plugin-update.mjs)）验证的是
+   **资格链路**，不是运行中的 Host 调用：它用 `DSH_HOME` 指向独立目录、从官方 web 模板建干净 profile、
+   从 npm 装一个较旧的已发布版本，复现 `updateRefusal()` 的资格判定，并跑与
+   `listVersions()` / `updateBundle()` 的 check 完全相同的 `pnpm view` 查询（引擎兼容性复用宿主的
+   `evaluatePluginCompatibility()`）。它**不**挂载完整 Loader 树与 HMR，因此不证明 Web 插件页的
+   「版本」区块渲染、也不证明真实的 `check → remove → install → restore` 执行。要拿这两层证据，
+   用 `--home <dir>` 保留实例、按脚本打印的命令在独立端口启动 GUI，人工点「更新」后用
+   `--home <dir> --verify-result` 断言 profile 已 `saveExact` 到目标版本。开发用的 `web` profile
+   以 `link:` 安装，宿主明确不显示版本区块，不能用它验证更新。

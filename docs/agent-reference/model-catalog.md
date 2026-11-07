@@ -228,6 +228,32 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   and has no connection to the Laguna retirement; it is an independent upstream data change that
   this sync deliberately leaves for a separate decision (CI does not run this check).
 
+  **Follow-up check (2026-11-07, CLI 1.88.4 → 1.88.5):** npm `latest` reached `1.88.5`
+  (11-06T21:18:22Z). The npm package's `CHANGELOG.md` has one entry — a `cmd login` / `/login`
+  retry when the stored API key is wrong, deleted or expired — which is CLI-side UX this plugin
+  never renders, so the pinned constant moves to `1.88.5` as a pure `x-command-code-version`
+  header sync. Static comparison of `dist/cli.mjs` finds no protocol change: 26 endpoint paths,
+  13 custom headers, the `promptCache` (5) / `reasoning_effort` (7) / `max_tokens` (12) /
+  `cache_control` (1) counts, the `/alpha/generate` call site, `buildModelGroups` /
+  `getPlanInfo` / `modelSupportsZdr` counts and the subscription map and ZDR exception set (19)
+  all match; the only new literal is `DEEPSEEK_V4_1_FLASH_ULTRAFAST`. The embedded
+  `catalogVersion` moves `b21583db…` → `d4517aa3…`, matching the live catalog: default view 95 →
+  96 and `?view=client` 109 → 110, with one new row `deepseek/deepseek-v4.1-flash-ultrafast`
+  ("+ 1 High throughput V4.1 Flash" on the models docs page) — 1M context, text + image,
+  efforts `off/low/high/max`, `minimumPlan: individual-goat`, `zdr:true`, no deal and no peak
+  schedule, `$2.40/$9.60/$0.048`, `maxOutputTokens: null`. It is catalog-first: the models,
+  pricing and go/goat/pro/max plan pages all list it. Snapshot sync: `KNOWN_PLANS` 95 → 96,
+  `KNOWN_EFFORTS` 69 → 70, `KNOWN_IMAGE_MODELS` 74 → 75 and one vendored price row;
+  `KNOWN_THINKING_MODELS` (15), `KNOWN_NON_ZDR_MODELS` (19), `KNOWN_DEALS` (4), subscriptions
+  and peak rows stay put; the generated output-limit table stays at 82 ceilings because the new
+  model has no vendor row (left to runtime learning). User decision also clears the two
+  outstanding generator drifts: `sync-model-prices.mjs` drops `claude-opus-4-6` (the 11-06
+  estimator withdrawal) and adds the new row, still 95 rows; `sync-output-limits.mjs` updates
+  the Crouton Alpha provenance comment (`1 → 2 provider(s)`, value 943718 unchanged). Both
+  `--check` runs now exit 0. Audit: 14 sources HTTP 200, 0 errors, `candidateDiffs` only the
+  three maps above. Verification: `typecheck` 0, `npm test` 1206/1206; no authenticated,
+  paid-generation or browser-render check.
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot

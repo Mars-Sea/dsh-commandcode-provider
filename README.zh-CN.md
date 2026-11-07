@@ -80,12 +80,20 @@ dsh `0.2.2-alpha.2` 自己声明 `engines.node >=24.9.0`，而本插件准入这
 
 > **pnpm 11 会拦下刚发布的新版本。** 它的 `minimumReleaseAge` 默认为 1440 分钟，发布不足一天的版本会被跳过，`@latest` 解析到**上一个**版本 —— 而且是静默的，命令照样以成功退出。想装 24 小时内发布的版本，必须写精确版本号：`@mars-sea/dsh-commandcode-provider@0.11.15`。这一点对每个 profile 都成立，包括下面的终端界面。
 
-**更新** —— 用与安装时相同的 tag，然后重启 Web 应用。每个 profile 各自更新 —— 终端界面有独立的插件列表：
+### 更新
+
+**推荐在 Web 插件页更新。** 从 npm 注册表安装的本插件会被 dsh 标为「可更新」：侧栏 **插件** → 打开本插件 → 页面下方的 **版本** 区块列出比当前版本新的版本，点 **更新** 即可；有更新时卡片显示 **可更新**、详情页显示 **更新到**。宿主先检查目标版本，再移除旧版、安装目标版本，失败会自动回滚到原版本；有 HMR（热模块替换）时新版本立即生效，没有 HMR 时提示重启。API key 存在 dsh 凭据库、配置存在 profile 的 `cordis.patch.yml`，都不随包卸载丢失。
+
+**只有从 npm 注册表、以自身包名安装的 profile 才有「版本」区块。** 用 `link:`／本地路径、Git 地址或压缩包安装的（例如开发时 `dsh plugin add /path/to/dsh-commandcode-provider`），以及安装随附的官方组合包，都不显示该区块；这类安装请用下面的命令行方式，或先卸载再按上面的注册表命令重装。版本区块默认只推荐非预发布、未弃用、且 `engines.dsh` 接纳当前 dsh 的版本，预发布版本可手动展开查看。
+
+**命令行（备用）** —— 用与安装时相同的 tag，然后重启 Web 应用。每个 profile 各自更新，终端界面有独立的插件列表：
 
 ```sh
 dsh plugin --profile web update @mars-sea/dsh-commandcode-provider@latest
 dsh plugin --profile dsh-tui update @mars-sea/dsh-commandcode-provider@latest
 ```
+
+> `dsh plugin update` 是 pnpm 透传，不是宿主的插件更新链路；上文的 `minimumReleaseAge` 同样会让它静默跳过刚发布的版本，必要时写精确版本号。
 
 ## 获取 API key 并验证
 
