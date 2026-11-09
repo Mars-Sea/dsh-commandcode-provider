@@ -438,7 +438,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   - The picker `description` is composed by `capabilityDescription()`: plan tier · active deal ·
     peak/off-peak state (`Peak`/`Half`, hourly-priced models only) · `Image` (Vision only) · context
     (`formatContext()`: `1M`/`256K`/`262K`). Text-only models show no capability marker. Do not reintroduce
-    "Text only" or "Supports image input".
+    "Text only" or "Supports image input". The display name above the description can itself be overridden
+    per catalog id via `Config.modelNames` (issue #121) — a label-only change that never touches the
+    description, the model id, the request body, pricing or peak/off-peak membership.
   - **自定义上下文长度（issue #86）**：`resolveModel()` 与 `listModels()` 宣告的窗口是
     `effectiveContextWindow(catalog, model, connection)`——`contextWindowOverrides`（按模型）→
     `contextWindow`（全局）→ 目录 `context_length`——选择器标注与宿主的 `context.contextWindow`
@@ -452,8 +454,10 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   - The picker list is **sorted free models first, then by plan tier, then name** (`compareByPlan()` in
     `src/capabilities.ts`; free = `KNOWN_DEALS` `free: true` via `isFreeModel()`, tier weights in
     `PLAN_ORDER`): FREE → Go → GOAT → Pro → Provider → Max, alphabetical within each group, unknown plans
-    last. Keep this order when changing `listModels()`. `formatContext()` renders sub-1K windows raw (never
-    `"0K"`).
+    last. Keep this order when changing `listModels()`. A `Config.modelNames` override (issue #121) applies
+    only to `LlmModelInfo.name` AFTER this sort, so the order still follows the catalog original name; it never
+    touches the model id, request body, pricing or peak/off-peak membership. `formatContext()` renders
+    sub-1K windows raw (never `"0K"`).
   - The picker also **hides models above the account's subscription tier** (`modelVisibleInPlan()`, on by
     default via `filterModelsByPlan`): the billing facts mirror the CLI's `createBilling` flow — whoami →
     orgId, then `/alpha/billing/subscriptions` (planId, honored only for `active`/`trialing`/`past_due`

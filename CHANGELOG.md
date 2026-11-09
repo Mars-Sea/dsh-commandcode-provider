@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.4] - 2026-11-09
+
+### Added
+
+- **新增按模型自定义显示名 `modelNames`（issue #121）：让外部「按显示名字符串匹配」的插件重新对得上，本插件自身的计价／峰谷／价格表／wire 一律不变。** issue 作者最初提出「希望能够在设置页面添加修改模型名称的功能，方便模型计价和峰谷判断」，随后在评论里澄清：他自己另有「峰谷提醒插件」与「缓存计价插件」，两者**按模型显示名字符串判断条件**；本插件默认在目录名后加 ` (CC)` 后缀，而上游目录 `raw.name` 自身还带 ` (latest)`（现场核实 `GET https://api.commandcode.ai/provider/v1/models` 返回 `"DeepSeek V4.1 Flash (latest)"`），两个后缀让他的插件匹配不上。因此本功能与本插件自身的计价、峰谷判定无关，只是给用户一个自定义显示名的入口，好让外部工具按名称匹配。**用户已拍板**：取「逐模型覆盖表 / 只改 `LlmModelInfo.name` / 排序与显示名解耦」——`Config.modelNames?: Record<string, string>`（键＝目录模型 id，值＝自定义显示名）只覆盖 `src/adapter.ts` `listModels()` 与 `resolveModel()` 宣告的 `LlmModelInfo.name`，`compareByPlan()` 仍按目录原名排序，改名不改变模型选择器顺序；模型 id、请求体、计价与峰谷标注、费率、价格表、`commandcode/prices` wire、Remote 描述符数量一律不变。**用户可见默认值**：未设置／空表时名称与现状完全一致，即 `${catalogName} (CC)`（上游 ` (latest)` 保留）；未知目录模型（无条目）保持显示裸 id。**作用范围**：设置页目录、模型分析、模型搜索仍显示目录原名——`listModels()` 新增可选 `catalogNames` 开关，`catalogForEditors()`（`commandcode/models`）与 `createAnalyticsReader()` 用它取上游目录名，替代原先各自 `replace(/ \(CC\)$/)` 去后缀的写法（自定义名不会被误删后缀）；Web 设置页「模型与上下文」分组新增一张按模型的名称覆盖表（模型下拉 + 名称输入 + 移除 + 添加，复用 `cc-context*` 表格样式），不进 `SECTION_FIELDS`、走独立草稿，空名称行保存时丢弃，整表一次提交，清空写 `{}`；TUI 设置页一期不接入（沿用 #86 `contextWindow` 先例）。配置示例写入两份 README 的 `llm-commandcode` 段：`modelNames: { "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash" }`。清洗与生效判定收在依赖自由的纯模块 `src/model-names.ts`（`readModelNames()` 丢弃非对象／空键／非字符串／纯空白并返回新对象或 `undefined`；`effectiveModelName()` 覆盖值优先，否则 `${catalogName} (CC)`，无目录名回落裸 id），Host 与 client 共用，新测试文件 `tests/model-names.test.ts`。**版本**：用户拍板本次按补丁版 **0.17.4** 发布；新增用户可见功能按仓库既有口径本应走 minor（`0.18.0`），这次的取舍已在《决策记录》第十二章如实记录，既定口径不变、后续同类功能仍按 minor 取号。**改动文件**：源码与测试侧 `src/model-names.ts`（新增）、`src/index.ts`、`src/adapter.ts`、`src/analytics-history.ts`、Web 设置页相关模块与 locale、`tests/model-names.test.ts`（新增）及五个既有测试夹具；构建产物 `lib/`；文档侧两份 README、`docs/agent-reference/` 下四份参考文档（客户端与设置、模型目录、适配器协议、仓库地图）、`docs/决策记录.md`、`docs/提交历史.md`、`CHANGELOG.md`。**验证**：本地 `npm run typecheck` 退出码 0；`npm test` **1220／1220**；`npm run build` 两段通过、`lib/` 已重建且二次构建逐字节一致；`npm run test:engine` **7/7**（`0.2.1-rc.2`～`0.2.2-rc.1`）。**未做**：真实账号登录、付费生成、浏览器渲染。
+
 ## [0.17.3] - 2026-11-07
 
 ### Changed

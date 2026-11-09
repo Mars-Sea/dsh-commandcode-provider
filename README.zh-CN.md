@@ -31,6 +31,7 @@
 - **插件包**：一条 `dsh plugin add` 命令安装 `commandcode` provider 路由，带实时模型目录。
 - **设置页**：账户列表（密钥、网页登录、实时额度、专用模型）、模型显示、隐私开关与连接参数。
 - **目录带标注**：模型选择器里标注套餐档位、折扣/`FREE` 徽章、峰谷时段、图片支持与上下文长度，免费模型置顶。
+- **自定义模型显示名**：按目录模型 id 覆盖显示名，让按名称字符串匹配的外部插件（峰谷提醒、缓存计价）能对上；模型 id、请求体、计价与选择器顺序都不变。
 - **多账户轮换**：一个账户用量打满后自动切换到下一个；可固定优先账户，也可把模型指派给专用账户。
 - **浏览器内登录获取 key**：一键发起官方授权流程，完成后密钥自动写入本机凭据服务。
 - **套餐与配额面板**：可选的侧边栏卡片，显示当前服务账号的套餐、5 小时 / 每周两个配额窗口、余额与重置时间。
@@ -126,7 +127,7 @@ dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@latest
 
 `/model` 会列出所有已注册的 provider，Command Code 的实时目录连同套餐/优惠/上下文标注一起出现；`/commandcode` 用量面板在终端里同样可用。
 
-**填写 API key。** 终端没有网页版 Models 页面，所以插件会在终端设置页里声明自己的页面 —— **`/settings` → Command Code** —— 包含 API key、API 地址、隐藏套餐外模型、当前账号和命令语言。key 字段是只写的：它只显示"是否已配置"，输入的内容写进凭据库，不会写进任何 settings 文档。同一页面还把整个模型目录列成勾选框，按套餐档位分组、免费模型排在最前；默认全部勾选 —— 未设置白名单就等于"显示全部模型"，选择会以「单模型覆盖」的形式保存在网页端编辑的 `visibleModels` 列表旁边，两个界面可以混用。
+**填写 API key。** 终端没有网页版 Models 页面，所以插件会在终端设置页里声明自己的页面 —— **`/settings` → Command Code** —— 包含 API key、API 地址、隐藏套餐外模型、当前账号和命令语言。key 字段是只写的：它只显示"是否已配置"，输入的内容写进凭据库，不会写进任何 settings 文档。同一页面还把整个模型目录列成勾选框，按套餐档位分组、免费模型排在最前；默认全部勾选 —— 未设置白名单就等于"显示全部模型"，选择会以「单模型覆盖」的形式保存在网页端编辑的 `visibleModels` 列表旁边，两个界面可以混用。自定义模型显示名（`modelNames`）目前仅 Web 设置页可配置，终端设置页暂未接入（沿用 #86 `contextWindow` 先例）。
 
 也可以在终端外配置 key。凭据解析先命中者生效，顺序如下：
 
@@ -204,6 +205,7 @@ llm-commandcode:
   # contextWindowOverrides:              # 可选：按模型的上下文长度；优先于 contextWindow
   #   deepseek/deepseek-v4-pro: 65536
   # maxOutputTokens: 65536               # 可选：单轮输出上限；0 = 不发送 max_tokens
+  # modelNames: { "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash" }   # 可选：按目录 id 自定义显示名
 ```
 
 ### 上下文、输出与图片调节
@@ -213,6 +215,7 @@ llm-commandcode:
 | `contextWindow`、`contextWindowOverrides` | 替换模型目录里的 `context_length` —— 宿主据此计量上下文并触发压缩（issue #86）。目录值偏大时会话会撞上 `context_length_exceeded`，偏小时又会过早压缩，用它把窗口调成模型真实容量。取值必须是 1 – 10 000 000 的整数 token，接受 `32K`/`1M` 简写。 |
 | `maxOutputTokens` | 单轮 `max_tokens` 上限。插件每次请求本来就带 `max_tokens`，取「模型公布上限、运行时学到的上限、网关上限 131 072」三者最小 —— 被动硬限制，到点平台直接切断，模型收不到任何提示。填正整数只能**收紧**；填 `0` 则**不发送**该字段，这是「长回答写到一半被切断」的解法（`0` 只对 CLI 与 OpenAI 两条传输生效，Claude 走的 Anthropic Messages 端点必填该字段）。留空表示**清除**该配置，不是写入 0。 |
 | `offloadSeenImagesForCache` | 在 CLI 传输上，即使此前所有请求消息逐字节一致，新图片也可能让服务端报告的缓存命中量退回第一张历史图片处。开启后，同一模型看过图片并回复后，旧图会被替换成稳定文字占位，后续文本更容易保持缓存。它只能缓解费用上涨，未修复 Command Code 服务端的多模态缓存行为；模型如需重新查看已 offload 的图片，必须重新读取原文件。默认关闭。[实测证据](docs/issue-64-cache-review.md)。 |
+| `modelNames` | 可选，「目录模型 id → 自定义显示名」的映射；只改选择器显示名 `LlmModelInfo.name`，用于让**按模型显示名字符串匹配**的外部插件（峰谷提醒、缓存计价）重新匹配上——本插件默认加的 ` (CC)` 后缀与上游目录 `raw.name` 自带的 ` (latest)` 后缀正是它们匹配不上的原因。**默认未设置／空表时名称与现状完全一致**：`${catalogName} (CC)`（上游 ` (latest)` 保留）；未知目录模型仍显示裸 id。模型 id、请求体、计价与峰谷标注、费率、价格表、`commandcode/prices` wire、Remote 描述符数量一律不变；`compareByPlan()` 仍按目录原名排序，改名不改变模型选择器顺序。仅 Web 设置页可配置，终端设置页暂未接入。 |
 
 ## 联网搜索
 

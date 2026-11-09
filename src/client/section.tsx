@@ -196,6 +196,8 @@ export interface CommandCodeSettingsProps {
   clearVisibleModels(): void
   /** Stage the whole per-model context-length map (one entry per row, issue #86). */
   editContextWindowOverrides(next: Record<string, string>): void
+  /** Stage the whole per-model display-name map (one entry per row, issue #121). */
+  editModelNames(next: Record<string, string>): void
 }
 
 /**
@@ -269,11 +271,12 @@ export function invalidGroups(state: Pick<SettingsPageState, AdvancedField | Mod
 
 /**
  * "N customized" on the Models & context heading: its staged fields that
- * differ from the default, plus one per per-model context override (each row
- * is a customization the user made).
+ * differ from the default, plus one per per-model context override and one per
+ * custom model name (each row is a customization the user made).
  */
-export function modelsOverriddenCount(state: Pick<SettingsPageState, ModelsField | 'contextWindowOverrides'>): number {
-  return MODELS_FIELDS.filter((field) => state[field].overridden).length + state.contextWindowOverrides.length
+export function modelsOverriddenCount(state: Pick<SettingsPageState, ModelsField | 'contextWindowOverrides' | 'modelNames'>): number {
+  return MODELS_FIELDS.filter((field) => state[field].overridden).length
+    + state.contextWindowOverrides.length + state.modelNames.length
 }
 
 /** "N customized" on the Advanced heading. */
@@ -1111,10 +1114,11 @@ export interface FoldProps {
  * Accounts; the heading then summarizes the allowlist size and how much of the
  * group is customized.
  */
-function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, onOverrides, expanded, onToggle }: FormCardProps & FoldProps & {
+function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, onOverrides, onNames, expanded, onToggle }: FormCardProps & FoldProps & {
   onSelect(ids: string[]): void
   onClear(): void
   onOverrides(next: Record<string, string>): void
+  onNames(next: Record<string, string>): void
 }) {
   return (
     <FoldableGroup
@@ -1154,6 +1158,7 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, on
         onReset={onReset}
         onOverrides={onOverrides}
       />
+      <ModelNamesCard state={state} disabled={disabled} t={t} onNames={onNames} />
     </FoldableGroup>
   )
 }
@@ -1311,6 +1316,114 @@ function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormC
                 <Icon name="close" />
               </button>
               {row.invalid ? <p className="cc-rowError cc-contextError">{invalidCopy(row.invalidReason, t, 'context')}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+/**
+ * 自定义模型名称（issue #121）：按目录模型 id 覆盖选择器里的显示名。
+ *
+ * 报告者另有「峰谷提醒」「缓存计价」插件按模型名称字符串判断条件，而默认
+ * 显示名带 ` (CC)` 后缀、上游目录名还可能带 ` (latest)`，两者都让匹配落空。
+ * 这里只覆盖 `LlmModelInfo.name`：模型 id、请求体里的 model、计价、峰谷、
+ * 选择器排序（仍按目录原名）全都不变。空名称行保存时丢弃，所以任何一行
+ * 都不会阻止整批保存。
+ */
+function ModelNamesCard({ state, disabled, t, onNames }: Pick<FormCardProps, 'state' | 'disabled' | 't'> & {
+  onNames(next: Record<string, string>): void
+}) {
+  const rows = state.modelNames
+  const used = new Set(rows.map((row) => row.model))
+  const available = allowlistedModels(state.catalogModels, state.visibleModels, state.visibleModelsAll)
+    .filter((model) => !used.has(model.id))
+  const asMap = (): Record<string, string> => Object.fromEntries(rows.map((row) => [row.model, row.text]))
+  const setText = (model: string, text: string) => onNames({ ...asMap(), [model]: text })
+  const setModel = (from: string, to: string) => {
+    if (to === '' || to === from || used.has(to)) return
+    const next: Record<string, string> = {}
+    for (const row of rows) next[row.model === from ? to : row.model] = row.text
+    onNames(next)
+  }
+  const removeRow = (model: string) => {
+    const next = asMap()
+    delete next[model]
+    onNames(next)
+  }
+  const addRow = () => {
+    const model = available[0]
+    if (model === undefined) return
+    onNames({ ...asMap(), [model.id]: '' })
+  }
+  const labelOf = (model: string): string => {
+    const entry = state.catalogModels.find((candidate) => candidate.id === model)
+    // 目录里已不存在的 id 仍保留在表里（不静默丢掉用户的设置），标注为已下架。
+    return entry === undefined ? `${model} · ${t('modelStale')}` : `${entry.name} (${model})`
+  }
+  return (
+    <>
+      <SettingRow
+        title={t('modelNamesTitle')}
+        description={<p>{t('modelNamesHint')}</p>}
+        control={
+          <PageButton
+            variant="outline"
+            size="sm"
+            icon={<Icon name="plus" className="cc-icon cc-btnIcon" />}
+            disabled={disabled || available.length === 0}
+            onClick={addRow}
+          >
+            {t('modelNamesAdd')}
+          </PageButton>
+        }
+      />
+      {state.catalogFailed ? <p className="cc-groupDesc">{t('modelNamesNoCatalog')}</p> : null}
+      {rows.length > 0 ? (
+        <div className="cc-contextTable">
+          <div className="cc-contextHead">
+            <span>{t('modelNamesModel')}</span>
+            <span>{t('modelNamesValue')}</span>
+            <span aria-hidden="true" />
+          </div>
+          {rows.map((row) => (
+            <div className="cc-contextItem" key={row.model}>
+              <span className="cc-contextSelect">
+                <select
+                  className="cc-fieldInput cc-contextModel"
+                  value={row.model}
+                  aria-label={t('modelNamesModel')}
+                  disabled={disabled}
+                  onChange={(event) => setModel(row.model, event.target.value)}
+                >
+                  <option value={row.model}>{labelOf(row.model)}</option>
+                  {available.map((model) => (
+                    <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
+                  ))}
+                </select>
+                <Icon name="chevron" className="cc-icon cc-contextCaret" />
+              </span>
+              <span className="cc-unitBox cc-unitBoxText">
+                <input
+                  className="cc-fieldInput"
+                  type="text"
+                  aria-label={t('modelNamesValue')}
+                  value={row.text}
+                  disabled={disabled}
+                  onChange={(event) => setText(row.model, event.target.value)}
+                />
+              </span>
+              <button
+                type="button"
+                className="cc-iconButton"
+                aria-label={t('modelNamesRemove')}
+                disabled={disabled}
+                onClick={() => removeRow(row.model)}
+              >
+                <Icon name="close" />
+              </button>
             </div>
           ))}
         </div>
@@ -2785,6 +2898,7 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onSelect={props.editVisibleModels}
         onClear={props.clearVisibleModels}
         onOverrides={props.editContextWindowOverrides}
+        onNames={props.editModelNames}
       />
       <PrivacyCard {...form} {...foldProps('privacy')} />
       <IntegrationsCard {...form} {...foldProps('integrations')} status={status.snapshot} probe={status.probe} onRetryProbe={status.retry} />

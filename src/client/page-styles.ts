@@ -144,6 +144,8 @@ export const PAGE_CSS = `
 .cc-unitBoxInvalid{border-color:var(--dsw-alias-state-error-primary)}
 .cc-unitBox:has(>.cc-fieldInput:disabled){opacity:.5}
 .cc-unitBox>.cc-fieldInput{flex:1;width:auto;height:30px;border:0;border-radius:0;background:0 0;outline:none;text-align:right;font-variant-numeric:tabular-nums}
+/* 名称是文本而不是数字：沿用同一个输入框外形，但左对齐、不用等宽数字（issue #121）。 */
+.cc-unitBoxText>.cc-fieldInput{text-align:left;font-variant-numeric:normal}
 .cc-unit{flex:none;padding:0 10px 0 2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;white-space:nowrap}
 /* A customized field's marker on its title line: the badge, then a 20px
  * round reset button. Reset lives here rather than after the control, so no

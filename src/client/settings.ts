@@ -3,6 +3,7 @@
 
 import { MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS } from '../timeout-limits.ts'
 import { modelIsVisible, readVisibility } from '../model-visibility.ts'
+import { readModelNames } from '../model-names.ts'
 import { CONTEXT_WINDOW_MAX, CONTEXT_WINDOW_MIN, isValidContextWindow, readContextWindowOverrides } from '../context-window.ts'
 import { MAX_OUTPUT_TOKEN_LIMIT, OMIT_OUTPUT_TOKENS, isValidMaxOutputTokens } from '../output-budget.ts'
 import type { SettingsMutationReport, SettingsPathOp } from './settings-scope.ts'
@@ -92,6 +93,19 @@ export interface ContextOverrideRow {
   invalid: boolean
   /** `format`, `tooSmall`/`tooLarge`; undefined when valid. */
   invalidReason: InvalidReason | undefined
+}
+
+/**
+ * One custom model-name row (issue #121): the catalog id plus the exact display
+ * name the model picker should show. Blank text means "no override once saved"
+ * (the row drops out); any non-blank text is valid — the value is a label, not
+ * a number, so a row can never block the save.
+ */
+export interface ModelNameRow {
+  /** Catalog model id; one override per model. */
+  model: string
+  /** Live draft text the input shows. */
+  text: string
 }
 
 /**
@@ -208,6 +222,8 @@ export interface SettingsPageState {
   maxOutputTokens: StagedField
   /** Per-model context-length rows: staged draft or stored values, one per model. */
   contextWindowOverrides: ContextOverrideRow[]
+  /** Custom display-name rows: staged draft or stored values, one per model (issue #121). */
+  modelNames: ModelNameRow[]
   /** The catalog the model editors offer (Host-side, empty until loaded). */
   catalogModels: CatalogModelOption[]
   /** Whether the catalog fetch failed (editors fall back to typing). */
@@ -465,6 +481,8 @@ export class CommandCodeSettingsController {
   private visibleModelsDraft: string[] | undefined = undefined
   /** Staged per-model context-length overrides as raw text (undefined = no draft, issue #86). */
   private contextWindowOverridesDraft: Record<string, string> | undefined = undefined
+  /** Staged per-model display names as raw text (undefined = no draft, issue #121). */
+  private modelNamesDraft: Record<string, string> | undefined = undefined
   private catalogModels: CatalogModelOption[] = []
   private catalogFailed = false
   private saving = false
@@ -567,9 +585,10 @@ export class CommandCodeSettingsController {
       contextWindow: this.field('contextWindow'),
       maxOutputTokens: this.field('maxOutputTokens'),
       contextWindowOverrides: this.effectiveContextWindowOverrides(),
+      modelNames: this.effectiveModelNames(),
       catalogModels: this.catalogModels,
       catalogFailed: this.catalogFailed,
-      dirty: plan.length > 0 || this.visibleModelsDirty() || this.contextWindowOverridesDirty(),
+      dirty: plan.length > 0 || this.visibleModelsDirty() || this.contextWindowOverridesDirty() || this.modelNamesDirty(),
       invalid: plan.some((item) => item.change === undefined)
         || this.effectiveContextWindowOverrides().some((row) => row.invalid),
       saving: this.saving,
@@ -620,10 +639,11 @@ export class CommandCodeSettingsController {
   /** Discard every staged edit. */
   discard(): void {
     if (this.staged.size === 0 && this.visibleModelsDraft === undefined
-      && this.contextWindowOverridesDraft === undefined && !this.failed) return
+      && this.contextWindowOverridesDraft === undefined && this.modelNamesDraft === undefined && !this.failed) return
     this.staged.clear()
     this.visibleModelsDraft = undefined
     this.contextWindowOverridesDraft = undefined
+    this.modelNamesDraft = undefined
     this.failed = false
     this.saveResult = undefined
     this.publish()
@@ -647,13 +667,16 @@ export class CommandCodeSettingsController {
     const submitted = new Map(this.staged)
     const submittedVisible = this.visibleModelsDraft
     const submittedContextOverrides = this.contextWindowOverridesDraft
+    const submittedModelNames = this.modelNamesDraft
     const plan = this.plan()
     const visibleDirty = this.visibleModelsDirty()
     const contextOverrides = this.parsedContextWindowOverrides()
     const contextOverridesDirty = this.contextWindowOverridesDirty()
+    const modelNames = this.parsedModelNames()
+    const modelNamesDirty = this.modelNamesDirty()
     // 一个无法解析的按模型覆盖行与越界的普通字段一样整体阻止本次保存，
     // 而不是把其余字段写下去、留下这行草稿。
-    if ((plan.length === 0 && !visibleDirty && !contextOverridesDirty)
+    if ((plan.length === 0 && !visibleDirty && !contextOverridesDirty && !modelNamesDirty)
       || plan.some(item => item.change === undefined) || contextOverrides.invalid) return
     const ops = plan.flatMap(item => typeof item.change === 'object' ? [item.change] : [])
     const key = plan.find(item => item.field === 'apiKey')?.change
@@ -664,6 +687,7 @@ export class CommandCodeSettingsController {
     const completion = this.writer.submit({ kind: 'save', ops,
       ...(visibleDirty ? { visibleModels: submittedVisible ?? [] } : {}),
       ...(contextOverridesDirty ? { contextWindowOverrides: contextOverrides.values } : {}),
+      ...(modelNamesDirty ? { modelNames } : {}),
       ...(typeof key === 'string' ? { key } : {}),
     })
     this.publish()
@@ -681,6 +705,7 @@ export class CommandCodeSettingsController {
     }
     if ((outcome.config === 'confirmed' || writeCompleted(outcome)) && this.visibleModelsDraft === submittedVisible) this.visibleModelsDraft = undefined
     if ((outcome.config === 'confirmed' || writeCompleted(outcome)) && this.contextWindowOverridesDraft === submittedContextOverrides) this.contextWindowOverridesDraft = undefined
+    if ((outcome.config === 'confirmed' || writeCompleted(outcome)) && this.modelNamesDraft === submittedModelNames) this.modelNamesDraft = undefined
     this.publish()
     return outcome
   }
@@ -712,6 +737,50 @@ export class CommandCodeSettingsController {
     this.failed = false
     this.saveResult = undefined
     this.publish()
+  }
+
+  /**
+   * Stage the whole per-model display-name map (issue #121): one entry per row,
+   * the raw text the input shows. Blank rows drop out on save; there is no
+   * numeric parsing here, so a name row can never block the save. The map is
+   * submitted as ONE `set` op together with every other staged field.
+   */
+  editModelNames(next: Record<string, string>): void {
+    this.modelNamesDraft = { ...next }
+    this.failed = false
+    this.saveResult = undefined
+    this.publish()
+  }
+
+  /** The stored names, already cleaned by the shared rule. */
+  private storedModelNames(): Record<string, string> {
+    return { ...readModelNames(this.sectionValue('modelNames')) }
+  }
+
+  /** Effective rows: the staged draft verbatim, or the stored values. */
+  private effectiveModelNames(): ModelNameRow[] {
+    const source: Record<string, string> = this.modelNamesDraft ?? this.storedModelNames()
+    return Object.entries(source)
+      .filter(([model]) => model !== '')
+      .map(([model, text]) => ({ model, text }))
+  }
+
+  /** The draft parsed for the write: blank rows drop out, names are trimmed. */
+  private parsedModelNames(): Record<string, string> {
+    const values: Record<string, string> = {}
+    for (const row of this.effectiveModelNames()) {
+      const name = row.text.trim()
+      if (name !== '') values[row.model] = name
+    }
+    return values
+  }
+
+  private modelNamesDirty(): boolean {
+    if (this.modelNamesDraft === undefined) return false
+    const values = this.parsedModelNames()
+    const stored = this.storedModelNames()
+    const keys = new Set([...Object.keys(values), ...Object.keys(stored)])
+    return [...keys].some((model) => values[model] !== stored[model])
   }
 
   /** The stored per-model overrides, already cleaned by the shared validity rule. */

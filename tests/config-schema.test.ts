@@ -106,3 +106,14 @@ test('程序化构造越过配置校验时，非法输出预算回落到「未�
   assert.equal(resolveAdapterOptions({ maxOutputTokens: 64_000 }).maxOutputTokens, 64_000)
   assert.equal(resolveAdapterOptions({}).maxOutputTokens, undefined)
 })
+
+test('自定义模型名称走 volatile 配置，程序化构造另行清洗（issue #121）', () => {
+  const config = unwrapVolatileConfig(Config({ modelNames: { 'deepseek/deepseek-v4.1-flash': 'DeepSeek V4.1 Flash' } }))
+  assert.deepEqual(config.modelNames, { 'deepseek/deepseek-v4.1-flash': 'DeepSeek V4.1 Flash' })
+  // 默认空表：解析结果里根本没有这个字段，显示名沿用目录名 + (CC)。
+  assert.equal(resolveAdapterOptions(unwrapVolatileConfig(Config({}))).modelNames, undefined)
+  const dirty = {
+    modelNames: { good: '  Name  ', blank: '   ', number: 42, '': 'blank id' },
+  } as unknown as Config
+  assert.deepEqual(resolveAdapterOptions(dirty).modelNames, { good: 'Name' })
+})

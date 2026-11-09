@@ -36,7 +36,7 @@ export interface SettingsWriteResult {
 }
 
 export type SettingsWriteIntent =
-  | { kind: 'save'; ops: readonly SettingsPathOp[]; visibleModels?: readonly string[]; contextWindowOverrides?: Record<string, number>; key?: string }
+  | { kind: 'save'; ops: readonly SettingsPathOp[]; visibleModels?: readonly string[]; contextWindowOverrides?: Record<string, number>; modelNames?: Record<string, string>; key?: string }
   | { kind: 'rename'; ref: string; label: string }
   | { kind: 'remove' | 'cleanup'; ref: string }
   | { kind: 'key'; target: string; value?: string }
@@ -115,6 +115,11 @@ export class SettingsWriter {
     // 用户层以遮蔽基础层，而不是 unset 让基础层重新露出）。
     if (owned.kind === 'save' && owned.contextWindowOverrides !== undefined) {
       ops.push({ op: 'set', path: ['contextWindowOverrides'], value: owned.contextWindowOverrides })
+    }
+    // 自定义模型名称（issue #121）：同样是整表一次写入，清空写 `{}` 以遮蔽
+    // 基础层，而不是 unset 让组合配置的旧名称重新露出。
+    if (owned.kind === 'save' && owned.modelNames !== undefined) {
+      ops.push({ op: 'set', path: ['modelNames'], value: owned.modelNames })
     }
     const baseline = new Map(ops.map(op => [op.path[0]!, structuredClone(fieldBaseline(snapshot, op.path[0]!))]))
     const defaultRef = (owned.kind === 'save' && owned.key !== undefined) || (owned.kind === 'key' && owned.target === 'default')

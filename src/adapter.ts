@@ -25,6 +25,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { IDENTITY_ENCODING_HEADER } from './response-encoding.ts'
 import { MAX_TIMEOUT_SECONDS } from './timeout-limits.ts'
 import { modelIsVisible } from './model-visibility.ts'
+import { effectiveModelName } from './model-names.ts'
 import { effectiveContextWindow } from './context-window.ts'
 import { applyMaxOutputTokens, omitOutputTokens, MAX_OUTPUT_TOKEN_LIMIT } from './output-budget.ts'
 import { readableErrorText } from './readable-error.ts'
@@ -1544,6 +1545,12 @@ export interface CommandCodeConnectionOptions {
    */
   modelVisibility?: Readonly<Record<string, boolean>> | undefined
   /**
+   * 自定义模型名称（issue #121）：按目录模型 id 覆盖 `LlmModelInfo.name`。
+   * 只影响模型选择器里的显示文本，不改 id、请求体里的 `model`、计价或峰谷；
+   * 未设置时沿用 `${catalogName} (CC)`。排序仍按目录原名，与此表无关。
+   */
+  modelNames?: Readonly<Record<string, string>> | undefined
+  /**
    * 自定义上下文长度（全局值，issue #86）：对没有 {@link contextWindowOverrides}
    * 条目的目录模型，宣告给宿主的上下文窗口改用此值而非目录的
    * `context_length`；选择器标注、`defaultMaxTokens` 预算同样跟随。
@@ -2714,9 +2721,21 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     return requestImageTarget(image)
   }
 
+  /**
+   * List the models the picker (or a settings-page editor) may offer.
+   *
+   * @param opts.unfiltered - serve the whole catalog regardless of plan/visibility
+   *   filters (the settings page's model editors).
+   * @param opts.catalogNames - return the upstream catalog name verbatim, with
+   *   neither the ` (CC)` marker nor a `modelNames` override. The settings-page
+   *   catalog endpoint and the model-analytics reader need the ORIGINAL name for
+   *   their dropdowns/reports, so the custom display name stays confined to the
+   *   model picker (issue #121). Optional so the host's `_provider`-only call
+   *   keeps its shape.
+   */
   override async listModels(
     provider: string,
-    opts?: { unfiltered?: boolean },
+    opts?: { unfiltered?: boolean; catalogNames?: boolean },
   ): Promise<readonly LlmModelInfo[]> {
     const connection = { ...this.deps.options() }
     // The picker and the settings page's filter editor are read-only surfaces,
@@ -2746,7 +2765,12 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       return {
         provider,
         id: model.id,
-        name: `${model.name} (CC)`,
+        // 显示名只覆盖模型选择器：id、请求体与所有按 id 的快照都不动
+        //（issue #121）。设置页目录与模型分析要目录原名（catalogNames），
+        // 排序已在 map 之前按目录原名完成。
+        name: opts?.catalogNames === true
+          ? model.name
+          : effectiveModelName(model.name, model.id, connection),
         // The picker renders `description` under the model name: plan tier,
         // active deal, Image marker for Vision models, and context window —
         // the CUSTOM one when a context-length override applies (issue #86).
@@ -2761,8 +2785,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       }
     }
     // Unfiltered: the settings page's catalog endpoint serves the full catalog
-    // so the filter editor can always offer every model.
-    if (opts?.unfiltered === true) return catalog.map(toInfo).sort(compareByPlan)
+    // so the filter editor can always offer every model. Sort on the CATALOG
+    // rows (before the display name is applied) so custom names cannot reorder
+    // the picker (issue #121).
+    if (opts?.unfiltered === true) return [...catalog].sort(compareByPlan).map(toInfo)
     // Plan filter: hide models no account in the pool can run. Fails open —
     // a billing-fetch problem, an unknown plan, or a positive on-demand
     // balance all keep the catalog visible, and the server remains the final
@@ -2785,14 +2811,16 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const visible = connection.visibleModels
     const allow = Array.isArray(visible) ? visible.filter((id) => typeof id === 'string' && id !== '') : []
     const overrides = connection.modelVisibility
+    // The picker renders rows in the order returned: sort by plan tier
+    // (Go first, … Provider last) so the models a Go-plan user can actually
+    // use lead the list, then alphabetically within each tier. Sorting happens
+    // on the CATALOG rows, before `toInfo` applies a custom display name, so
+    // renaming a model never changes its position (issue #121).
     return catalog
       .filter((model) => modelVisibleForAnyAccount(model.id, accesses))
       .filter((model) => modelIsVisible(model.id, allow, overrides))
-      .map(toInfo)
-      // The picker renders rows in the order returned: sort by plan tier
-      // (Go first, … Provider last) so the models a Go-plan user can actually
-      // use lead the list, then alphabetically within each tier.
       .sort(compareByPlan)
+      .map(toInfo)
   }
 
   /**
@@ -2843,7 +2871,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     return {
       provider,
       id: model,
-      name: entry ? `${entry.name} (CC)` : model,
+      name: effectiveModelName(entry?.name, model, connection),
       description: capabilityDescription(model, contextWindow),
       inputModalities: vision ? (['text', 'image'] as const) : (['text'] as const),
       // Both Command Code transports send the complete active tool declaration

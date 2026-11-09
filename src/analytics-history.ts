@@ -59,10 +59,14 @@ export function createAnalyticsReader(ctx: Context, adapter: Pick<CommandCodeAda
     busy = true
     try {
       return await readAnalyticsHistory(history, query, async () => {
-        const available = await adapter.listModels('commandcode')
+        // `catalogNames` gives the upstream catalog name verbatim, so neither
+        // the ` (CC)` marker nor a `modelNames` override leaks into the report
+        // (issue #121) — the analytics names stay stable while the picker label
+        // can be customized.
+        const available = await adapter.listModels('commandcode', { catalogNames: true })
         return Promise.all(available.map(async m => {
           const resolved = await adapter.resolveModel('commandcode', m.id)
-          return { id: m.id, name: m.name.replace(/ \(CC\)$/, ''), contextWindow: resolved.context?.contextWindow ?? null, images: resolved.inputModalities?.includes('image') ?? false, efforts: [...(KNOWN_EFFORTS[m.id] ?? [])] }
+          return { id: m.id, name: m.name, contextWindow: resolved.context?.contextWindow ?? null, images: resolved.inputModalities?.includes('image') ?? false, efforts: [...(KNOWN_EFFORTS[m.id] ?? [])] }
         }))
       }, signal)
     } finally { busy = false }

@@ -31,6 +31,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **Plugin bundle** — one `dsh plugin add` installs a `commandcode` provider route with the live model catalog.
 - **Settings page** — accounts (keys, browser sign-in, live quota, dedicated models), model visibility, privacy switches, connection options.
 - **Annotated catalog** — plan tier, deal/`FREE` badge, peak/off-peak, image support and context window in the picker; free models first.
+- **Custom model names** — override a model's display name by catalog id so external tools that match on the name string (peak-hour reminders, cache-pricing plugins) keep working; the model id, request body, pricing and picker order are unchanged.
 - **Multi-account rotation** — an exhausted account hands over to the next one; pin a preferred account or route models to dedicated ones.
 - **Browser sign-in** — run the official authorization flow from the settings page; the approved key lands in the local credential store.
 - **Plans & quota panel** — optional sidebar card with the serving account's plan, 5-hour and weekly windows, balances and reset times.
@@ -126,7 +127,7 @@ Then pick the provider in the model selector, or name it directly:
 
 `/model` lists every registered provider, with the live catalog and its plan/deal/context annotations; the `/commandcode` dashboard works there too.
 
-**Entering the key.** The TUI has no web Models page, so the plugin declares its own page — **`/settings` → Command Code** — with the API key, API base, out-of-plan filter, active account and command language. The key field is write-only: it shows whether a key is configured and writes what you type to the credential store, never to a settings document. The same page lists the whole catalog as checkboxes grouped by plan tier, free models first; everything starts checked, and the choice is stored as per-model overrides next to the `visibleModels` list the web page edits.
+**Entering the key.** The TUI has no web Models page, so the plugin declares its own page — **`/settings` → Command Code** — with the API key, API base, out-of-plan filter, active account and command language. The key field is write-only: it shows whether a key is configured and writes what you type to the credential store, never to a settings document. The same page lists the whole catalog as checkboxes grouped by plan tier, free models first; everything starts checked, and the choice is stored as per-model overrides next to the `visibleModels` list the web page edits. Custom display names (`modelNames`) are configurable on the Web settings page only for now; the terminal settings page does not expose them yet (the same boundary as `contextWindow`, issue #86).
 
 Alternatively set the key outside the TUI. The first match wins:
 
@@ -204,6 +205,7 @@ llm-commandcode:
   # contextWindowOverrides:              # optional: per-model context lengths; wins over contextWindow
   #   deepseek/deepseek-v4-pro: 65536
   # maxOutputTokens: 65536               # optional: per-turn output limit; 0 sends no max_tokens
+  # modelNames: { "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash" }   # optional: display-name overrides by catalog id
 ```
 
 ### Context, output and image tuning
@@ -213,6 +215,7 @@ llm-commandcode:
 | `contextWindow`, `contextWindowOverrides` | Replace the catalog `context_length` the harness meters and compacts on (issue #86). Use it when the catalog over-reports the window (sessions then fail with `context_length_exceeded`) or under-reports it (sessions compact too early). Whole tokens in 1 – 10,000,000; `32K`/`1M` shorthand accepted. |
 | `maxOutputTokens` | Per-turn `max_tokens` cap. Every request already carries `max_tokens`, resolved as the smallest of the model's published ceiling, the runtime-learned ceiling and the gateway cap of 131,072 — a passive hard limit that cuts the answer with no warning to the model. A positive number can only **tighten** it; `0` sends **no** field at all, which is the fix for answers cut off mid-sentence (`0` affects the CLI and OpenAI transports only; Claude's Anthropic Messages endpoint requires the field). An empty field clears the setting — it is not the same as writing `0`. |
 | `offloadSeenImagesForCache` | On the CLI transport a new image can make the reported prompt cache retreat to the first historical image even when every previous request message is byte-identical. Enabling it replaces an older image with a stable text placeholder once this model has answered with it, so later text stays cached without replaying old pixels. It mitigates the cost spike but does not repair Command Code's multimodal cache behavior, and the model cannot inspect an offloaded image again without rereading the source file. Off by default. [Live evidence](docs/issue-64-cache-review.md). |
+| `modelNames` | Optional map of catalog model id → custom display name; only the picker label (`LlmModelInfo.name`) changes, so external tools that match on the model name string (peak-hour reminders, cache-pricing plugins) can be made to line up — our default ` (CC)` suffix and upstream's ` (latest)` suffix are what break them. **Unset or empty (the default) keeps the name exactly as today: `${catalogName} (CC)`**, with any upstream ` (latest)` preserved; an unknown model with no catalog row still shows the bare id. The model id, request body, pricing, peak labels, price table, `commandcode/prices` wire and Remote descriptor count are unchanged; sorting still uses the catalog original name, so renaming never reorders the picker. Configurable on the Web settings page only for now — the terminal settings page is not wired up. |
 
 ## Web search
 

@@ -163,6 +163,12 @@ interface CommandCodeConnectionOptions {
    */
   modelVisibility?: Readonly<Record<string, boolean>> | undefined;
   /**
+   * 自定义模型名称（issue #121）：按目录模型 id 覆盖 `LlmModelInfo.name`。
+   * 只影响模型选择器里的显示文本，不改 id、请求体里的 `model`、计价或峰谷；
+   * 未设置时沿用 `${catalogName} (CC)`。排序仍按目录原名，与此表无关。
+   */
+  modelNames?: Readonly<Record<string, string>> | undefined;
+  /**
    * 自定义上下文长度（全局值，issue #86）：对没有 {@link contextWindowOverrides}
    * 条目的目录模型，宣告给宿主的上下文窗口改用此值而非目录的
    * `context_length`；选择器标注、`defaultMaxTokens` 预算同样跟随。
@@ -489,8 +495,21 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * @returns the same target `readImageRequest` encodes to, before base64 expansion.
    */
   imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget;
+  /**
+   * List the models the picker (or a settings-page editor) may offer.
+   *
+   * @param opts.unfiltered - serve the whole catalog regardless of plan/visibility
+   *   filters (the settings page's model editors).
+   * @param opts.catalogNames - return the upstream catalog name verbatim, with
+   *   neither the ` (CC)` marker nor a `modelNames` override. The settings-page
+   *   catalog endpoint and the model-analytics reader need the ORIGINAL name for
+   *   their dropdowns/reports, so the custom display name stays confined to the
+   *   model picker (issue #121). Optional so the host's `_provider`-only call
+   *   keeps its shape.
+   */
   listModels(provider: string, opts?: {
     unfiltered?: boolean;
+    catalogNames?: boolean;
   }): Promise<readonly LlmModelInfo[]>;
   /**
    * The per-model allowance bracket this account POOL falls into, or undefined
@@ -2480,6 +2499,17 @@ interface Config {
    * path per model — a map.
    */
   modelVisibility?: Record<string, boolean>;
+  /**
+   * 自定义模型名称（issue #121）：按目录模型 id 覆盖宿主模型选择器里的显示名，
+   * 值是要显示的确切文本。用于让按模型名称判断条件的外部插件（如峰谷提醒、
+   * 缓存计价插件）能匹配上——默认显示名带 ` (CC)` 后缀，上游目录名还可能带
+   * ` (latest)`，两者都会让这类匹配落空。
+   *
+   * 默认空表＝沿用 `${catalogName} (CC)`，行为不变。只改 `LlmModelInfo.name`：
+   * 模型 id、请求体里的 `model`、本插件的计价与峰谷、价格表、选择器排序都不受
+   * 影响（排序仍按目录原名）。设置页目录、模型分析与搜索仍显示目录原名。
+   */
+  modelNames?: Record<string, string>;
   /**
    * 自定义上下文长度（全局值，issue #86）：宣告给宿主的上下文窗口不再取
    * 模型目录的 `context_length`，而用这个值——上下文计量、自动压缩时机与

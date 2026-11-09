@@ -62,12 +62,13 @@ function modelsState(over: {
   rows?: readonly boolean[]
 }): Pick<
   SettingsPageState,
-  'filterModelsByPlan' | 'contextWindow' | 'maxOutputTokens' | 'contextWindowOverrides'
+  'filterModelsByPlan' | 'contextWindow' | 'maxOutputTokens' | 'contextWindowOverrides' | 'modelNames'
 > {
   return {
     filterModelsByPlan: staged(over.filterModelsByPlan ?? false),
     contextWindow: staged(over.contextWindow ?? false),
     maxOutputTokens: staged(over.maxOutputTokens ?? false),
+    modelNames: [],
     contextWindowOverrides: (over.rows ?? []).map((invalid, index) => ({
       model: `vendor/model-${index}`,
       text: '256K',

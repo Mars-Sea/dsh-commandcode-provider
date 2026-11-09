@@ -64,6 +64,10 @@ src/context-window.ts Shared context-window bounds + precedence: the global
                       `contextWindow` / per-model `contextWindowOverrides`
                       cleaning and effective-window resolution used by both
                       the Host schema and the settings page (dependency-free).
+src/model-names.ts    Custom display names (issue #121): dependency-free
+                      `readModelNames()` cleaning and `effectiveModelName()`
+                      resolution (override, else `${catalogName} (CC)`, else bare
+                      id), shared by the Host and the browser settings page.
 src/output-budget.ts  Shared per-turn output-budget rules (issue #74): the
                       gateway-wide `MAX_OUTPUT_TOKEN_LIMIT` (also the settings
                       field's upper bound), the `0` omit sentinel, the
@@ -223,6 +227,9 @@ tests/adapter.test.ts Core adapter unit tests (node:test + tsx), including the
 tests/model-badge.test.ts Model-selector promo badges: free/discount copy,
                       expiry on the same clock as the description marker, no
                       deal, and the English fallback for an unmapped label.
+tests/model-names.test.ts  Custom display names (issue #121): `readModelNames()`
+                       drops invalid entries and `effectiveModelName()` keeps the
+                       override / `${catalogName} (CC)` / bare-id fallback.
 tests/accounts.test.ts Account-pool rotation tests.
 tests/commands.test.ts getUsage + command tests (stubbed fetch, no network).
 tests/settings.test.ts settings-page controller tests.

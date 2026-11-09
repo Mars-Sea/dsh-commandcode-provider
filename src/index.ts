@@ -76,6 +76,7 @@ import {
   isValidContextWindow,
   readContextWindowOverrides,
 } from './context-window.ts'
+import { readModelNames } from './model-names.ts'
 import {
   MAX_OUTPUT_TOKEN_LIMIT,
   OMIT_OUTPUT_TOKENS,
@@ -239,6 +240,17 @@ export interface Config {
    */
   modelVisibility?: Record<string, boolean>
   /**
+   * 自定义模型名称（issue #121）：按目录模型 id 覆盖宿主模型选择器里的显示名，
+   * 值是要显示的确切文本。用于让按模型名称判断条件的外部插件（如峰谷提醒、
+   * 缓存计价插件）能匹配上——默认显示名带 ` (CC)` 后缀，上游目录名还可能带
+   * ` (latest)`，两者都会让这类匹配落空。
+   *
+   * 默认空表＝沿用 `${catalogName} (CC)`，行为不变。只改 `LlmModelInfo.name`：
+   * 模型 id、请求体里的 `model`、本插件的计价与峰谷、价格表、选择器排序都不受
+   * 影响（排序仍按目录原名）。设置页目录、模型分析与搜索仍显示目录原名。
+   */
+  modelNames?: Record<string, string>
+  /**
    * 自定义上下文长度（全局值，issue #86）：宣告给宿主的上下文窗口不再取
    * 模型目录的 `context_length`，而用这个值——上下文计量、自动压缩时机与
    * 选择器上的上下文标注都跟随它。对没有 {@link contextWindowOverrides}
@@ -368,6 +380,7 @@ export const Config: z<Config> = z.object(markVolatileFields({
   filterModelsByPlan: z.boolean(),
   visibleModels: z.array(z.string()),
   modelVisibility: z.dict(z.boolean()),
+  modelNames: z.dict(z.string()),
   // 自定义上下文长度（issue #86）：全局值与按模型覆盖共用同一边界，越界
   // 在 schema 层就被拒绝，页面输入用相同常量在输入时报错。
   contextWindow: z.number().min(CONTEXT_WINDOW_MIN).max(CONTEXT_WINDOW_MAX).step(1),
@@ -433,6 +446,9 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     // and a malformed flag must fall back to the array rather than hide a
     // model.
     modelVisibility: readModelVisibility(config.modelVisibility),
+    // 自定义模型名称（issue #121）：只保留非空字符串，程序化构造绕过 schema
+    // 时也清洗一次；空表读为「未设置」，显示名沿用目录名 + (CC)。
+    modelNames: readModelNames(config.modelNames),
     // 自定义上下文长度：程序化构造可能绕过 schemastery 归一化，这里重新
     // 判定一次，越界或非数值回落到目录公布值（见 context-window.ts）。
     contextWindow: isValidContextWindow(config.contextWindow) ? config.contextWindow : undefined,
@@ -822,7 +838,11 @@ export function apply(ctx: Context, config: Config): void {
   // Each entry carries its plan-tier key so the editors can group under tier
   // headings without importing the Host's capability snapshot.
   const catalogForEditors = async (): Promise<CommandCodeCatalog> => {
-    const models = await adapter.listModels(PROVIDER, { unfiltered: true })
+    // `catalogNames` keeps the upstream catalog name here, without the ` (CC)`
+    // marker or a `modelNames` override: the editors label models by their
+    // official name, while the picker alone shows the custom display name
+    // (issue #121).
+    const models = await adapter.listModels(PROVIDER, { unfiltered: true, catalogNames: true })
     // Per-model monthly allowance (how far this one model stretches the plan's
     // credit pool). The page publishes Go, GOAT and Pro figures, so the POOL's
     // bracket decides whether a figure exists at all — a Max/Provider account
@@ -835,7 +855,9 @@ export function apply(ctx: Context, config: Config): void {
         const allowance = bracket === undefined ? undefined : modelAllowanceFor(model.id)?.[bracket]
         return {
           id: model.id,
-          name: model.name.replace(/\s*\(CC\)$/, ''),
+          // `catalogNames: true` already returns the upstream name verbatim,
+          // so the old ` (CC)` stripping no longer belongs here (issue #121).
+          name: model.name,
           ...(tier === undefined ? {} : { tier }),
           ...(allowance === undefined ? {} : { allowance }),
         }

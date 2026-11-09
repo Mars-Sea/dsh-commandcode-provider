@@ -1301,6 +1301,51 @@ test('上下文普通小数阻止整批保存，按模型覆盖使用相同整�
   assert.equal(scope.state.value.contextWindow, undefined)
 })
 
+test('per-model custom names stage, save and clear as one map (issue #121)', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  controller.editModelNames({ 'deepseek/deepseek-v4.1-flash': '  DeepSeek V4.1 Flash  ' })
+  assert.deepEqual(controller.state().modelNames, [
+    { model: 'deepseek/deepseek-v4.1-flash', text: '  DeepSeek V4.1 Flash  ' },
+  ])
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  // 名称是标签，落盘前去掉首尾空白；整表一次写入。
+  assert.deepEqual(scope.state.value.modelNames, { 'deepseek/deepseek-v4.1-flash': 'DeepSeek V4.1 Flash' })
+  assert.equal(controller.state().dirty, false)
+
+  controller.editModelNames({})
+  assert.equal(controller.state().dirty, true)
+  await controller.save()
+  assert.deepEqual(scope.state.value.modelNames, {})
+  assert.deepEqual(controller.state().modelNames, [])
+})
+
+test('a blank custom-name row neither blocks nor dirties the save', async () => {
+  const scope = makeScope({})
+  const { controller } = makeController({ scope })
+  controller.editModelNames({ 'deepseek/deepseek-v4.1-flash': '   ' })
+  assert.equal(controller.state().invalid, false)
+  assert.equal(controller.state().dirty, false)
+  await controller.save()
+  assert.equal(scope.state.value.modelNames, undefined)
+})
+
+test('stored custom names render as clean rows; discard clears a staged map', () => {
+  const scope = makeScope({
+    value: { modelNames: { m: 'Name' } },
+    user: { modelNames: { m: 'Name' } },
+  })
+  const { controller } = makeController({ scope })
+  assert.deepEqual(controller.state().modelNames, [{ model: 'm', text: 'Name' }])
+  assert.equal(controller.state().dirty, false)
+  controller.editModelNames({ m: 'Other' })
+  assert.equal(controller.state().dirty, true)
+  controller.discard()
+  assert.deepEqual(controller.state().modelNames, [{ model: 'm', text: 'Name' }])
+  assert.equal(controller.state().dirty, false)
+})
+
 test('compact shorthand is case-insensitive and still bounds-checked', async () => {
   const scope = makeScope({})
   const { controller } = makeController({ scope })

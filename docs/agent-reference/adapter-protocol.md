@@ -285,7 +285,13 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     and is read only for that exact gateway; an unscoped older file or a different gateway's file is ignored
     until a successful refresh rewrites it. A refresh still has a five-minute TTL, and failure waits ten
     seconds before another fetch. Output-ceiling facts derived from the directory are also scoped by
-    `apiBase`, so a custom gateway cannot constrain another gateway's same-named model.
+    `apiBase`, so a custom gateway cannot constrain another gateway's same-named model. The catalog's
+    `name` is the original display name; a `Config.modelNames` override (issue #121) applies only when the
+    row is projected into `LlmModelInfo.name` (`listModels()` / `resolveModel()` via `src/model-names.ts`) —
+    the catalog name, model id, request body, pricing, peak/off-peak membership and `compareByPlan()`'s sort
+    key all stay on the original catalog name. `listModels({ catalogNames: true })` skips the override
+    entirely, which is how the settings-page catalog Remote and the model-analytics reader keep the
+    upstream name (and why they no longer strip a ` (CC)` suffix themselves).
   - Provider API endpoints (docs, 2026-09-25): `/provider/v1/chat/completions`, `/provider/v1/responses`
     (OpenAI + open models; added in command-code@1.55.0), `/provider/v1/messages` (Claude family only),
     `/provider/v1/models`. The provider also publishes `/provider/v1/systemone` (System One decisions, model

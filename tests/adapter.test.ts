@@ -6101,6 +6101,98 @@ test('listModels() parses the catalog and marks input as text-only', async () =>
   assert.deepEqual(models[0]!.inputModalities, ['text'])
 })
 
+// ---------------------------------------------------------------------------
+// Custom model names (issue #121): display text only, never the id/wire/order
+// ---------------------------------------------------------------------------
+
+test('listModels() lets modelNames override the display name only', async () => {
+  const catalog = {
+    object: 'list',
+    data: [
+      { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash (latest)', context_length: 1000000 },
+      { id: 'claude-opus-5', name: 'Claude Opus 5', context_length: 1000000 },
+    ],
+  }
+  const adapter = makeAdapter({
+    fetchImpl: fetchReturning(200, JSON.stringify(catalog)),
+    options: () => ({
+      apiBase: DEFAULT_API_BASE, workingDir: '/tmp', modelsCachePath: '',
+      requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+      // 去掉 (CC) 与上游 (latest) 后缀，正是 issue #121 的用法。
+      modelNames: { 'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash' },
+    }),
+  })
+  const models = await adapter.listModels('commandcode')
+  assert.equal(models.length, 2)
+  assert.equal(models[0]!.id, 'deepseek/deepseek-v4-flash')
+  assert.equal(models[0]!.name, 'DeepSeek V4 Flash')
+  // 没有条目的模型保持既有名称；id 一律不动。
+  assert.equal(models[1]!.name, 'Claude Opus 5 (CC)')
+  assert.equal(models[1]!.id, 'claude-opus-5')
+})
+
+test('custom names do not reorder the picker: sorting uses the catalog name', async () => {
+  const catalog = {
+    object: 'list',
+    data: [
+      { id: 'vendor/alpha', name: 'Alpha', context_length: 1000 },
+      { id: 'vendor/beta', name: 'Beta', context_length: 1000 },
+    ],
+  }
+  const adapter = makeAdapter({
+    fetchImpl: fetchReturning(200, JSON.stringify(catalog)),
+    options: () => ({
+      apiBase: DEFAULT_API_BASE, workingDir: '/tmp', modelsCachePath: '',
+      requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+      modelNames: { 'vendor/alpha': 'Zulu' },
+    }),
+  })
+  const models = await adapter.listModels('commandcode', { unfiltered: true })
+  // 'Zulu' 按自定义名会排到 'Beta (CC)' 之后；目录原名 'Alpha' 仍在前。
+  assert.deepEqual(models.map((model) => model.id), ['vendor/alpha', 'vendor/beta'])
+  assert.deepEqual(models.map((model) => model.name), ['Zulu', 'Beta (CC)'])
+})
+
+test('listModels({ catalogNames: true }) serves the upstream name verbatim (issue #121)', async () => {
+  const catalog = {
+    object: 'list',
+    data: [{ id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash (latest)', context_length: 1000000 }],
+  }
+  const adapter = makeAdapter({
+    fetchImpl: fetchReturning(200, JSON.stringify(catalog)),
+    options: () => ({
+      apiBase: DEFAULT_API_BASE, workingDir: '/tmp', modelsCachePath: '',
+      requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+      modelNames: { 'deepseek/deepseek-v4-flash': 'My Flash' },
+    }),
+  })
+  // 设置页目录与模型分析用这个开关拿目录原名：既不带 (CC)，也不带自定义名。
+  const editors = await adapter.listModels('commandcode', { unfiltered: true, catalogNames: true })
+  assert.equal(editors[0]!.name, 'DeepSeek V4 Flash (latest)')
+  const picker = await adapter.listModels('commandcode')
+  assert.equal(picker[0]!.name, 'My Flash')
+})
+
+test('resolveModel() applies the same override; unknown models keep the bare id', async () => {
+  const catalog = {
+    object: 'list',
+    data: [{ id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash (latest)', context_length: 1000000 }],
+  }
+  const adapter = makeAdapter({
+    fetchImpl: fetchReturning(200, JSON.stringify(catalog)),
+    options: () => ({
+      apiBase: DEFAULT_API_BASE, workingDir: '/tmp', modelsCachePath: '',
+      requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+      modelNames: { 'deepseek/deepseek-v4-flash': 'My Flash' },
+    }),
+  })
+  const resolved = await adapter.resolveModel('commandcode', 'deepseek/deepseek-v4-flash')
+  assert.equal(resolved.id, 'deepseek/deepseek-v4-flash')
+  assert.equal(resolved.name, 'My Flash')
+  const unknown = await adapter.resolveModel('commandcode', 'custom/model')
+  assert.equal(unknown.name, 'custom/model')
+})
+
 test('listModels() 目录已在内存时不再等一次联网刷新', async (t) => {
   // 选择器与设置页的过滤编辑器都只是把目录画出来：本进程手里已经有这些行时，
   // 还让这次打开等一次刷新，纯粹是延迟 —— 行刚刚还是好的，刷新留给下次打开。

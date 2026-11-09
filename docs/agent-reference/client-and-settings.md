@@ -354,6 +354,25 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   （`.cc-contextHead`，宽度与行内三列逐一对齐），`<select>` 用 `appearance:none` + 自绘
   `.cc-contextCaret`（同 `.cc-selectorCaret` 形状）替换平台箭头。宿主侧应用（选择器标注与
   `defaultMaxTokens` 预算）见[模型目录](model-catalog.md)。
+- **自定义模型名称（issue #121）**：`Config.modelNames?: Record<string, string>`（键＝目录模型 id，
+  值＝自定义显示名）只覆盖 `LlmModelInfo.name`，即 `src/adapter.ts` 的 `listModels()` 与
+  `resolveModel()`；`compareByPlan()` 仍按目录原名排序，改名不改变选择器顺序，也不影响模型 id、
+  请求体 `model`、计价与峰谷标注、费率、价格表、`commandcode/prices` wire 与 Remote 描述符数量。
+  **默认值是未设置／空表**：名称与现状逐字一致，即 `${catalogName} (CC)`（上游 ` (latest)` 保留）；
+  未知目录模型（无条目）仍显示裸 id。用途是让外部「峰谷提醒」「缓存计价」插件按显示名字符串重新
+  匹配上，与本插件自身的计价、峰谷、价格表、wire 无关。页面上是「模型与上下文」分组内一张按模型
+  的名称覆盖表（模型下拉 + 名称输入 + 移除 + 添加），复用 `cc-context*` 表格样式；下拉沿用
+  `allowlistedModels`（与同分组的上下文覆盖表一致，默认「显示全部」时即整个目录），已存但目录里
+  已不存在的 id 仍保留在表里并标注「已下架」；不进
+  `SECTION_FIELDS`，走独立草稿（与 `contextWindowOverrides` 的整表草稿同形）：空名称行保存时丢弃，
+  **整表一次提交**，**清空写 `{}`** 而不是 `unset`，避免基础层（组合配置）的旧值重新露出。
+  清洗与生效判定收在依赖自由的纯模块 `src/model-names.ts`（`readModelNames()` 丢弃非对象／空键／
+  非字符串／纯空白，返回新对象或 `undefined`；`effectiveModelName()` 覆盖值优先，否则回落到
+  `${catalogName} (CC)`、无目录名回落裸 id），Host 与 client 共用，判据在 `tests/model-names.test.ts`。
+  **TUI 设置页一期不接入**（沿用 #86 `contextWindow` 先例）；设置页目录、模型分析、模型搜索仍显示
+  目录原名——`listModels()` 新增可选 `catalogNames` 开关，`catalogForEditors()`（`commandcode/models`）
+  与 `createAnalyticsReader()` 用它取上游目录名，替代原先各自 `replace(/ \(CC\)$/)` 去后缀的写法，
+  自定义名因此不会被误删后缀。配置示例见两份 README 的 `llm-commandcode` 段。
 - **单轮输出上限（issue #74）**：`Config.maxOutputTokens` 与同分组内紧随上下文长度之后的
   `Field`（spec 为 `maxOutputTokensField`）。字段有**三种**语义，靠同一个数值字段表达，因此
   与上下文长度字段有本质差别：留空＝沿用推导（默认，行为不变）、正整数＝与推导值取最小、

@@ -83,6 +83,13 @@ export type SettingsCommandCodeKey =
   | 'contextOverrideModel'
   | 'contextOverrideValue'
   | 'contextOverrideNoCatalog'
+  | 'modelNamesTitle'
+  | 'modelNamesHint'
+  | 'modelNamesAdd'
+  | 'modelNamesRemove'
+  | 'modelNamesModel'
+  | 'modelNamesValue'
+  | 'modelNamesNoCatalog'
   | 'contextWindowTooSmall'
   | 'contextWindowTooLarge'
   | 'contextWindowInvalid'
@@ -339,6 +346,13 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   contextOverrideModel: '模型',
   contextOverrideValue: '上下文长度',
   contextOverrideNoCatalog: '模型目录尚未加载，暂时无法添加按模型覆盖。',
+  modelNamesTitle: '模型名称',
+  modelNamesHint: '为单个模型指定选择器里显示的名称，便于按名称判断条件的插件匹配；留空沿用目录名。',
+  modelNamesAdd: '添加模型',
+  modelNamesRemove: '移除该模型的名称',
+  modelNamesModel: '模型',
+  modelNamesValue: '显示名称',
+  modelNamesNoCatalog: '模型目录尚未加载，暂时无法添加模型名称。',
   contextWindowTooSmall: '上下文长度不能小于 1',
   contextWindowTooLarge: '上下文长度不能大于 10,000,000',
   contextWindowInvalid: '请输入有效的整数 token 数',
@@ -617,6 +631,13 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   contextOverrideModel: 'Model',
   contextOverrideValue: 'Context length',
   contextOverrideNoCatalog: 'The model catalog has not loaded yet; per-model overrides cannot be added right now.',
+  modelNamesTitle: 'Model names',
+  modelNamesHint: 'Set the name a model shows in the picker so plugins that match on the name can identify it. Leave empty to use the catalog name.',
+  modelNamesAdd: 'Add model',
+  modelNamesRemove: 'Remove this model’s name',
+  modelNamesModel: 'Model',
+  modelNamesValue: 'Display name',
+  modelNamesNoCatalog: 'The model catalog has not loaded yet; custom names cannot be added right now.',
   contextWindowTooSmall: 'Context length must be at least 1',
   contextWindowTooLarge: 'Context length must not exceed 10,000,000',
   contextWindowInvalid: 'Enter a valid whole-token count',
