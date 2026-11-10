@@ -149,6 +149,7 @@ interface ModelPriceRow {
 const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'claude-fable-5', rates: [10, 50, 1, 12.5], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'claude-fable-5-1', rates: [10, 50, 0.25, 12.5], allowance: { go: 6, goat: 20, pro: 20 } },
+  { id: 'claude-fable-5-2', rates: [8, 40, 0.2, 10], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'claude-haiku-4-5', rates: [1, 5, 0.1, 1.25], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'claude-haiku-5-5', rates: [0.1, 0.5, 0.01, 0.125], allowance: { go: 6, goat: 20, pro: 30 }, contextTiers: [{"maxContext":100000,"rates":[0.1,0.5,0.01,0.125]},{"rates":[0.5,2.5,0.05,0.625]}] },
   { id: 'claude-opus-4-7', rates: [5, 25, 0.5, 6.25], allowance: { go: 6, goat: 20, pro: 20 } },
@@ -214,6 +215,7 @@ const MODEL_PRICE_ROWS: readonly ModelPriceRow[] = [
   { id: 'minimax-m3', rates: [0.3, 1.2, 0.06], listRates: [0.6, 2.4, 0.12], allowance: { go: 8, goat: 47, pro: 57 } },
   { id: 'minimax-m3.1-flash', rates: [0.15, 0.6, 0.015], allowance: { go: 6, goat: 20, pro: 30 } },
   { id: 'mistral-large-4', rates: [1.36, 4.18, 0.14], allowance: { go: 6, goat: 20, pro: 30 } },
+  { id: 'muse-ember', rates: [0.1, 0.5, 0.004], allowance: { go: 6, goat: 20, pro: 30 } },
   { id: 'muse-spark-1.1', rates: [1.25, 4.25, 0.15], allowance: { go: 6, goat: 20, pro: 20 } },
   { id: 'muse-spark-1.2', rates: [1.25, 4.25, 0.15], allowance: { go: 6, goat: 20, pro: 30 } },
   { id: 'muse-spark-1.2-contributor', rates: [0.1, 0.2, 0.002], allowance: { go: 6, goat: 20, pro: 30 } },

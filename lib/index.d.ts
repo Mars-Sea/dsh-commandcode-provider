@@ -1233,6 +1233,13 @@ declare const KNOWN_IMAGE_MODELS: ReadonlySet<string>;
  * is defense for stale sessions, not evidence, and the 1.86.1 artifact itself
  * dropped it. A verdict flip here is positive evidence, never "listed before,
  * absent now".
+ *
+ * 2026-11-10 (catalog-only sync) moves the set 19 -> 20: `claude-fable-5-2`
+ * joins on the `?view=client` `zdr:false` verdict while the 1.88.5 artifact
+ * names neither the model nor the id — the same catalog-only path
+ * `reflection/beam:free` took at 1.84.0. The retired free Beam row stays listed:
+ * both sources still serve its `zdr:false` and retirement alone is not coverage
+ * evidence, exactly like the free Laguna row.
  */
 declare const KNOWN_NON_ZDR_MODELS: ReadonlySet<string>;
 /**

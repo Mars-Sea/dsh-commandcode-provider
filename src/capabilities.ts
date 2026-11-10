@@ -50,7 +50,19 @@
  * efforts `off/low/high/max`, `zdr:true`, no deal and no peak schedule. It
  * enters `KNOWN_PLANS`, `KNOWN_EFFORTS`, `KNOWN_IMAGE_MODELS` and the vendored
  * price table; `KNOWN_NON_ZDR_MODELS` stays at 19 and every other map is
- * unchanged. Keeping the
+ * unchanged. The 2026-11-10 check finds the CLI still at 1.88.5 and the drift
+ * entirely server-side: the catalog moves to 97 default-view rows and 112
+ * `?view=client` rows with two new ids — Claude Fable 5.2
+ * (`claude-fable-5-2`, Provider-tier flagship, 1M context, text + image, the
+ * five-level effort set, `zdr:false`, five rates) and Muse Ember
+ * (`meta/muse-ember`, Go tier, 1,048,576 context, text + image + file, the same
+ * five levels, `zdr:true`) — while the free Beam preview
+ * (`reflection/beam:free`) goes `hidden` and leaves the default view, the
+ * pricing page, the models docs page and all four plan pages: it leaves
+ * `KNOWN_PLANS`, `KNOWN_EFFORTS` and `KNOWN_DEALS`, but `KNOWN_NON_ZDR_MODELS`
+ * keeps it (both sources still serve `zdr:false`). Fable 5.2 joins that ZDR
+ * set: the artifact does not name it, `?view=client` serves `zdr:false`, and
+ * the union rule is the membership this file mirrors. Keeping the
  * snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
  * wire/runtime logic. The read helpers live here too, for the same reason.
@@ -96,6 +108,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // same three selectable levels. It is also the only model the 1.82.2 -> 1.82.4
   // train added to the artifact's own effort table.
   'Qwen/Qwen3.8-Max-Prime': ['low', 'medium', 'xhigh'],
+  // 2026-11-10 (catalog-only sync): the Fable family's newest and most capable
+  // member serves the same five selectable levels as 5.1 and 5. Catalog-only
+  // evidence — command-code@1.88.5 does not name the model at all (see
+  // KNOWN_NON_ZDR_MODELS, where it joins on the `?view=client` `zdr:false`).
+  'claude-fable-5-2': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-fable-5-1': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-opus-4-7': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -150,11 +167,12 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   'moonshotai/Kimi-K3.1-Pro': ['low', 'high', 'max'],
   // command-code@1.43.0.
   'google/gemini-3.8-flash': ['low', 'medium', 'high'],
-  // 2026-10-16, first seen at the 1.84.0 sync: the live `?view=client` catalog
-  // serves five levels for Reflection's free Beam preview, and it is the only
-  // row this map gained in that train. Catalog-only evidence — the 1.84.0
-  // artifact registry does not name the model at all (see KNOWN_NON_ZDR_MODELS).
-  'reflection/beam:free': ['low', 'medium', 'high', 'xhigh', 'max'],
+  // `reflection/beam:free` left this map on 2026-11-10 (retirement, not a lazy
+  // edit): the row went `hidden` in `?view=client`, disappeared from the
+  // default catalog view, and the pricing page, the models docs page and all
+  // four plan pages dropped it — the same path the other free previews took.
+  // It served the five-level set. The id stays in `KNOWN_NON_ZDR_MODELS`
+  // because both sources still serve its `zdr:false` verdict.
   'sakana/fugu-ultra': ['high', 'xhigh'],
   // command-code@1.60.0; same three-level set as its Step 3.x Flash siblings,
   // which still reason automatically with no levels and stay out of this map.
@@ -181,6 +199,10 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // the only registry addition in the 1.79.2 -> 1.81.0 train. It carries the
   // same four-level set as Muse Spark 1.1/1.2 (no `max`).
   'meta/muse-wonder-1.0': ['low', 'medium', 'high', 'xhigh'],
+  // 2026-11-10 (catalog-only sync): Muse Ember is the Muse family's newest
+  // member and the second one to serve `max` (Muse Spark 1.3 is the other).
+  // Catalog-only evidence — command-code@1.88.5 does not name it.
+  'meta/muse-ember': ['low', 'medium', 'high', 'xhigh', 'max'],
   // 2026-10-15; the open-weight Muse Spark. Vision-capable, Go-tier and
   // served only by the live catalog - it postdates the 1.82.4 artifact's own
   // embedded snapshot, so it cannot be read out of `dist/cli.mjs`.
@@ -306,6 +328,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // command-code@1.82.4; inputModalities:["text","image"] in both the artifact's
   // embedded catalog and the live `?view=client` catalog.
   'Qwen/Qwen3.8-Max-Prime',
+  // 2026-11-10 (catalog-only sync): inputModalities:["text","image"] in the live
+  // `?view=client` catalog, and `caps.vision: true` on the pricing page.
+  'claude-fable-5-2',
   'claude-fable-5-1',
   'claude-fable-5',
   'claude-haiku-4-5-20251001',
@@ -369,9 +394,12 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   'meta/muse-spark-1.3',
   'meta/muse-spark-1.3-contributor',
   // command-code@1.80.0; Vision per the official registry and the CLI's
-  // inputModalities:["text","image","file"] — the only model in this catalog
-  // that also declares the `file` modality.
+  // inputModalities:["text","image","file"] — one of two models in this catalog
+  // that also declares the `file` modality (the other is `meta/muse-ember`).
   'meta/muse-wonder-1.0',
+  // 2026-11-10 (catalog-only sync): inputModalities:["text","image","file"] in
+  // the live `?view=client` catalog, and `caps.vision: true` on the pricing page.
+  'meta/muse-ember',
   // 2026-10-15; inputModalities:["text","image"] in the live catalog.
   'meta/muse-spark-open',
   // 2026-10-14; inputModalities:["text","image"], and the only Nemotron row
@@ -516,6 +544,13 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
  * is defense for stale sessions, not evidence, and the 1.86.1 artifact itself
  * dropped it. A verdict flip here is positive evidence, never "listed before,
  * absent now".
+ *
+ * 2026-11-10 (catalog-only sync) moves the set 19 -> 20: `claude-fable-5-2`
+ * joins on the `?view=client` `zdr:false` verdict while the 1.88.5 artifact
+ * names neither the model nor the id — the same catalog-only path
+ * `reflection/beam:free` took at 1.84.0. The retired free Beam row stays listed:
+ * both sources still serve its `zdr:false` and retirement alone is not coverage
+ * evidence, exactly like the free Laguna row.
  */
 export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'MiniMaxAI/MiniMax-M3',
@@ -525,6 +560,11 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // live catalog both serve `zdr:false` for them.
   'claude-fable-5',
   'claude-fable-5-1',
+  // 2026-11-10 (catalog-only sync). `?view=client` serves `zdr:false` for the
+  // Fable 5.2 flagship while command-code@1.88.5 names it nowhere; the union
+  // rule admits the catalog verdict alone — the same path the free Beam preview
+  // took at 1.84.0.
+  'claude-fable-5-2',
   // command-code@1.67.0. The 1.67.0 artifact lists it in BOTH anchor sets, so
   // the CLI's own ZDR predicate excludes it. Unlike the retired stealth
   // previews, the pricing page carries no ZDR note for this row — the artifact
@@ -783,6 +823,8 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   // anthropic
   ['claude-fable-5-1', 128000],
   // anthropic
+  ['claude-fable-5-2', 128000],
+  // anthropic
   ['claude-haiku-4-5-20251001', 64000],
   // anthropic
   ['claude-haiku-5-5', 128000],
@@ -904,8 +946,6 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['Qwen/Qwen3.8-Omni-Flash', 131072],
   // sakana
   ['sakana/fugu-ultra', 1000000],
-  // 2 provider(s), unanimous
-  ['stealth/crouton-alpha', 943718],
   // stepfun
   ['stepfun/Step-3.5-Flash', 256000],
   // stepfun
@@ -1063,6 +1103,12 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // 2026-10-15; individual-go true (Go and every higher tier), the same
   // "all":true availability shape as its Muse siblings.
   'meta/muse-spark-open': 'go',
+  // 2026-11-10 (catalog-only sync): Muse Ember is Go on every source —
+  // `minimumPlan: "individual-go"` in `?view=client` and every tier true in the
+  // pricing page's embedded availability, so the go / goat / pro / max plan
+  // pages all list it. Catalog-only evidence: the 1.88.5 artifact does not name
+  // it.
+  'meta/muse-ember': 'go',
   // command-code@1.75.0; the pricing page's embedded availability grants every
   // tier (individual-go through teams-pro) — the "all":true shape shared by the
   // Qwen 3.8 family above.
@@ -1097,19 +1143,16 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // KNOWN_DEALS drops the matching FREE badge and the generated output-limit
   // table follows this map, so its 32768 row goes too. KNOWN_NON_ZDR_MODELS
   // keeps the id: both sources still serve its `zdr:false` verdict.
-  // 2026-10-16, first seen at the 1.84.0 sync: the free Beam preview was the one
-  // new id the DEFAULT catalog view served then (93 ids). This map tracks that
-  // view: the `hidden:true` rows of `?view=client` do not belong here, unlike
-  // `KNOWN_NON_ZDR_MODELS`, whose membership is the catalog/artifact union (see
-  // the decision record, chapter 7). The 2026-10-20 catalog-only sync took the
-  // view to 94 ids — the MiniMax M3.1 Flash pair joined and
-  // `stealth/cat-jam:free` left — the 1.86.1 sync took it to 96 with the Ornith
-  // 1.5 122B pair, and the 2026-10-23 sync takes it to 92: both `:free` twins
-  // lapsed and the MiMo V2.5 pair went hidden, so those four ids left this map
-  // and `?view=client` now hides twelve rows. The 2026-10-24 check adds Kimi
-  // K3.1 Pro and takes it to 93 while `?view=client` goes to 105 (the same
-  // twelve hidden rows).
-  'reflection/beam:free': 'go',
+  // This map tracks the DEFAULT catalog view: the `hidden:true` rows of
+  // `?view=client` do not belong here, unlike `KNOWN_NON_ZDR_MODELS`, whose
+  // membership is the catalog/artifact union (see the decision record,
+  // chapter 7). `reflection/beam:free` was the one new id the default view
+  // served at the 1.84.0 sync (93 ids); on 2026-11-10 the row went `hidden`,
+  // left the default view and was dropped by the pricing page, the models docs
+  // page and all four plan pages, so it left this map by the same retirement
+  // path the other free previews took. At this check the default view carries
+  // 97 ids and `?view=client` 112 (fifteen hidden): +Claude Fable 5.2,
+  // +Muse Ember, -Beam 1.0 (Free).
   'stepfun/Step-3.5-Flash': 'go',
   'stepfun/Step-3.7-Flash': 'go',
   // command-code@1.60.0; every tier, and listed by the Go/GOAT/Pro/Max plan
@@ -1198,6 +1241,12 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'gpt-6.1-terra': 'pro',
   'meta/muse-spark-1.1': 'pro',
   // --- Provider (8) ---
+  // 2026-11-10 (catalog-only sync): the Fable 5.2 flagship is Provider/Max like
+  // its siblings — `minimumPlan: "individual-provider"`, while the pricing
+  // page's embedded availability sets go / go-v1 / goat / pro / pro-v1 false and
+  // max / ultra / provider / teams-pro true. Catalog-only evidence: the 1.88.5
+  // artifact does not name it.
+  'claude-fable-5-2': 'provider',
   // command-code@1.40.0; Provider/Max exactly like its `claude-fable-5`
   // predecessor — individual-provider/max/ultra and teams-pro only.
   'claude-fable-5-1': 'provider',
@@ -1388,8 +1437,9 @@ export interface KnownDeal {
 
 export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
-  // 2026-11-04 (catalog-only sync): `stealth/crouton-alpha` is the fourth live
-  // free preview in this map and the first one with image input. Its terms are
+  // 2026-11-04 (catalog-only sync): `stealth/crouton-alpha` is one of the two
+  // live free previews in this map (the other is its Glyph Cluster sibling) and
+  // the first one with image input. Its terms are
   // the undated kind — 100% off "while the stealth preview lasts", 1000
   // requests a day, no published end instant — so it carries no `expiresAt` and
   // is deleted (not lapsed) when the preview retires, like its Glyph Cluster
@@ -1425,13 +1475,16 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   // check. `KNOWN_NON_ZDR_MODELS` keeps the id because both sources still serve
   // its `zdr:false` verdict; the generated output-limit table follows
   // `KNOWN_PLANS` and loses its row with it.
-  // 2026-10-16 (1.84.0 sync); the third live free preview in this map.
-  // "Free while capacity lasts", no daily request limit, and — unlike its Glyph
-  // Cluster sibling — the page states outright that it is "Not routed under
-  // ZDR", which matches the catalog verdict in `KNOWN_NON_ZDR_MODELS`. The page
-  // publishes it at a literal zero, so it gets no row in the vendored price
-  // table either.
-  'reflection/beam:free': { label: 'FREE', free: true },
+  // 2026-11-10 (catalog-only sync): the free Beam preview is RETIRED — the row
+  // is `hidden` in `?view=client`, left the default catalog view, and the
+  // pricing page (its deal list included), the models docs page and all four
+  // plan pages dropped it — so the FREE entry is removed rather than left to
+  // badge a model the catalog no longer serves (the same path the Laguna /
+  // MiniMax / Ornith / Ling free twins took). `isFreeModel()` therefore stops
+  // ranking it and `KNOWN_PLANS` lost its plan entry in the same check.
+  // `KNOWN_NON_ZDR_MODELS` keeps the id because both sources still serve its
+  // `zdr:false` verdict; retirement alone is not coverage evidence. The page
+  // published it at a literal zero, so it never had a vendored price row.
   // `stealth/cat-jam:free` (`FREE`, the 2026-10-15 stealth preview) left this
   // map on 2026-10-20: the live catalog (both views), the pricing page and the
   // models docs page stopped serving the row, so there is no deal to display.

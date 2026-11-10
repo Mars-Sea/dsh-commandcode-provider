@@ -2607,7 +2607,7 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', context_length: 1_000_000 },
       { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
       { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', context_length: 1_000_000 },
-      { id: 'reflection/beam:free', name: 'Beam 1.0', context_length: 1_048_576 },
+      { id: 'stealth/crouton-alpha', name: 'Crouton Alpha', context_length: 1_048_576 },
     ],
   }
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify(catalog)) })
@@ -2625,13 +2625,16 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   assert.deepEqual(v4Flash.inputModalities, ['text'])
   assert.ok(v4Flash.description !== undefined)
   assert.match(v4Flash.description, /^Go · (?:Peak|Half) · 1M$/)
-  assert.equal(byId.get('reflection/beam:free')!.description, 'Go · FREE · 1M')
+  // The free stealth preview is Go-tier, image-capable and 1M: the FREE deal
+  // leads the picker and the Image marker rides along. (`reflection/beam:free`
+  // held this case until its 2026-11-10 retirement.)
+  assert.equal(byId.get('stealth/crouton-alpha')!.description, 'Go · FREE · Image · 1M')
   // Picker order: free models, then Go, then Pro, alphabetically within a tier
   // (the fixture's input order is deliberately shuffled).
   assert.deepEqual(
     models.map((m) => m.id),
     [
-      'reflection/beam:free',
+      'stealth/crouton-alpha',
       'deepseek/deepseek-v4-flash',
       'deepseek/deepseek-v4-pro',
       'claude-sonnet-5',
@@ -2645,7 +2648,7 @@ test('listModels() advertises active deal badges and leaves paid models unbadged
     const catalog = {
       object: 'list',
       data: [
-        { id: 'reflection/beam:free', name: 'Beam 1.0', context_length: 1_048_576 },
+        { id: 'stealth/crouton-alpha', name: 'Crouton Alpha', context_length: 1_048_576 },
         { id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3', context_length: 1_000_000 },
         { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
       ],
@@ -2665,7 +2668,7 @@ test('listModels() advertises active deal badges and leaves paid models unbadged
     const badgeOf = (id: string): unknown => (byId.get(id) as { badge?: unknown }).badge
     // A free promo: the selector renders a `success`-toned FREE Tag and the host
     // resolves the localized text through its own locale service.
-    assert.deepEqual(badgeOf('reflection/beam:free'), {
+    assert.deepEqual(badgeOf('stealth/crouton-alpha'), {
       text: { en: 'FREE', zh: '免费' },
       tone: 'success',
     })
@@ -3402,7 +3405,7 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
 test('compareByPlan() sorts free models first, then plan tier, then name', () => {
   // Free models (KNOWN_DEALS free: true) lead the list regardless of tier.
   assert.ok(compareByPlan(
-    { id: 'reflection/beam:free', name: 'Beam 1.0 (CC)' },
+    { id: 'stealth/crouton-alpha', name: 'Crouton Alpha (CC)' },
     { id: 'claude-opus-5', name: 'Claude Opus 5 (CC)' },
   ) < 0)
   // A paid Go model sorts before a higher tier, but after every free model.
@@ -3411,15 +3414,16 @@ test('compareByPlan() sorts free models first, then plan tier, then name', () =>
     { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
   ) < 0)
   assert.ok(compareByPlan(
-    { id: 'reflection/beam:free', name: 'Beam 1.0 (CC)' },
+    { id: 'stealth/crouton-alpha', name: 'Crouton Alpha (CC)' },
     { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
   ) < 0)
-  // Both are Go-tier free models, so the tie falls through to the name and
-  // Beam leads its Glyph Cluster sibling. (The 2026-10-20 catalog sync dropped
-  // the `stealth/cat-jam:free` deal when the live catalog delisted that
-  // preview; it stays in `KNOWN_NON_ZDR_MODELS` on artifact evidence.)
+  // Both are Go-tier free models, so the tie falls through to the name:
+  // Crouton Alpha leads its Glyph Cluster sibling. (`reflection/beam:free`
+  // covered this tie until its 2026-11-10 retirement took it out of
+  // `KNOWN_DEALS`; the 2026-10-20 catalog sync had already dropped the
+  // `stealth/cat-jam:free` deal, far enough back that cat-jam no longer ranks.)
   assert.ok(compareByPlan(
-    { id: 'reflection/beam:free', name: 'Beam 1.0 (CC)' },
+    { id: 'stealth/crouton-alpha', name: 'Crouton Alpha (CC)' },
     { id: 'stealth/glyph-cluster:free', name: 'Glyph Cluster (CC)' },
   ) < 0)
   assert.ok(compareByPlan(
@@ -6709,7 +6713,13 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   // DeepSeek V4 Pro's 75% off deal lapsed on 2026-08-16 16:00 UTC when DeepSeek moved
   // to peak/off-peak pricing, so it left the snapshot (see KNOWN_PEAK_PRICING).
   assert.equal(KNOWN_DEALS['deepseek/deepseek-v4-pro'], undefined)
-  assert.equal(KNOWN_DEALS['reflection/beam:free']?.free, true)
+  // 2026-11-10: the free Beam preview was retired — the row went `hidden` in
+  // `?view=client`, left the default catalog view, and the pricing page (deal
+  // list included), the models docs page and all four plan pages dropped it — so
+  // its FREE entry is removed and `isFreeModel` stops ranking it, the same path
+  // the Laguna / Ling / MiniMax / Ornith free twins took.
+  assert.equal(KNOWN_DEALS['reflection/beam:free'], undefined)
+  assert.equal(isFreeModel('reflection/beam:free'), false)
   // Neither the retired stealth/ox-alpha nor its z-ai/glm-5.3-flash successor has a deal.
   assert.equal(KNOWN_DEALS['stealth/ox-alpha'], undefined)
   assert.equal(KNOWN_DEALS['z-ai/glm-5.3-flash'], undefined)
@@ -6791,8 +6801,9 @@ test('dealLabel() hides a deal after its expiry date', () => {
   assert.equal(dealLabel('MiniMaxAI/MiniMax-M3', Date.parse('2030-01-01T00:00:00Z')), '50% off')
   // DeepSeek V4 Pro's deal was removed after it lapsed; the model is peak/off-peak priced now.
   assert.equal(dealLabel('deepseek/deepseek-v4-pro', Date.parse('2026-08-15T00:00:00Z')), undefined)
-  // Free label survives until capacity ends (treated as permanent here).
-  assert.equal(dealLabel('reflection/beam:free', Date.parse('2030-01-01T00:00:00Z')), 'FREE')
+  // Beam 1.0 (Free) was retired on 2026-11-10 with no expiry date in play, so
+  // there is no label at any time (see KNOWN_DEALS).
+  assert.equal(dealLabel('reflection/beam:free', Date.parse('2030-01-01T00:00:00Z')), undefined)
   // Laguna S 2.1's free promo was retired on 2026-11-06, so there is no label at
   // any time (see KNOWN_DEALS).
   assert.equal(dealLabel('poolside/laguna-s-2.1-free', Date.parse('2030-01-01T00:00:00Z')), undefined)
@@ -6824,8 +6835,10 @@ test('formatContext() renders compact human sizes', () => {
 })
 
 test('capabilityDescription() composes plan, deal, Image, context', () => {
-  // Free model without Vision: no Image marker.
-  assert.equal(capabilityDescription('reflection/beam:free', 1_048_576), 'Go · FREE · 1M')
+  // Free model without Vision: no Image marker. (`reflection/beam:free` held
+  // this case until its 2026-11-10 retirement; Glyph Cluster is the remaining
+  // text-only free preview, and 256K is its catalog window.)
+  assert.equal(capabilityDescription('stealth/glyph-cluster:free', 256_000), 'Go · FREE · 256K')
   // LongCat 2.0 has been paid since its promo ended — text-only, 1M, so no deal and no Image marker.
   assert.equal(capabilityDescription('meituan/LongCat-2.0', 1_048_576), 'Go · 1M')
   // Discounted Image model with context.
@@ -8846,15 +8859,25 @@ test('every new-arrival model carries an output ceiling or is left to runtime le
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash:free'), undefined)
   // 2026-11-04: the 1019 row graduated to the paid id, and the generator now
   // records its `maxOutputTokens` ceiling (262 144, from `?view=client`)
-  // against that id; the retired `:free` key is gone. The Crouton Alpha stealth
-  // preview publishes the same 943 718 ceiling, so it is recorded rather than
-  // deferred to runtime learning. `gpt-6.1-terra` and `Kimi-K3.1-Pro` were both
-  // carried in `KNOWN_PLANS` before this sync but never got their ceiling rows.
+  // against that id; the retired `:free` key is gone. `gpt-6.1-terra` and
+  // `Kimi-K3.1-Pro` were both carried in `KNOWN_PLANS` before this sync but
+  // never got their ceiling rows.
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash-1019'), 262_144)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('inclusionai/ling-3.1-flash-1019:free'), undefined)
-  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('stealth/crouton-alpha'), 943_718)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('gpt-6.1-terra'), 128_000)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('moonshotai/Kimi-K3.1-Pro'), 1_048_576)
+  // 2026-11-10: Claude Fable 5.2 gets a row (128 000, the Anthropic figure every
+  // models.dev provider files for it). Muse Ember is deliberately left to
+  // runtime learning: its models.dev rows disagree (943 718 / 1 048 576 /
+  // 270 000), so the generator pins no guess (rule 4 of
+  // scripts/sync-output-limits.mjs).
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('claude-fable-5-2'), 128_000)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('meta/muse-ember'), undefined)
+  // Crouton Alpha's 943 718 row did NOT survive that check: models.dev renamed
+  // its entries to `crouton-alpha-free` and files 270 000, so the generator
+  // found neither a vendor row nor a unanimous one and left the id to runtime
+  // learning instead of writing the new number.
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('stealth/crouton-alpha'), undefined)
   // A ceiling is a CEILING, not a window: both are far below their own context,
   // which is the whole point of the table — deriving `max_tokens` from
   // `context_length` is exactly what produced #71.

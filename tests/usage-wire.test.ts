@@ -284,7 +284,7 @@ test('prices schema parses rates, the optional peak block, and the windows', () 
     models: [
       { id: 'deepseek/deepseek-v4-pro', slug: 'deepseek-v4-pro', inputCost: 0.66, outputCost: 1.98, cacheReadCost: 0.022,
         peak: { inputCost: 1.32, outputCost: 3.96, cacheReadCost: 0.044 } },
-      { id: 'reflection/beam:free', slug: 'reflection/beam:free', inputCost: 0, outputCost: 0, cacheReadCost: 0, free: true },
+      { id: 'stealth/crouton-alpha', slug: 'stealth/crouton-alpha', inputCost: 0, outputCost: 0, cacheReadCost: 0, free: true },
     ],
     peakHours: [[1, 4], [6, 10]],
   })

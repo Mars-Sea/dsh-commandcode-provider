@@ -15,9 +15,10 @@ import assert from 'node:assert/strict'
 import { KNOWN_DEALS, dealBadgeText, modelBadge } from '../src/capabilities.ts'
 
 test('a free promo advertises a localized FREE badge', () => {
-  // `reflection/beam:free` is a permanent free row in the snapshot (the free
-  // Laguna S 2.1 row was retired in command-code@1.88.4 and left `KNOWN_DEALS`).
-  assert.deepEqual(modelBadge('reflection/beam:free'), {
+  // `stealth/crouton-alpha` is a permanent free row in the snapshot (the free
+  // Beam 1.0 row was retired on 2026-11-10 and the free Laguna S 2.1 row on
+  // 2026-11-06; both left `KNOWN_DEALS`).
+  assert.deepEqual(modelBadge('stealth/crouton-alpha'), {
     text: { en: 'FREE', zh: '免费' },
     tone: 'success',
   })

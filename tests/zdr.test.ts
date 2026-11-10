@@ -73,11 +73,18 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
   // 2026-11-06 (command-code@1.88.4) retires the free Laguna S 2.1 picker row,
   // but membership is unchanged: both sources still serve `zdr:false` for the
   // id, and retirement alone is not coverage evidence, so it stays (19 == 19).
+  //
+  // 2026-11-10 (catalog-only sync) adds `claude-fable-5-2` (19 -> 20): the
+  // 1.88.5 artifact names it nowhere while `?view=client` serves `zdr:false`,
+  // so the union admits the catalog verdict alone. The free Beam row retired the
+  // same day still stays in the set — both sources still serve its `zdr:false`
+  // — exactly like the retired free Laguna row.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
     'claude-fable-5',
     'claude-fable-5-1',
+    'claude-fable-5-2',
     'deepseek/deepseek-v4.1-flash-fast',
     'meituan/LongCat-2.0',
     'meta/muse-spark-1.2-contributor',
