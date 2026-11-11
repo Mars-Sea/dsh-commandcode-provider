@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.6] - 2026-11-11
 
 ### Changed
 
@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **没有正文、也没有工具调用的一轮 assistant 消息不再以 `content: null` 发往 `/provider/v1/chat/completions`，DeepSeek 每轮 400 的问题结束（[#122](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/122)）。** 报告人（GOAT 套餐）在 `deepseek/deepseek-v4.1-flash` 上频繁遇到 `400`，界面只显示通用文案「服务端拒绝了本次请求，请检查模型、套餐和请求设置」；换 Pi 的 Command Code 插件、或换 GLM-5.3 Flash 均正常。**根因**：该端点的 assistant 消息里 `content: null` 只在**同时带 `tool_calls`** 时合法，否则整条请求被拒，上游原文为 `Invalid assistant message: content or tool_calls must be set`（这一句此前不被错误映射识别，故落到通用分支，把人引向三个都正确的方向）。**触发路径**：某一轮的 tool call 没有配对 tool result 时，`pairedToolCalls()` 按既有策略丢弃该调用，这一轮就退化成「只有 reasoning、没有正文、没有工具调用」，`buildOpenAI` 侧写入 `content: null` → 400。压缩、工具结果裁剪、中断的轮次、跨 provider 切换都会留下这种历史；因为拒绝的是**整个请求**，历史里只要有一轮如此，该会话此后每一轮都是 400（与报告人「频繁出现」一致）。**实测（2026-11-11，真实 GOAT 账号，`/provider/v1/chat/completions` + `deepseek/deepseek-v4.1-flash`，单请求逐形状对照）**：`content: null` + `reasoning_content` → **400**；`content: ""` + 同样的 `reasoning_content` → **200**；省略 `content` 键 → **400**；带 `tool_calls` 时 `content: null` → **200**（保留不变）。**为什么 Pi 与 GLM 正常**：`/alpha/generate` 把 reasoning 作为 content **数组里的一个 part**，不存在 null/空串之分，同形状实测 200；GLM-5.3 Flash 不校验该项。**改动**：`src/adapter.ts` 的 OpenAI 编码器改为「有正文则用正文；无正文但有 tool calls 仍用 `null`；二者皆无则用空串」。**错误文案**：`src/provider-errors.ts` 新增 `ASSISTANT_MESSAGE_SHAPE_REJECTION`，该 400 不再落到通用分支，改为说明「会话历史里存在该端点无法接受的一轮，请升级插件后重试，仍失败则新建会话」，并明确否定模型／套餐／设置三项。**验证**：把修复临时回退后，同一条真实历史（真实 adapter + 真实账号）稳定复现 400；修复后同一请求正常流式返回；孤立 tool-call 这条退化路径单独做过 A/B（回退 400 / 修复 200）。`tests/adapter.test.ts` 新增 4 条（reasoning-only 用 `""`、有 tool_calls 仍为 `null`、多轮混合无遗漏、**孤立 tool-call 退化路径**）与 1 条错误映射用例；`npm run typecheck` 退出码 0、`npm test` **1230／1230**、`npm run build` 两段 `Build complete` 且 `lib/` 已重建。**未做**：未在浏览器界面里走完整 GUI 会话；未用报告者本人那条会话复验（其会话文件未提供），复现基于本机真实会话历史与同一上游报错原文。
+
+**发布**：用户拍板「两批改动合并为一个 patch 版本」发布，版本 **0.17.6**。发布提交 `e96017c`，附注标签 `v0.17.6` 指向同一提交，`main` 与标签均已推送。发布前检查全通过：锁文件隔离 `npm ci --dry-run`（103 包）、`typecheck` 退出码 0、`npm test` **1230／1230**、`build` 两段 `Build complete`（二次构建 md5 一致）、`test:engine` **7/7**、`test:install` **7/7**（pnpm 10.34.5）、`test:pack` 16 文件、`test:update` PASS、`npm pack --dry-run` 16 文件。经 [npm 可信发布工作流](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/runs/42969373628) 实际上传，日志确认 `+ @mars-sea/dsh-commandcode-provider@0.17.6` 且 Provenance 已发布到透明度日志；注册表 packument 的 `dist-tags.latest` 在前几分钟仍显示 `0.17.5`（CDN 传播延迟），复核后确认为 `0.17.6`，`npm view` 的 `version`／`engines.dsh`／`dsh.bundle.patch` 三项齐全。`CI` 与 `Security Scans` 在 `e96017c` 上均 success。[中英双语发布记录](https://github.com/Mars-Sea/dsh-commandcode-provider/releases/tag/v0.17.6) 已创建。**未做**：真实账号登录、付费生成与浏览器渲染；「网关只发 length 终态、不发 usage」这一上游形态未实测，该文案改动依据代码路径与合成流。
 
 ## [0.17.5] - 2026-11-10
 
