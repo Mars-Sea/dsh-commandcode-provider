@@ -354,6 +354,29 @@ test('does not retry once an HTTP status arrived: a 403 is an answer, not a blip
   assert.equal(calls, 1)
 })
 
+test('an upstream search timeout stays a WEB_PROVIDER_ERROR and is not converted to a model token limit', async () => {
+  let calls = 0
+  const provider = new CommandCodeSearchProvider({
+    resolveKey: async () => 'synthetic-key',
+    apiBase: () => 'https://api.commandcode.ai',
+    fetchImpl: (async () => {
+      calls += 1
+      return Response.json({ error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Request timed out performing the search. Please try again later.',
+      } }, { status: 504 })
+    }) as typeof fetch,
+    retryWait: async () => { throw new Error('a received response must never be retried') },
+  })
+  await assert.rejects(() => provider.search({ query: 'q' }), (error: unknown) => {
+    const e = error as { code?: string; message?: string }
+    assert.equal(e.code, 'WEB_PROVIDER_ERROR')
+    assert.equal(e.message, 'Command Code web search failed (HTTP 504): INTERNAL_SERVER_ERROR — Request timed out performing the search. Please try again later.')
+    return true
+  })
+  assert.equal(calls, 1)
+})
+
 test('an abort during the retry wait stops it instead of making another request', async () => {
   let calls = 0
   const stub = makeFetch(() => { calls += 1; throw fetchFailure('ECONNRESET') })

@@ -65,7 +65,19 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   - `POST {apiBase}/provider/v1/chat/completions` — documented OpenAI-format transport with a flat body `{
     model, messages, tools?, max_tokens, temperature, stream, reasoning_effort? }`. Used for every account
     with Provider API access whose model the catalog does not route to `/messages`; historical reasoning is
-    replayed as `reasoning_content`. `temperature` starts from the caller's value and defaults to 0.3, but a
+    replayed as `reasoning_content`. **A textless assistant turn that carries no `tool_calls` must send
+    `content: ""`, never `content: null`** (issue #122). `content: null` is only legal beside `tool_calls`;
+    the endpoint otherwise refuses the entire request with `Invalid assistant message: content or tool_calls
+    must be set` (measured 2026-11-11 on `deepseek/deepseek-v4.1-flash`: `null` + `reasoning_content` → 400,
+    `""` + the same reasoning → 200, and the `content` key omitted entirely → 400). This is the shape a
+    turn degrades into when its only tool call has no paired tool result — `pairedToolCalls()` drops the
+    unpaired call, leaving reasoning and nothing else — which is what compaction, tool-result pruning, an
+    interrupted turn or a cross-provider switch leave in history. Because the refusal is about the REQUEST,
+    one such turn kills every later turn of that session; the same history is accepted on `/alpha/generate`,
+    where reasoning travels as a content PART with no null/empty distinction, so the CLI path and other
+    providers are unaffected. `ASSISTANT_MESSAGE_SHAPE_REJECTION` in `./provider-errors.ts` recognises the
+    refusal so it stops landing in the generic "check the model, plan and request settings" branch.
+    `temperature` starts from the caller's value and defaults to 0.3, but a
     model whose own upstream pins it to 1 gets NO field: `moonshotai/Kimi-K3.1-Pro` refuses 0.3 with HTTP 400
     `temperature must be 1 for kimi-k3.1-pro` (measured 2026-11-06; 1 and an absent field both answer 200),
     and the refusal names nothing the error mapping recognises, so it surfaced as the generic "服务端拒绝了
@@ -434,7 +446,10 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   itself unavailable at test time — and Command Code has since retired it outright (2026-10-01), so that
   wording can now only be re-measured on another model. Preserve
   received usage on failures; report the actual finish reason, request budget, output tokens and reasoning
-  tokens (unknown when absent). A length finish proves a limit, not that every token was spent reasoning. Without any
+  tokens (unknown when absent). A length finish is the provider's truncation signal, not a measurement that
+  the adapter's budget was exhausted or that every token was spent reasoning. The error copy must say so,
+  and explicitly name missing usage when none was received. OpenAI `usage: null` placeholders are ignored,
+  never mapped to zero or allowed to overwrite a previously received usage object. Without any
   terminal event, preserve `EMPTY_RESPONSE` when no content arrived and `STREAM_CLOSED` after text/tool
   fragments; never execute a buffered tool call from a cut stream. `STREAM_CLOSED` and `OUTPUT_TOKEN_LIMIT`
   stay outside the retry whitelist. Thus an old silent stop cannot be attributed to a particular branch

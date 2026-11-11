@@ -92,6 +92,24 @@ export function parseOutputCeiling(detail: string): number | undefined {
 const JSON_NODE_LIMIT_REJECTION = /JSON node count cannot exceed\s+(\d+)/i
 
 /**
+ * Whether one rejection says an assistant history turn is structurally invalid:
+ * `Invalid assistant message: content or tool_calls must be set`.
+ *
+ * This is the upstream wording for a replayed assistant message whose `content`
+ * is null while it carries no `tool_calls` (issue #122). The adapter no longer
+ * emits that shape — a reasoning-only turn goes out with `content: ''` — but the
+ * diagnosis is kept so a session recorded by an OLDER build, or a transcribed
+ * body from another client, still names the real cause. Without it the refusal
+ * carries no field the mapping recognises and lands in the generic "服务端拒绝了
+ * 本次请求，请检查模型、套餐和请求设置" branch, steering the user at three things
+ * that are all fine.
+ *
+ * Matched on the provider detail rather than a status, because the gateway
+ * folds it into an ordinary 400.
+ */
+const ASSISTANT_MESSAGE_SHAPE_REJECTION = /content or tool_calls must be set/i
+
+/**
  * Whether one rejection says "ZDR requested, no ZDR-capable upstream": the
  * provider spells the code `cmd_zdr_no_providers` in JSON error bodies and
  * `CMD_ZDR_NO_PROVIDERS` in plain-text ones (the official CLI's own
@@ -401,6 +419,25 @@ export function generateHttpError(
       + ' a new session, or reduce the messages and images in this one',
       `Command Code API 返回 ${status}：请求超过网关的 JSON 节点数上限（节点数不能超过 ${nodeLimit}）`
       + '——限制的是请求结构，不是 token 长度，压缩上下文通常不足以降到该上限以内；请新建会话，或减少本会话中的消息与图片',
+      { status },
+    )
+  }
+  if (status < 500 && ASSISTANT_MESSAGE_SHAPE_REJECTION.test(overflowDetail)) {
+    // A structurally invalid replayed turn, not a model/plan/settings problem
+    // (issue #122). No retry and no compaction can fix a malformed message, so
+    // the advice names the one real recovery: the history has to stop sending
+    // that shape, which a rebuilt (new) session does and a resumed one may not.
+    return bilingual(
+      'PROVIDER_HTTP_ERROR',
+      `Command Code API error ${status}: a replayed assistant turn is malformed`
+      + ' — the provider refuses a message whose content is empty while it carries no tool call'
+      + ' (upstream: "content or tool_calls must be set"). This is not a model, plan or'
+      + ' settings problem: the session history contains a turn this endpoint cannot accept.'
+      + ' Update the plugin, then retry; if it persists, start a new session',
+      `Command Code API 返回 ${status}：回放的 assistant 消息结构不合法`
+      + '——上游拒绝了「正文为空且没有工具调用」的 assistant 消息（原文：content or tool_calls must be set）。'
+      + '这不是模型、套餐或请求设置的问题，而是会话历史里存在该端点无法接受的一轮。'
+      + '请升级插件后重试；若仍失败，请新建会话',
       { status },
     )
   }

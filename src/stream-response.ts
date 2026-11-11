@@ -736,7 +736,7 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   if (!Array.isArray(choices) || choices.length === 0) {
     // A standalone usage chunk (some OpenAI-compatible servers send it
     // before [DONE]) still carries usage.
-    if (event.usage !== undefined) {
+    if (isRecord(event.usage)) {
       chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
     }
     return chunks
@@ -814,7 +814,7 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
     asm.finishReason = stringValue(choice.finish_reason)
     chunks.push(...closeText(asm), ...closeReasoning(asm), ...emitOpenAiToolCalls(asm))
-    if (event.usage !== undefined) {
+    if (isRecord(event.usage)) {
       chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
     }
     chunks.push({ type: 'finish', reason: mapFinishReason(choice.finish_reason) })
@@ -1019,7 +1019,8 @@ function emptyCompletionError(
 ): LlmError {
   const detail = `finish_reason=${reason ?? 'unknown'}, max_tokens=${maxTokens}, outputTokens=${usage?.outputTokens ?? 'unknown'}, reasoningTokens=${usage?.reasoningTokens ?? 'unknown'}`
   if (mapFinishReason(reason).kind === 'max-tokens') {
-    // A length finish proves a generation limit, not how all tokens were spent.
+    // Preserve the provider's limit signal, but do not present it as measured
+    // exhaustion of our request budget: the gateway can omit usage entirely.
     // Keep this outside the retry whitelist: replaying the identical budget
     // can repeatedly charge for reasoning without ever producing an answer. A
     // genuine context-window rejection has its own upstream wording and is
@@ -1030,8 +1031,14 @@ function emptyCompletionError(
     // removed, issue #74).
     return bilingual(
       'OUTPUT_TOKEN_LIMIT',
-      `Command Code reached the output token limit without producing answer text or a tool call (${detail})`,
-      'Command Code 已达到输出 token 上限，但没有生成正文或工具调用；请调整思考强度，或在模型和接口上限内增加输出预算',
+      `Command Code returned no answer text or tool call and reported a token-limit finish reason (${detail}). `
+        + 'max_tokens is the output budget, not measured token usage. '
+        + (usage === undefined ? 'The provider supplied no usage, so actual token consumption cannot be confirmed. ' : '')
+        + `If this was unexpected, capture the raw stream with ${STREAM_TRACE_ENV} to diagnose the upstream response`,
+      'Command Code 未生成正文或工具调用，上游报告输出截断；max_tokens 表示输出预算，并非已消耗 token 数。'
+        + (usage === undefined ? '上游未返回用量，无法确认实际消耗。' : '')
+        + '若确认预算耗尽，可降低思考强度或在模型和接口上限内增加预算；'
+        + `若与实际情况不符，请通过 ${STREAM_TRACE_ENV} 抓取原始流以排查上游响应`,
     )
   }
   if (reason === 'content_filter' || reason === 'content-filter') {

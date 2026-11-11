@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **输出截断的诊断不再把「上游报了 length 终态」说成「已耗尽输出预算」，且 OpenAI 的 `usage: null` 占位不再被当成用量。** 原文案「Command Code 已达到输出 token 上限」把上游的**截断信号**当成了本地预算的**测量结论**：网关可以在终态里完全不返回 usage，此时既不能确认预算耗尽，也不能确认 thinking 花了多少 token，而用户看到的却是言之凿凿的「已达上限」，于是照着「降低思考强度／增加预算」调也未必有用。现在文案改为如实陈述：上游报告截断、`max_tokens` 是**输出预算而非已消耗 token 数**、未收到 usage 时明确写「无法确认实际消耗」，并在疑似异常时指引用 `DSH_COMMANDCODE_TRACE` 抓原始流排查；`OUTPUT_TOKEN_LIMIT` 失败码、重试白名单（仍不可重试）与三协议行为均不变。**同时修掉一处用量丢失**：OpenAI 流里的 `usage: null`（部分 OpenAI 兼容服务在终态发空占位）此前会被当成一个真实用量对象映射，可能以 0 覆盖先前已收到的 usage；现在 `null` 占位被忽略，已收到的用量原样保留，独立 usage 分块与终态分块两条路径都已覆盖。**改动**：`src/stream-response.ts`（两处 `event.usage !== undefined` → `isRecord(event.usage)`，`emptyCompletionError()` 的双语文案）；`tests/adapter.test.ts` 原 1 条用例扩为三协议循环（CLI／OpenAI／Messages）并新增两条 `usage: null` 覆盖（终态分块、独立分块），断言不再出现「已达上限／耗尽了全部 reasoning」这类measured 口径，且失败码不进入重试白名单；`tests/web-search.test.ts` 补一条回归护栏：搜索上游 504 `Request timed out performing the search` 必须保持 `WEB_PROVIDER_ERROR`，不得被误判为模型的输出 token 上限（`src/web-search.ts` 无改动，纯护栏）。**验证**：`npm run typecheck` 退出码 0、`npm test` **1230／1230**、`npm run build` 两段 `Build complete`。**未做**：未在真实账号上复验「网关只发 length 终态、不发 usage」这一上游形态，该文案改动依据的是代码路径与合成流，不是实测响应。
+
+### Fixed
+
+- **没有正文、也没有工具调用的一轮 assistant 消息不再以 `content: null` 发往 `/provider/v1/chat/completions`，DeepSeek 每轮 400 的问题结束（[#122](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/122)）。** 报告人（GOAT 套餐）在 `deepseek/deepseek-v4.1-flash` 上频繁遇到 `400`，界面只显示通用文案「服务端拒绝了本次请求，请检查模型、套餐和请求设置」；换 Pi 的 Command Code 插件、或换 GLM-5.3 Flash 均正常。**根因**：该端点的 assistant 消息里 `content: null` 只在**同时带 `tool_calls`** 时合法，否则整条请求被拒，上游原文为 `Invalid assistant message: content or tool_calls must be set`（这一句此前不被错误映射识别，故落到通用分支，把人引向三个都正确的方向）。**触发路径**：某一轮的 tool call 没有配对 tool result 时，`pairedToolCalls()` 按既有策略丢弃该调用，这一轮就退化成「只有 reasoning、没有正文、没有工具调用」，`buildOpenAI` 侧写入 `content: null` → 400。压缩、工具结果裁剪、中断的轮次、跨 provider 切换都会留下这种历史；因为拒绝的是**整个请求**，历史里只要有一轮如此，该会话此后每一轮都是 400（与报告人「频繁出现」一致）。**实测（2026-11-11，真实 GOAT 账号，`/provider/v1/chat/completions` + `deepseek/deepseek-v4.1-flash`，单请求逐形状对照）**：`content: null` + `reasoning_content` → **400**；`content: ""` + 同样的 `reasoning_content` → **200**；省略 `content` 键 → **400**；带 `tool_calls` 时 `content: null` → **200**（保留不变）。**为什么 Pi 与 GLM 正常**：`/alpha/generate` 把 reasoning 作为 content **数组里的一个 part**，不存在 null/空串之分，同形状实测 200；GLM-5.3 Flash 不校验该项。**改动**：`src/adapter.ts` 的 OpenAI 编码器改为「有正文则用正文；无正文但有 tool calls 仍用 `null`；二者皆无则用空串」。**错误文案**：`src/provider-errors.ts` 新增 `ASSISTANT_MESSAGE_SHAPE_REJECTION`，该 400 不再落到通用分支，改为说明「会话历史里存在该端点无法接受的一轮，请升级插件后重试，仍失败则新建会话」，并明确否定模型／套餐／设置三项。**验证**：把修复临时回退后，同一条真实历史（真实 adapter + 真实账号）稳定复现 400；修复后同一请求正常流式返回；孤立 tool-call 这条退化路径单独做过 A/B（回退 400 / 修复 200）。`tests/adapter.test.ts` 新增 4 条（reasoning-only 用 `""`、有 tool_calls 仍为 `null`、多轮混合无遗漏、**孤立 tool-call 退化路径**）与 1 条错误映射用例；`npm run typecheck` 退出码 0、`npm test` **1230／1230**、`npm run build` 两段 `Build complete` 且 `lib/` 已重建。**未做**：未在浏览器界面里走完整 GUI 会话；未用报告者本人那条会话复验（其会话文件未提供），复现基于本机真实会话历史与同一上游报错原文。
+
 ## [0.17.5] - 2026-11-10
 
 ### Changed
