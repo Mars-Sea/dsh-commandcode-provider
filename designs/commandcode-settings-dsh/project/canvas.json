@@ -1,0 +1,77 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-11-12T02:53:00Z"
+  },
+  "title": "Command Code 设置页重设计（DSH 原生风格）",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 920,
+      "h": 880,
+      "title": "方案 A（主推）· 原生设置弹窗内效果（800×800 壳）",
+      "is_interactive": true
+    },
+    "FormAndOverrides.dc.html": {
+      "x": 1000,
+      "y": 0,
+      "w": 680,
+      "h": 1220,
+      "title": "方案 A 展开全览 · SettingsForm 与字段原语细节",
+      "is_interactive": true
+    },
+    "SegmentedTabsVariant.dc.html": {
+      "x": 1760,
+      "y": 0,
+      "w": 920,
+      "h": 880,
+      "title": "方案 B（零折叠备选）· SegmentedTabs 三栏切换",
+      "is_interactive": true
+    },
+    "DarkAndOverlays.dc.html": {
+      "x": 0,
+      "y": 1540,
+      "w": 920,
+      "h": 880,
+      "title": "深色模式（data-ds-dark-theme）与浮层原语态",
+      "is_interactive": true
+    },
+    "ComponentReuseSpec.dc.html": {
+      "x": 1000,
+      "y": 1540,
+      "w": 1680,
+      "h": 880,
+      "title": "原语复用对照表 · 移除自写组件映射清单"
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "FormAndOverrides.dc.html",
+    "SegmentedTabsVariant.dc.html",
+    "DarkAndOverlays.dc.html",
+    "ComponentReuseSpec.dc.html"
+  ],
+  "notes": {
+    "row1_title": {
+      "x": 0,
+      "y": -240,
+      "text": "Command Code 设置页 · 对齐 DSH 原生风格与 UI 原语",
+      "kind": "title1",
+      "maxW": 2680
+    },
+    "row2_title": {
+      "x": 0,
+      "y": 1300,
+      "text": "深色主题、浮层菜单与原语收敛清单",
+      "kind": "title1",
+      "maxW": 2680
+    }
+  },
+  "designSystems": []
+}

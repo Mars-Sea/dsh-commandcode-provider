@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { LlmError } from '@deepseek-ai/dsh-llm'
+import { providerError } from '../src/llm-error.ts'
 import { GatewayFacts, modelOutputTokenLimit, outputCeilingRefusal } from '../src/gateway-facts.ts'
 
 const model = 'synthetic/facts'
@@ -114,7 +114,7 @@ test('版本或网关不匹配的磁盘不能成为目录事实', async t => {
 
 test('上限拒绝以实发值判断，共享学习只降低且按网关隔离', () => {
   const a = source('facts-learning-a').apiBase, b = source('facts-learning-b').apiBase
-  const error = (limit: number) => new LlmError(`max_tokens: 131072 > ${limit}, which is the maximum allowed number of output tokens`, 'PROVIDER_HTTP_ERROR')
+  const error = (limit: number) => providerError(`max_tokens: 131072 > ${limit}, which is the maximum allowed number of output tokens`, 'PROVIDER_HTTP_ERROR')
   assert.equal(outputCeilingRefusal(a, model, 131072, error(20000)), 20000)
   assert.equal(outputCeilingRefusal(a, model, 131072, error(40000)), 20000)
   assert.equal(outputCeilingRefusal(a, model, 20000, error(40000)), undefined)

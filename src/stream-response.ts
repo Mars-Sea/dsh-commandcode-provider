@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { LlmError, ProviderRequestId, ToolCallId, errorChain, type FinishReason, type StreamChunk, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import { bilingual, streamErrorToLlmError } from './provider-errors.ts'
+import { providerError } from './llm-error.ts'
 import { isRecord, numberValue, stringValue, recordOrEmpty } from './wire-guards.ts'
 import { boundTraceText, STREAM_TRACE_ENV, type StreamTrace } from './stream-trace.ts'
 import type { RequestTiming } from './request-timing.ts'
@@ -79,7 +80,7 @@ async function* readResponse(response: Response, context: StreamResponseContext)
   const { protocol, signal, maxTokens, apiBase, streamIdleTimeoutMs, responseMetadata, trace, timing } = context
   if (!response.body) {
     trace.record('end', { outcome: 'empty', code: 'PROVIDER_PROTOCOL_ERROR' })
-    throw failureWithRequestId(new LlmError('Command Code API returned no response body', 'PROVIDER_PROTOCOL_ERROR'), responseMetadata)
+    throw failureWithRequestId(providerError('Command Code API returned no response body', 'PROVIDER_PROTOCOL_ERROR'), responseMetadata)
   }
 
   // --- SSE/JSONL event stream -> harness StreamChunk protocol ---
@@ -435,7 +436,7 @@ function hasResponseIdentifiers(metadata: ResponseMetadata): boolean {
 export function failureWithRequestId(error: unknown, metadata: ResponseMetadata): unknown {
   const id = metadata.providerRequestId ?? metadata.headers['x-request-id'] ?? metadata.headers['request-id']
   if (!(error instanceof LlmError) || error.failure.requestId !== undefined || id === undefined) return error
-  return new LlmError(error.message, error.code, {
+  return providerError(error.message, error.code, {
     ...error.failure,
     requestId: ProviderRequestId(id),
     ...(error.cause === undefined ? {} : { cause: error.cause }),
@@ -732,15 +733,13 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   // surfaced only as a generic EMPTY_RESPONSE (which the retry policy repeats)
   // and the real cause was lost.
   if (event.error !== undefined) throw streamErrorToLlmError(event.error, stringValue(event.message))
-  const choices = event.choices
-  if (!Array.isArray(choices) || choices.length === 0) {
-    // A standalone usage chunk (some OpenAI-compatible servers send it
-    // before [DONE]) still carries usage.
-    if (isRecord(event.usage)) {
-      chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
-    }
-    return chunks
+  // Usage belongs to the event, independently of its choices or finish reason.
+  // The gateway also sends tail usage with an empty delta and a null finish_reason.
+  if (isRecord(event.usage)) {
+    chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
   }
+  const choices = event.choices
+  if (!Array.isArray(choices) || choices.length === 0) return chunks
   const choice = isRecord(choices[0]) ? choices[0] : {}
   const delta = isRecord(choice.delta) ? choice.delta : {}
 
@@ -814,9 +813,6 @@ function handleOpenAIEvent(asm: BlockAssembler, event: unknown): StreamChunk[] {
   if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
     asm.finishReason = stringValue(choice.finish_reason)
     chunks.push(...closeText(asm), ...closeReasoning(asm), ...emitOpenAiToolCalls(asm))
-    if (isRecord(event.usage)) {
-      chunks.push({ type: 'usage', usage: mapOpenAIUsage(event.usage) })
-    }
     chunks.push({ type: 'finish', reason: mapFinishReason(choice.finish_reason) })
   }
   return chunks

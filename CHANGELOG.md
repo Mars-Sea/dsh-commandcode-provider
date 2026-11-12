@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.7] - 2026-11-12
+
+### Changed
+
+- **设置页与账号卡片改用 DSH 原生组件。** 设置页采用统一字段、按钮、输入框、分段选项、状态标记、标签和确认弹窗；保留账户、模型、集成和高级设置四个分组，保存操作改为有待保存内容时显示的底栏。账户卡片和详情区的层次、间距及深色模式样式与宿主对齐，移除顶部重复状态展示；固定账户的取消固定操作可直接使用，即使凭据来自只读的组合配置，也能在配置可写时恢复自动轮换；只读和操作忙碌时正确禁用。配套设计源稿与渲染回归测试一同纳入仓库。
+- **适配并验证 DSH `0.2.2-rc.2`，保留旧引擎和原有重试分类。** 新增 `src/llm-error.ts`：存在 `LlmError.fromFailure()` 时用官方开放错误码工厂，否则走旧引擎构造函数；共享错误分类、流响应请求号补全、模型目录错误与账号池的 `THROTTLED` 分支改走该入口。自定义错误码不重映射，`cause`、HTTP 状态、重试等待、请求号及图片卸载数量保持原样。新增两条 API 分支的错误事实回归、三协议限流元数据回归，并在 `test:engine` 加入三协议 × HTTP 拒绝／限流／空响应体的真实引擎错误探针。11-11 先完成预适配，11-12 在用户升级后补齐目标验证；全套 rc.2 类型检查还发现既有图标插槽 owner 补充声明与辅助请求用途类型的问题，现已对齐 owner 形状，并以 `Omit<GenerateOptions, 'purpose'> & { purpose?: string }` 转发外部 producer 用途，标题夹具按适配器参数校验。**验证**：本地旧依赖与全套 rc.2 隔离依赖的类型检查均退出码 0；单测 **1239/1239**（含工作树既有 issue #124 回归）；构建、实际安装 rc.2 引擎检查及目标单版本隔离安装均退出码 0；补入 rc.2 后 `test:engine` 与 `test:install` 均 **8/8**、退出码 0，详细结果见[对接说明](docs/对接说明.md#四验证证据与边界)。**声明**：`dshReleases` 由七条扩为八条，引擎范围、vendor 配对和依赖声明不变；此次与其他本地改动统一发布为 `0.17.7`，锁文件同步版本号。此前 npm `ETARGET`／`E404` 缺口已消除。兼容验证未做真实账号生成、浏览器或 macOS Desktop 交互验证。
+
+### Fixed
+
+- **修复 OpenAI 占位 choice 帧中的用量丢失（[#124](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/124)）。** 网关把尾部 `usage` 放在 `choices: [{ delta: {}, finish_reason: null }]` 时，原解析器既不进入空 choices 分支，也不进入结束原因分支，用量被跳过。现在事件级用量在错误检查后统一提取，不依赖 choices 或结束原因；继续忽略 `usage: null`，只在终止前向宿主交付最后一份累计读数一次。新增公开 `CommandCodeAdapter.stream()` 回归，覆盖报告中的尾帧、缺失结束原因与缓存读数、后续空用量不覆盖，以及多帧累计用量和正文交付。先确认原解析器因缺少 usage 而失败，最小修复后通过；本地完整测试 **1239/1239**、类型检查与构建退出码均为 0。真实网关同模型返回 HTTP 200 和占位 choice 用量帧，同一真实响应在修复前丢失用量、修复后回放交付一份 input 11／output 2／total 13 的用量，正文一致；详见[复现、修复计划与验证记录](docs/issue-124-usage-review.md)。浏览器统计区恢复尚未实测。
+
+**v0.17.7 发布前检查（2026-11-12）**：隔离锁文件 `npm ci --dry-run --ignore-scripts`、本地类型检查、最终源码的完整 rc.2 依赖类型检查、**1243/1243** 单测、构建、八引擎加载矩阵 **8/8**、隔离安装矩阵 **8/8**、发布入口检查（16 个文件）及 `npm pack --dry-run` 均退出码 0。`test:update` 对当前已发布版本 `0.17.5 → 0.17.6` 的隔离更新资格检查通过；上传后再核对 `0.17.6 → 0.17.7`。设置页改造的新增回归使用 React 渲染树与原语替身，未做浏览器端到端或 macOS Desktop 交互验收；兼容矩阵使用合成网络和凭据。配套设计源文件一并提交，编辑器缓存与日志按既有忽略规则留在本机。
+
 ## [0.17.6] - 2026-11-11
 
 ### Changed

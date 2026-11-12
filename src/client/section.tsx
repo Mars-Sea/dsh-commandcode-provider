@@ -1,32 +1,41 @@
 /**
  * React component for the "Command Code" settings page (browser half).
  *
- * Renders as a `settings.section` entry — a page at the same settings-nav
- * level as General / Models / Plugins. All copy comes from the
- * `settings.commandcode` locale namespace; all state comes from the
- * `CommandCodeSettingsController` injected by the slot registration.
- *
- * Layout, top to bottom: Accounts (one card per account, status, quota,
- * actions and dedicated models — every operation commits immediately), Models
- * & context (plan filter + visible-model allowlist, then the context-length
- * rows: the global custom window and the per-model overrides, issue #86),
- * Privacy & security (ZDR), Integrations & display (service status, web search,
- * sidebar quota card), and Advanced (API base + network limits). Everything
- * below Accounts is a flat group of rows (title/description left, control
- * right) inside the staged form the floating save bar writes.
- *
- * All five groups fold from their own heading (`FoldableGroup`, 决策记录第十章
- * 第4条): Accounts opens by default, the rest start folded, and the choice is
- * remembered per browser (./group-fold.ts). A folded heading still summarizes its group, and anything
- * inside it that blocks the save is reported on the heading; the save bar's
- * Locate action opens that group and focuses the invalid field.
- *
- * Styles are injected once by the client entry (see src/client/index.ts) and
- * class-prefixed `cc-` to stay local.
+ * Variant A (native DSH alignment): renders as a `settings.section` entry with
+ * the same typography, flat `0.5px` group dividers, `20px` entity cards and
+ * `16px` inline module panels as DSH's own `ModelsSection` and
+ * `PluginInventorySettingsTab`. Standard UI atoms — `Button`, `Switch`, `Tag`,
+ * `StateDot`, `SegmentedControl`, `SettingsValueField`, `Input`, `Menu`,
+ * `Modal`, and the `Icon*Outline*` glyph set — come directly from the seeded
+ * `@deepseek-ai/dsh-client-ui-primitives` package rather than local copies.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { Menu, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import {
+  Button,
+  IconCheckCircleOutlineRegular,
+  IconChevronDownOutlineRegular,
+  IconEllipsisOutlineRegular,
+  IconGaugeOutlineRegular,
+  IconInfoOutlineRegular,
+  IconPlusOutlineMedium,
+  IconPlusOutlineRegular,
+  IconRefreshOutlineRegular,
+  IconRightUpOutlineRegular,
+  IconSearchOutlineRegular,
+  IconShieldOutlineRegular,
+  IconTrashOutlineRegular,
+  IconWarningOutlineRegular,
+  IconWarningTriangleOutlineRegular,
+  Input,
+  Menu,
+  Modal,
+  SegmentedControl,
+  SettingsValueField,
+  StateDot,
+  Switch,
+  Tag,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry, StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeCredits } from '../adapter.ts'
@@ -36,10 +45,28 @@ import type { CatalogModelOption, SettingsPageState, StagedField } from './setti
 import type { AccountEnrollmentController, EnrollmentPageState } from './enrollment.ts'
 import type { LoginPageState } from './login.ts'
 import { loginHint, loginStateForTarget } from './login.ts'
-import { allowlistedModels, buildModelSelectOptions, catalogIsReady, groupModelSelectOptions, staleModelIds, tierHeadingFor, toggleModelSelection } from './model-select.ts'
+import {
+  allowlistedModels,
+  buildModelSelectOptions,
+  catalogIsReady,
+  groupModelSelectOptions,
+  staleModelIds,
+  tierHeadingFor,
+  toggleModelSelection,
+} from './model-select.ts'
 import type { UsagePageState } from './usage.ts'
 import { USAGE_AUTO_RETRY_LIMIT, USAGE_AUTO_RETRY_MS, usageCardState } from './usage.ts'
-import { compactCountTitle, formatCompactCount, formatMoney, formatMoneyExact, formatResetAtShort, formatSuccessRate, formatTokensCompact, windowRatio, formatUsageBillingPeriod } from '../display-format.ts'
+import {
+  compactCountTitle,
+  formatCompactCount,
+  formatMoney,
+  formatMoneyExact,
+  formatResetAtShort,
+  formatSuccessRate,
+  formatTokensCompact,
+  formatUsageBillingPeriod,
+  windowRatio,
+} from '../display-format.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
 import { checkForUpdate, localStorageUpdateStore } from './update.ts'
 import {
@@ -54,96 +81,47 @@ import type { ServiceProbe, ServiceStatusSnapshot, ServiceStatusView, ServiceTon
 import type { CommandCodeProbeResult } from '../service-probe-wire.ts'
 import { expandGroups, localStorageFoldStore, type FoldGroup, type FoldState } from './group-fold.ts'
 
-/**
- * The page's line icons, one single-colour 16px stroke set so every glyph in
- * the page reads alike (the UI rules forbid emoji and character icons such as
- * "×" or "↗"). The colour comes from `currentColor`, i.e. from the button,
- * link or notice tone the icon sits in.
- */
-type IconName = 'swap' | 'chevron' | 'more' | 'chart' | 'arrowRight' | 'check' | 'reset' | 'close' | 'refresh' | 'plus' | 'external' | 'info' | 'warn' | 'error' | 'lock'
-const ICON_PATHS: Record<IconName, ReactNode> = {
-  swap: <><path d="M2.5 5h9l-2-2" /><path d="M13.5 11h-9l2 2" /></>,
-  chevron: <path d="M4 6l4 4 4-4" />,
-  more: <><circle cx="8" cy="3.5" r=".9" fill="currentColor" stroke="none" /><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none" /><circle cx="8" cy="12.5" r=".9" fill="currentColor" stroke="none" /></>,
-  chart: <><path d="M2.5 13.5h11" /><path d="M4.5 13.5V8.5M8 13.5V4.5M11.5 13.5V6.5" /></>,
-  arrowRight: <path d="M3 8h10M9 4l4 4-4 4" />,
-  check: <><circle cx="8" cy="8" r="6" /><path d="M5.5 8.2 7.2 9.8 10.5 6.5" /></>,
-  reset: <><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9" /><path d="M2.5 2.5v3h3" /></>,
-  close: <path d="M4 4l8 8M12 4l-8 8" />,
-  refresh: <><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" /><path d="M13.5 2.5v3h-3" /></>,
-  plus: <path d="M8 3v10M3 8h10" />,
-  external: <><path d="M9 2.5h4.5V7" /><path d="M13.5 2.5 7.5 8.5" /><path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" /></>,
-  info: <><circle cx="8" cy="8" r="6" /><path d="M8 7.25v3.5M8 5.25v.01" /></>,
-  warn: <><path d="M8 2.5 14 13H2z" /><path d="M8 6.5v3M8 11.25v.01" /></>,
-  error: <><circle cx="8" cy="8" r="6" /><path d="M6 6l4 4M10 6l-4 4" /></>,
-  lock: <><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></>,
-}
-
-function Icon({ name, className = 'cc-icon' }: { name: IconName; className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {ICON_PATHS[name]}
-    </svg>
-  )
-}
-
-/**
- * The page's button, drawn to the design canvas (cc-kit.css) rather than taken
- * from the harness primitive, whose 36px / 12px-corner md size and outline
- * secondary read heavier than the design: every button is a capsule; md is
- * 32px (14px text, 14px icon), sm 28px (12px text), lg 36px (the save bar);
- * `primary` is the brand fill, `outline` the design's quiet grey fill, `ghost`
- * label-secondary text on no fill, `danger` the error fill for a destructive
- * confirm. Native button attributes pass through; `type` defaults to button.
- */
-type PageButtonVariant = 'primary' | 'outline' | 'ghost' | 'danger'
-const PAGE_BUTTON_VARIANT: Record<PageButtonVariant, string> = {
-  primary: 'cc-btnPrimary',
-  outline: 'cc-btnSecondary',
-  ghost: 'cc-btnGhost',
-  danger: 'cc-btnDanger',
-}
-const PAGE_BUTTON_SIZE = { sm: ' cc-btnSm', md: '', lg: ' cc-btnLg' } as const
-
-function PageButton({ variant = 'ghost', size = 'md', icon, className, type = 'button', children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: PageButtonVariant
-  size?: keyof typeof PAGE_BUTTON_SIZE
-  /** Leading line icon; drawn at the button's icon size. */
-  icon?: ReactNode
-}) {
-  const classes = `cc-btn ${PAGE_BUTTON_VARIANT[variant]}${PAGE_BUTTON_SIZE[size]}${className === undefined ? '' : ` ${className}`}`
-  return (
-    <button {...rest} type={type} className={classes}>
-      {icon}
-      {children}
-    </button>
-  )
-}
-
 type NoticeTone = 'neutral' | 'success' | 'warn' | 'error'
-const NOTICE_ICON: Record<NoticeTone, IconName> = { neutral: 'info', success: 'check', warn: 'warn', error: 'error' }
-const NOTICE_CLASS: Record<NoticeTone, string> = { neutral: 'cc-notice', success: 'cc-notice cc-noticeSuccess', warn: 'cc-notice cc-noticeWarn', error: 'cc-notice cc-noticeError' }
+type NoticeIconKind = 'info' | 'check' | 'warn' | 'error' | 'lock'
+const NOTICE_DEFAULT_ICON: Record<NoticeTone, NoticeIconKind> = {
+  neutral: 'info',
+  success: 'check',
+  warn: 'warn',
+  error: 'error',
+}
+const NOTICE_CLASS: Record<NoticeTone, string> = {
+  neutral: 'cc-notice',
+  success: 'cc-notice cc-noticeSuccess',
+  warn: 'cc-notice cc-noticeWarn',
+  error: 'cc-notice cc-noticeError',
+}
+
+function NoticeGlyph({ kind }: { kind: NoticeIconKind }) {
+  if (kind === 'check') return <IconCheckCircleOutlineRegular size={16} />
+  if (kind === 'warn') return <IconWarningTriangleOutlineRegular size={16} />
+  if (kind === 'error') return <IconWarningOutlineRegular size={16} />
+  if (kind === 'lock') return <IconShieldOutlineRegular size={16} />
+  return <IconInfoOutlineRegular size={16} />
+}
 
 /**
- * The one block every result, warning and failure on this page uses (read-only
- * config, a failed account operation, a cleanup still owed, …), so status no
- * longer arrives as loose red paragraphs in a different shape each time.
- * Actions sit under the text; the caller keeps the live-region role.
+ * Quiet module-platform callout for inline status, warnings and recovery actions,
+ * using DSH product icons instead of custom SVG paths.
  */
 function Notice({ tone = 'neutral', icon, title, actions, role = 'status', label, children }: {
   tone?: NoticeTone
-  /** Overrides the tone's default icon (the read-only notice shows a lock). */
-  icon?: IconName
+  icon?: NoticeIconKind
   title?: string
   actions?: ReactNode
-  /** `alertdialog` for an in-place confirmation, which then needs `label`. */
-  role?: 'status' | 'alert' | 'alertdialog'
+  role?: 'status' | 'alert'
   label?: string
   children?: ReactNode
 }) {
   return (
     <div className={NOTICE_CLASS[tone]} role={role} aria-label={label}>
-      <Icon name={icon ?? NOTICE_ICON[tone]} className="cc-noticeIcon" />
+      <span className="cc-noticeIcon" aria-hidden="true">
+        <NoticeGlyph kind={icon ?? NOTICE_DEFAULT_ICON[tone]} />
+      </span>
       <div className="cc-noticeBody">
         {title !== undefined ? <p className="cc-noticeTitle">{title}</p> : null}
         {children}
@@ -164,23 +142,12 @@ export interface CommandCodeSettingsProps {
   save(): void
   discard(): void
   refreshUsage(): void
-  /**
-   * The automatic half: first paint, and the card's own 30-second re-check
-   * loop while the report is still missing something. Nobody clicked anything,
-   * so this may coalesce with a read another surface just made; refreshUsage
-   * above is the user's own request and always goes to the wire.
-   */
   refreshUsageAuto(): void
   openAnalytics?(): void
   refreshCredentials(): void
   beginLogin(targetRef?: string): void
   cancelLogin(): void
   createEnrollment(): AccountEnrollmentController
-  /**
-   * The status row's live half: one Host-side probe of the configured API base
-   * (`commandcode/probe`). A Host older than that endpoint answers the failure
-   * branch, which the row renders as "unknown" rather than throwing.
-   */
   probeService(): Promise<
     | { ok: true; value: CommandCodeProbeResult }
     | { ok: false; error: { message: string } }
@@ -194,20 +161,11 @@ export interface CommandCodeSettingsProps {
   setAccountModels(target: string, ids: string[]): Promise<boolean>
   editVisibleModels(ids: string[]): void
   clearVisibleModels(): void
-  /** Stage the whole per-model context-length map (one entry per row, issue #86). */
   editContextWindowOverrides(next: Record<string, string>): void
-  /** Stage the whole per-model display-name map (one entry per row, issue #121). */
   editModelNames(next: Record<string, string>): void
 }
 
-/**
- * The Host-side defaults an empty field falls back to, shown as placeholders so
- * an empty box reads "300 s" rather than looking broken. They are literals
- * because the client bundle must not pull in the adapter; `tests/section.test.ts`
- * pins each one to the constant it mirrors (DEFAULT_API_BASE,
- * DEFAULT_REQUEST_TIMEOUT_MS / DEFAULT_STREAM_IDLE_TIMEOUT_MS in seconds,
- * DEFAULT_TRANSPORT_MAX_RETRIES).
- */
+/** Host-side defaults shown as placeholders when a field is empty. */
 export const FIELD_DEFAULTS = {
   apiBase: 'https://api.commandcode.ai',
   requestTimeoutSeconds: '300',
@@ -215,7 +173,6 @@ export const FIELD_DEFAULTS = {
   transportMaxRetries: '5',
 } as const
 
-/** The section fields folded into the collapsible Advanced card. */
 type AdvancedField = 'apiBase' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'transportMaxRetries' | 'offloadSeenImagesForCache'
 const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'apiBase',
@@ -225,30 +182,13 @@ const ADVANCED_FIELDS: readonly AdvancedField[] = [
   'offloadSeenImagesForCache',
 ]
 
-/**
- * The staged drafts the Models & context group owns. `filterModelsByPlan` is a
- * switch and cannot fail through the page's own control, but it sits in the
- * same staged plan the save guard walks and Advanced's equivalent switch is
- * checked the same way — so the heading must not be able to disagree with it.
- */
 type ModelsField = 'filterModelsByPlan' | 'contextWindow' | 'maxOutputTokens'
 const MODELS_FIELDS: readonly ModelsField[] = ['filterModelsByPlan', 'contextWindow', 'maxOutputTokens']
 
-/**
- * Whether anything the collapsed Advanced card owns is blocking the save. The
- * card is folded on arrival, so this drives the warning badge on its heading.
- */
 export function advancedGroupInvalid(state: Pick<SettingsPageState, AdvancedField>): boolean {
   return ADVANCED_FIELDS.some((field) => state[field].invalid)
 }
 
-/**
- * Whether anything the collapsed Models & context group owns is blocking the
- * save (issue #94). Besides its staged drafts — the plan switch and the two
- * numbers — that group owns the per-model context rows, whose drafts are
- * validated one by one: a bad row must surface on the heading just like a bad
- * number, or Save would sit disabled with nothing on screen explaining why.
- */
 export function modelsGroupInvalid(
   state: Pick<SettingsPageState, ModelsField | 'contextWindowOverrides'>,
 ): boolean {
@@ -256,12 +196,6 @@ export function modelsGroupInvalid(
     || state.contextWindowOverrides.some((row) => row.invalid)
 }
 
-/**
- * The groups holding a draft that blocks the save, in page order — what the
- * save bar's locate action opens before focusing the first invalid field.
- * Privacy and Integrations hold switches only and Accounts is not staged, so
- * only these two can ever appear.
- */
 export function invalidGroups(state: Pick<SettingsPageState, AdvancedField | ModelsField | 'contextWindowOverrides'>): FoldGroup[] {
   const groups: FoldGroup[] = []
   if (modelsGroupInvalid(state)) groups.push('models')
@@ -269,35 +203,19 @@ export function invalidGroups(state: Pick<SettingsPageState, AdvancedField | Mod
   return groups
 }
 
-/**
- * "N customized" on the Models & context heading: its staged fields that
- * differ from the default, plus one per per-model context override and one per
- * custom model name (each row is a customization the user made).
- */
 export function modelsOverriddenCount(state: Pick<SettingsPageState, ModelsField | 'contextWindowOverrides' | 'modelNames'>): number {
   return MODELS_FIELDS.filter((field) => state[field].overridden).length
     + state.contextWindowOverrides.length + state.modelNames.length
 }
 
-/** "N customized" on the Advanced heading. */
 export function advancedOverriddenCount(state: Pick<SettingsPageState, AdvancedField>): number {
   return ADVANCED_FIELDS.filter((field) => state[field].overridden).length
 }
 
-/**
- * The effective value of a staged switch: an unset draft (`''`) means the
- * field's default. Used by the summary badges, which must say what the switch
- * on screen says.
- */
 export function stagedSwitch(field: StagedField, defaultValue: boolean): boolean {
   return field.text === '' ? defaultValue : field.text === 'true'
 }
 
-/**
- * Accounts that need attention, for the Accounts heading. Uses the same
- * verdicts as each row's status dot (`statusDotClass`): a rejected key is a
- * hard failure, a cooldown or any other mark a warning.
- */
 export function accountIssues(entries: readonly (Pick<CommandCodeAccountUsage, 'mark' | 'cooldownUntil'> | undefined)[]): { count: number; severe: boolean } {
   let count = 0
   let severe = false
@@ -313,22 +231,15 @@ export function accountIssues(entries: readonly (Pick<CommandCodeAccountUsage, '
   return { count, severe }
 }
 
-/**
- * One settings row, laid out like the harness's own General page: the title
- * and description on the left, the control on the right, a hairline between
- * rows.
- */
+/** One horizontal setting row (GeneralSection / WebSearchCard geometry). */
 function SettingRow({ title, titleFor, titleId, tag, description, error, control, className }: {
   title: string
-  /** Makes the title a `<label>` for this control id. */
   titleFor?: string
   titleId?: string
   tag?: ReactNode
   description?: ReactNode
-  /** Replaces the description while set. */
   error?: string | undefined
   control?: ReactNode
-  /** Extra row class, appended to `cc-row`. */
   className?: string | undefined
 }) {
   return (
@@ -349,12 +260,8 @@ function SettingRow({ title, titleFor, titleId, tag, description, error, control
 }
 
 /**
- * The title-line marker of a field that differs from its default: the
- * "customized" badge with a small reset button right after it (a draft that
- * only clears the stored value shows the button alone). Keeping reset on the
- * title line, not after the control, means no row reserves an empty reset
- * column — every control, account card and heading action ends on the same
- * right edge.
+ * Overridden marker for non-text rows (`ToggleField`), matching `SettingsValueField`'s
+ * `Tag` + quiet `reset` button pair so every overridden row reads identically.
  */
 function OverrideTag({ label, state, disabled, t, onReset }: {
   label: string
@@ -366,119 +273,36 @@ function OverrideTag({ label, state, disabled, t, onReset }: {
   if (!state.overridden && !state.clear) return null
   return (
     <span className="cc-overrideTag">
-      {state.overridden ? <span className="cc-badge">{t('overridden')}</span> : null}
+      {state.overridden ? <Tag tone="neutral">{t('overridden')}</Tag> : null}
       <button
         type="button"
-        className="cc-resetInline"
+        className="cc-resetLink"
         disabled={disabled}
         onClick={onReset}
         aria-label={`${label} — ${t('reset')}`}
-        title={t('reset')}
       >
-        <Icon name="reset" className="cc-icon cc-btnIcon" />
+        {t('reset')}
       </button>
     </span>
   )
 }
 
-/** One text/number field row. */
-function Field({
-  id,
-  label,
-  hint,
-  state,
-  disabled,
-  numeric,
-  decimal,
-  context,
-  output,
-  wide,
-  unit,
-  placeholder,
-  onEdit,
-  onReset,
-  t,
-}: {
-  id: string
-  label: string
-  /** Absent when the group's own description already says it (API base). */
-  hint?: string
-  state: StagedField
-  disabled: boolean
-  numeric?: boolean
-  decimal?: boolean
-  /** Renders the context-length bounds copy instead of the generic number one. */
-  context?: boolean
-  /** Renders the output-budget bounds copy (0 = omit, capped by the gateway). */
-  output?: boolean
-  wide?: boolean
-  /**
-   * Unit drawn inside the number box, right of the value (seconds, tokens, …),
-   * as the design's field does; the label no longer repeats it.
-   */
-  unit?: string
-  /** What an empty field means — the default it falls back to. */
-  placeholder?: string | undefined
-  onEdit(text: string): void
-  onReset(): void
-  t: Translate<SettingsCommandCodeKey>
-}) {
-  const width = wide ? 'cc-rowInputWide' : 'cc-rowInput'
-  const input = (
-    <input
-      id={id}
-      className={unit === undefined ? `cc-fieldInput ${width}${state.invalid ? ' cc-fieldInputInvalid' : ''}` : 'cc-fieldInput'}
-      type="text"
-      inputMode={decimal ? 'decimal' : numeric ? 'numeric' : undefined}
-      aria-invalid={state.invalid || undefined}
-      value={state.text}
-      placeholder={placeholder}
-      disabled={disabled}
-      onChange={(event) => onEdit(event.target.value)}
-    />
-  )
-  return (
-    <SettingRow
-      title={label}
-      titleFor={id}
-      tag={<OverrideTag label={label} state={state} disabled={disabled} t={t} onReset={onReset} />}
-      description={hint}
-      error={state.invalid
-        ? invalidCopy(state.invalidReason, t, output === true ? 'output' : context === true ? 'context' : decimal === true ? 'duration' : 'number')
-        : undefined}
-      control={
-        <>
-          {unit === undefined ? input : (
-            <span className={state.invalid ? 'cc-unitBox cc-unitBoxInvalid' : 'cc-unitBox'}>
-              {input}
-              <span className="cc-unit">{unit}</span>
-            </span>
-          )}
-        </>
-      }
-    />
-  )
-}
-
-/** The per-field error copy for a staged draft's failure reason. */
-function invalidCopy(reason: StagedField['invalidReason'], t: Translate<SettingsCommandCodeKey>, mode: 'number' | 'duration' | 'context' | 'output' = 'number'): string {
+function invalidCopy(
+  reason: StagedField['invalidReason'],
+  t: Translate<SettingsCommandCodeKey>,
+  mode: 'number' | 'duration' | 'context' | 'output' = 'number',
+): string {
   if (mode === 'duration') {
     if (reason === 'tooSmall') return t('durationTooSmall')
     if (reason === 'tooLarge') return t('durationTooLarge')
     return t('durationInvalid')
   }
   if (mode === 'context') {
-    // The shared generic copy names the retry bounds ("Retries must be at
-    // least 0"), which would be wrong here — context lengths have their own
-    // 1 – 10,000,000 token bounds (CONTEXT_WINDOW_MIN/MAX).
     if (reason === 'tooSmall') return t('contextWindowTooSmall')
     if (reason === 'tooLarge') return t('contextWindowTooLarge')
     return t('contextWindowInvalid')
   }
   if (mode === 'output') {
-    // Same reason: this field's range includes 0 (the omit sentinel) and stops
-    // at the gateway's own cap, so neither the retry copy nor the context copy
-    // describes it.
     if (reason === 'tooSmall') return t('maxOutputTokensTooSmall')
     if (reason === 'tooLarge') return t('maxOutputTokensTooLarge')
     return t('maxOutputTokensInvalid')
@@ -488,18 +312,7 @@ function invalidCopy(reason: StagedField['invalidReason'], t: Translate<Settings
   return t('invalidNumber')
 }
 
-/**
- * One boolean field row rendered as a switch. The staged text is `'true'` /
- * `'false'` / `''` (unset → `defaultChecked`); toggling stages the string the
- * boolean field spec parses back into a real boolean on save.
- *
- * The control is the harness's own `Switch` primitive (issue #108), not a
- * restyled checkbox: a `<button role="switch" aria-checked>` whose drawing keys
- * off `aria-checked`, so what it shows cannot drift from what assistive tech
- * reads, and it matches the host's other settings switches. It takes no `id`,
- * so the row title is plain text and the switch carries the label as its
- * accessible name instead of through `<label htmlFor>`.
- */
+/** Boolean setting row backed by the platform `Switch` primitive (issue #108). */
 export function ToggleField({
   id,
   label,
@@ -513,7 +326,7 @@ export function ToggleField({
 }: {
   id: string
   label: string
-  hint: string
+  hint?: string
   state: StagedField
   disabled: boolean
   defaultChecked: boolean
@@ -521,13 +334,31 @@ export function ToggleField({
   onReset(): void
   t: Translate<SettingsCommandCodeKey>
 }) {
+  const [helpOpen, setHelpOpen] = useState(false)
+  const helpId = `${id}-help`
   const checked = state.text === '' ? defaultChecked : state.text === 'true'
   return (
     <SettingRow
       title={label}
       titleId={id}
-      tag={<OverrideTag label={label} state={state} disabled={disabled} t={t} onReset={onReset} />}
-      description={hint}
+      tag={
+        <>
+          {hint !== undefined && hint !== '' ? (
+            <button
+              type="button"
+              className="cc-helpButton"
+              aria-label={label}
+              aria-expanded={helpOpen}
+              aria-controls={helpId}
+              onClick={() => setHelpOpen((open) => !open)}
+            >
+              <IconInfoOutlineRegular size={12} />
+            </button>
+          ) : null}
+          <OverrideTag label={label} state={state} disabled={disabled} t={t} onReset={onReset} />
+        </>
+      }
+      description={helpOpen && hint !== undefined && hint !== '' ? <p id={helpId}>{hint}</p> : undefined}
       control={
         <Switch
           className="cc-switch"
@@ -541,7 +372,7 @@ export function ToggleField({
   )
 }
 
-/** One stat tile in the account card's summary grid. */
+/** Borderless stat cell in the concentric quota surface's telemetry strip. */
 function UsageStat({ label, value, sub, title }: { label: string; value: string; sub?: string | undefined; title?: string | undefined }) {
   return (
     <div className="cc-usageStat" title={title}>
@@ -552,7 +383,7 @@ function UsageStat({ label, value, sub, title }: { label: string; value: string;
   )
 }
 
-/** One window-limit row: label, used/cap, a fill bar, and the reset time. */
+/** GPU-composited `translateX` window-limit progress bar. */
 function UsageWindow({
   label,
   limit,
@@ -573,8 +404,6 @@ function UsageWindow({
         <span className="cc-usageWindowValue">{cap > 0 ? `${formatMoney(used)} / ${formatMoney(cap)}` : formatMoney(used)}</span>
       </div>
       <div className="cc-usageBar" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)}>
-        {/* Full width, shifted left by the unused share: a transform animates
-            without layout and keeps the fill's rounded ends. */}
         <div className={exceeded ? 'cc-usageBarFill cc-usageBarFillWarn' : 'cc-usageBarFill'} style={{ transform: `translateX(${(ratio - 1) * 100}%)` }} />
       </div>
       {reset !== '' ? <p className="cc-usageWindowReset">{t('usageReset')} {reset}</p> : null}
@@ -582,12 +411,6 @@ function UsageWindow({
   )
 }
 
-/**
- * Left text of the balance label row: the billing period, stated once per card.
- * 用量汇总与订阅起点对齐时给完整区间；对不上（或用量汇总没取到）时退回订阅
- * 自身的截止日，它不依赖对齐也可靠。余额没取到时没有「月额度剩余」可挂，完整
- * 区间前补回「官方账期用量」，避免一串裸日期没有上下文。
- */
 export function balanceLabelText(
   report: Pick<CommandCodeUsageReport, 'credits' | 'plan' | 'usage'>,
   t: Translate<SettingsCommandCodeKey>,
@@ -603,13 +426,14 @@ export function balanceLabelText(
   return usagePeriod !== '' ? `${t('usageBillingPeriod')} ${usagePeriod}` : periodText
 }
 
-/** One pool account's facts (identity, totals, credits, window limits). */
+/**
+ * One pool account's expanded facts inside one concentric `R10` `.cc-usageSurface`
+ * (balance + window meters + hairline telemetry strip — zero nested bordered boxes).
+ */
 function AccountReport({ entry, fetchedAt, t, headless = false }: {
   entry: CommandCodeAccountUsage
-  /** When the shared usage snapshot was fetched; shown at the right of the balance label row. */
   fetchedAt?: number | undefined
   t: Translate<SettingsCommandCodeKey>
-  /** Omit the identity header (the account row already shows it). */
   headless?: boolean
 }) {
   const report = entry.report
@@ -624,6 +448,11 @@ function AccountReport({ entry, fetchedAt, t, headless = false }: {
   const updatedText = fetchedAt === undefined
     ? ''
     : `${t('usageUpdated')} ${new Date(fetchedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+  const monthlyKnown = credits !== undefined && credits.monthlyReported !== false
+  const depleted = credits !== undefined && monthlyKnown && credits.monthlyCredits <= 0
+  const hasBalance = label !== '' || updatedText !== ''
+  const hasWindows = credits?.fiveHour !== undefined || credits?.weekly !== undefined
+  const hasStats = report.usage !== undefined
 
   return (
     <div className="cc-accountReport">
@@ -631,7 +460,7 @@ function AccountReport({ entry, fetchedAt, t, headless = false }: {
         <div className="cc-usageHead">
           <h4 className="cc-usageTitle">{entry.label}</h4>
           {accountName !== '' ? <span className="cc-usageAccount">{accountName}</span> : null}
-          {planName !== '' ? <span className="cc-badge cc-badgeOutline">{planName}</span> : null}
+          {planName !== '' ? <Tag tone="neutral">{planName}</Tag> : null}
         </div>
       ) : null}
       {planStatus !== '' ? <p className="cc-usagePlanStatus">{planStatus}</p> : null}
@@ -641,8 +470,6 @@ function AccountReport({ entry, fetchedAt, t, headless = false }: {
       {report.blocked !== undefined ? (
         <Notice tone="error" role="alert" title={blockedTitle(report.blocked, t)}>
           <p>{blockedHint(report.blocked, t)}</p>
-          {/* Keep the per-endpoint failures visible alongside the summary:
-              they carry the actual status or transport error for diagnosis. */}
           {report.failures.length > 0 ? (
             <p className="cc-noticeDetail" title={report.failures.join('; ')}>
               {report.failures.join(' · ')}
@@ -651,74 +478,61 @@ function AccountReport({ entry, fetchedAt, t, headless = false }: {
         </Notice>
       ) : null}
 
-      {/* The monthly remainder leads the details: it is the balance that
-          decides whether requests go through, and once it reaches zero the
-          purchased and free balances can no longer be spent — so those two
-          ride under it as context, not beside it as peers. `monthlyCredits` is
-          what is LEFT (see MonthlyBalance); an omitted figure reads "—".
-          Its label row also carries the billing period (left) and the fetch
-          time (right), so the card states "when" once, above every number. */}
-      {(() => {
-        const monthlyKnown = credits !== undefined && credits.monthlyReported !== false
-        const depleted = credits !== undefined && monthlyKnown && credits.monthlyCredits <= 0
-        // 余额没取到时标签行仍要交代账期与更新时间，两者都没有才整块不画。
-        if (label === '' && updatedText === '') return null
-        return (
-          <div className={depleted ? 'cc-balance cc-balanceEmpty' : 'cc-balance'}>
-            <div className="cc-balanceRow">
-              <span className="cc-balanceLabel">{label}</span>
-              {updatedText !== '' ? <span className="cc-balanceLabel">{updatedText}</span> : null}
-            </div>
-            {credits !== undefined ? (
+      {hasBalance || hasWindows || hasStats ? (
+        <div className="cc-usageSurface">
+          {hasBalance ? (
+            <div className={depleted ? 'cc-balance cc-balanceEmpty' : 'cc-balance'}>
               <div className="cc-balanceRow">
-                <span className="cc-balanceValue">{monthlyKnown ? formatMoney(Math.max(0, credits.monthlyCredits)) : '—'}</span>
-                <span className="cc-balanceSub">
-                  {`${t('usagePurchased')} ${credits.purchasedReported === false ? '—' : formatMoney(credits.purchasedCredits)} · ${t('usageFree')} ${credits.freeReported === false ? '—' : formatMoney(credits.freeCredits)}`}
-                </span>
+                <span className="cc-balanceLabel">{label}</span>
+                {updatedText !== '' ? <span className="cc-balanceLabel">{updatedText}</span> : null}
               </div>
-            ) : null}
-            {depleted ? <p className="cc-balanceNote" role="status">{t('usageMonthlyDepleted')}</p> : null}
-          </div>
-        )
-      })()}
-
-      {report.usage !== undefined ? (
-        <div className="cc-usageStats cc-usageStatsActivity">
-          {/* 计数按 K/M/B 紧凑显示：四列等宽窄卡里，原始位数会先把右侧的「失败 …」
-              挤出省略号。精确值改由 title 悬停查看，且只在确实换算过时才挂。 */}
-          <UsageStat
-            label={t('usageRequests')}
-            value={formatCompactCount(report.usage.totalCount)}
-            // Success count is already the rate beside it; the sub line keeps
-            // the one number the rate hides, so it fits a quarter-width tile.
-            sub={`${t('usageFailed')} ${formatCompactCount(report.usage.failedCount)}`}
-            title={compactCountTitle([
-              [t('usageRequests'), report.usage.totalCount],
-              [t('usageCompleted'), report.usage.completedCount],
-              [t('usageFailed'), report.usage.failedCount],
-            ] as const)}
-          />
-          <UsageStat label={t('usageSuccessRate')} value={`${formatSuccessRate(report.usage.successRate)}%`} />
-          <UsageStat
-            label={t('usageCost')}
-            value={formatMoneyExact(report.usage.totalCost)}
-            sub={`${formatMoney(report.usage.totalCredits)} credits`}
-          />
-          <UsageStat
-            label={t('usageTokens')}
-            value={formatTokensCompact(report.usage.totalTokensIn + report.usage.totalTokensOut)}
-            sub={`${formatTokensCompact(report.usage.totalTokensIn)} ${t('usageTokensIn')} / ${formatTokensCompact(report.usage.totalTokensOut)} ${t('usageTokensOut')}`}
-          />
-        </div>
-      ) : null}
-
-      {credits?.fiveHour !== undefined || credits?.weekly !== undefined ? (
-        <div className="cc-usageWindows">
-          {credits.fiveHour !== undefined ? (
-            <UsageWindow label={t('usageFiveHour')} limit={credits.fiveHour} t={t} />
+              {credits !== undefined ? (
+                <div className="cc-balanceRow">
+                  <span className="cc-balanceValue">{monthlyKnown ? formatMoney(Math.max(0, credits.monthlyCredits)) : '—'}</span>
+                  <span className="cc-balanceSub">
+                    {`${t('usagePurchased')} ${credits.purchasedReported === false ? '—' : formatMoney(credits.purchasedCredits)} · ${t('usageFree')} ${credits.freeReported === false ? '—' : formatMoney(credits.freeCredits)}`}
+                  </span>
+                </div>
+              ) : null}
+              {depleted ? <p className="cc-balanceNote" role="status">{t('usageMonthlyDepleted')}</p> : null}
+            </div>
           ) : null}
-          {credits.weekly !== undefined ? (
-            <UsageWindow label={t('usageWeekly')} limit={credits.weekly} t={t} />
+
+          {hasWindows && credits !== undefined ? (
+            <div className="cc-usageWindows">
+              {credits.fiveHour !== undefined ? (
+                <UsageWindow label={t('usageFiveHour')} limit={credits.fiveHour} t={t} />
+              ) : null}
+              {credits.weekly !== undefined ? (
+                <UsageWindow label={t('usageWeekly')} limit={credits.weekly} t={t} />
+              ) : null}
+            </div>
+          ) : null}
+
+          {report.usage !== undefined ? (
+            <div className="cc-usageStatsStrip">
+              <UsageStat
+                label={t('usageRequests')}
+                value={formatCompactCount(report.usage.totalCount)}
+                sub={`${t('usageFailed')} ${formatCompactCount(report.usage.failedCount)}`}
+                title={compactCountTitle([
+                  [t('usageRequests'), report.usage.totalCount],
+                  [t('usageCompleted'), report.usage.completedCount],
+                  [t('usageFailed'), report.usage.failedCount],
+                ] as const)}
+              />
+              <UsageStat label={t('usageSuccessRate')} value={`${formatSuccessRate(report.usage.successRate)}%`} />
+              <UsageStat
+                label={t('usageCost')}
+                value={formatMoneyExact(report.usage.totalCost)}
+                sub={`${formatMoney(report.usage.totalCredits)} credits`}
+              />
+              <UsageStat
+                label={t('usageTokens')}
+                value={formatTokensCompact(report.usage.totalTokensIn + report.usage.totalTokensOut)}
+                sub={`${formatTokensCompact(report.usage.totalTokensIn)} ${t('usageTokensIn')} / ${formatTokensCompact(report.usage.totalTokensOut)} ${t('usageTokensOut')}`}
+              />
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -730,7 +544,6 @@ function AccountReport({ entry, fetchedAt, t, headless = false }: {
   )
 }
 
-/** The headline copy for a report whose every endpoint failed the same way. */
 function blockedTitle(reason: CommandCodeUsageReport['blocked'], t: Translate<SettingsCommandCodeKey>): string {
   if (reason === 'invalid-key') return t('usageKeyInvalid')
   if (reason === 'service-unavailable') return t('usageServiceUnavailable')
@@ -738,7 +551,6 @@ function blockedTitle(reason: CommandCodeUsageReport['blocked'], t: Translate<Se
   return t('usageNetworkError')
 }
 
-/** The actionable hint under a blocked report's headline. */
 function blockedHint(reason: CommandCodeUsageReport['blocked'], t: Translate<SettingsCommandCodeKey>): string {
   if (reason === 'invalid-key') return t('usageKeyInvalidHint')
   if (reason === 'service-unavailable') return t('usageServiceUnavailableHint')
@@ -747,16 +559,7 @@ function blockedHint(reason: CommandCodeUsageReport['blocked'], t: Translate<Set
 }
 
 /**
- * A checkbox multi-select dropdown for picking catalog models (the routing-rule
- * rows and the visible-models filter share it). The trigger shows the selection
- * count; the Menu lists every catalog model, grouping under plan-tier headings
- * and flagging selected ids the catalog no longer carries as stale, so a saved
- * selection never silently loses an entry (the VisibleModelsCard offers a
- * one-click cleanup).
- *
- * With `deferCommit` the toggles collect in a local draft that is handed to
- * `onSelect` once, when the menu closes: the per-account picker writes
- * immediately, and one write per click would be a burst of document writes.
+ * Checkbox multi-select dropdown over `Menu` + `Input` + `Tag` primitives.
  */
 function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCommit = false, ownerOf, t, onSelect }: {
   id: string
@@ -764,7 +567,6 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
   catalog: CatalogModelOption[]
   disabled: boolean
   deferCommit?: boolean
-  /** Names the other account a model currently belongs to, if any. */
   ownerOf?: (modelId: string) => string | undefined
   t: Translate<SettingsCommandCodeKey>
   onSelect(ids: string[]): void
@@ -773,7 +575,6 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<string[] | undefined>(undefined)
   const selected = draft ?? committed
-  // The search box must not inherit a stale query from a previous open.
   useEffect(() => {
     if (open) setQuery('')
   }, [open])
@@ -785,9 +586,6 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
       if (changed) onSelect(draft)
     }
   }
-  // Tier headings come from the catalog entries themselves (the Host stamps
-  // each entry's plan-tier key on the Remote); rebuild only when the catalog
-  // changes.
   const tiers = useMemo(
     () => Object.fromEntries(
       catalog.flatMap((model) => model.tier === undefined ? [] : [[model.id, model.tier] as const]),
@@ -812,23 +610,19 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
             tabIndex={-1}
           />
           <span className="cc-checkName">{option.label}</span>
-          {option.stale ? <span className="cc-badge">{t('modelStale')}</span> : null}
+          {option.stale ? <Tag tone="warning">{t('modelStale')}</Tag> : null}
           {option.allowance !== undefined ? (
-            <span className="cc-badge cc-badgeOutline" title={t('modelAllowanceTitle')}>
-              {t('modelAllowance', { amount: option.allowance })}
+            <span title={t('modelAllowanceTitle')}>
+              <Tag tone="outline">{t('modelAllowance', { amount: option.allowance })}</Tag>
             </span>
           ) : null}
           {!selected.includes(option.value) && ownerOf?.(option.value) !== undefined ? (
-            <span className="cc-badge cc-badgeOutline">{t('accountModelOwner', { name: ownerOf(option.value)! })}</span>
+            <Tag tone="outline">{t('accountModelOwner', { name: ownerOf(option.value)! })}</Tag>
           ) : null}
         </span>
       ),
     })),
   ])
-  // The search box lives INSIDE the Menu anchor (which renders in place
-  // inside the Menu's root span): a pointerdown there counts as "inside",
-  // so focusing/typing never trips the Menu's outside-click close. A box
-  // rendered as a sibling would close the Menu on the first click.
   return (
     <Menu
       open={open}
@@ -858,12 +652,13 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
             <span className="cc-selectorText">
               {selected.length === 0 ? t('modelPick') : t('modelCount', { count: selected.length })}
             </span>
-            <Icon name="chevron" className="cc-icon cc-selectorChevron" />
+            <IconChevronDownOutlineRegular size={12} className="cc-selectorChevron" />
           </button>
           {open ? (
-            <input
+            <Input
               type="search"
-              className="cc-input cc-modelSearch"
+              className="cc-modelSearch"
+              icon={<IconSearchOutlineRegular size={14} />}
               placeholder={t('modelSearchPlaceholder')}
               aria-label={t('modelSearchPlaceholder')}
               value={query}
@@ -878,7 +673,7 @@ function ModelMultiSelect({ id, selected: committed, catalog, disabled, deferCom
   )
 }
 
-/** The visible-model filter row: an allowlist over the catalog. Empty = show all. */
+/** Visible-model allowlist row. */
 function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
   t: Translate<SettingsCommandCodeKey>
   state: SettingsPageState
@@ -893,11 +688,6 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
     }
     return t(key, params)
   }
-  // Selected ids the live catalog no longer carries (retired upstream): kept,
-  // flagged stale in the dropdown, removable in one click — never auto-dropped,
-  // since an empty catalog (fetch failure) must not wipe the list. Both the
-  // cleanup button and its hint are gated on catalogIsReady, whose doc states
-  // why an empty catalog makes every selection look retired.
   const readiness = { catalogIds: state.catalogModels.map((model) => model.id), catalogFailed: state.catalogFailed }
   const staleIds = staleModelIds(state.visibleModels, readiness)
   const catalogReady = catalogIsReady(readiness)
@@ -905,29 +695,28 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
     <SettingRow
       title={t('visibleModelsTitle')}
       titleFor="cc-visible-models"
+      tag={!state.visibleModelsAll ? <Tag tone="outline">{t('overridden')}</Tag> : undefined}
       description={
-        <>
-          <p>{t('visibleModelsHint')}</p>
-          {staleIds.length > 0 && catalogReady ? <p>{t('visibleModelsStaleHint', { count: staleIds.length })}</p> : null}
-        </>
+        staleIds.length > 0 && catalogReady ? <p>{t('visibleModelsStaleHint', { count: staleIds.length })}</p> : undefined
       }
       error={state.catalogFailed ? t('modelCatalogFailed') : undefined}
       control={
         <>
           {catalogReady && staleIds.length > 0 ? (
-            <PageButton
+            <Button
               variant="ghost"
               size="sm"
+              className="cc-press"
               disabled={disabled}
               onClick={() => onSelect(state.visibleModels.filter((id) => !staleIds.includes(id)))}
             >
               {t('visibleModelsCleanStale', { count: staleIds.length })}
-            </PageButton>
+            </Button>
           ) : null}
           {!state.visibleModelsAll ? (
-            <PageButton variant="ghost" size="sm" disabled={disabled} onClick={onClear}>
+            <Button variant="ghost" size="sm" className="cc-press" disabled={disabled} onClick={onClear}>
               {t('visibleModelsShowAll')}
-            </PageButton>
+            </Button>
           ) : null}
           <ModelMultiSelect
             id="cc-visible-models"
@@ -944,102 +733,15 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
 }
 
 /**
- * The glanceable header strip: account health, monthly remainder, service
- * status, model scope. Every string reuses one the groups already compute
- * (group summaries, balance labels, the service badge), so the strip adds no
- * locale keys and cannot disagree with the card below it. Cells are plain
- * text, not links — the groups beneath are the place to act.
- */
-function StatusStrip({ t, state, usage, snapshot, probe }: {
-  t: Translate<SettingsCommandCodeKey>
-  state: SettingsPageState
-  usage: UsagePageState
-  snapshot: ServiceStatusSnapshot | undefined
-  probe: ServiceProbe
-}) {
-  const rows = accountRows(state, usage, t)
-  const issues = accountIssues(rows.map((row) => row.usage))
-  const defaultRow = rows.find((row) => row.id === 'default')
-  const credits = defaultRow?.usage?.report?.credits
-  const monthly = credits !== undefined && credits.monthlyReported !== false ? credits : undefined
-  const depleted = monthly !== undefined && monthly.monthlyCredits <= 0
-  const planName = defaultRow?.usage?.report?.plan?.name ?? ''
-  const overridden = modelsOverriddenCount(state)
-  const view = serviceStatusView(snapshot, probe, t, Date.now())
-  const serviceDot = view.badge.tone === 'ok' ? 'cc-tabDot cc-tabDotOk'
-    : view.badge.tone === 'warn' ? 'cc-tabDot cc-tabDotWarn'
-      : view.badge.tone === 'error' ? 'cc-tabDot cc-tabDotError'
-        : 'cc-tabDot cc-tabDotBlank'
-  return (
-    <div className="cc-statusStrip">
-      <div className="cc-statusCell">
-        <span className="cc-statusHead">
-          <span className={issues.severe ? 'cc-tabDot cc-tabDotError' : issues.count > 0 ? 'cc-tabDot cc-tabDotWarn' : 'cc-tabDot cc-tabDotOk'} aria-hidden="true" />
-          <span className="cc-statusLabel">{t('accountsTitle')}</span>
-        </span>
-        <span className="cc-statusStripValue">{rows.length === 1 ? t('accountsSummaryOne') : t('accountsSummaryMany', { count: rows.length })}</span>
-        {issues.count > 0 ? (
-          <span className="cc-statusSub">{t('accountsSummaryIssues', { count: issues.count })}</span>
-        ) : planName !== '' ? (
-          <span className="cc-statusSub">{planName}</span>
-        ) : null}
-      </div>
-      <div className="cc-statusCell">
-        <span className="cc-statusHead">
-          <span className={depleted ? 'cc-tabDot cc-tabDotError' : monthly !== undefined ? 'cc-tabDot cc-tabDotOk' : 'cc-tabDot cc-tabDotBlank'} aria-hidden="true" />
-          <span className="cc-statusLabel">{t('usageMonthlyLeft')}</span>
-        </span>
-        <span className="cc-statusStripValue">{monthly !== undefined ? formatMoney(Math.max(0, monthly.monthlyCredits)) : '—'}</span>
-        {credits !== undefined ? (
-          <span className="cc-statusSub">{`${t('usagePurchased')} ${credits.purchasedReported === false ? '—' : formatMoney(credits.purchasedCredits)} · ${t('usageFree')} ${credits.freeReported === false ? '—' : formatMoney(credits.freeCredits)}`}</span>
-        ) : null}
-      </div>
-      <div className="cc-statusCell">
-        <span className="cc-statusHead">
-          <span className={serviceDot} aria-hidden="true" />
-          <span className="cc-statusLabel">{t('serviceStatusTitle')}</span>
-        </span>
-        <span className="cc-statusStripValue">{view.badge.label}</span>
-        {/* A stale record has no age line, so it falls back to its publish date
-            (`detailParts[0]`) before the local probe text. */}
-        <span className="cc-statusSub">{view.updated ?? view.detailParts[0] ?? view.local}</span>
-      </div>
-      <div className="cc-statusCell">
-        <span className="cc-statusHead">
-          <span className="cc-tabDot" aria-hidden="true" />
-          <span className="cc-statusLabel">{t('modelsTitle')}</span>
-        </span>
-        <span className="cc-statusStripValue">{state.visibleModelsAll ? t('visibleModelsSummaryAll') : t('visibleModelsSummary', { count: state.visibleModels.length })}</span>
-        {overridden > 0 ? <span className="cc-statusSub">{overriddenText(overridden, t)}</span> : null}
-      </div>
-    </div>
-  )
-}
-
-/**
- * One top-level group of the page (决策记录第十章第4条). All five groups share
- * this one shape so they cannot drift apart: the heading is an `h3` wrapping a
- * single full-width button — chevron first, then the title and the summary
- * badges — and a group action such as Refresh sits OUTSIDE that button, so
- * using it never folds the group. Which groups are open is page state (see
- * ./group-fold.ts), passed in here.
- *
- * The body stays mounted and is hidden with the `hidden` attribute rather than
- * unrendered: `aria-controls` then always points at a real element, and the
- * save bar's locate action can focus an invalid field right after opening its
- * group. Folding is presentation only and instant toggling is deliberate (it
- * happens too often to be worth a wait); staged drafts, validation and the
- * save path are untouched (第六章第1、2条).
+ * Native flat group (`PluginInventorySettingsTab.group` geometry): `0.5px`
+ * hairline divider between groups, instant `hidden` toggle, `160ms` chevron.
  */
 function FoldableGroup({ id, title, expanded, onToggle, badges, action, children }: {
-  /** Stable group id; it derives the title and body element ids. */
   id: FoldGroup
   title: string
   expanded: boolean
   onToggle(): void
-  /** Summary badges beside the title, shown folded or not. */
   badges?: ReactNode
-  /** Heading action outside the toggle (Accounts' Refresh). */
   action?: ReactNode
   children: ReactNode
 }) {
@@ -1050,7 +752,10 @@ function FoldableGroup({ id, title, expanded, onToggle, badges, action, children
       <div className="cc-groupHead">
         <h3 className="cc-groupHeading">
           <button type="button" className="cc-disclosure" aria-expanded={expanded} aria-controls={bodyId} onClick={onToggle}>
-            <Icon name="chevron" className={expanded ? 'cc-icon cc-foldChevron' : 'cc-icon cc-foldChevron cc-foldChevronClosed'} />
+            <IconChevronDownOutlineRegular
+              size={14}
+              className={expanded ? 'cc-foldChevron' : 'cc-foldChevron cc-foldChevronClosed'}
+            />
             <span id={titleId} className="cc-groupTitle">{title}</span>
             {badges}
           </button>
@@ -1058,38 +763,26 @@ function FoldableGroup({ id, title, expanded, onToggle, badges, action, children
         {action}
       </div>
       <div id={bodyId} className="cc-groupBody" hidden={!expanded}>
-        <div className="cc-rows">{children}</div>
+        {children}
       </div>
     </section>
   )
 }
 
-/**
- * A heading's neutral summary as quiet text ("3 allowlisted · 1 customized"),
- * like the harness's own section captions; only warnings and errors get a
- * tinted pill, so a pill always means "look here". Empty parts are skipped.
- */
 function GroupSummary({ parts }: { parts: readonly (string | undefined)[] }) {
   const text = parts.filter((part): part is string => part !== undefined && part !== '').join(' · ')
   return text === '' ? null : <span className="cc-groupSummary">{text}</span>
 }
 
-/** "N customized" for a heading summary; undefined at zero. */
 function overriddenText(count: number, t: Translate<SettingsCommandCodeKey>): string | undefined {
   if (count === 0) return undefined
   return count === 1 ? t('groupOverriddenOne') : t('groupOverriddenMany', { count })
 }
 
-/**
- * The badge a FOLDED group shows while something inside it blocks the save:
- * its rows are off screen, so without it Save would sit disabled with nothing
- * visible explaining why (issue #94). Expanded, the row errors speak for it.
- */
 function InvalidBadge({ show, t }: { show: boolean; t: Translate<SettingsCommandCodeKey> }) {
-  return show ? <span className="cc-badge cc-badgeError">{t('groupInvalid')}</span> : null
+  return show ? <Tag tone="danger">{t('groupInvalid')}</Tag> : null
 }
 
-/** The staged-field callbacks every form card shares. */
 interface FormCardProps {
   state: SettingsPageState
   disabled: boolean
@@ -1098,22 +791,12 @@ interface FormCardProps {
   onReset(field: string): void
 }
 
-/** Whether a group is open, and how to flip it; owned by the page (./group-fold.ts). */
 export interface FoldProps {
   expanded: boolean
   onToggle(): void
 }
 
-/**
- * Models & context: the plan filter and the allowlist sit together because both
- * decide what the model picker lists (the allowlist applies after the plan
- * filter), and the context-length fields follow them because they are the same
- * subject seen from the other side — the window each listed model advertises.
- * Those fields carry no heading or divider of their own: they are rows of this
- * group, not a section inside it. Folded by default like every group but
- * Accounts; the heading then summarizes the allowlist size and how much of the
- * group is customized.
- */
+/** Models & context group: switches, allowlist, 2-col `SettingsValueField`s, and `ModelsSection.modelEntry` overrides. */
 function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, onOverrides, onNames, expanded, onToggle }: FormCardProps & FoldProps & {
   onSelect(ids: string[]): void
   onClear(): void
@@ -1138,18 +821,19 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, on
         </>
       }
     >
-      <ToggleField
-        id="cc-filter-models-by-plan"
-        label={t('filterModelsByPlan')}
-        hint={t('filterModelsByPlanHint')}
-        state={state.filterModelsByPlan}
-        disabled={disabled}
-        defaultChecked
-        onEdit={(text) => onEdit('filterModelsByPlan', text)}
-        onReset={() => onReset('filterModelsByPlan')}
-        t={t}
-      />
-      <VisibleModelsRow t={t} state={state} disabled={disabled} onSelect={onSelect} onClear={onClear} />
+      <div className="cc-rows">
+        <ToggleField
+          id="cc-filter-models-by-plan"
+          label={t('filterModelsByPlan')}
+          state={state.filterModelsByPlan}
+          disabled={disabled}
+          defaultChecked
+          onEdit={(text) => onEdit('filterModelsByPlan', text)}
+          onReset={() => onReset('filterModelsByPlan')}
+          t={t}
+        />
+        <VisibleModelsRow t={t} state={state} disabled={disabled} onSelect={onSelect} onClear={onClear} />
+      </div>
       <ContextCard
         state={state}
         disabled={disabled}
@@ -1164,23 +848,8 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, on
 }
 
 /**
- * Context length (issue #86): the global custom window plus one row per model
- * override, both staged into the same save as the other form fields. Rendered
- * as plain rows of the Models & context group — no heading, no divider of its
- * own: the setting belongs to the models that group already governs, and on the
- * real page a section inside the group read as visual noise. The advertised
- * window is what the harness meters context against and when it compacts, so a
- * lowered value compacts earlier and a raised one follows the model's real
- * capacity when the catalog under-reports it. Precedence: a per-model row, then
- * the global value, then the catalog.
- *
- * The rows live as raw text drafts: blank drops the override on save, an
- * unparseable one blocks the save with its own bounds copy, and the value
- * accepts the compact shorthand the picker prints (`256K`, `1M`). The model
- * select offers only allowlisted models the list does not already carry —
- * one override per model, matching what the Models card lets through — and
- * keeps a stored id the catalog no longer carries (or the whitelist just
- * dropped) as itself so an existing override never silently disappears.
+ * Global context & output fields (reusing `SettingsValueField` in a 2-column
+ * `SubagentLimitsFields` grid) plus concentric `R14 → R10` per-model rows.
  */
 function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormCardProps & {
   onOverrides(next: Record<string, string>): void
@@ -1209,130 +878,112 @@ function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormC
   }
   const labelOf = (model: string): string => {
     const entry = state.catalogModels.find((candidate) => candidate.id === model)
-    // An override the catalog no longer carries stays in the list (a retired
-    // id must not silently lose its setting) and is named as such.
     return entry === undefined ? `${model} · ${t('modelStale')}` : `${entry.name} (${model})`
   }
   return (
     <>
-      <Field
-        id="cc-context-window"
-        label={t('contextWindow')}
-        hint={t('contextWindowHint')}
-        state={state.contextWindow}
-        disabled={disabled}
-        context
-        unit={t('unitTokens')}
-        placeholder={t('placeholderCatalog')}
-        onEdit={(text) => onEdit('contextWindow', text)}
-        onReset={() => onReset('contextWindow')}
-        t={t}
-      />
-      {/* Output budget (issue #74): sits with the context field because both
-          bound one request's size, and both are per-plugin rather than
-          per-model. Placed after the window so the more common setting leads. */}
-      <Field
-        id="cc-max-output-tokens"
-        label={t('maxOutputTokens')}
-        hint={t('maxOutputTokensHint')}
-        state={state.maxOutputTokens}
-        disabled={disabled}
-        numeric
-        output
-        unit={t('unitTokens')}
-        placeholder={t('placeholderAuto')}
-        onEdit={(text) => onEdit('maxOutputTokens', text)}
-        onReset={() => onReset('maxOutputTokens')}
-        t={t}
-      />
-      <SettingRow
-        title={t('contextOverridesTitle')}
-        description={<p>{t('contextOverridesHint')}</p>}
-        control={
-          <>
-            <PageButton
-              variant="outline"
-              size="sm"
-              icon={<Icon name="plus" className="cc-icon cc-btnIcon" />}
-              disabled={disabled || available.length === 0}
-              onClick={addRow}
-            >
-              {t('contextOverrideAdd')}
-            </PageButton>
-          </>
-        }
-      />
-      {/* Only a real fetch failure explains the disabled add button; the
-          catalog still loading does not (it may yet land). */}
-      {state.catalogFailed ? <p className="cc-groupDesc">{t('contextOverrideNoCatalog')}</p> : null}
-      {/* The overrides are a small table in a card, as the design draws them:
-          a head row over a model / value / remove grid, one line per override. */}
-      {rows.length > 0 ? (
-        <div className="cc-contextTable">
-          <div className="cc-contextHead">
-            <span>{t('contextOverrideModel')}</span>
-            <span>{t('contextOverrideValue')}</span>
-            <span aria-hidden="true" />
-          </div>
-          {rows.map((row) => (
-            <div className="cc-contextItem" key={row.model}>
-              <span className="cc-contextSelect">
-                <select
-                  className="cc-fieldInput cc-contextModel"
-                  value={row.model}
-                  aria-label={t('contextOverrideModel')}
-                  disabled={disabled}
-                  onChange={(event) => setModel(row.model, event.target.value)}
-                >
-                  <option value={row.model}>{labelOf(row.model)}</option>
-                  {available.map((model) => (
-                    <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
-                  ))}
-                </select>
-                {/* The plugin's own caret instead of the platform arrow: the
-                    native one renders in whatever style the OS chooses, which is
-                    exactly the inconsistency this card should not carry. */}
-                <Icon name="chevron" className="cc-icon cc-contextCaret" />
-              </span>
-              <span className={row.invalid ? 'cc-unitBox cc-unitBoxInvalid' : 'cc-unitBox'}>
+      <div className="cc-fieldGrid2">
+        <div className="cc-fieldCell cc-numField">
+          <SettingsValueField
+            id="cc-context-window"
+            label={t('contextWindow')}
+            help={{ label: t('contextWindow'), content: <p>{t('contextWindowHint')}</p> }}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={invalidCopy(state.contextWindow.invalidReason, t, 'context')}
+            disabled={disabled}
+            placeholder={t('placeholderCatalog')}
+            {...state.contextWindow}
+            onEdit={(text) => onEdit('contextWindow', text)}
+            onReset={() => onReset('contextWindow')}
+          />
+        </div>
+        <div className="cc-fieldCell cc-numField">
+          <SettingsValueField
+            id="cc-max-output-tokens"
+            label={t('maxOutputTokens')}
+            help={{ label: t('maxOutputTokens'), content: <p>{t('maxOutputTokensHint')}</p> }}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={invalidCopy(state.maxOutputTokens.invalidReason, t, 'output')}
+            disabled={disabled}
+            placeholder={t('placeholderAuto')}
+            {...state.maxOutputTokens}
+            onEdit={(text) => onEdit('maxOutputTokens', text)}
+            onReset={() => onReset('maxOutputTokens')}
+          />
+        </div>
+      </div>
+
+      <div className="cc-overrideBlock">
+        <div className="cc-overrideHead">
+          <span className="cc-rowTitle">{t('contextOverridesTitle')}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="cc-press"
+            icon={<IconPlusOutlineRegular size={13} />}
+            disabled={disabled || available.length === 0}
+            onClick={addRow}
+          >
+            {t('contextOverrideAdd')}
+          </Button>
+        </div>
+        {state.catalogFailed ? <p className="cc-groupDesc">{t('contextOverrideNoCatalog')}</p> : null}
+        {rows.length > 0 ? (
+          <div className="cc-overrideList">
+            <div className="cc-overrideCols">
+              <span>{t('contextOverrideModel')}</span>
+              <span className="cc-overrideColRight">{t('contextOverrideValue')}</span>
+              <span aria-hidden="true" />
+            </div>
+            {rows.map((row) => (
+              <div className="cc-modelEntry" key={row.model}>
+                <span className="cc-contextSelect">
+                  <select
+                    className="cc-fieldInput cc-contextModel"
+                    value={row.model}
+                    aria-label={t('contextOverrideModel')}
+                    disabled={disabled}
+                    onChange={(event) => setModel(row.model, event.target.value)}
+                  >
+                    <option value={row.model}>{labelOf(row.model)}</option>
+                    {available.map((model) => (
+                      <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
+                    ))}
+                  </select>
+                  <IconChevronDownOutlineRegular size={12} className="cc-contextCaret" />
+                </span>
                 <input
-                  className="cc-fieldInput"
+                  className={row.invalid ? 'cc-fieldInput cc-fieldInputNum cc-fieldInputInvalid' : 'cc-fieldInput cc-fieldInputNum'}
                   type="text"
                   aria-label={t('contextOverrideValue')}
                   aria-invalid={row.invalid || undefined}
+                  placeholder={t('unitTokens')}
                   value={row.text}
                   disabled={disabled}
                   onChange={(event) => setText(row.model, event.target.value)}
                 />
-                <span className="cc-unit">{t('unitTokens')}</span>
-              </span>
-              <button
-                type="button"
-                className="cc-iconButton"
-                aria-label={t('contextOverrideRemove')}
-                disabled={disabled}
-                onClick={() => removeRow(row.model)}
-              >
-                <Icon name="close" />
-              </button>
-              {row.invalid ? <p className="cc-rowError cc-contextError">{invalidCopy(row.invalidReason, t, 'context')}</p> : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
+                <button
+                  type="button"
+                  className="cc-iconButton cc-iconButtonDanger"
+                  aria-label={t('contextOverrideRemove')}
+                  disabled={disabled}
+                  onClick={() => removeRow(row.model)}
+                >
+                  <IconTrashOutlineRegular size={14} />
+                </button>
+                {row.invalid ? <p className="cc-rowError cc-contextError">{invalidCopy(row.invalidReason, t, 'context')}</p> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </>
   )
 }
 
-/**
- * 自定义模型名称（issue #121）：按目录模型 id 覆盖选择器里的显示名。
- *
- * 报告者另有「峰谷提醒」「缓存计价」插件按模型名称字符串判断条件，而默认
- * 显示名带 ` (CC)` 后缀、上游目录名还可能带 ` (latest)`，两者都让匹配落空。
- * 这里只覆盖 `LlmModelInfo.name`：模型 id、请求体里的 model、计价、峰谷、
- * 选择器排序（仍按目录原名）全都不变。空名称行保存时丢弃，所以任何一行
- * 都不会阻止整批保存。
- */
+/** Per-model custom display names (issue #121), sharing the concentric `cc-modelEntry` row shape. */
 function ModelNamesCard({ state, disabled, t, onNames }: Pick<FormCardProps, 'state' | 'disabled' | 't'> & {
   onNames(next: Record<string, string>): void
 }) {
@@ -1360,36 +1011,33 @@ function ModelNamesCard({ state, disabled, t, onNames }: Pick<FormCardProps, 'st
   }
   const labelOf = (model: string): string => {
     const entry = state.catalogModels.find((candidate) => candidate.id === model)
-    // 目录里已不存在的 id 仍保留在表里（不静默丢掉用户的设置），标注为已下架。
     return entry === undefined ? `${model} · ${t('modelStale')}` : `${entry.name} (${model})`
   }
   return (
-    <>
-      <SettingRow
-        title={t('modelNamesTitle')}
-        description={<p>{t('modelNamesHint')}</p>}
-        control={
-          <PageButton
-            variant="outline"
-            size="sm"
-            icon={<Icon name="plus" className="cc-icon cc-btnIcon" />}
-            disabled={disabled || available.length === 0}
-            onClick={addRow}
-          >
-            {t('modelNamesAdd')}
-          </PageButton>
-        }
-      />
+    <div className="cc-overrideBlock">
+      <div className="cc-overrideHead">
+        <span className="cc-rowTitle">{t('modelNamesTitle')}</span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="cc-press"
+          icon={<IconPlusOutlineRegular size={13} />}
+          disabled={disabled || available.length === 0}
+          onClick={addRow}
+        >
+          {t('modelNamesAdd')}
+        </Button>
+      </div>
       {state.catalogFailed ? <p className="cc-groupDesc">{t('modelNamesNoCatalog')}</p> : null}
       {rows.length > 0 ? (
-        <div className="cc-contextTable">
-          <div className="cc-contextHead">
+        <div className="cc-overrideList">
+          <div className="cc-overrideCols cc-overrideColsName">
             <span>{t('modelNamesModel')}</span>
             <span>{t('modelNamesValue')}</span>
             <span aria-hidden="true" />
           </div>
           {rows.map((row) => (
-            <div className="cc-contextItem" key={row.model}>
+            <div className="cc-modelEntry cc-modelEntryName" key={row.model}>
               <span className="cc-contextSelect">
                 <select
                   className="cc-fieldInput cc-contextModel"
@@ -1403,91 +1051,46 @@ function ModelNamesCard({ state, disabled, t, onNames }: Pick<FormCardProps, 'st
                     <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
                   ))}
                 </select>
-                <Icon name="chevron" className="cc-icon cc-contextCaret" />
+                <IconChevronDownOutlineRegular size={12} className="cc-contextCaret" />
               </span>
-              <span className="cc-unitBox cc-unitBoxText">
-                <input
-                  className="cc-fieldInput"
-                  type="text"
-                  aria-label={t('modelNamesValue')}
-                  value={row.text}
-                  disabled={disabled}
-                  onChange={(event) => setText(row.model, event.target.value)}
-                />
-              </span>
+              <input
+                className="cc-fieldInput"
+                type="text"
+                aria-label={t('modelNamesValue')}
+                value={row.text}
+                disabled={disabled}
+                onChange={(event) => setText(row.model, event.target.value)}
+              />
               <button
                 type="button"
-                className="cc-iconButton"
+                className="cc-iconButton cc-iconButtonDanger"
                 aria-label={t('modelNamesRemove')}
                 disabled={disabled}
                 onClick={() => removeRow(row.model)}
               >
-                <Icon name="close" />
+                <IconTrashOutlineRegular size={14} />
               </button>
             </div>
           ))}
         </div>
       ) : null}
-    </>
+    </div>
   )
 }
 
-/**
- * Privacy & security: the opt-in that changes where data goes. ZDR restricts
- * which upstream serves a request, so it starts off.
- */
-function PrivacyCard({ state, disabled, t, onEdit, onReset, expanded, onToggle }: FormCardProps & FoldProps) {
-  return (
-    <FoldableGroup
-      id="privacy"
-      title={t('privacyTitle')}
-      expanded={expanded}
-      onToggle={onToggle}
-      badges={<GroupSummary parts={[stagedSwitch(state.zdr, false) ? t('zdrSummaryOn') : t('zdrSummaryOff')]} />}
-    >
-      <ToggleField
-        id="cc-zdr"
-        label={t('zdr')}
-        hint={t('zdrHint')}
-        state={state.zdr}
-        disabled={disabled}
-        defaultChecked={false}
-        onEdit={(text) => onEdit('zdr', text)}
-        onReset={() => onReset('zdr')}
-        t={t}
-      />
-    </FoldableGroup>
-  )
-}
-
-/**
- * The service-status row: the official status page's published record and the
- * Host's live probe of the configured API base, both projected by
- * ./service-status.ts (source order, cache TTL, the lag rule and every
- * degradation path live there). It is display-only — it writes no setting and
- * never blocks Save; the link opens the page for the full history.
- */
+/** Service status row: official Upptime record + live Host probe. */
 function ServiceStatusRow({ view, t, onRetry }: {
   view: ServiceStatusView
   t: Translate<SettingsCommandCodeKey>
   onRetry: () => void
 }) {
-  // Two sources, one line each, so the published record and this machine's
-  // own probe never read as one fact: "Official" carries the verdict, the
-  // aggregates and the record's age (or, once the record is stale, its publish
-  // date in place of the verdict, with the hidden aggregates behind that
-  // date's tooltip); "This device" carries the probe and offers a retry when it
-  // did not get through. The verdict is not repeated as a tag here — the group
-  // heading already shows it.
   return (
     <SettingRow
       title={t('serviceStatusTitle')}
-      // The status-page link sits on the title line, not in the control
-      // column: the two value lines then get the row's full width.
       tag={
         <a className="cc-statusLink cc-statusTitleLink" href={STATUS_PAGE_URL} target="_blank" rel="noreferrer">
           {view.linkLabel}
-          <Icon name="external" className="cc-icon cc-iconInline" />
+          <IconRightUpOutlineRegular size={12} />
         </a>
       }
       description={
@@ -1498,10 +1101,6 @@ function ServiceStatusRow({ view, t, onRetry }: {
               <StateDot state={toneDot(view.officialTone)} size={8} />
               <span className="cc-statusVerdict" title={view.hiddenDetail}>{view.label}</span>
               {view.detailParts.length > 0 || view.updated !== undefined ? (
-                // Each segment is unbreakable (cc-statusPart) and carries the
-                // "·" after it behind a no-break space, so a narrow panel wraps
-                // between whole segments — never inside "13 小时前更新", and a
-                // wrapped line never starts with a dot.
                 <span className="cc-statusMeta">
                   {[...view.detailParts, ...(view.updated !== undefined ? [view.updated] : [])].map((part, index, parts) => {
                     const last = index === parts.length - 1
@@ -1523,10 +1122,8 @@ function ServiceStatusRow({ view, t, onRetry }: {
               <StateDot state={localDotState(view)} size={8} />
               <span className={view.localTone === 'warn' ? 'cc-statusVerdict cc-statusBad' : 'cc-statusVerdict'}>{view.local}</span>
               {view.localTone === 'warn' ? (
-                // The probe already retried itself once; this is the user's own
-                // second chance after a transient failure, not a standing control.
                 <button type="button" className="cc-statusRetry" onClick={onRetry}>
-                  <Icon name="refresh" className="cc-icon cc-iconInline" />
+                  <IconRefreshOutlineRegular size={12} />
                   {t('serviceStatusLocalRetry')}
                 </button>
               ) : null}
@@ -1539,11 +1136,6 @@ function ServiceStatusRow({ view, t, onRetry }: {
   )
 }
 
-/**
- * The status dot and verdict, shared by the status row and the Integrations
- * heading. The primitive's five states already carry the theme's
- * success/warn/error tokens, so the colours are the design system's own.
- */
 function ServiceStatusBadge({ view }: { view: ServiceStatusView }) {
   return (
     <span className="cc-statusBadge" title={view.hint}>
@@ -1553,7 +1145,6 @@ function ServiceStatusBadge({ view }: { view: ServiceStatusView }) {
   )
 }
 
-/** A view tone on the harness StateDot. */
 function toneDot(tone: ServiceTone): StateDotState {
   return tone === 'ok' ? 'done'
     : tone === 'warn' ? 'warning'
@@ -1562,12 +1153,6 @@ function toneDot(tone: ServiceTone): StateDotState {
           : 'idle'
 }
 
-/**
- * The local probe's dot: done once it got through, warning when it ran and did
- * not, breathing while the request is in flight, idle when the Host offers no
- * probe at all. A failed probe is a warning rather than an error: it reports
- * this Host's moment, never the service's health.
- */
 function localDotState(view: ServiceStatusView): StateDotState {
   if (view.localTone === 'ok') return 'done'
   if (view.localTone === 'warn') return 'warning'
@@ -1575,9 +1160,8 @@ function localDotState(view: ServiceStatusView): StateDotState {
 }
 
 /**
- * Integrations & display: surfaces outside chat that reuse this provider. The
- * status snapshot comes from the page, which probes once per open even while
- * this group is folded — its heading shows the verdict either way.
+ * Features, privacy & status (Variant A unified group): Service status + ZDR +
+ * Web search + Sidebar quota card in one cohesive flat section.
  */
 function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onToggle, status, probe, onRetryProbe }: FormCardProps & FoldProps & {
   status: ServiceStatusSnapshot | undefined
@@ -1594,45 +1178,57 @@ function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onTog
       badges={
         <>
           <ServiceStatusBadge view={view} />
-          <GroupSummary parts={[stagedSwitch(state.webSearch, true) ? t('webSearchSummaryOn') : t('webSearchSummaryOff')]} />
+          <GroupSummary
+            parts={[
+              stagedSwitch(state.zdr, false) ? t('zdrSummaryOn') : t('zdrSummaryOff'),
+              stagedSwitch(state.webSearch, true) ? t('webSearchSummaryOn') : t('webSearchSummaryOff'),
+            ]}
+          />
         </>
       }
     >
-      {/* Status first: it is the row a user opens this page to check when
-          requests start failing, before the two opt-in display switches. */}
-      <ServiceStatusRow view={view} t={t} onRetry={onRetryProbe} />
-      <ToggleField
-        id="cc-web-search"
-        label={t('webSearch')}
-        hint={t('webSearchHint')}
-        state={state.webSearch}
-        disabled={disabled}
-        defaultChecked
-        onEdit={(text) => onEdit('webSearch', text)}
-        onReset={() => onReset('webSearch')}
-        t={t}
-      />
-      {/* Opt-in, and off by default: the sidebar quota card is a display
-          surface, so an unset document shows nothing on the left. */}
-      <ToggleField
-        id="cc-show-sidebar-quota"
-        label={t('showSidebarQuota')}
-        hint={t('showSidebarQuotaHint')}
-        state={state.showSidebarQuota}
-        disabled={disabled}
-        defaultChecked={false}
-        onEdit={(text) => onEdit('showSidebarQuota', text)}
-        onReset={() => onReset('showSidebarQuota')}
-        t={t}
-      />
+      <div className="cc-rows">
+        <ServiceStatusRow view={view} t={t} onRetry={onRetryProbe} />
+        <ToggleField
+          id="cc-zdr"
+          label={t('zdr')}
+          hint={t('zdrHint')}
+          state={state.zdr}
+          disabled={disabled}
+          defaultChecked={false}
+          onEdit={(text) => onEdit('zdr', text)}
+          onReset={() => onReset('zdr')}
+          t={t}
+        />
+        <ToggleField
+          id="cc-web-search"
+          label={t('webSearch')}
+          hint={t('webSearchHint')}
+          state={state.webSearch}
+          disabled={disabled}
+          defaultChecked
+          onEdit={(text) => onEdit('webSearch', text)}
+          onReset={() => onReset('webSearch')}
+          t={t}
+        />
+        <ToggleField
+          id="cc-show-sidebar-quota"
+          label={t('showSidebarQuota')}
+          state={state.showSidebarQuota}
+          disabled={disabled}
+          defaultChecked={false}
+          onEdit={(text) => onEdit('showSidebarQuota', text)}
+          onReset={() => onReset('showSidebarQuota')}
+          t={t}
+        />
+      </div>
     </FoldableGroup>
   )
 }
 
 /**
- * The "Advanced" group: the API base and the network limits. Its heading
- * names the customized count, and while folded, an invalid number (which
- * blocks save); expanded, the row's own error says it.
+ * Advanced group: full-width monospace `apiBase` `SettingsValueField` (never
+ * truncates reverse-proxy URLs) over a 3-column `tabular-nums` limits row.
  */
 function AdvancedSection({ state, disabled, t, onEdit, onReset, expanded, onToggle }: FormCardProps & FoldProps) {
   return (
@@ -1648,99 +1244,98 @@ function AdvancedSection({ state, disabled, t, onEdit, onReset, expanded, onTogg
         </>
       }
     >
-      <p className="cc-groupDesc">{t('advancedSettingsHint')}</p>
-      <Field
-        id="cc-api-base"
-        label={t('apiBase')}
-        state={state.apiBase}
-        disabled={disabled}
-        wide
-        placeholder={FIELD_DEFAULTS.apiBase}
-        onEdit={(text) => onEdit('apiBase', text)}
-        onReset={() => onReset('apiBase')}
-        t={t}
-      />
-      <Field
-        id="cc-request-timeout"
-        label={t('requestTimeoutMs')}
-        hint={t('requestTimeoutMsHint')}
-        state={state.requestTimeoutMs}
-        disabled={disabled}
-        numeric
-        decimal
-        unit={t('unitSeconds')}
-        placeholder={FIELD_DEFAULTS.requestTimeoutSeconds}
-        onEdit={(text) => onEdit('requestTimeoutMs', text)}
-        onReset={() => onReset('requestTimeoutMs')}
-        t={t}
-      />
-      <Field
-        id="cc-stream-idle-timeout"
-        label={t('streamIdleTimeoutMs')}
-        hint={t('streamIdleTimeoutMsHint')}
-        state={state.streamIdleTimeoutMs}
-        disabled={disabled}
-        numeric
-        decimal
-        unit={t('unitSeconds')}
-        placeholder={FIELD_DEFAULTS.streamIdleTimeoutSeconds}
-        onEdit={(text) => onEdit('streamIdleTimeoutMs', text)}
-        onReset={() => onReset('streamIdleTimeoutMs')}
-        t={t}
-      />
-      <Field
-        id="cc-transport-max-retries"
-        label={t('transportMaxRetries')}
-        hint={t('transportMaxRetriesHint')}
-        state={state.transportMaxRetries}
-        disabled={disabled}
-        numeric
-        unit={t('unitRetries')}
-        placeholder={FIELD_DEFAULTS.transportMaxRetries}
-        onEdit={(text) => onEdit('transportMaxRetries', text)}
-        onReset={() => onReset('transportMaxRetries')}
-        t={t}
-      />
-      <ToggleField
-        id="cc-offload-seen-images-for-cache"
-        label={t('offloadSeenImagesForCache')}
-        hint={t('offloadSeenImagesForCacheHint')}
-        state={state.offloadSeenImagesForCache}
-        disabled={disabled}
-        defaultChecked={false}
-        onEdit={(text) => onEdit('offloadSeenImagesForCache', text)}
-        onReset={() => onReset('offloadSeenImagesForCache')}
-        t={t}
-      />
+      <div className="cc-monoField">
+        <SettingsValueField
+          id="cc-api-base"
+          label={t('apiBase')}
+          overriddenLabel={t('overridden')}
+          resetLabel={t('reset')}
+          invalidLabel={t('invalidNumber')}
+          disabled={disabled}
+          placeholder={FIELD_DEFAULTS.apiBase}
+          {...state.apiBase}
+          onEdit={(text) => onEdit('apiBase', text)}
+          onReset={() => onReset('apiBase')}
+        />
+      </div>
+      <div className="cc-fieldGrid3">
+        <div className="cc-fieldCell cc-numField">
+          <SettingsValueField
+            id="cc-request-timeout"
+            label={`${t('requestTimeoutMs')} (${t('unitSeconds')})`}
+            help={{ label: t('requestTimeoutMs'), content: <p>{t('requestTimeoutMsHint')}</p> }}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={invalidCopy(state.requestTimeoutMs.invalidReason, t, 'duration')}
+            disabled={disabled}
+            placeholder={FIELD_DEFAULTS.requestTimeoutSeconds}
+            {...state.requestTimeoutMs}
+            onEdit={(text) => onEdit('requestTimeoutMs', text)}
+            onReset={() => onReset('requestTimeoutMs')}
+          />
+        </div>
+        <div className="cc-fieldCell cc-numField">
+          <SettingsValueField
+            id="cc-stream-idle-timeout"
+            label={`${t('streamIdleTimeoutMs')} (${t('unitSeconds')})`}
+            help={{ label: t('streamIdleTimeoutMs'), content: <p>{t('streamIdleTimeoutMsHint')}</p> }}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={invalidCopy(state.streamIdleTimeoutMs.invalidReason, t, 'duration')}
+            disabled={disabled}
+            placeholder={FIELD_DEFAULTS.streamIdleTimeoutSeconds}
+            {...state.streamIdleTimeoutMs}
+            onEdit={(text) => onEdit('streamIdleTimeoutMs', text)}
+            onReset={() => onReset('streamIdleTimeoutMs')}
+          />
+        </div>
+        <div className="cc-fieldCell cc-numField">
+          <SettingsValueField
+            id="cc-transport-max-retries"
+            label={`${t('transportMaxRetries')} (${t('unitRetries')})`}
+            help={{ label: t('transportMaxRetries'), content: <p>{t('transportMaxRetriesHint')}</p> }}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={invalidCopy(state.transportMaxRetries.invalidReason, t, 'number')}
+            numeric
+            disabled={disabled}
+            placeholder={FIELD_DEFAULTS.transportMaxRetries}
+            {...state.transportMaxRetries}
+            onEdit={(text) => onEdit('transportMaxRetries', text)}
+            onReset={() => onReset('transportMaxRetries')}
+          />
+        </div>
+      </div>
+      <div className="cc-rows">
+        <ToggleField
+          id="cc-offload-seen-images-for-cache"
+          label={t('offloadSeenImagesForCache')}
+          hint={t('offloadSeenImagesForCacheHint')}
+          state={state.offloadSeenImagesForCache}
+          disabled={disabled}
+          defaultChecked={false}
+          onEdit={(text) => onEdit('offloadSeenImagesForCache', text)}
+          onReset={() => onReset('offloadSeenImagesForCache')}
+          t={t}
+        />
+      </div>
     </FoldableGroup>
   )
 }
 
-/** One row of the unified account list: a stored account merged with its usage entry. */
 interface AccountRowModel {
-  /** Slot id: `default` or the extra account's credential reference. */
   id: string
   label: string
-  /** Credential reference for extra accounts; undefined for the default slot. */
   ref: string | undefined
   isDefault: boolean
-  /** Whether this page can manage the row (false for literal-only composition entries). */
   managed: boolean
-  /** Whether a key resolves for this account (stored credential or a Host-side source). */
   configured: boolean
-  /** Whether a stored credential exists this page could delete. */
   storedKey: boolean
   credentialKnown: boolean
   keyWritable: boolean
   usage: CommandCodeAccountUsage | undefined
 }
 
-/**
- * Merge the controller's accounts with the usage report. The default slot is
- * always first; report entries this page cannot manage (literal keys from the
- * composition config) still render, read-only, so the list names every
- * account the pool rotates through.
- */
 function accountRows(state: SettingsPageState, usage: UsagePageState, t: Translate<SettingsCommandCodeKey>): AccountRowModel[] {
   const report = new Map((usage.report?.accounts ?? []).map((entry) => [entry.id, entry]))
   const defaultUsage = report.get('default')
@@ -1791,28 +1386,15 @@ function accountRows(state: SettingsPageState, usage: UsagePageState, t: Transla
   return rows
 }
 
-/**
- * The row's status dot. Read top-down, so a problem always outranks "serving":
- * red for a key the Host rejected, amber while a rate limit is cooling down,
- * green for the account that is actually serving requests. A standby (or not
- * yet configured) account draws NOTHING — `cc-tabDotBlank` is an unfilled,
- * borderless dot that only holds the column so the account names stay aligned
- * with the rows that do have a verdict. Green therefore means "in use", not
- * "healthy": a wall of green dots would say nothing.
- */
-function statusDotClass(row: AccountRowModel): string {
+/** Semantic `StateDot` state for an account row; undefined on quiet standby rows. */
+function accountDotState(row: AccountRowModel): StateDotState | undefined {
   const entry = row.usage
-  if (entry?.mark === 'invalid-credential') return 'cc-tabDot cc-tabDotError'
-  if (entry !== undefined && (entry.mark !== '' || entry.cooldownUntil > 0)) return 'cc-tabDot cc-tabDotWarn'
-  if (row.configured && entry?.active === true) return 'cc-tabDot cc-tabDotOk'
-  return 'cc-tabDot cc-tabDotBlank'
+  if (entry?.mark === 'invalid-credential') return 'error'
+  if (entry !== undefined && (entry.mark !== '' || entry.cooldownUntil > 0)) return 'warning'
+  if (row.configured && entry?.active === true) return 'done'
+  return undefined
 }
 
-/**
- * The same verdict as a sentence, for the dot's tooltip. Undefined on a blank
- * dot: there is no verdict to read out, and a hover hotspot on an invisible
- * 8px mark would only invite the question it cannot usefully answer.
- */
 function statusDotTitle(row: AccountRowModel, t: Translate<SettingsCommandCodeKey>): string | undefined {
   const entry = row.usage
   if (entry?.mark === 'invalid-credential') return t('usageInvalidKey')
@@ -1822,7 +1404,6 @@ function statusDotTitle(row: AccountRowModel, t: Translate<SettingsCommandCodeKe
   return entry?.active === true ? t('usageActive') : undefined
 }
 
-/** One compact quota meter for a row's summary line. */
 function MiniMeter({ label, limit }: { label: string; limit: NonNullable<CommandCodeCredits['fiveHour']> }) {
   const ratio = windowRatio(limit.used, limit.cap)
   const percent = limit.cap > 0 ? `${Math.round(ratio * 100)}%` : formatMoney(limit.used)
@@ -1837,10 +1418,6 @@ function MiniMeter({ label, limit }: { label: string; limit: NonNullable<Command
   )
 }
 
-/**
- * The monthly credit balance for a row's summary line: the billing endpoint's
- * `monthlyCredits` is what is LEFT, shown as the amount alone.
- */
 function MonthlyBalance({ label, remaining }: { label: string; remaining: number }) {
   return (
     <span className="cc-miniMeter">
@@ -1850,7 +1427,7 @@ function MonthlyBalance({ label, remaining }: { label: string; remaining: number
   )
 }
 
-/** A single-input inline form (paste key, rename) with confirm/cancel. */
+/** Single-input inline form over `Input` + `Button` primitives. */
 function InlineInput({ id, label, secret, initial, placeholder, confirmLabel, disabled, t, onSubmit, onCancel }: {
   id: string
   label: string
@@ -1874,9 +1451,9 @@ function InlineInput({ id, label, secret, initial, placeholder, confirmLabel, di
         if (ready && !disabled) onSubmit(value)
       }}
     >
-      <input
+      <Input
         id={id}
-        className="cc-input"
+        className="cc-panelInput"
         type={secret && !visible ? 'password' : 'text'}
         aria-label={label}
         autoComplete="new-password"
@@ -1892,47 +1469,21 @@ function InlineInput({ id, label, secret, initial, placeholder, confirmLabel, di
       />
       <div className="cc-inlineActions">
         {secret && value !== '' ? (
-          <PageButton variant="ghost" size="sm" type="button" onClick={() => setVisible((shown) => !shown)}>
+          <Button variant="ghost" size="sm" className="cc-press" type="button" onClick={() => setVisible((shown) => !shown)}>
             {visible ? t('hide') : t('show')}
-          </PageButton>
+          </Button>
         ) : null}
         <span className="cc-spacer" />
-        <PageButton variant="ghost" size="sm" type="button" onClick={onCancel}>{t('cancel')}</PageButton>
-        <PageButton variant="primary" size="sm" type="submit" disabled={!ready || disabled}>{confirmLabel}</PageButton>
+        <Button variant="outline" size="sm" className="cc-press" type="button" onClick={onCancel}>{t('cancel')}</Button>
+        <Button variant="primary" size="sm" className="cc-press" type="submit" disabled={!ready || disabled}>{confirmLabel}</Button>
       </div>
     </form>
   )
 }
 
-/** A destructive confirmation, shown in place in the card as an error notice (no modal). */
-function ConfirmBar({ text, confirmLabel, disabled, t, onConfirm, onCancel }: {
-  text: string
-  confirmLabel: string
-  disabled: boolean
-  t: Translate<SettingsCommandCodeKey>
-  onConfirm(): void
-  onCancel(): void
-}) {
-  return (
-    <Notice
-      tone="error"
-      icon="warn"
-      role="alertdialog"
-      label={text}
-      title={text}
-      actions={
-        <>
-          <PageButton variant="danger" size="sm" disabled={disabled} onClick={onConfirm}>{confirmLabel}</PageButton>
-          <PageButton variant="ghost" size="sm" onClick={onCancel}>{t('cancel')}</PageButton>
-        </>
-      }
-    />
-  )
-}
-
 type RowMode = 'key' | 'rename' | 'remove' | 'clearKey' | undefined
 
-/** One account row: identity, status, quota summary, actions and expandable details. */
+/** Entity account card (`ModelsSection.rowCard` `R20` + concentric `R10` details + `Modal` confirm). */
 function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, actions }: {
   row: AccountRowModel
   rows: readonly AccountRowModel[]
@@ -1952,8 +1503,6 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
   const accountName = report?.account === undefined ? '' : report.account.userName || report.account.name
   const planName = report?.plan?.name ?? ''
   const credits = report?.credits
-  // Only an explicit `false` means the balance was omitted (an older Host
-  // never sends the flag and always sent a real number).
   const monthlyReported = credits !== undefined && credits.monthlyReported !== false
   const multi = rows.length > 1
   const loginTarget = row.ref
@@ -2007,8 +1556,15 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
     return undefined
   }
 
+  const dot = accountDotState(row)
+  const itemClass = entry?.mark === 'invalid-credential'
+    ? 'cc-accountItem cc-accountItemInvalid'
+    : entry?.active
+      ? 'cc-accountItem cc-accountItemActive'
+      : 'cc-accountItem'
+
   return (
-    <div className={row.usage?.active ? 'cc-accountItem cc-accountItemActive' : 'cc-accountItem'}>
+    <div className={itemClass}>
       <div className="cc-accountHead">
         <button
           type="button"
@@ -2017,22 +1573,42 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
           aria-controls={`cc-account-${row.id}-details`}
           onClick={() => setExpanded((value) => !value)}
         >
-          <span className={statusDotClass(row)} title={statusDotTitle(row, t)} aria-hidden="true" />
+          {dot !== undefined ? (
+            <span title={statusDotTitle(row, t)} style={{ display: 'inline-flex' }}>
+              <StateDot state={dot} />
+            </span>
+          ) : (
+            <span className="cc-dotSpacer" aria-hidden="true" />
+          )}
           <span className="cc-accountName">{row.label}</span>
           {accountName !== '' && accountName !== row.label ? <span className="cc-usageAccount">{accountName}</span> : null}
-          {planName !== '' ? <span className="cc-badge cc-badgeOutline">{planName}</span> : null}
-          {entry?.active && multi ? <span className="cc-badge cc-badgeOk">{t('usageActive')}</span> : null}
-          {pinned ? <span className="cc-badge">{t('accountStatusPinned')}</span> : null}
-          {!row.credentialKnown || !row.configured ? <span className="cc-badge cc-badgeOutline">{t(row.credentialKnown ? 'apiKeyUnset' : 'writeStateUnknown')}</span> : null}
-          {entry?.mark === 'invalid-credential' ? <span className="cc-badge cc-badgeError">{t('usageInvalidKey')}</span> : null}
+          {planName !== '' ? <Tag tone="neutral">{planName}</Tag> : null}
+          {entry?.active && multi ? <Tag tone="success">{t('usageActive')}</Tag> : null}
+          {pinned ? <Tag tone="solid">{t('accountStatusPinned')}</Tag> : null}
+          {!row.credentialKnown || !row.configured ? <Tag tone="outline">{t(row.credentialKnown ? 'apiKeyUnset' : 'writeStateUnknown')}</Tag> : null}
+          {entry?.mark === 'invalid-credential' ? <Tag tone="danger">{t('usageInvalidKey')}</Tag> : null}
           {entry !== undefined && entry.mark !== 'invalid-credential' && (entry.cooldownUntil > 0 || entry.mark === 'rate-limit') ? (
-            <span className="cc-badge cc-badgeWarn">
+            <Tag tone="warning">
               {t('usageCooldown')}{entry.cooldownUntil > 0 ? ` ${formatResetAtShort(entry.cooldownUntil)}` : ''}
-            </span>
+            </Tag>
           ) : null}
           <span className="cc-spacer" />
-          <Icon name="chevron" className={expanded ? 'cc-icon cc-foldChevron cc-chevronOpen' : 'cc-icon cc-foldChevron'} />
+          <IconChevronDownOutlineRegular
+            size={14}
+            className={expanded ? 'cc-foldChevron cc-chevronOpen' : 'cc-foldChevron'}
+          />
         </button>
+        {multi && pinned ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="cc-press"
+            disabled={disabled || state.accountBusy}
+            onClick={() => void actions.setActive('')}
+          >
+            {t('accountActionUnpin')}
+          </Button>
+        ) : null}
         {items.length > 0 ? (
           <Menu
             open={menuOpen}
@@ -2051,15 +1627,13 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
                 aria-expanded={menuOpen}
                 onClick={() => setMenuOpen((value) => !value)}
               >
-                <Icon name="more" />
+                <IconEllipsisOutlineRegular size={16} />
               </button>
             }
           />
         ) : null}
       </div>
 
-      {/* Folded, the meters are the card's summary; expanded, the details show
-          the same windows as full bars, so the summary steps aside. */}
       {!expanded && credits !== undefined && (credits.fiveHour !== undefined || credits.weekly !== undefined || monthlyReported) ? (
         <div className="cc-accountMeters">
           {credits.fiveHour !== undefined ? <MiniMeter label={t('usageFiveHour')} limit={credits.fiveHour} /> : null}
@@ -2075,10 +1649,10 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
           icon={row.keyWritable ? 'info' : 'lock'}
           actions={keyActions ? (
             <>
-              <PageButton variant="primary" size="sm" disabled={loginBusy || busyElsewhere} onClick={() => actions.beginLogin(loginTarget)}>
+              <Button variant="primary" size="sm" className="cc-press" disabled={loginBusy || busyElsewhere} onClick={() => actions.beginLogin(loginTarget)}>
                 {t('accountAddLogin')}
-              </PageButton>
-              <PageButton variant="outline" size="sm" onClick={() => setMode('key')}>{t('accountAddPaste')}</PageButton>
+              </Button>
+              <Button variant="outline" size="sm" className="cc-press" onClick={() => setMode('key')}>{t('accountAddPaste')}</Button>
             </>
           ) : undefined}
         >
@@ -2125,34 +1699,63 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
           />
         </div>
       ) : null}
-      {mode === 'remove' && row.ref !== undefined ? (
-        <ConfirmBar
-          text={t('accountRemoveConfirm', { name: row.label })}
-          confirmLabel={t('accountConfirmRemove')}
-          disabled={disabled || state.accountBusy}
-          t={t}
-          onCancel={() => setMode(undefined)}
-          onConfirm={() => {
-            void actions.remove(row.ref!).then((ok) => {
-              if (ok) setMode(undefined)
-            })
-          }}
-        />
-      ) : null}
-      {mode === 'clearKey' ? (
-        <ConfirmBar
-          text={t('accountClearKeyConfirm')}
-          confirmLabel={t('accountConfirmClear')}
-          disabled={disabled || state.accountBusy}
-          t={t}
-          onCancel={() => setMode(undefined)}
-          onConfirm={() => {
-            void actions.clearKey(row.id).then((ok) => {
-              if (ok) setMode(undefined)
-            })
-          }}
-        />
-      ) : null}
+
+      {/* Centered native Modal for destructive confirmations (replaces custom inline ConfirmBar). */}
+      <Modal
+        open={mode === 'remove' && row.ref !== undefined}
+        onClose={() => setMode(undefined)}
+        title={t('accountActionRemove')}
+        closeLabel={t('cancel')}
+        description={t('accountRemoveConfirm', { name: row.label })}
+        footer={
+          <div className="cc-modalActions">
+            <Button variant="outline" size="md" className="cc-press" onClick={() => setMode(undefined)}>
+              {t('cancel')}
+            </Button>
+            <Button
+              variant="outline"
+              size="md"
+              className="cc-press cc-dangerButton"
+              disabled={disabled || state.accountBusy}
+              onClick={() => {
+                if (row.ref === undefined) return
+                void actions.remove(row.ref).then((ok) => {
+                  if (ok) setMode(undefined)
+                })
+              }}
+            >
+              {t('accountConfirmRemove')}
+            </Button>
+          </div>
+        }
+      />
+      <Modal
+        open={mode === 'clearKey'}
+        onClose={() => setMode(undefined)}
+        title={t('accountActionClearKey')}
+        closeLabel={t('cancel')}
+        description={t('accountClearKeyConfirm')}
+        footer={
+          <div className="cc-modalActions">
+            <Button variant="outline" size="md" className="cc-press" onClick={() => setMode(undefined)}>
+              {t('cancel')}
+            </Button>
+            <Button
+              variant="outline"
+              size="md"
+              className="cc-press cc-dangerButton"
+              disabled={disabled || state.accountBusy}
+              onClick={() => {
+                void actions.clearKey(row.id).then((ok) => {
+                  if (ok) setMode(undefined)
+                })
+              }}
+            >
+              {t('accountConfirmClear')}
+            </Button>
+          </div>
+        }
+      />
 
       {expanded ? (
         <div id={`cc-account-${row.id}-details`} className="cc-accountDetails">
@@ -2166,7 +1769,6 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
               className="cc-rowFlush"
               title={t('accountModels')}
               titleFor={`cc-account-${row.id}-models`}
-              description={t('accountModelsHint')}
               error={state.catalogFailed ? t('modelCatalogFailed') : undefined}
               control={
                 <ModelMultiSelect
@@ -2188,7 +1790,6 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
   )
 }
 
-/** The live status of one browser sign-in: link while waiting, outcome after. */
 function LoginStatus({ state, t, onCancel }: {
   state: LoginPageState
   t: Translate<SettingsCommandCodeKey>
@@ -2196,26 +1797,23 @@ function LoginStatus({ state, t, onCancel }: {
 }) {
   const hint = loginHint(state, t)
   const busy = state.phase === 'starting' || state.phase === 'waiting'
-  // loginHint's class is the verdict the Models-page card also paints; here it
-  // picks the notice tone instead.
   const tone: NoticeTone = hint.className === 'cc-loginError' ? 'error' : hint.className === 'cc-loginDone' ? 'success' : 'neutral'
   const link = state.authUrl !== undefined ? (
     <a className="cc-loginLink" href={state.authUrl} target="_blank" rel="noreferrer">
       {t('loginOpenLink')}
-      <Icon name="external" className="cc-icon cc-iconInline" />
+      <IconRightUpOutlineRegular size={12} />
     </a>
   ) : null
   return (
     <Notice
       tone={tone}
-      actions={link !== null || busy ? <>{link}{busy ? <PageButton variant="ghost" size="sm" onClick={onCancel}>{t('loginCancel')}</PageButton> : null}</> : undefined}
+      actions={link !== null || busy ? <>{link}{busy ? <Button variant="ghost" size="sm" className="cc-press" onClick={onCancel}>{t('loginCancel')}</Button> : null}</> : undefined}
     >
       <p title={hint.title}>{hint.text}</p>
     </Notice>
   )
 }
 
-/** The immediate account operations the list and its rows call. */
 interface AccountActions {
   refreshCredentials(): void
   cleanup(ref: string): Promise<boolean>
@@ -2229,22 +1827,9 @@ interface AccountActions {
   cancelLogin(): void
 }
 
-/** How the add-account panel takes a key: the harness's browser sign-in, or a pasted key. */
 export type AddAccountMode = 'browser' | 'paste'
-
-/** Enrollment phases during which the panel only offers "cancel setup". */
 const ENROLLMENT_BUSY_PHASES: readonly string[] = ['creating', 'waiting', 'writing', 'cancelling']
 
-/**
- * What the add-account panel's action row shows, from the enrollment phase
- * and the panel's own inputs — a pure function so the button logic is tested
- * without rendering:
- * - `naming`: the host could not save the name; retry / accept / cancel.
- * - `cancelSetup`: a sign-in or key write is in flight; only "cancel setup",
- *   with the method switch and inputs locked.
- * - `start`: idle; cancel plus the mode's primary action ("Start sign-in", or
- *   "Add" once a key is typed in paste mode).
- */
 export function addAccountPanelView({ phase, mode, keyReady, disabled }: {
   phase: string | undefined
   mode: AddAccountMode
@@ -2257,11 +1842,8 @@ export function addAccountPanelView({ phase, mode, keyReady, disabled }: {
 }
 
 /**
- * 新增面板只负责输入和操作意图；账号、登录、命名与补偿由宿主过程负责。
- * Drawn as the design canvas does: a "sign in / paste key" segmented switch,
- * the optional name, the key field in paste mode, then cancel + the primary
- * action on the right. Leaving paste mode clears the typed key, so a key never
- * lingers in a field the user has moved away from.
+ * Add-account inline panel (`ModelsSection.addCard` surface) powered by the
+ * platform `SegmentedControl`, `Input` and `Button` primitives.
  */
 function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: {
   state: SettingsPageState
@@ -2279,8 +1861,12 @@ function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: 
   const view = addAccountPanelView({ phase: active?.phase, mode, keyReady: key.trim() !== '', disabled })
   const fallbackName = t('accountNameN', { n: state.accounts.length + 2 })
   useEffect(() => { if (active?.phase === 'finished') onClose() }, [active?.phase, onClose])
-  const start = () => enrollment.begin({ mode: mode === 'browser' ? 'browser' : 'manual',
-    label: label.trim() || fallbackName, automaticName: label.trim() === '', ...(mode === 'browser' ? {} : { key }) })
+  const start = () => enrollment.begin({
+    mode: mode === 'browser' ? 'browser' : 'manual',
+    label: label.trim() || fallbackName,
+    automaticName: label.trim() === '',
+    ...(mode === 'browser' ? {} : { key }),
+  })
   const close = () => { enrollment.cancel(); onClose() }
   const pick = (next: AddAccountMode) => {
     setMode(next)
@@ -2290,6 +1876,11 @@ function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: 
     }
   }
   const waitingLink = active?.authUrl && active.phase === 'waiting' ? active.authUrl : undefined
+  const modeOptions = useMemo(() => [
+    { value: 'browser' as const, label: t('accountAddLogin') },
+    { value: 'paste' as const, label: t('accountAddPaste') },
+  ], [t])
+
   return (
     <form
       className="cc-panel"
@@ -2299,29 +1890,31 @@ function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: 
         if (view.canSubmit) void start()
       }}
     >
-      <span className="cc-panelTitle">{t('accountAdd')}</span>
-      <p className="cc-rowDesc">{t('accountAddHint')}</p>
-      <div className="cc-seg" role="group" aria-label={t('accountAddMethod')}>
-        {(['browser', 'paste'] as const).map((option) => (
-          <button
-            key={option}
-            type="button"
-            className={mode === option ? 'cc-segItem cc-segOn' : 'cc-segItem'}
-            aria-pressed={mode === option}
-            disabled={view.locked}
-            onClick={() => pick(option)}
-          >
-            {option === 'browser' ? t('accountAddLogin') : t('accountAddPaste')}
-          </button>
-        ))}
+      <div className="cc-panelHead">
+        <span className="cc-panelTitle">{t('accountAdd')}</span>
+        <SegmentedControl
+          id="cc-add-account-mode"
+          value={mode}
+          options={modeOptions}
+          onChange={pick}
+          label={t('accountAddMethod')}
+          disabled={view.locked}
+        />
       </div>
-      <input className="cc-fieldInput cc-panelInput" type="text" aria-label={t('accountNamePlaceholder')} placeholder={t('accountNamePlaceholder')}
-        value={label} disabled={view.locked} onChange={(event) => setLabel(event.target.value)} />
+      <Input
+        className="cc-panelInput"
+        type="text"
+        aria-label={t('accountNamePlaceholder')}
+        placeholder={t('accountNamePlaceholder')}
+        value={label}
+        disabled={view.locked}
+        onChange={(event) => setLabel(event.target.value)}
+      />
       {mode === 'paste' ? (
         <div className="cc-keyField">
-          <input
+          <Input
             id="cc-add-account-key"
-            className="cc-fieldInput cc-panelInput"
+            className="cc-panelInput"
             type={keyVisible ? 'text' : 'password'}
             aria-label={t('accountKeyPlaceholder')}
             placeholder={t('accountKeyPlaceholder')}
@@ -2333,9 +1926,9 @@ function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: 
             onChange={(event) => setKey(event.target.value)}
           />
           {key !== '' ? (
-            <PageButton variant="ghost" size="sm" disabled={view.locked} onClick={() => setKeyVisible((shown) => !shown)}>
+            <Button variant="ghost" size="sm" className="cc-press" disabled={view.locked} onClick={() => setKeyVisible((shown) => !shown)}>
               {keyVisible ? t('hide') : t('show')}
-            </PageButton>
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -2344,7 +1937,7 @@ function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: 
           actions={waitingLink !== undefined ? (
             <a className="cc-loginLink" href={waitingLink} target="_blank" rel="noreferrer">
               {t('accountAddOpenLink')}
-              <Icon name="external" className="cc-icon cc-iconInline" />
+              <IconRightUpOutlineRegular size={12} />
             </a>
           ) : undefined}
         >
@@ -2356,18 +1949,18 @@ function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: 
       <div className="cc-panelActions">
         {view.actions === 'naming' && active !== undefined ? (
           <>
-            <PageButton variant="ghost" onClick={close}>{t('cancel')}</PageButton>
-            <PageButton variant="outline" disabled={disabled} onClick={() => void enrollment.name()}>{t('accountNameAcceptExisting')}</PageButton>
-            <PageButton variant="primary" disabled={disabled} onClick={() => void enrollment.name(active.suggestedName || label || fallbackName)}>{t('accountNameSaveRetry')}</PageButton>
+            <Button variant="ghost" size="md" className="cc-press" onClick={close}>{t('cancel')}</Button>
+            <Button variant="outline" size="md" className="cc-press" disabled={disabled} onClick={() => void enrollment.name()}>{t('accountNameAcceptExisting')}</Button>
+            <Button variant="primary" size="md" className="cc-press" disabled={disabled} onClick={() => void enrollment.name(active.suggestedName || label || fallbackName)}>{t('accountNameSaveRetry')}</Button>
           </>
         ) : view.actions === 'cancelSetup' ? (
-          <PageButton variant="ghost" onClick={close}>{t('accountAddCancel')}</PageButton>
+          <Button variant="outline" size="md" className="cc-press" onClick={close}>{t('accountAddCancel')}</Button>
         ) : (
           <>
-            <PageButton variant="ghost" onClick={close}>{t('cancel')}</PageButton>
-            <PageButton variant="primary" type="submit" disabled={!view.canSubmit}>
+            <Button variant="outline" size="md" className="cc-press" onClick={close}>{t('cancel')}</Button>
+            <Button variant="primary" size="md" className="cc-press" type="submit" disabled={!view.canSubmit}>
               {mode === 'browser' ? t('accountAddStart') : t('accountAddConfirm')}
-            </PageButton>
+            </Button>
           </>
         )}
       </div>
@@ -2375,16 +1968,6 @@ function AddAccountPanel({ state, disabled, t, enrollment, snapshot, onClose }: 
   )
 }
 
-/**
- * The unified account card: every account the pool rotates through, one row
- * each, with its status and quota inline — so one account's facts no longer
- * have to be cross-read across separate surfaces.
- *
- * Exported for the render test (`tests/accounts-card-render.test.ts`) that pins
- * the first-paint auto-refresh wiring against a real React tree: the page mounts
- * this card, and a test that only checks the injected function exists cannot see
- * the card reaching for it.
- */
 export function AccountsCard({ t, state, usage, login, disabled, actions, onRefresh, onRefreshAuto, openAnalytics, createEnrollment, expanded, onToggle }: FoldProps & {
   t: Translate<SettingsCommandCodeKey>
   state: SettingsPageState
@@ -2393,9 +1976,7 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
   disabled: boolean
   actions: AccountActions
   onRefresh(): void
-  /** First-paint read; may coalesce. The refresh button above never does. */
   onRefreshAuto(): void
-  /** Opens the model-usage dashboard. Absent when the Host exposes no panel seam. */
   openAnalytics?: (() => void) | undefined
   createEnrollment(): AccountEnrollmentController
 }) {
@@ -2405,25 +1986,6 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
   useEffect(() => { enrollment.activate(); return () => enrollment.dispose() }, [enrollment])
   const closeAdd = useCallback(() => setAdding(false), [])
   const { loading, shouldRefresh } = usageCardState(usage)
-  // Ask the Host on first paint: CLI auth and composition keys are not
-  // represented by browser credential references.
-  //
-  // The same seam now keeps a re-check loop while the card still owes an
-  // answer: `shouldRefresh` also covers `error` and a `ready` report whose
-  // endpoints partly failed, so a blip no longer sits there until the user
-  // presses refresh. The interval mirrors the controller's
-  // `USAGE_AUTO_RETRY_MS` cooldown, which is what actually rate-limits the
-  // requests — this effect only decides WHEN to ask, never how often the wire
-  // is hit. A clean report turns `shouldRefresh` false, tearing the loop down.
-  //
-  // The budget ({@link USAGE_AUTO_RETRY_LIMIT}) lives here, not in the
-  // controller: the sidebar panel shares `refresh({ auto: true })` on its own
-  // two-minute tick and must keep running, while this fast loop is the one a
-  // permanent refusal could turn into a storm. A remount starts a fresh budget.
-  //
-  // `onRefreshAuto` is a fresh closure on every render, so it lives in a ref:
-  // listing it as a dependency would rebuild the interval on every render and
-  // let it never fire.
   const refreshAuto = useRef(onRefreshAuto)
   useEffect(() => { refreshAuto.current = onRefreshAuto })
   const autoAttempts = useRef(0)
@@ -2457,35 +2019,34 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
       onToggle={onToggle}
       badges={
         <>
-          <GroupSummary parts={[rows.length === 1 ? t('accountsSummaryOne') : t('accountsSummaryMany', { count: rows.length })]} />
+          <GroupSummary
+            parts={[
+              rows.length === 1 ? t('accountsSummaryOne') : t('accountsSummaryMany', { count: rows.length }),
+              multi
+                ? (pinnedRow !== undefined ? t('accountModePinned', { name: pinnedRow.label }) : t('accountModeAuto'))
+                : undefined,
+            ]}
+          />
           {issues.count > 0 ? (
-            <span className={issues.severe ? 'cc-badge cc-badgeError' : 'cc-badge cc-badgeWarn'}>
+            <Tag tone={issues.severe ? 'danger' : 'warning'}>
               {t('accountsSummaryIssues', { count: issues.count })}
-            </span>
+            </Tag>
           ) : null}
         </>
       }
       action={
-        <PageButton variant="ghost" size="sm" icon={<Icon name="refresh" className="cc-icon cc-btnIcon" />} disabled={loading} onClick={() => { onRefresh(); void enrollment.refresh() }}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="cc-press"
+          icon={<IconRefreshOutlineRegular size={14} />}
+          disabled={loading}
+          onClick={() => { onRefresh(); void enrollment.refresh() }}
+        >
           {loading ? t('usageRefreshing') : t('usageRefresh')}
-        </PageButton>
+        </Button>
       }
     >
-      <p className="cc-groupDesc">{multi ? t('accountsRotationHint') : t('accountsHint')}</p>
-      {multi ? (
-        <div className="cc-accountMode">
-          <Icon name="swap" className="cc-icon cc-btnIcon" />
-          <span>{pinnedRow !== undefined ? t('accountModePinned', { name: pinnedRow.label }) : t('accountModeAuto')}</span>
-          {pinnedRow !== undefined ? (
-            <PageButton variant="ghost" size="sm" disabled={disabled || state.accountBusy} onClick={() => void actions.setActive('')}>
-              {t('accountActionUnpin')}
-            </PageButton>
-          ) : null}
-        </div>
-      ) : null}
-      {/* Every account-level result is the same Notice block: a hard failure
-          is an error, an operation that is half done and offers a retry is a
-          warning. The retry buttons stay outline so they read as actions. */}
       {(() => {
         const writeNotice = settingsWriteNotice(state.accountResult, t)
         const notices: ReactNode[] = []
@@ -2501,7 +2062,7 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
         }
         if (state.credentialRefreshFailed || state.accountResult?.refreshFailed || state.saveResult?.refreshFailed) {
           notices.push(
-            <Notice key="refresh" tone="warn" actions={<PageButton variant="outline" size="sm" onClick={actions.refreshCredentials}>{t('writeRefreshRetry')}</PageButton>}>
+            <Notice key="refresh" tone="warn" actions={<Button variant="outline" size="sm" className="cc-press" onClick={actions.refreshCredentials}>{t('writeRefreshRetry')}</Button>}>
               <p>{t('writeRefreshFailed')}</p>
             </Notice>,
           )
@@ -2515,10 +2076,10 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
               key="cleanup"
               tone="warn"
               actions={
-                <PageButton variant="outline" size="sm" disabled={disabled || state.accountBusy}
+                <Button variant="outline" size="sm" className="cc-press" disabled={disabled || state.accountBusy}
                   onClick={() => { for (const ref of state.pendingCredentialCleanup) void actions.cleanup(ref) }}>
                   {t('accountCleanupRetry')}
-                </PageButton>
+                </Button>
               }
             >
               <p>{t('accountCleanupPending')}</p>
@@ -2533,11 +2094,11 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
               actions={
                 <>
                   {record.phase === 'naming' && record.suggestedName ? (
-                    <PageButton variant="outline" size="sm" disabled={disabled} onClick={() => void enrollment.recover(record, record.suggestedName)}>{t('accountNameSaveRetry')}</PageButton>
+                    <Button variant="outline" size="sm" className="cc-press" disabled={disabled} onClick={() => void enrollment.recover(record, record.suggestedName)}>{t('accountNameSaveRetry')}</Button>
                   ) : null}
-                  <PageButton variant="outline" size="sm" disabled={disabled} onClick={() => void enrollment.recover(record)}>
+                  <Button variant="outline" size="sm" className="cc-press" disabled={disabled} onClick={() => void enrollment.recover(record)}>
                     {record.phase === 'naming' ? t('accountNameAcceptExisting') : t('accountEnrollmentCleanupRetry')}
-                  </PageButton>
+                  </Button>
                 </>
               }
             >
@@ -2550,7 +2111,7 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
             <Notice
               key="active-cleanup"
               tone="warn"
-              actions={<PageButton variant="outline" size="sm" disabled={disabled} onClick={() => void enrollment.recover(snapshot.active!)}>{t('accountEnrollmentCleanupRetry')}</PageButton>}
+              actions={<Button variant="outline" size="sm" className="cc-press" disabled={disabled} onClick={() => void enrollment.recover(snapshot.active!)}>{t('accountEnrollmentCleanupRetry')}</Button>}
             >
               <p>{t(snapshot.active.messageKey)}</p>
             </Notice>,
@@ -2584,24 +2145,30 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
           onClose={closeAdd}
         />
       ) : null}
-      {/* One action row under the list: Add account leads, the analytics exit
-          trails it as a quieter ghost button (the 14-character label would
-          crowd the group heading). The Host may expose no panel seam at all,
-          hence the optional render; while the add panel is open it replaces
-          the add button. */}
       {!adding || openAnalytics ? (
         <div className="cc-accountActions">
           {!adding ? (
-            <PageButton variant="outline" size="md" icon={<Icon name="plus" className="cc-icon cc-btnIcon" />} disabled={disabled} onClick={() => { enrollment.reset(); setAdding(true) }}>
-              {t('accountAdd')}
-            </PageButton>
-          ) : null}
-          <span className="cc-spacer" />
+            <button
+              type="button"
+              className="cc-addButton"
+              disabled={disabled}
+              onClick={() => { enrollment.reset(); setAdding(true) }}
+            >
+              <IconPlusOutlineMedium size={14} />
+              <span>{t('accountAdd')}</span>
+            </button>
+          ) : <span className="cc-spacer" />}
           {openAnalytics ? (
-            <PageButton variant="ghost" size="md" icon={<Icon name="chart" className="cc-icon cc-btnIcon" />} className="cc-analyticsEntry" onClick={openAnalytics}>
+            <Button
+              variant="outline"
+              size="md"
+              className="cc-press cc-analyticsEntry"
+              icon={<IconGaugeOutlineRegular size={15} />}
+              onClick={openAnalytics}
+            >
               <span className="cc-analyticsEntryText">{t('openAnalytics')}</span>
-              <Icon name="arrowRight" className="cc-icon cc-btnIcon" />
-            </PageButton>
+              <IconRightUpOutlineRegular size={13} />
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -2609,16 +2176,8 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
   )
 }
 
-/**
- * Show the save bar's "saved" confirmation for a short window after each accepted save.
- * The controller only counts saves (`savedCount`); the flash timing lives
- * here so the state machine stays timer-free.
- */
 function useSavedFlash(tick: number): boolean {
   const [visible, setVisible] = useState(false)
-  // The count lives in the shared controller and outlives this component, so
-  // a remount (switching settings pages, reopening settings) sees a non-zero
-  // count it did not witness. Only a save landing while mounted may flash.
   const seen = useRef(tick)
   useEffect(() => {
     if (tick === seen.current) return
@@ -2630,12 +2189,6 @@ function useSavedFlash(tick: number): boolean {
   return visible
 }
 
-/**
- * The update hint: one throttled npm-registry check per page open (the
- * throttle and all failure handling live in ./update.ts). Resolves to the
- * newest published version when it is newer than this build, else undefined —
- * every failure mode degrades to no hint at all.
- */
 function usePluginUpdate(): string | undefined {
   const [available, setAvailable] = useState<string | undefined>(undefined)
   useEffect(() => {
@@ -2646,8 +2199,6 @@ function usePluginUpdate(): string | undefined {
       store: localStorageUpdateStore(),
     }).then((version) => {
       if (!cancelled) setAvailable(version)
-      // A rejected checkForUpdate would be a bug (it catches internally);
-      // swallow it regardless — the footer must never break the page.
     }, () => {})
     return () => {
       cancelled = true
@@ -2656,18 +2207,6 @@ function usePluginUpdate(): string | undefined {
   return available
 }
 
-/**
- * The service status: paint the cached snapshot immediately, then run one
- * throttled check per page open (the TTL and every failure path live in
- * ./service-status.ts, which never rejects). The Host probe runs alongside it
- * and is the row's real-time half — the published record only moves on a status
- * change or the daily summary, so it can legitimately be hours old (and is
- * reported as stale past a day).
- *
- * The probe retries itself once before the row shows a failure, and `retry`
- * re-runs it from the row's button: a single transient miss must not stick on
- * the page until the settings page is reopened.
- */
 function useServiceStatus(probeService: CommandCodeSettingsProps['probeService']): {
   snapshot: ServiceStatusSnapshot | undefined
   probe: ServiceProbe
@@ -2677,8 +2216,6 @@ function useServiceStatus(probeService: CommandCodeSettingsProps['probeService']
     () => readCachedServiceStatus(localStorageServiceStatusStore()),
   )
   const [probe, setProbe] = useState<ServiceProbe>({ kind: 'checking' })
-  // The injected method may arrive as a fresh function on every render; pinning
-  // it in a ref keeps the mount probe from re-running on each paint.
   const probeRef = useRef(probeService)
   probeRef.current = probeService
   const cancelled = useRef(false)
@@ -2699,8 +2236,6 @@ function useServiceStatus(probeService: CommandCodeSettingsProps['probeService']
     let cancelledSnapshot = false
     void checkServiceStatus({ store: localStorageServiceStatusStore() }).then((next) => {
       if (!cancelledSnapshot) setSnapshot(next)
-      // A rejection here would be a bug — checkServiceStatus catches every
-      // source failure — but the settings page must never break on a probe.
     }, () => {})
     return () => {
       cancelledSnapshot = true
@@ -2709,10 +2244,6 @@ function useServiceStatus(probeService: CommandCodeSettingsProps['probeService']
   return { snapshot, probe, retry: runProbe }
 }
 
-/**
- * The page's fold state, read once from this browser's storage and written
- * back on every change (./group-fold.ts holds the defaults and fallbacks).
- */
 function useGroupFold(): [FoldState, (next: FoldState) => void] {
   const [store] = useState(localStorageFoldStore)
   const [fold, setFoldState] = useState<FoldState>(() => store.read())
@@ -2729,16 +2260,9 @@ interface SaveBarView {
   visible: boolean
   tone: SaveBarTone
   message: string
-  /** Whether Discard/Save apply (hidden while only the saved confirmation shows). */
   actions: boolean
 }
 
-/**
- * What the save bar says. It exists only while there is something to act on
- * or to confirm: pending edits, a save in flight, a failure, or the brief
- * confirmation after a save landed. Account operations never reach it, they
- * commit on their own.
- */
 function saveBarView(state: SettingsPageState, savedVisible: boolean, t: Translate<SettingsCommandCodeKey>): SaveBarView {
   const notice = settingsWriteNotice(state.saveResult, t)
   if (notice) return { visible: true, tone: state.failed ? 'error' : 'pending', message: notice, actions: state.dirty || state.failed }
@@ -2752,82 +2276,66 @@ function saveBarView(state: SettingsPageState, savedVisible: boolean, t: Transla
   return { visible: false, tone: 'success', message: '', actions: false }
 }
 
-/** The save bar's leading status mark: a soft dot while pending, a glyph once there is an outcome. */
-function SaveBarIcon({ tone }: { tone: SaveBarTone }) {
-  if (tone === 'pending') return <span className="cc-saveBarIcon" aria-hidden="true"><span className="cc-saveBarPulse" /></span>
-  return (
-    <span className="cc-saveBarIcon" aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="8" cy="8" r="6.5" />
-        {tone === 'success' ? <path d="M5.2 8.2l1.9 1.9 3.7-3.9" /> : <path d="M8 4.8v3.6M8 11.1v.1" />}
-      </svg>
-    </span>
-  )
-}
-
 /**
- * The floating save bar: pinned to the bottom of the settings scrollport and
- * slid out of view when there is nothing to save. It stays mounted so it can
- * animate out, and keeps showing its last message while it does (the state
- * that hid it has no message of its own).
+ * Native `SettingsForm`-aligned sticky footer bar using `StateDot` and `Button`
+ * (`md`: H36/R12) instead of a custom floating capsule bar.
  */
-function SaveBar({ view, state, t, onDiscard, onSave, onLocate }: {
+function SaveFooter({ view, state, t, onDiscard, onSave, onLocate }: {
   view: SaveBarView
   state: SettingsPageState
   t: Translate<SettingsCommandCodeKey>
   onDiscard(): void
   onSave(): void
-  /** Opens the groups holding an invalid draft and focuses the first one. */
   onLocate(): void
 }) {
-  const last = useRef(view)
-  if (view.visible) last.current = view
-  const shown = view.visible ? view : last.current
+  if (!view.visible) return null
+  const dotState: StateDotState = state.saving
+    ? 'ongoing'
+    : view.tone === 'error'
+      ? 'error'
+      : view.tone === 'success'
+        ? 'done'
+        : 'warning'
   return (
-    <div className="cc-saveBarDock">
-      <div
-        className={`cc-saveBar cc-saveBar-${shown.tone}${view.visible ? ' cc-saveBarShown' : ''}`}
-        role="region"
-        aria-label={t('save')}
-        aria-hidden={!view.visible}
-      >
-        <SaveBarIcon tone={shown.tone} />
-        <p className="cc-saveBarText" role="status" aria-live="polite" title={shown.message}>{shown.message}</p>
-        {shown.actions ? (
-          <div className="cc-saveBarActions">
-            {/* The harness Button at its 36px size; the bar's 16px corners are
-                its 12px corners plus the 4px inset, so the two stay concentric.
-                Save stays disabled while a draft is invalid; Locate is how the
-                bar points at it, since that draft may sit in a folded group. */}
-            {state.invalid ? (
-              <PageButton variant="ghost" size="lg" disabled={!view.visible} onClick={onLocate}>
-                {t('saveLocate')}
-              </PageButton>
-            ) : null}
-            <PageButton
-              variant="ghost"
-              size="lg"
-              disabled={!view.visible || (!state.dirty && !state.failed) || state.saving}
-              onClick={onDiscard}
-            >
-              {t('discard')}
-            </PageButton>
-            <PageButton
-              variant="primary"
-              size="lg"
-              disabled={!view.visible || !state.dirty || state.invalid || state.saving}
-              onClick={onSave}
-            >
-              {t(state.saving ? 'saving' : 'save')}
-            </PageButton>
-          </div>
-        ) : null}
-      </div>
+    <div className="cc-saveFooter" role="region" aria-label={t('save')}>
+      <span className="cc-saveStatus">
+        <StateDot state={dotState} />
+        <p className={view.tone === 'error' ? 'cc-saveText cc-saveTextError' : 'cc-saveText'} role="status" aria-live="polite" title={view.message}>
+          {view.message}
+        </p>
+      </span>
+      {view.actions ? (
+        <div className="cc-saveActions">
+          {state.invalid ? (
+            <Button variant="ghost" size="md" className="cc-press" onClick={onLocate}>
+              {t('saveLocate')}
+            </Button>
+          ) : null}
+          <Button
+            variant="outline"
+            size="md"
+            className="cc-press"
+            disabled={(!state.dirty && !state.failed) || state.saving}
+            onClick={onDiscard}
+          >
+            {t('discard')}
+          </Button>
+          <Button
+            variant="primary"
+            size="md"
+            className="cc-press"
+            disabled={!state.dirty || state.invalid || state.saving}
+            onClick={onSave}
+          >
+            {t(state.saving ? 'saving' : 'save')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
 
-/** The settings page body: accounts, then the staged provider settings. */
+/** The settings page body (Variant A): native header + 4 flat groups + sticky `SettingsForm` footer. */
 export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const { t } = props
   const state = props.useCommandCodeSettings((snapshot) => snapshot)
@@ -2836,7 +2344,6 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const disabled = !state.writable
   const savedVisible = useSavedFlash(state.savedCount)
   const updateVersion = usePluginUpdate()
-  // 账号行共享稳定的操作对象；新增账号的过程则由页面自己的控制器持有。
   const {
     renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey,
     setActiveAccount, setAccountModels, beginLogin, cancelLogin, refreshCredentials,
@@ -2858,8 +2365,6 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   const status = useServiceStatus(props.probeService)
   const [fold, setFold] = useGroupFold()
   const foldProps = (group: FoldGroup) => ({ expanded: fold[group], onToggle: () => setFold({ ...fold, [group]: !fold[group] }) })
-  // Locate: open every group holding an invalid draft, then — once the
-  // re-render has unhidden it — focus the first invalid control in page order.
   const sectionRef = useRef<HTMLElement>(null)
   const [locateTick, setLocateTick] = useState(0)
   useEffect(() => {
@@ -2874,10 +2379,25 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
     setLocateTick((tick) => tick + 1)
   }
   return (
-    <section ref={sectionRef} className={bar.visible ? 'cc-section cc-sectionWithBar' : 'cc-section'} aria-label={t('title')}>
-      <h2 className="cc-title">{t('title')}</h2>
-      <p className="cc-intro">{t('intro')}</p>
-      <StatusStrip t={t} state={state} usage={usage} snapshot={status.snapshot} probe={status.probe} />
+    <section ref={sectionRef} className="cc-section" aria-label={t('title')}>
+      <div className="cc-header">
+        <div className="cc-titleRow">
+          <h2 className="cc-title">{t('title')}</h2>
+          {updateVersion !== undefined ? (
+            <a
+              className="cc-versionLink"
+              href={PLUGIN_RELEASES_URL}
+              target="_blank"
+              rel="noreferrer"
+              title={t('updateHint')}
+            >
+              <Tag tone="warning">v{updateVersion} {t('updateAvailable')}</Tag>
+            </a>
+          ) : (
+            <Tag tone="neutral">v{PLUGIN_VERSION}</Tag>
+          )}
+        </div>
+      </div>
       {!state.writable ? <Notice icon="lock"><p>{t('readOnly')}</p></Notice> : null}
       <AccountsCard
         t={t}
@@ -2900,27 +2420,9 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         onOverrides={props.editContextWindowOverrides}
         onNames={props.editModelNames}
       />
-      <PrivacyCard {...form} {...foldProps('privacy')} />
       <IntegrationsCard {...form} {...foldProps('integrations')} status={status.snapshot} probe={status.probe} onRetryProbe={status.retry} />
       <AdvancedSection {...form} {...foldProps('advanced')} />
-      <p className="cc-version">
-        Command Code Provider v{PLUGIN_VERSION}
-        {updateVersion !== undefined ? (
-          <>
-            {' · '}
-            <a
-              className="cc-versionLink"
-              href={PLUGIN_RELEASES_URL}
-              target="_blank"
-              rel="noreferrer"
-              title={t('updateHint')}
-            >
-              v{updateVersion} {t('updateAvailable')}
-            </a>
-          </>
-        ) : null}
-      </p>
-      <SaveBar view={bar} state={state} t={t} onDiscard={props.discard} onSave={props.save} onLocate={locate} />
+      <SaveFooter view={bar} state={state} t={t} onDiscard={props.discard} onSave={props.save} onLocate={locate} />
     </section>
   )
 }

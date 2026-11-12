@@ -18,6 +18,7 @@
  */
 
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { providerError } from './llm-error.ts'
 import { THROTTLED_CODE } from './transient-retry.ts'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 
@@ -796,7 +797,7 @@ function allAccountsUnusable(accounts: readonly ResolvedAccount[]): LlmError {
   // backoff paces the retries.
   const windowMarked = marked.filter((state) => state.cause === 'window')
   if (windowMarked.length === 0) {
-    return new LlmError(
+    return providerError(
       `llm-commandcode: all ${accounts.length} Command Code account(s) are rate limited (429)`
         + ' — the provider did not report an exhausted usage window; retrying'
         + `；全部 ${accounts.length} 个 Command Code 账户被限流（429）`

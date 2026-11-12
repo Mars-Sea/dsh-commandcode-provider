@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案 B · SegmentedTabs 三栏切换方案</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--cc-ease-out:cubic-bezier(0.23,1,0.32,1)}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+a{color:#2b63d9;text-decoration:none}
+button{transition:transform 150ms var(--cc-ease-out),background-color 150ms ease,color 150ms ease,border-color 150ms ease,opacity 150ms ease}
+button:active:not(:disabled){transform:scale(0.97)}
+button[role="tab"]:active:not(:disabled){transform:scale(0.98)}
+button[role="switch"]:active:not(:disabled){transform:scale(0.95)}
+.tab-indicator{transition:transform 180ms var(--cc-ease-out)}
+@media (hover:hover) and (pointer:fine){
+  a:hover{text-decoration:underline}
+  .nav-item:hover:not([aria-current="page"]){background-color:rgba(38,49,72,0.06)!important}
+  .btn-outline:hover:not(:disabled){background-color:rgba(38,49,72,0.06)!important}
+  .btn-primary:hover:not(:disabled){background-color:#2c3036!important}
+  .btn-dashed:hover:not(:disabled){background-color:rgba(38,49,72,0.04)!important;border-color:rgba(0,0,0,0.32)!important}
+  button[role="tab"]:hover{color:#0f1115!important}
+}
+@media (prefers-reduced-motion:reduce){
+  button,.tab-indicator{transition:background-color 150ms ease,color 150ms ease!important;transform:none}
+}
+</style>
+</helmet>
+<div style="width: 920px; height: 880px; box-sizing: border-box; background: #e4e7ee; display: flex; align-items: center; justify-content: center; padding: 40px">
+  <!-- DSH SettingsRoot 800x800 Modal Panel -->
+  <div style="width: 800px; height: 800px; box-sizing: border-box; border-radius: 28px; background: #ffffff; box-shadow: 0 0 0 0.5px rgba(0,0,0,0.14), 0 4px 12px rgba(0,0,0,0.04), 0 16px 36px rgba(0,0,0,0.09); display: grid; grid-template-columns: 188px minmax(0, 1fr); grid-template-rows: 54px minmax(0, 1fr); overflow: hidden; color: #0f1115">
+
+    <!-- Top-Left Title -->
+    <div style="padding: 22px 12px 8px 24px; font-size: 16px; font-weight: 500; line-height: 24px; letter-spacing: -0.01em; color: #0f1115; box-sizing: border-box">设置</div>
+
+    <!-- Top-Right Header -->
+    <div style="height: 54px; padding: 20px 14px 8px 10px; box-sizing: border-box; display: flex; align-items: center; justify-content: flex-end; gap: 8px">
+      <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>
+        <span>打开配置文件</span>
+      </button>
+      <button type="button" aria-label="关闭设置" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+
+    <!-- Left Nav Rail -->
+    <nav aria-label="设置分区" style="padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box">
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5.2" r="2.6"/><path d="M3.2 13.4c.7-2.2 2.5-3.4 4.8-3.4s4.1 1.2 4.8 3.4"/></svg>
+        <span>账号</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.4M8 12.4v1.4M2.2 8h1.4M12.4 8h1.4M3.9 3.9l1 1M11.1 11.1l1 1M12.1 3.9l-1 1M4.9 11.1l-1 1"/></svg>
+        <span>通用</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="8" cy="4.2" rx="4.8" ry="1.8"/><path d="M3.2 4.2v3.8c0 1 2.1 1.8 4.8 1.8s4.8-.8 4.8-1.8V4.2"/><path d="M3.2 8v3.8c0 1 2.1 1.8 4.8 1.8s4.8-.8 4.8-1.8V8"/></svg>
+        <span>模型</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.8" y="3" width="10.4" height="10" rx="2.2"/><path d="M5.6 6.8h4.8M5.6 9.6h3"/></svg>
+        <span>智能体预设</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.2 3.2h3.6v2.2h3v3.6h-2.2v3.8H4.2V9H2V5.4h4.2z"/></svg>
+        <span>内置插件</span>
+      </button>
+      <button type="button" aria-current="page" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: #ebeef2; color: #0f1115; font: inherit; font-size: 14px; font-weight: 500; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v8a2 2 0 1 0 2-2H4a2 2 0 1 0 2 2V4a2 2 0 1 0-2 2h8a2 2 0 1 0-2-2"/></svg>
+        <span>Command Code</span>
+      </button>
+    </nav>
+
+    <!-- Right Content Area -->
+    <div style="padding: 0 24px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; min-width: 0; min-height: 0">
+
+      <!-- Header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 2px">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; letter-spacing: -0.01em; color: #0f1115">Command Code</h2>
+        <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">复用 SegmentedTabs · 零折叠实现</span>
+      </div>
+
+      <!-- PRIMITIVE: SegmentedTabs with REAL GPU translateX indicator (concentric R15 track + 3px pad -> R12 pill, stable weight 500 = zero text jitter!) -->
+      <div role="tablist" aria-label="Command Code 配置分类" style="position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 3px; border-radius: 15px; background: #f5f6f7; gap: 2px">
+        <span class="tab-indicator" aria-hidden="true" style="position: absolute; top: 3px; left: 3px; width: calc((100% - 10px) / 3); height: calc(100% - 6px); border-radius: 12px; background: #ffffff; box-shadow: 0 0 0 0.5px rgba(0,0,0,0.14), 0 2px 6px rgba(0,0,0,0.04); transform: {{ tabIndicatorTransform }}; pointer-events: none"></span>
+        <button type="button" role="tab" aria-selected="{{ isTabAccounts }}" onClick="{{ pickAccountsTab }}" style="position: relative; z-index: 1; height: 32px; padding: 0 12px; border-radius: 12px; border: 0; background: transparent; color: {{ tabAccountsColor }}; font: inherit; font-size: 13px; font-weight: 500; line-height: 20px; cursor: pointer">账户与状态 (2)</button>
+        <button type="button" role="tab" aria-selected="{{ isTabModels }}" onClick="{{ pickModelsTab }}" style="position: relative; z-index: 1; height: 32px; padding: 0 12px; border-radius: 12px; border: 0; background: transparent; color: {{ tabModelsColor }}; font: inherit; font-size: 13px; font-weight: 500; line-height: 20px; cursor: pointer">模型与上下文</button>
+        <button type="button" role="tab" aria-selected="{{ isTabNetwork }}" onClick="{{ pickNetworkTab }}" style="position: relative; z-index: 1; height: 32px; padding: 0 12px; border-radius: 12px; border: 0; background: transparent; color: {{ tabNetworkColor }}; font: inherit; font-size: 13px; font-weight: 500; line-height: 20px; cursor: pointer">功能与网络</button>
+      </div>
+
+      <!-- TAB 1: 账户与状态 (Instant swap — 0ms wait for frequent tab switching, zero SaveBar clutter) -->
+      <sc-if value="{{ isTabAccounts }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <!-- Compact Service Status Card -->
+          <div style="border: 0.5px solid rgba(0,0,0,0.16); border-radius: 20px; background: #ffffff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px">
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <div style="display: inline-flex; align-items: center; gap: 8px">
+                <span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: inline-block"></span>
+                <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115; font-variant-numeric: tabular-nums">上游服务正常 · 本机直连 146 ms</span>
+                <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66; font-variant-numeric: tabular-nums">7d 99.98%</span>
+              </div>
+              <span style="font-size: 12px; line-height: 18px; color: #595e66">本页操作全部立即生效，无需手动点击保存</span>
+            </div>
+            <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer; flex: none">重新探测</button>
+          </div>
+
+          <!-- Account Card 1 (Concentric R20 + 12px pad -> R10 inner surface) -->
+          <div style="border: 0.5px solid rgba(0,0,0,0.18); border-radius: 20px; background: #ffffff; padding: 12px; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px">
+              <div style="display: inline-flex; align-items: center; gap: 8px">
+                <span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: inline-block"></span>
+                <span style="font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Work · 主力研发</span>
+                <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Max</span>
+                <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #0f1115; color: #ffffff">固定使用</span>
+              </div>
+              <div style="display: inline-flex; align-items: center; gap: 6px">
+                <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">刷新</button>
+                <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">操作 ▾</button>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+              <div style="background: #f5f6f7; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px">
+                <span style="font-size: 12px; line-height: 18px; color: #595e66">月额度剩余</span>
+                <span style="font-size: 16px; font-weight: 600; line-height: 22px; color: #0f1115; font-variant-numeric: tabular-nums">$164.20 / $200</span>
+                <span style="font-size: 11px; line-height: 16px; color: #595e66; font-variant-numeric: tabular-nums">另含已购 $20.00</span>
+              </div>
+              <div style="background: #f5f6f7; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 5px">
+                <span style="font-size: 12px; line-height: 18px; color: #595e66">5 小时窗口 (21%)</span>
+                <span style="font-size: 14px; font-weight: 500; line-height: 20px; color: #0f1115; font-variant-numeric: tabular-nums">$8.40 / $40.00</span>
+                <div style="height: 4px; border-radius: 999px; background: #dfe3ea; overflow: hidden"><div style="width: 100%; height: 100%; border-radius: 999px; background: #0f1115; transform: translateX(-79%)"></div></div>
+              </div>
+              <div style="background: #f5f6f7; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 5px">
+                <span style="font-size: 12px; line-height: 18px; color: #595e66">7 天窗口 (26%)</span>
+                <span style="font-size: 14px; font-weight: 500; line-height: 20px; color: #0f1115; font-variant-numeric: tabular-nums">$35.80 / $140</span>
+                <div style="height: 4px; border-radius: 999px; background: #dfe3ea; overflow: hidden"><div style="width: 100%; height: 100%; border-radius: 999px; background: #0f1115; transform: translateX(-74%)"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Account Card 2 -->
+          <div style="border: 0.5px solid rgba(0,0,0,0.16); border-radius: 20px; background: #ffffff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 8px">
+            <div style="display: inline-flex; align-items: center; gap: 8px">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: inline-block"></span>
+              <span style="font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Personal · 备用</span>
+              <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Pro</span>
+              <span style="font-size: 12px; line-height: 18px; color: #595e66; font-variant-numeric: tabular-nums">月余 $18.50 · 5h 12%</span>
+            </div>
+            <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">展开详情</button>
+          </div>
+
+          <!-- Bottom Actions -->
+          <div style="display: flex; align-items: center; gap: 8px; padding-top: 2px">
+            <button type="button" class="btn-dashed" style="flex: 1; height: 40px; border-radius: 14px; border: 1px dashed rgba(0,0,0,0.22); background: transparent; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+              <span>添加账户</span>
+            </button>
+            <button type="button" class="btn-outline" style="height: 40px; padding: 0 14px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer">
+              <span>查看模型成本分析</span>
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5"/></svg>
+            </button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- TAB 2: 模型与上下文 -->
+      <sc-if value="{{ isTabModels }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 12px; flex: 1">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <span style="font-size: 13px; font-weight: 500; color: #0f1115">隐藏套餐外模型</span>
+              <span style="font-size: 12px; color: #595e66">按主用账户当前套餐自动过滤不可用模型</span>
+            </div>
+            <button type="button" role="switch" aria-checked="true" aria-label="隐藏套餐外模型" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <span style="font-size: 13px; font-weight: 500; color: #0f1115">可见模型白名单</span>
+              <span style="font-size: 12px; color: #595e66">控制选择器中公开的模型目录范围</span>
+            </div>
+            <button type="button" class="btn-outline" style="height: 32px; width: 188px; padding: 0 10px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; display: inline-flex; align-items: center; justify-content: space-between; cursor: pointer"><span>显示全部 (18)</span><span>▾</span></button>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 6px 0">
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <label for="t2-ctx" style="font-size: 13px; font-weight: 500; color: #0f1115">全局上下文长度</label>
+              <input id="t2-ctx" type="text" value="200K" style="height: 34px; padding: 0 12px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; box-sizing: border-box">
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <label for="t2-out" style="font-size: 13px; font-weight: 500; color: #0f1115">单轮输出上限</label>
+              <input id="t2-out" type="text" placeholder="自动推导（上限 128K）" style="height: 34px; padding: 0 12px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; box-sizing: border-box">
+            </div>
+          </div>
+
+          <div style="margin-top: auto; padding-top: 14px; border-top: 0.5px solid rgba(0,0,0,0.12); display: flex; justify-content: flex-end; gap: 8px">
+            <button type="button" class="btn-outline" style="height: 36px; padding: 0 14px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 14px; cursor: pointer">放弃修改</button>
+            <button type="button" class="btn-primary" style="height: 36px; padding: 0 16px; border-radius: 12px; border: 0; background: #0f1115; color: #ffffff; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer">保存</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- TAB 3: 功能与网络 -->
+      <sc-if value="{{ isTabNetwork }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 12px; flex: 1">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+            <span style="font-size: 13px; font-weight: 500; color: #0f1115">零数据保留（ZDR）</span>
+            <button type="button" role="switch" aria-checked="true" aria-label="零数据保留" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+            <span style="font-size: 13px; font-weight: 500; color: #0f1115">启用 Command Code 联网搜索</span>
+            <button type="button" role="switch" aria-checked="true" aria-label="联网搜索" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+            <span style="font-size: 13px; font-weight: 500; color: #0f1115">侧栏显示额度卡片</span>
+            <button type="button" role="switch" aria-checked="true" aria-label="侧栏显示额度卡片" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 4px">
+            <label for="t3-base" style="font-size: 13px; font-weight: 500; color: #0f1115">API 基础地址</label>
+            <input id="t3-base" type="text" placeholder="https://api.commandcode.ai" style="height: 34px; padding: 0 12px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font-family: 'SF Mono',Menlo,monospace; font-size: 13px; box-sizing: border-box">
+          </div>
+          <div style="margin-top: auto; padding-top: 14px; border-top: 0.5px solid rgba(0,0,0,0.12); display: flex; justify-content: flex-end; gap: 8px">
+            <button type="button" class="btn-primary" style="height: 36px; padding: 0 16px; border-radius: 12px; border: 0; background: #0f1115; color: #ffffff; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer">保存</button>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"activeTab":{"editor":"enum","options":["accounts","models","network"],"default":"accounts","section":"标签页切换"},"$preview":{"width":920,"height":880}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: null };
+  }
+  renderVals() {
+    const tab = this.state.tab ?? this.props.activeTab ?? 'accounts';
+    const isTabAccounts = tab === 'accounts';
+    const isTabModels = tab === 'models';
+    const isTabNetwork = tab === 'network';
+    const indicatorMap = {
+      accounts: 'translateX(0px)',
+      models: 'translateX(calc(100% + 2px))',
+      network: 'translateX(calc(200% + 4px))'
+    };
+    return {
+      isTabAccounts,
+      isTabModels,
+      isTabNetwork,
+      tabIndicatorTransform: indicatorMap[tab] || 'translateX(0px)',
+      tabAccountsColor: isTabAccounts ? '#0f1115' : '#595e66',
+      tabModelsColor: isTabModels ? '#0f1115' : '#595e66',
+      tabNetworkColor: isTabNetwork ? '#0f1115' : '#595e66',
+      pickAccountsTab: () => this.setState({ tab: 'accounts' }),
+      pickModelsTab: () => this.setState({ tab: 'models' }),
+      pickNetworkTab: () => this.setState({ tab: 'network' })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案 A · DSH 原生设置弹窗内效果</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--cc-ease-out:cubic-bezier(0.23,1,0.32,1)}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+a{color:#2b63d9;text-decoration:none}
+button{transition:transform 150ms var(--cc-ease-out),background-color 150ms ease,color 150ms ease,border-color 150ms ease,opacity 150ms ease}
+button:active:not(:disabled){transform:scale(0.97)}
+button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:disabled){transform:scale(0.95)}
+.seg-indicator{transition:transform 180ms var(--cc-ease-out)}
+.fold-chevron{transition:transform 160ms var(--cc-ease-out),color 150ms ease}
+.switch-thumb{transition:transform 160ms var(--cc-ease-out)}
+.meter-fill{transition:transform 240ms var(--cc-ease-out)}
+.save-bar-enter{transition:opacity 180ms var(--cc-ease-out),transform 180ms var(--cc-ease-out)}
+@starting-style{.save-bar-enter{opacity:0;transform:translateY(6px)}}
+@media (hover:hover) and (pointer:fine){
+  a:hover{text-decoration:underline}
+  .nav-item:hover:not([aria-current="page"]){background-color:rgba(38,49,72,0.06)!important}
+  .btn-outline:hover:not(:disabled){background-color:rgba(38,49,72,0.06)!important}
+  .btn-ghost:hover:not(:disabled){background-color:rgba(38,49,72,0.06)!important;color:#0f1115!important}
+  .btn-primary:hover:not(:disabled){background-color:#2c3036!important}
+  .btn-dashed:hover:not(:disabled){background-color:rgba(38,49,72,0.04)!important;border-color:rgba(0,0,0,0.32)!important}
+  .group-toggle:hover .fold-chevron{stroke:#0f1115!important}
+}
+@media (prefers-reduced-motion:reduce){
+  button,.seg-indicator,.fold-chevron,.switch-thumb,.meter-fill,.save-bar-enter{transition:background-color 150ms ease,color 150ms ease,opacity 150ms ease!important;transform:none}
+}
+</style>
+</helmet>
+<div style="width: 920px; height: 880px; box-sizing: border-box; background: #e4e7ee; display: flex; align-items: center; justify-content: center; padding: 40px; position: relative">
+  <!-- DSH SettingsRoot 800x800 Modal Panel (--dsw-radius-panel: 28px, concentric 12px nav inset + 12px nav cell) -->
+  <div style="width: 800px; height: 800px; box-sizing: border-box; border-radius: 28px; background: #ffffff; box-shadow: 0 0 0 0.5px rgba(0,0,0,0.14), 0 4px 12px rgba(0,0,0,0.04), 0 16px 36px rgba(0,0,0,0.09); display: grid; grid-template-columns: 188px minmax(0, 1fr); grid-template-rows: 54px minmax(0, 1fr); overflow: hidden; color: #0f1115">
+
+    <!-- Top-Left Title Cell (SettingsRoot.navTitle) -->
+    <div style="padding: 22px 12px 8px 24px; font-size: 16px; font-weight: 500; line-height: 24px; color: #0f1115; letter-spacing: -0.01em; box-sizing: border-box">设置</div>
+
+    <!-- Top-Right Header Actions (SettingsRoot.header) -->
+    <div style="height: 54px; padding: 20px 14px 8px 10px; box-sizing: border-box; display: flex; align-items: center; justify-content: flex-end; gap: 8px">
+      <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>
+        <span>打开配置文件</span>
+      </button>
+      <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="关闭设置" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+
+    <!-- Left Nav Rail (SettingsRoot.nav: 188px) -->
+    <nav aria-label="设置分区" style="padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box">
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5.2" r="2.6"/><path d="M3.2 13.4c.7-2.2 2.5-3.4 4.8-3.4s4.1 1.2 4.8 3.4"/></svg>
+        <span>账号</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.4M8 12.4v1.4M2.2 8h1.4M12.4 8h1.4M3.9 3.9l1 1M11.1 11.1l1 1M12.1 3.9l-1 1M4.9 11.1l-1 1"/></svg>
+        <span>通用</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="8" cy="4.2" rx="4.8" ry="1.8"/><path d="M3.2 4.2v3.8c0 1 2.1 1.8 4.8 1.8s4.8-.8 4.8-1.8V4.2"/><path d="M3.2 8v3.8c0 1 2.1 1.8 4.8 1.8s4.8-.8 4.8-1.8V8"/></svg>
+        <span>模型</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.8" y="3" width="10.4" height="10" rx="2.2"/><path d="M5.6 6.8h4.8M5.6 9.6h3"/></svg>
+        <span>智能体预设</span>
+      </button>
+      <button type="button" class="nav-item" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.2 3.2h3.6v2.2h3v3.6h-2.2v3.8H4.2V9H2V5.4h4.2z"/></svg>
+        <span>内置插件</span>
+      </button>
+      <button type="button" aria-current="page" style="height: 40px; padding: 9px 14px 9px 12px; border-radius: 12px; border: 0; background: #ebeef2; color: #0f1115; font: inherit; font-size: 14px; font-weight: 500; line-height: 22px; display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v8a2 2 0 1 0 2-2H4a2 2 0 1 0 2 2V4a2 2 0 1 0-2 2h8a2 2 0 1 0-2-2"/></svg>
+        <span>Command Code</span>
+      </button>
+    </nav>
+
+    <!-- Right Options Viewport (SettingsRoot.options: padding 0 24px 24px) -->
+    <div style="padding: 0 24px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; min-width: 0; min-height: 0">
+
+      <!-- Native Section Header (ModelsSection.title 16/24 500, zero redundant intro) -->
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 2px">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; letter-spacing: -0.01em; color: #0f1115">Command Code</h2>
+        <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66; font-variant-numeric: tabular-nums">v0.9.4</span>
+      </div>
+
+      <!-- GROUP 1: 账户 -->
+      <section style="display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 8px; min-height: 30px">
+          <button type="button" class="group-toggle" onClick="{{ toggleAccountsGroup }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+            <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ accGroupChevron }}"><path d="M4 6l4 4 4-4"/></svg>
+            <span style="font-size: 14px; font-weight: 500; line-height: 22px">账户</span>
+          </button>
+          <span style="font-size: 12px; line-height: 18px; color: #595e66">2 个账户 · 优先固定 Work</span>
+          <div style="margin-left: auto; display: inline-flex; align-items: center; gap: 4px">
+            <button type="button" class="btn-ghost" onClick="{{ triggerRefresh }}" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: {{ refreshTextColor }}; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.5-3.7"/><path d="M13.2 2.8v2.8h-2.8"/></svg>
+              <span>{{ refreshLabel }}</span>
+            </button>
+          </div>
+        </div>
+
+        <sc-if value="{{ accountsOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; flex-direction: column; gap: 8px">
+
+            <!-- Entity Card 1: Concentric outer R20 + pad 10px/12px -> inner module R10, ZERO nested bordered stat boxes! -->
+            <div style="border: 0.5px solid rgba(0,0,0,0.18); border-radius: 20px; background: #ffffff; padding: 12px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; align-items: center; gap: 8px; padding: 0 2px">
+                <button type="button" onClick="{{ toggleAcc1 }}" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left">
+                  <span style="width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none"><span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: block"></span></span>
+                  <span style="font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Work · 主力研发</span>
+                  <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Max</span>
+                  <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #0f1115; color: #ffffff">固定使用</span>
+                </button>
+                <div style="display: inline-flex; align-items: center; gap: 4px; flex: none">
+                  <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">取消固定</button>
+                  <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="账户操作菜单" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12" cy="8" r="1.2"/></svg>
+                  </button>
+                  <button type="button" data-icon-btn="true" class="btn-ghost" onClick="{{ toggleAcc1 }}" aria-label="收起详情" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+                    <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ acc1Chevron }}"><path d="M4 6l4 4 4-4"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <sc-if value="{{ acc1Open }}" hint-placeholder-val="{{ true }}">
+                <div style="display: flex; flex-direction: column; gap: 10px">
+                  <!-- Concentric inner surface: R10 inside R20 card with 10px optical inset -->
+                  <div style="background: #f5f6f7; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px">
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px">
+                      <div style="display: flex; align-items: baseline; gap: 8px">
+                        <span style="font-size: 12px; line-height: 18px; color: #595e66">月额度剩余</span>
+                        <span style="font-size: 18px; font-weight: 600; line-height: 24px; letter-spacing: -0.015em; color: #0f1115; font-variant-numeric: tabular-nums">$164.20</span>
+                        <span style="font-size: 12px; line-height: 18px; color: #595e66; font-variant-numeric: tabular-nums">/ $200.00 · 已购 $20.00</span>
+                      </div>
+                      <span style="font-size: 11px; line-height: 16px; color: #595e66; font-variant-numeric: tabular-nums">账期 11/01–12/01 · {{ updatedTimeText }}</span>
+                    </div>
+
+                    <!-- GPU-composited translateX progress bars (never width%) -->
+                    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+                      <div style="display: flex; flex-direction: column; gap: 5px">
+                        <div style="display: flex; justify-content: space-between; font-size: 12px; line-height: 18px">
+                          <span style="color: #595e66">5 小时窗口 · 14:00 重置</span>
+                          <span style="color: #0f1115; font-weight: 500; font-variant-numeric: tabular-nums">$8.40 / $40</span>
+                        </div>
+                        <div style="height: 4px; border-radius: 999px; background: #dfe3ea; overflow: hidden">
+                          <div class="meter-fill" style="width: 100%; height: 100%; border-radius: 999px; background: #0f1115; transform: translateX(-79%)"></div>
+                        </div>
+                      </div>
+                      <div style="display: flex; flex-direction: column; gap: 5px">
+                        <div style="display: flex; justify-content: space-between; font-size: 12px; line-height: 18px">
+                          <span style="color: #595e66">7 天窗口 · 周一 08:00</span>
+                          <span style="color: #0f1115; font-weight: 500; font-variant-numeric: tabular-nums">$35.80 / $140</span>
+                        </div>
+                        <div style="height: 4px; border-radius: 999px; background: #dfe3ea; overflow: hidden">
+                          <div class="meter-fill" style="width: 100%; height: 100%; border-radius: 999px; background: #0f1115; transform: translateX(-74%)"></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Borderless hairline telemetry strip inside the same surface (eliminates 4 extra nested boxes!) -->
+                    <div style="border-top: 0.5px solid rgba(0,0,0,0.08); padding-top: 8px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+                      <div style="display: flex; align-items: baseline; gap: 5px">
+                        <span style="font-size: 11px; color: #595e66">请求</span>
+                        <span style="font-size: 13px; font-weight: 500; color: #0f1115; font-variant-numeric: tabular-nums">1,284</span>
+                      </div>
+                      <div style="display: flex; align-items: baseline; gap: 5px">
+                        <span style="font-size: 11px; color: #595e66">成功率</span>
+                        <span style="font-size: 13px; font-weight: 500; color: #0f1115; font-variant-numeric: tabular-nums">99.4%</span>
+                      </div>
+                      <div style="display: flex; align-items: baseline; gap: 5px">
+                        <span style="font-size: 11px; color: #595e66">消耗</span>
+                        <span style="font-size: 13px; font-weight: 500; color: #0f1115; font-variant-numeric: tabular-nums">$35.80</span>
+                      </div>
+                      <div style="display: flex; align-items: baseline; gap: 5px">
+                        <span style="font-size: 11px; color: #595e66">Token</span>
+                        <span style="font-size: 13px; font-weight: 500; color: #0f1115; font-variant-numeric: tabular-nums">48.2M</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dedicated Models Binding Row -->
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 2px">
+                    <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115">专属模型绑定</span>
+                    <button type="button" class="btn-outline" style="height: 30px; width: 176px; padding: 0 10px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; justify-content: space-between; cursor: pointer">
+                      <span>已绑定 2 个模型</span>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#595e66" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+
+            <!-- Entity Card 2: Collapsed Account -->
+            <div style="border: 0.5px solid rgba(0,0,0,0.16); border-radius: 20px; background: #ffffff; padding: 10px 14px; display: flex; align-items: center; gap: 8px">
+              <span style="width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none"><span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: block"></span></span>
+              <span style="font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Personal · 备用</span>
+              <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Pro</span>
+              <span style="font-size: 12px; line-height: 18px; color: #595e66; margin-left: 4px; font-variant-numeric: tabular-nums">月余 $18.50 · 5h 12%</span>
+              <div style="margin-left: auto; display: inline-flex; align-items: center; gap: 4px">
+                <button type="button" class="btn-ghost" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">固定</button>
+                <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="更多操作" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12" cy="8" r="1.2"/></svg>
+                </button>
+                <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="展开详情" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Add Account Area: REAL sliding SegmentedControl indicator (translateX, concentric R11 -> R8) -->
+            <sc-if value="{{ showAddForm }}" hint-placeholder-val="{{ false }}">
+              <div style="border-radius: 16px; background: #f5f6f7; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px">
+                <div style="position: relative; display: inline-grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 11px; background: rgba(38,49,72,0.07); align-self: flex-start">
+                  <span class="seg-indicator" aria-hidden="true" style="position: absolute; top: 3px; left: 3px; width: calc((100% - 8px) / 2); height: calc(100% - 6px); border-radius: 8px; background: #ffffff; box-shadow: 0 0 0 0.5px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.06); transform: {{ addSegTransform }}; pointer-events: none"></span>
+                  <button type="button" onClick="{{ selectOAuthMode }}" style="position: relative; z-index: 1; height: 28px; padding: 0 16px; border: 0; border-radius: 8px; background: transparent; color: {{ oauthTabColor }}; font: inherit; font-size: 13px; font-weight: 500; line-height: 20px; cursor: pointer">网页登录</button>
+                  <button type="button" onClick="{{ selectPasteMode }}" style="position: relative; z-index: 1; height: 28px; padding: 0 16px; border: 0; border-radius: 8px; background: transparent; color: {{ pasteTabColor }}; font: inherit; font-size: 13px; font-weight: 500; line-height: 20px; cursor: pointer">粘贴密钥</button>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 5px">
+                  <label for="cc-new-acc-name" style="font-size: 12px; font-weight: 500; line-height: 18px; color: #595e66">账户备注名</label>
+                  <input id="cc-new-acc-name" type="text" placeholder="例如：Team 共享账号" style="height: 34px; padding: 0 12px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; box-sizing: border-box">
+                </div>
+                <sc-if value="{{ isPasteMode }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; gap: 5px">
+                    <label for="cc-new-acc-key" style="font-size: 12px; font-weight: 500; line-height: 18px; color: #595e66">API 密钥</label>
+                    <input id="cc-new-acc-key" type="password" placeholder="粘贴 Command Code API Key" style="height: 34px; padding: 0 12px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; box-sizing: border-box">
+                  </div>
+                </sc-if>
+                <div style="display: flex; justify-content: flex-end; gap: 8px">
+                  <button type="button" class="btn-outline" onClick="{{ toggleAddForm }}" style="height: 36px; padding: 0 14px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 14px; line-height: 22px; cursor: pointer">取消</button>
+                  <button type="button" class="btn-primary" style="height: 36px; padding: 0 16px; border-radius: 12px; border: 0; background: #0f1115; color: #ffffff; font: inherit; font-size: 14px; font-weight: 500; line-height: 22px; cursor: pointer">{{ addSubmitText }}</button>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ hideAddForm }}" hint-placeholder-val="{{ true }}">
+              <div style="display: flex; align-items: center; gap: 8px">
+                <button type="button" class="btn-dashed" onClick="{{ toggleAddForm }}" style="flex: 1; height: 36px; border-radius: 12px; border: 1px dashed rgba(0,0,0,0.22); background: transparent; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+                  <span>添加账户</span>
+                </button>
+                <button type="button" class="btn-outline" style="height: 36px; padding: 0 12px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.18); background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer">
+                  <span>用量与成本分析</span>
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11 11 5M6 5h5v5"/></svg>
+                </button>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+      </section>
+
+      <!-- GROUP 2: 模型与上下文 (Interactive instant fold!) -->
+      <section style="border-top: 0.5px solid rgba(0,0,0,0.12); padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+          <button type="button" class="group-toggle" onClick="{{ toggleModelsGroup }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+            <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ modelsGroupChevron }}"><path d="M4 6l4 4 4-4"/></svg>
+            <span style="font-size: 14px; font-weight: 500; line-height: 22px">模型与上下文</span>
+          </button>
+          <div style="display: inline-flex; align-items: center; gap: 8px">
+            <span style="font-size: 12px; line-height: 18px; color: #595e66; font-variant-numeric: tabular-nums">已选 6 / 18 个模型</span>
+            <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; border: 0.5px solid rgba(0,0,0,0.22); color: #595e66">已覆盖 2 项</span>
+          </div>
+        </div>
+        <sc-if value="{{ modelsOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0 2px 20px">
+            <span style="font-size: 13px; color: #0f1115">隐藏套餐外模型</span>
+            <button type="button" role="switch" aria-checked="{{ zdrSwitchOn }}" aria-label="隐藏套餐外模型" onClick="{{ toggleZdrSwitch }}" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: {{ zdrSwitchBg }}; cursor: pointer; display: inline-flex; align-items: center; box-sizing: border-box">
+              <span class="switch-thumb" style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: {{ zdrSwitchThumb }}; display: block"></span>
+            </button>
+          </div>
+        </sc-if>
+      </section>
+
+      <!-- GROUP 3: 功能与服务状态 (Interactive instant fold + Switch triggers SettingsForm save bar!) -->
+      <section style="border-top: 0.5px solid rgba(0,0,0,0.12); padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+          <button type="button" class="group-toggle" onClick="{{ toggleFeaturesGroup }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+            <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ featuresGroupChevron }}"><path d="M4 6l4 4 4-4"/></svg>
+            <span style="font-size: 14px; font-weight: 500; line-height: 22px">功能与服务状态</span>
+          </button>
+          <div style="display: inline-flex; align-items: center; gap: 6px">
+            <span style="width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center"><span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: block"></span></span>
+            <span style="font-size: 12px; line-height: 18px; color: #595e66">{{ featuresSummaryText }}</span>
+          </div>
+        </div>
+        <sc-if value="{{ featuresOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0 2px 20px">
+            <div style="display: flex; flex-direction: column; gap: 1px">
+              <span style="font-size: 13px; font-weight: 500; color: #0f1115">零数据保留（ZDR）</span>
+              <span style="font-size: 12px; color: #595e66">切换此开关可立即预览底部 SettingsForm 保存栏入场</span>
+            </div>
+            <button type="button" role="switch" aria-checked="{{ zdrSwitchOn }}" aria-label="零数据保留" onClick="{{ toggleZdrSwitch }}" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: {{ zdrSwitchBg }}; cursor: pointer; display: inline-flex; align-items: center; box-sizing: border-box">
+              <span class="switch-thumb" style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: {{ zdrSwitchThumb }}; display: block"></span>
+            </button>
+          </div>
+        </sc-if>
+      </section>
+
+      <!-- GROUP 4: 高级设置 -->
+      <section style="border-top: 0.5px solid rgba(0,0,0,0.12); padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px">
+        <button type="button" class="group-toggle" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+          <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: rotate(-90deg)"><path d="M4 6l4 4 4-4"/></svg>
+          <span style="font-size: 14px; font-weight: 500; line-height: 22px">高级设置</span>
+        </button>
+        <span style="font-size: 12px; line-height: 18px; color: #595e66; font-variant-numeric: tabular-nums">默认端点 · 超时 300s · 重试 5 次</span>
+      </section>
+
+      <!-- SettingsForm Save Footer: appears ONLY when staged draft is dirty, enters via @starting-style -->
+      <sc-if value="{{ isDirty }}" hint-placeholder-val="{{ false }}">
+        <div class="save-bar-enter" style="margin-top: auto; padding-top: 12px; border-top: 0.5px solid rgba(0,0,0,0.14); display: flex; align-items: center; justify-content: space-between; gap: 12px">
+          <span style="font-size: 12px; line-height: 18px; color: #595e66">有 1 项未保存更改</span>
+          <div style="display: inline-flex; align-items: center; gap: 8px">
+            <button type="button" class="btn-outline" onClick="{{ resetDirty }}" style="height: 36px; padding: 0 14px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 14px; cursor: pointer">放弃修改</button>
+            <button type="button" class="btn-primary" onClick="{{ commitDirty }}" style="height: 36px; padding: 0 16px; border-radius: 12px; border: 0; background: #0f1115; color: #ffffff; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer">保存</button>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"defaultAddOpen":{"editor":"boolean","default":false,"section":"交互预览"},"$preview":{"width":920,"height":880}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      accountsOpen: true,
+      modelsOpen: false,
+      featuresOpen: false,
+      acc1Open: true,
+      addOpen: null,
+      addMode: 'oauth',
+      refreshed: false,
+      zdrSaved: true,
+      zdrDraft: true
+    };
+  }
+  renderVals() {
+    const accountsOpen = this.state.accountsOpen;
+    const modelsOpen = this.state.modelsOpen;
+    const featuresOpen = this.state.featuresOpen;
+    const acc1Open = this.state.acc1Open;
+    const showAddForm = this.state.addOpen === null ? Boolean(this.props.defaultAddOpen) : this.state.addOpen;
+    const isPasteMode = this.state.addMode === 'paste';
+    const zdrSwitchOn = this.state.zdrDraft;
+    const isDirty = this.state.zdrDraft !== this.state.zdrSaved;
+    return {
+      accountsOpen,
+      accGroupChevron: accountsOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+      modelsOpen,
+      modelsGroupChevron: modelsOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+      featuresOpen,
+      featuresGroupChevron: featuresOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+      acc1Open,
+      acc1Chevron: acc1Open ? 'rotate(180deg)' : 'rotate(0deg)',
+      showAddForm,
+      hideAddForm: !showAddForm,
+      isPasteMode,
+      addSegTransform: isPasteMode ? 'translateX(calc(100% + 2px))' : 'translateX(0px)',
+      oauthTabColor: isPasteMode ? '#595e66' : '#0f1115',
+      pasteTabColor: isPasteMode ? '#0f1115' : '#595e66',
+      addSubmitText: isPasteMode ? '添加账户' : '开始登录',
+      refreshLabel: this.state.refreshed ? '已同步' : '刷新用量',
+      refreshTextColor: this.state.refreshed ? '#15733b' : '#595e66',
+      updatedTimeText: this.state.refreshed ? '刚刚更新' : '10:48 更新',
+      zdrSwitchOn,
+      zdrSwitchBg: zdrSwitchOn ? '#0f1115' : 'rgba(0,0,0,0.18)',
+      zdrSwitchThumb: zdrSwitchOn ? 'translateX(16px)' : 'translateX(0px)',
+      featuresSummaryText: zdrSwitchOn ? '服务正常 · ZDR 已开启 · 联网搜索已开启' : '服务正常 · ZDR 已关闭 · 联网搜索已开启',
+      isDirty,
+      toggleAccountsGroup: () => this.setState({ accountsOpen: !this.state.accountsOpen }),
+      toggleModelsGroup: () => this.setState({ modelsOpen: !this.state.modelsOpen }),
+      toggleFeaturesGroup: () => this.setState({ featuresOpen: !this.state.featuresOpen }),
+      toggleAcc1: () => this.setState({ acc1Open: !this.state.acc1Open }),
+      toggleAddForm: () => this.setState({ addOpen: !showAddForm }),
+      selectOAuthMode: () => this.setState({ addMode: 'oauth' }),
+      selectPasteMode: () => this.setState({ addMode: 'paste' }),
+      triggerRefresh: () => this.setState({ refreshed: true }),
+      toggleZdrSwitch: () => this.setState({ zdrDraft: !this.state.zdrDraft }),
+      resetDirty: () => this.setState({ zdrDraft: this.state.zdrSaved }),
+      commitDirty: () => this.setState({ zdrSaved: this.state.zdrDraft })
+    };
+  }
+}
+</script>
+</body>
+</html>

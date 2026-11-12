@@ -539,6 +539,67 @@ test('OpenAI 独立尾部用量包在结束原因之后仍被读取', async () =
   assert.equal(chunks.at(-1)?.type, 'finish')
 })
 
+test('OpenAI 占位 choice 尾部用量在成功结束前交付（问题 #124）', async () => {
+  const sse = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol: 'openai', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async () => packetResponse([
+      sse({ choices: [{ delta: { content: 'hi' } }] }),
+      sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      sse({ choices: [{ finish_reason: null, index: 0, delta: {} }], usage: {
+        completion_tokens: 37, prompt_tokens: 32, total_tokens: 69,
+        completion_tokens_details: { reasoning_tokens: 25, text_tokens: 12 },
+        prompt_tokens_details: { cached_tokens: 0 },
+      } }),
+      'data: [DONE]\n\n',
+    ])) as typeof fetch,
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', messages: [userMessage('say hi')] }))
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'usage' || chunk.type === 'finish'), [
+    { type: 'usage', usage: { inputTokens: 32, outputTokens: 37, cacheReadTokens: 0, reasoningTokens: 25, totalTokens: 69 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+})
+
+test('OpenAI 省略结束原因的尾部用量保留缓存读数，后续 null 不覆盖（问题 #124）', async () => {
+  const sse = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol: 'openai', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async () => packetResponse([
+      sse({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+      sse({ choices: [{ index: 0, delta: {} }], usage: {
+        prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 90 },
+      } }),
+      sse({ choices: [{ delta: {}, finish_reason: null }], usage: null }),
+    ])) as typeof fetch,
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'review/model', messages: [userMessage('hi')] }))
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'usage' || chunk.type === 'finish'), [
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 90 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+})
+
+test('OpenAI 多帧累计用量只交付最后一份，且不丢正文（问题 #124）', async () => {
+  const sse = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`
+  const adapter = makeAdapter({
+    options: () => ({ apiBase: DEFAULT_API_BASE, workingDir: '/tmp', protocol: 'openai', modelsCachePath: '', requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 }),
+    fetchImpl: (async () => packetResponse([
+      sse({ choices: [{ delta: { content: 'o' }, finish_reason: null }], usage: { prompt_tokens: 100, completion_tokens: 1 } }),
+      sse({ choices: [{ delta: { content: 'k' } }], usage: { prompt_tokens: 100, completion_tokens: 2 } }),
+      sse({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 3 } }),
+      sse({ choices: [{ delta: {}, finish_reason: null }], usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 90 } } }),
+      'data: [DONE]\n\n',
+    ])) as typeof fetch,
+  })
+  const chunks = await collect(adapter.stream({ provider: 'commandcode', model: 'review/model', messages: [userMessage('hi')] }))
+  assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), 'ok')
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'usage' || chunk.type === 'finish'), [
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 90, totalTokens: 105 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+})
+
 test('冷生成从同网关磁盘目录计算预算，切换网关不沿用旧目录且不额外联网', async () => {
   const { mkdtempSync, writeFileSync } = await import('node:fs')
   const directory = mkdtempSync(join(tmpdir(), 'commandcode-cold-budget-'))
@@ -4654,7 +4715,7 @@ for (const protocol of ['cli', 'openai'] as const) {
             return new Response(`data: ${JSON.stringify(event)}\n\ndata: ${JSON.stringify(finish)}\n\n`)
           }) as typeof fetch,
         })
-        const options: GenerateOptions = Object.freeze({
+        const options: Parameters<CommandCodeAdapter['stream']>[0] = Object.freeze({
           provider: 'commandcode', model, purpose: 'session-title', maxTokens: 64,
           ...(reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(reasoningEffort) }),
           messages: [userMessage('生成会话标题')],
@@ -7609,6 +7670,28 @@ for (const protocol of ['cli', 'openai', 'messages'] as const) {
       })
       assert.deepEqual(paths, [protocol === 'cli' ? '/alpha/generate' : protocol === 'messages' ? '/provider/v1/messages' : '/provider/v1/chat/completions'])
     }
+  })
+}
+
+for (const protocol of ['cli', 'openai', 'messages'] as const) {
+  test(`${protocol}：自定义限流错误保留原型、重试等待与响应请求号`, async () => {
+    const adapter = makeAdapter({
+      options: () => ({ ...OPENAI_OPTIONS(), protocol: protocol === 'messages' ? 'auto' : protocol, modelsCachePath: '' }),
+      fetchImpl: (async () => new Response('rate limited', {
+        status: 429,
+        headers: { 'retry-after': '7', 'x-request-id': 'synthetic-throttle-request' },
+      })) as typeof fetch,
+    })
+    await assert.rejects(collect(adapter.stream({ provider: 'commandcode', model: protocol === 'messages' ? 'claude-haiku-5-5' : 'm', messages: [userMessage('hi')] })), (error: unknown) => {
+      assert.ok(error instanceof LlmError)
+      assert.equal(error.code, 'THROTTLED')
+      assert.deepEqual(error.failure, {
+        message: error.message, code: 'THROTTLED', status: 429,
+        providerRetryAfterMs: 7000, requestId: 'synthetic-throttle-request',
+      })
+      assert.ok(Object.isFrozen(error.failure))
+      return true
+    })
   })
 }
 

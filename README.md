@@ -18,7 +18,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 
 | | |
 |---|---|
-| Verified engines | dsh `0.2.1-rc.2`, `0.2.1-rc.3`, `0.2.1-rc.4`, `0.2.1-rc.5`, `0.2.2-alpha.2`, `0.2.2-alpha.3`, `0.2.2-rc.1` |
+| Verified engines | dsh `0.2.1-rc.2`, `0.2.1-rc.3`, `0.2.1-rc.4`, `0.2.1-rc.5`, `0.2.2-alpha.2`, `0.2.2-alpha.3`, `0.2.2-rc.1`, `0.2.2-rc.2` |
 | Node.js | **`>=24.9`** — raised from 22 in 0.16.0, see [Node.js 24.9 or newer](#nodejs-249-or-newer-is-required) |
 | Install — web | `dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest` |
 | Install — terminal | `dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@latest` |
@@ -63,7 +63,9 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
-This build admits **dsh `>=0.2.1-rc.2 <0.2.2-0`** — every RC of the `0.2.1` channel from `0.2.1-rc.2` onward — **and `>=0.2.2-alpha.2 <0.2.3-0`**, the `0.2.2` channel from its current alpha. `0.2.1-rc.5` is what npm `latest` runs, `0.2.2-rc.1` is on `next`, and `0.2.2-alpha.3` on `alpha`. All seven are covered by the full engine matrix (`npm run test:engine`, `npm run test:install`). A later release of either channel is admitted without a plugin update, but stays unverified until a record is added to `dsh.compatibility.dshReleases`. `0.2.3` and later are deliberately excluded — the upper bounds are written `<0.2.2-0` / `<0.2.3-0` for exactly that reason. A profile on `0.2.0-rc.2`, `0.2.1-alpha.5` or older must upgrade its engine first. Compatibility details — the `engines.dsh` admission rule, package pairings, evidence — live in [engine compatibility](docs/agent-reference/engine-compatibility.md).
+This build admits **dsh `>=0.2.1-rc.2 <0.2.2-0`** — every RC of the `0.2.1` channel from `0.2.1-rc.2` onward — **and `>=0.2.2-alpha.2 <0.2.3-0`**, the `0.2.2` channel from its current alpha. As checked on 2026-11-12, npm `latest` points to `0.2.2-rc.1`, `next` to `0.2.2-rc.2`, and `alpha` to `0.2.2-alpha.3`. All eight verified releases are covered by the full engine matrix (`npm run test:engine`, `npm run test:install`). A later release of either channel is admitted without a plugin update, but stays unverified until a record is added to `dsh.compatibility.dshReleases`. `0.2.3` and later are deliberately excluded — the upper bounds are written `<0.2.2-0` / `<0.2.3-0` for exactly that reason. A profile on `0.2.0-rc.2`, `0.2.1-alpha.5` or older must upgrade its engine first. Compatibility details — the `engines.dsh` admission rule, package pairings, evidence — live in [engine compatibility](docs/agent-reference/engine-compatibility.md).
+
+**DSH `0.2.2-rc.2` compatibility (included in v0.17.7):** The actual installed engine and an isolated install have passed verification, along with a full typecheck against rc.2 dependencies. Provider errors retain custom codes and retry facts; auxiliary request purposes and settings-icon types compile with both older and newer engines. The existing engine range is unchanged and rc.2 is now recorded in `dshReleases`. Browser rendering and live-provider behavior remain outside these checks; see the [integration record](docs/对接说明.md).
 
 ### Node.js 24.9 or newer is required
 

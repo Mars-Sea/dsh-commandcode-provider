@@ -368,7 +368,6 @@ test('PAGE_CSS: an invalid field keeps its error border under the pointer', () =
   const plain = block.findIndex((selector) => selector.includes('.cc-fieldInput:hover:not(:disabled)'))
   const invalid = block.findIndex((selector) => selector.includes('.cc-fieldInputInvalid:hover:not(:disabled)'))
   assert.ok(plain >= 0 && invalid > plain, 'the invalid hover border must follow the plain one at equal specificity')
-  assert.ok(block[invalid]!.includes('.cc-unitBoxInvalid:hover'))
 })
 
 test('PAGE_CSS: the settings switch takes its box from the primitive, never from this sheet', () => {

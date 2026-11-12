@@ -1,12 +1,13 @@
 /** 连接拒绝与流内错误共享同一分类，避免错误恢复因响应载体不同而漂移。 */
-import { CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, LlmError, type LlmErrorOptions } from '@deepseek-ai/dsh-llm'
+import { CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, type LlmError, type LlmErrorOptions } from '@deepseek-ai/dsh-llm'
+import { providerError } from './llm-error.ts'
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
 import { THROTTLED_CODE } from './transient-retry.ts'
 import { booleanValue, isRecord, numberValue, stringValue } from './wire-guards.ts'
 
 /** Keep the two user-facing languages and error metadata together. */
 export function bilingual(code: string, en: string, zh: string, options?: LlmErrorOptions): LlmError {
-  return new LlmError(`${en}；${zh}`, code, options)
+  return providerError(`${en}；${zh}`, code, options)
 }
 
 /**
@@ -205,7 +206,7 @@ export function streamErrorToLlmError(value: unknown, fallbackMessage?: string):
       ? false
       : (statusCode !== undefined ? retryableStatus : true))
   if (!retryable) {
-    return new LlmError(
+    return providerError(
       `Command Code stream error: ${message}`,
       'PROVIDER_STREAM_ERROR',
       statusOption,
@@ -221,7 +222,7 @@ export function streamErrorToLlmError(value: unknown, fallbackMessage?: string):
       { ...statusOption, ...(wait > 0 ? { providerRetryAfterMs: wait } : {}) },
     )
   }
-  return new LlmError(
+  return providerError(
     `Command Code stream error: ${message}`,
     'SERVER',
     statusOption,
@@ -526,7 +527,7 @@ export function generateHttpError(
   const priorNote = priorIdentifier === undefined
     ? ''
     : `此前 Messages 接口以 ${priorIdentifier} 拒绝，已回退 CLI 直连，仍未成功。`
-  return new LlmError(
+  return providerError(
     `Command Code 请求失败（HTTP ${status}）${diagnostic}：`
       + (status === 429 ? '请求受到用量或速率限制，请稍后重试并检查账户额度。'
         : status === 408 ? '服务端处理超时，请稍后重试。'

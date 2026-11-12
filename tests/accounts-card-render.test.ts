@@ -31,7 +31,7 @@ import type { CommandCodeAccountsReport } from '../src/usage-wire.ts'
 import type { LoginPageState } from '../src/client/login.ts'
 import type { AccountEnrollmentController } from '../src/client/enrollment.ts'
 
-const { AccountsCard } = await import('../src/client/section.tsx')
+const { AccountsCard, CommandCodeSettingsPage } = await import('../src/client/section.tsx')
 
 // React 18 的 act 环境标记：不设置会为 effect 打印 "not wrapped in act" 警告。
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -246,5 +246,96 @@ test('复检预算耗尽后停下，把决定权交回用户', (t) => {
   act(() => { root = create(createElement(AccountsCard, props)) })
   act(() => { t.mock.timers.tick(USAGE_AUTO_RETRY_MS * (USAGE_AUTO_RETRY_LIMIT + 3)) })
   assert.equal(calls.length, USAGE_AUTO_RETRY_LIMIT, '预算耗尽后不再安排自动请求')
+  act(() => { root.unmount() })
+})
+
+for (const mode of ['writable', 'read-only', 'busy'] as const) {
+  test(`组合配置账户的取消固定入口保留并遵守写入状态：${mode}`, t => {
+    const selected = 'composition-account'
+    const calls: string[] = []
+    const props = makeProps([])
+    props.state = makeState({ activeAccount: selected, writable: mode !== 'read-only', accountBusy: mode === 'busy' })
+    props.disabled = mode === 'read-only'
+    props.usage = {
+      status: 'ready', error: undefined, fetchedAt: 1,
+      report: { accounts: [
+        { ...makeReport().accounts[0]!, active: false },
+        { id: selected, label: 'Composition account', configured: true, active: true, mark: '', cooldownUntil: 0, report: { failures: [] } },
+      ] },
+    }
+    props.actions = { ...actions, setActive: async (id: string) => { calls.push(id); return true } }
+    let root!: ReactTestRenderer
+    act(() => { root = create(createElement(AccountsCard, props)) })
+    t.after(() => { act(() => { root.unmount() }) })
+    const unpin = root.root.findAllByType('button').find(node => textOf(node.props.children) === 'accountActionUnpin')
+    assert.ok(unpin, '凭据只读不应隐藏清除 activeAccount 的配置操作')
+    assert.equal(unpin.props.disabled, mode !== 'writable')
+    if (mode === 'writable') act(() => { unpin.props.onClick() })
+    assert.deepEqual(calls, mode === 'writable' ? [''] : [])
+  })
+}
+
+test('方案 A 设置页直接复用 SettingsValueField、SegmentedControl 与按需底栏，不挂载顶部重复仪表盘', () => {
+  let state = makeState()
+  const usageReady: UsagePageState = { status: 'ready', report: makeReport(), error: undefined, fetchedAt: 1 }
+  const pageProps: ComponentProps<typeof CommandCodeSettingsPage> = {
+    t: ((key: string) => key) as unknown as Translate<SettingsCommandCodeKey>,
+    useCommandCodeSettings: <T,>(sel: (s: SettingsPageState) => T) => sel(state),
+    useCommandCodeUsage: <T,>(sel: (s: UsagePageState) => T) => sel(usageReady),
+    useCommandCodeLogin: <T,>(sel: (s: LoginPageState) => T) => sel(loginIdle),
+    edit: () => {},
+    resetField: () => {},
+    save: () => {},
+    discard: () => {},
+    refreshUsage: () => {},
+    refreshUsageAuto: () => {},
+    refreshCredentials: () => {},
+    beginLogin: () => {},
+    cancelLogin: () => {},
+    createEnrollment: () => ({ ...enrollment, reset: () => {} } as unknown as AccountEnrollmentController),
+    probeService: async () => ({ ok: true as const, value: { outcome: 'ok' as const, status: 401, latencyMs: 120, checkedAt: 1 } }),
+    renameAccount: async () => true,
+    removeAccount: async () => true,
+    retryCredentialCleanup: async () => true,
+    setAccountKey: async () => true,
+    clearAccountKey: async () => true,
+    setActiveAccount: async () => true,
+    setAccountModels: async () => true,
+    editVisibleModels: () => {},
+    clearVisibleModels: () => {},
+    editContextWindowOverrides: () => {},
+    editModelNames: () => {},
+  }
+
+  let root!: ReactTestRenderer
+  act(() => { root = create(createElement(CommandCodeSettingsPage, pageProps)) })
+
+  // 全部 6 个暂存数值/文本字段均由宿主的 SettingsValueField 原语承载。
+  const fieldIds = root.root
+    .findAll((node) => typeof node.props['data-cc-settings-field'] === 'string')
+    .map((node) => node.props['data-cc-settings-field'] as string)
+  assert.deepEqual(fieldIds, [
+    'cc-context-window',
+    'cc-max-output-tokens',
+    'cc-api-base',
+    'cc-request-timeout',
+    'cc-stream-idle-timeout',
+    'cc-transport-max-retries',
+  ])
+
+  // 无未保存改动时不渲染底部保存栏，也没有旧版顶部 StatusStrip。
+  assert.equal(root.root.findAll((node) => node.props.className === 'cc-saveFooter').length, 0)
+  assert.equal(root.root.findAll((node) => node.props.className === 'cc-statusStrip').length, 0)
+
+  // 点击添加账户按钮后，方式切换由宿主的 SegmentedControl (role="tablist") 承载。
+  const addBtn = root.root.find((node) => node.type === 'button' && node.props.className === 'cc-addButton')
+  act(() => { addBtn.props.onClick() })
+  assert.equal(root.root.findAll((node) => node.props.role === 'tablist').length, 1)
+
+  // 草稿进入 dirty 状态后，底部 SettingsForm 风格保存栏按需挂载。
+  state = makeState({ dirty: true })
+  act(() => { root.update(createElement(CommandCodeSettingsPage, pageProps)) })
+  assert.equal(root.root.findAll((node) => node.props.className === 'cc-saveFooter').length, 1)
+
   act(() => { root.unmount() })
 })

@@ -24,6 +24,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { Button, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import { settingsWriteNotice, type SettingsCommandCodeKey } from './locales.ts'
 import type { SettingsPageState, StagedField } from './settings.ts'
@@ -151,13 +152,13 @@ export function cardMode(
   }
 }
 
-/** Credential-state badge: the solid pill when set, the muted outline when not. */
+/** Credential-state badge: neutral Tag when set, outline Tag when not. */
 function StatusBadge({ ok, okLabel, pendingLabel }: {
   ok: boolean
   okLabel: string
   pendingLabel: string
 }) {
-  return <span className={ok ? 'cc-badge' : 'cc-badgeMuted'}>{ok ? okLabel : pendingLabel}</span>
+  return <Tag tone={ok ? 'neutral' : 'outline'}>{ok ? okLabel : pendingLabel}</Tag>
 }
 
 /** The key paste field, with the show/hide toggle over it. */
@@ -184,11 +185,11 @@ function CardKeyField({ state, disabled, t, onEdit }: {
         type={visible ? 'text' : 'password'}
         autoComplete="new-password"
         spellCheck={false}
+        placeholder={t('accountKeyPlaceholder')}
         value={state.text}
         disabled={disabled}
         onChange={(event) => onEdit(event.target.value)}
       />
-      <p className="cc-hint">{t('apiKeyHint')}</p>
     </div>
   )
 }
@@ -272,7 +273,7 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
               <span className="cc-label">{t('cardTitle')}</span>
               <span className="cc-badges">
                 <StatusBadge ok={configured} okLabel={t('apiKeySet')} pendingLabel={t(state.apiKeyKnown ? 'apiKeyUnset' : 'writeStateUnknown')} />
-                {props.provider.active ? <span className="cc-badge">{t('cardRouteActive')}</span> : null}
+                {props.provider.active ? <Tag tone="neutral">{t('cardRouteActive')}</Tag> : null}
               </span>
             </div>
           </div>
@@ -293,23 +294,25 @@ export function CommandCodeProviderCard(props: CommandCodeCardProps & ProviderCa
           ) : null}
           <div className="cc-footer">
             {notice ? <p className="cc-failed" role="status">{notice}</p> : null}
-            {state?.credentialRefreshFailed || state?.saveResult?.refreshFailed ? <button type="button" className="cc-reset" onClick={props.refreshCredentials}>{t('writeRefreshRetry')}</button> : null}
-            <button
-              type="button"
-              className="cc-reset"
+            {state?.credentialRefreshFailed || state?.saveResult?.refreshFailed ? <Button variant="outline" size="sm" className="cc-press" onClick={props.refreshCredentials}>{t('writeRefreshRetry')}</Button> : null}
+            <Button
+              variant="outline"
+              size="sm"
+              className="cc-press"
               disabled={(!dirty && !state?.failed) || saving}
               onClick={props.discard}
             >
               {t('discard')}
-            </button>
-            <button
-              type="button"
-              className="cc-reset"
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              className="cc-press"
               disabled={savingBlocked || saving}
               onClick={props.save}
             >
               {t(saving ? 'saving' : 'save')}
-            </button>
+            </Button>
           </div>
         </>
       ) : null}

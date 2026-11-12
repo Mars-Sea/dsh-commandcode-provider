@@ -522,6 +522,51 @@ async function checkVolatileConfig(staged) {
   }
 }
 
+/** Provider-owned codes must remain real engine errors with durable retry and request facts. */
+async function checkProviderFailures(staged, engineModules) {
+  if (staged === undefined) return
+  const plugin = await import(pathToFileURL(join(staged, 'lib', 'index.js')).href)
+  const require = createRequire(join(dirname(engineModules), 'provider-failure-probe.cjs'))
+  const llm = await import(pathToFileURL(require.resolve(`${SCOPE}/dsh-llm`)).href)
+  let verified = true
+  for (const protocol of ['cli', 'openai', 'messages']) {
+    for (const [status, code] of [[400, 'PROVIDER_HTTP_ERROR'], [429, 'THROTTLED'], [200, 'PROVIDER_PROTOCOL_ERROR']]) {
+      try {
+        const adapter = new plugin.CommandCodeAdapter({
+          options: () => ({
+            apiBase: 'https://engine-failure.invalid', workingDir: '/tmp/engine-probe', modelsCachePath: '',
+            protocol: protocol === 'messages' ? 'auto' : protocol,
+            requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+          }),
+          resolveApiKey: async () => 'synthetic-error-key',
+          fetchImpl: async () => new Response(status === 200 ? null : 'synthetic refusal', {
+            status, headers: { 'x-request-id': 'synthetic-engine-failure', 'retry-after': '7' },
+          }),
+        })
+        await assert.rejects(async () => {
+          for await (const _ of adapter.stream({
+            provider: 'commandcode', model: protocol === 'messages' ? 'claude-haiku-5-5' : 'synthetic-error-model',
+            messages: [llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] })],
+          })) { /* Consume the published adapter against this engine's actual error class. */ }
+        }, error => {
+          assert.ok(error instanceof llm.LlmError)
+          assert.equal(error.code, code)
+          assert.equal(error.failure.code, code)
+          assert.equal(error.failure.requestId, 'synthetic-engine-failure')
+          assert.equal(error.failure.status, status === 200 ? undefined : status)
+          assert.equal(error.failure.providerRetryAfterMs, status === 200 ? undefined : 7000)
+          assert.ok(Object.isFrozen(error.failure))
+          return true
+        })
+      } catch (error) {
+        verified = false
+        fail(`${protocol} provider failure ${code}: ${error.message}`)
+      }
+    }
+  }
+  if (verified) process.stdout.write('Provider failure contract passed: 3 protocols × HTTP refusal, throttle and missing body (real engine errors)\n')
+}
+
 /** Check 4: the engine exports the whole durable-offload contract the adapter speaks. */
 async function checkImagePolicy(engineModules) {
   const specifier = `${SCOPE}/dsh-llm`
@@ -1283,6 +1328,7 @@ async function verify(options) {
     checkClientRequires(engine.modules)
     await checkImagePricing(staged)
     await checkVolatileConfig(staged)
+    await checkProviderFailures(staged, engine.modules)
     await checkToolHistory(staged, engine.modules)
     await checkEnrollmentStream(staged, engine.modules)
     await checkAnalyticsHistory(staged, engine.modules)

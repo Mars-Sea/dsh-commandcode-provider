@@ -6,12 +6,11 @@
  * the installed dev types are `0.2.1-rc.3`, where the seat does not exist yet.
  * The declaration is restated so the registration site type-checks.
  *
- * DELETE THIS FILE once the devDependency engine moves to `>= 0.2.2-alpha.3`:
- * two declarations of the same key do not merge, so the restatement would then
- * collide with the real one. Structural shape copied from the alpha.3 shell
- * (`{ kind: 'list'; scope: 'root'; inline: true }`); the shell renders it once
- * per nav row with `only: row.id`, which is why the registrant's id must be the
- * section id.
+ * Keep the full declaration structurally identical to the newer shell's own
+ * declaration, including its owner props, so it can coexist with either type
+ * generation. Once the development dependency no longer needs this supplement,
+ * it may be removed. The shell renders it once per nav row with `only: row.id`,
+ * which is why the registrant's id must be the section id.
  *
  * @module dsh-commandcode-provider/client/settings-nav-slot
  */
@@ -23,7 +22,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * id, rendered with the row's `active` state and a 16px size; the shell
      * falls back to its own gear when no entry matches.
      */
-    'settings.section.icon': { kind: 'list'; scope: 'root'; inline: true }
+    'settings.section.icon': { kind: 'list'; scope: 'root'; inline: true; owner: { size: number; active: boolean } }
   }
 }
 

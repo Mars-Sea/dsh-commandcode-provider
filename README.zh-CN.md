@@ -18,7 +18,7 @@
 
 | | |
 |---|---|
-| 已验证引擎 | dsh `0.2.1-rc.2`、`0.2.1-rc.3`、`0.2.1-rc.4`、`0.2.1-rc.5`、`0.2.2-alpha.2`、`0.2.2-alpha.3`、`0.2.2-rc.1` |
+| 已验证引擎 | dsh `0.2.1-rc.2`、`0.2.1-rc.3`、`0.2.1-rc.4`、`0.2.1-rc.5`、`0.2.2-alpha.2`、`0.2.2-alpha.3`、`0.2.2-rc.1`、`0.2.2-rc.2` |
 | Node.js | **`>=24.9`** —— 0.16.0 起从 22 提高，见[需要 Node.js 24.9 或更高版本](#需要-nodejs-249-或更高版本) |
 | 安装 —— 网页端 | `dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest` |
 | 安装 —— 终端端 | `dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@latest` |
@@ -63,7 +63,9 @@
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
-本构建准入 **dsh `>=0.2.1-rc.2 <0.2.2-0`** —— `0.2.1` 通道中 `0.2.1-rc.2` 及以后的每个 RC —— **以及 `>=0.2.2-alpha.2 <0.2.3-0`**，即 `0.2.2` 通道从当前 alpha 起的每个版本。`0.2.1-rc.5` 是 npm `latest` 指向的版本，`0.2.2-rc.1` 挂在 `next`、`0.2.2-alpha.3` 挂在 `alpha`；这七个版本都跑过完整引擎矩阵（`npm run test:engine`、`npm run test:install`）。两个通道中更晚的版本无需更新插件即可准入，但在 `dsh.compatibility.dshReleases` 补上记录之前不算已验证。`0.2.3` 及以后被刻意排除 —— 两个区间上界分别写成 `<0.2.2-0` 与 `<0.2.3-0` 正是为了这一点。使用 `0.2.0-rc.2`、`0.2.1-alpha.5` 或更早版本的配置需先升级引擎，再安装本构建。兼容性细节 —— `engines.dsh` 准入规则、按引擎配对的包版本、验证证据 —— 见[引擎兼容](docs/agent-reference/engine-compatibility.md)。
+本构建准入 **dsh `>=0.2.1-rc.2 <0.2.2-0`** —— `0.2.1` 通道中 `0.2.1-rc.2` 及以后的每个 RC —— **以及 `>=0.2.2-alpha.2 <0.2.3-0`**，即 `0.2.2` 通道从当前 alpha 起的每个版本。截至 2026-11-12 核查，npm `latest` 指向 `0.2.2-rc.1`，`next` 指向 `0.2.2-rc.2`，`alpha` 指向 `0.2.2-alpha.3`；这八个已验证版本均由完整引擎矩阵覆盖（`npm run test:engine`、`npm run test:install`）。两个通道中更晚的版本无需更新插件即可准入，但在 `dsh.compatibility.dshReleases` 补上记录之前不算已验证。`0.2.3` 及以后被刻意排除 —— 两个区间上界分别写成 `<0.2.2-0` 与 `<0.2.3-0` 正是为了这一点。使用 `0.2.0-rc.2`、`0.2.1-alpha.5` 或更早版本的配置需先升级引擎，再安装本构建。兼容性细节 —— `engines.dsh` 准入规则、按引擎配对的包版本、验证证据 —— 见[引擎兼容](docs/agent-reference/engine-compatibility.md)。
+
+**DSH `0.2.2-rc.2` 兼容（纳入 v0.17.7）**：本机实际安装的目标引擎、隔离安装和 rc.2 全套依赖类型检查均已通过。服务商错误保留原错误码与重试信息，辅助请求用途和设置图标类型同时兼容新旧引擎。现有兼容范围不变，rc.2 已写入 `dshReleases`。这些检查不包含浏览器渲染与真实提供商行为，证据及验证边界见[对接说明](docs/对接说明.md)。
 
 ### 需要 Node.js 24.9 或更高版本
 

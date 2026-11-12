@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { providerError } from './llm-error.ts'
 import { DEFAULT_MESSAGES_MAX_TOKENS, MODEL_OUTPUT_TOKEN_LIMITS, requiresMessagesEndpoint } from './capabilities.ts'
 import { isRecord, numberValue, stringValue } from './wire-guards.ts'
 import { OUTPUT_LIMIT_REJECTION, parseOutputCeiling } from './provider-errors.ts'
@@ -69,9 +70,9 @@ function normalizeModel(raw: unknown, apiBase: string, disk: boolean): CommandCo
   }
 }
 function parseCatalog(value: unknown, apiBase: string): CommandCodeModel[] {
-  if (!isRecord(value) || value.object !== 'list' || !Array.isArray(value.data)) throw new LlmError('Unexpected Command Code models response shape', 'PROVIDER_PROTOCOL_ERROR')
+  if (!isRecord(value) || value.object !== 'list' || !Array.isArray(value.data)) throw providerError('Unexpected Command Code models response shape', 'PROVIDER_PROTOCOL_ERROR')
   const rows = value.data.map(raw => normalizeModel(raw, apiBase, false)).filter((row): row is CommandCodeModel => row !== undefined)
-  if (rows.length === 0) throw new LlmError('Command Code returned an empty model catalog', 'PROVIDER_PROTOCOL_ERROR')
+  if (rows.length === 0) throw providerError('Command Code returned an empty model catalog', 'PROVIDER_PROTOCOL_ERROR')
   return rows
 }
 async function readCache(source: GatewaySource): Promise<CommandCodeModel[]> {

@@ -141,14 +141,15 @@ test('DSH compatibility records every verified release of the admitted channel r
   // rc.5（2026-10-30 补入，npm `latest`／`next`），2026-10-28 用户拍板放开
   // 0.2.2 通道后补入的 alpha.2 与 alpha.3（npm `alpha`），以及 2026-11-05 补入的
   // rc.1（`0.2.2` 首个 RC，npm `next`；alpha.3 到 rc.1 的源码 delta 只有 package.json，
-  // 但补记录后仍须逐版本跑 `test:engine` 与 `test:install`）。
+  // 但补记录后仍须逐版本跑 `test:engine` 与 `test:install`），以及 2026-11-12
+  // 通过真实目标引擎、全套依赖类型检查与隔离安装后补入的 0.2.2-rc.2。
   // 未来同通道新版本无需改声明即可准入，但只有补上记录才算已验证；
   // 这份记录同时是 `test:engine` 与 `test:install` 的矩阵来源，加记录就必须先跑通它们。
   const declared = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
-  assert.equal(declared.length, 7, 'keep exactly the verified engine releases')
+  assert.equal(declared.length, 8, 'keep exactly the verified engine releases')
   assert.deepEqual(
     [...declared].sort(),
-    ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2', '0.2.2-alpha.3', '0.2.2-rc.1'],
+    ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2', '0.2.2-alpha.3', '0.2.2-rc.1', '0.2.2-rc.2'],
     'one record per channel: the 0.2.1 RC line plus the verified 0.2.2 prereleases',
   )
 })

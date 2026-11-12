@@ -56,7 +56,7 @@ import {
   type LlmImageRequestPricing,
   type ResolvedRetryPolicy,
   type ContentBlock,
-  type GenerateOptions,
+  type GenerateOptions as HarnessGenerateOptions,
   type LlmModelInfo,
   type LlmProviderInfo,
   type LlmResolvedModelInfo,
@@ -87,6 +87,11 @@ import {
 
 import { GatewayFacts, catalogModelMaxTokens, modelOutputTokenLimit, learnedOutputLimit, outputCeilingRefusal, type CommandCodeModel } from './gateway-facts.ts'
 export { DEFAULT_MAX_OUTPUT_TOKENS, MODEL_CATALOG_TTL_MS } from './gateway-facts.ts'
+
+// Producers own the newer engine's purpose registry. A forwarding adapter must
+// also accept calls from producers whose type augmentation is not imported here.
+// Omit keeps this shape usable with older, non-generic GenerateOptions too.
+type GenerateOptions = Omit<HarnessGenerateOptions, 'purpose'> & { purpose?: string }
 
 // ---------------------------------------------------------------------------
 // Request / connection defaults (protocol constants). The model/plan/deal

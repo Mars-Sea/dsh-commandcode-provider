@@ -24,6 +24,8 @@ src/gateway-facts.ts  网关目录、来源校验、共享刷新发布权、公�
 src/stream-response.ts 单次已连接响应：解析、块装配、终态校验、
                       最后用量、取消门控与本地清理。
 src/provider-errors.ts 连接拒绝、流内错误与连接前账号轮换的共享错误分类。
+src/llm-error.ts      开放服务商错误码的跨引擎构造入口：新引擎用 fromFailure，
+                      旧引擎用构造函数，保留 cause 与持久化失败事实。
 src/capabilities.ts   Static capability snapshot (model efforts/vision/thinking,
                       plan tiers, subscription plans, deals, peak pricing) +
                       its read helpers — the sync-only surface for upstream

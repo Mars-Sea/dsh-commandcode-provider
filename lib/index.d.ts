@@ -61,6 +61,9 @@ type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 //#endregion
 //#region src/adapter.d.ts
+type GenerateOptions$1 = Omit<GenerateOptions, 'purpose'> & {
+  purpose?: string;
+};
 declare const COMMAND_CODE_CLI_VERSION = "1.88.5";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
@@ -698,7 +701,7 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
     exceeded: boolean;
     resetAt: number;
   } | undefined>;
-  stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
+  stream(options: GenerateOptions$1): AsyncIterable<StreamChunk>;
   private streamWithTiming;
   /**
    * One turn, with at most one output-ceiling downshift.

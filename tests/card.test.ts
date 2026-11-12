@@ -19,6 +19,10 @@
  * controller wiring, like the other React-free controller tests here.
  */
 
+import { register } from 'node:module'
+
+register(new URL('./_css-module-loader.mjs', import.meta.url).href)
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -28,14 +32,14 @@ import {
   type SettingsPageApi,
 } from '../src/client/settings.ts'
 import { CommandCodeLoginController } from '../src/client/login.ts'
-import {
-  adjacentEditorCard,
-  cardMode,
-  type CommandCodeCardProps,
-  type ProviderCardOwnerProps,
+import type {
+  CommandCodeCardProps,
+  ProviderCardOwnerProps,
 } from '../src/client/card.tsx'
 import type { SettingsPageState } from '../src/client/settings.ts'
 import type { LoginPageState } from '../src/client/login.ts'
+
+const { adjacentEditorCard, cardMode } = await import('../src/client/card.tsx')
 
 // Helpers (mirrors tests/settings.test.ts)
 

@@ -2,6 +2,7 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
+- **v0.17.7 原生组件改造（2026-11-12）**：设置页采用账户、模型、集成、高级四个平铺折叠分组，数值／文本字段由 `SettingsValueField` 承载，配套 `Button`、`Input`、`SegmentedControl`、`Tag`、`StateDot` 与 `Modal`；普通设置仍经原控制器暂存与保存，账号操作即时确认。移除顶部重复状态区，保存底栏只在有状态提示或待保存内容时挂载。账户卡片沿用宿主表面与深色模式；组合配置中的凭据只读账户也保留取消固定入口，写入权限与账号忙碌状态控制按钮禁用，不把凭据可管理性当作清除 `activeAccount` 的前提。`tests/accounts-card-render.test.ts` 覆盖原生字段接线、分段选项、按需底栏及组合账户取消固定的可写／只读／忙碌状态；后文较早样式记录作为历史保留，当前实现以源码为准。设计源稿见 `designs/commandcode-settings-dsh/project/`；编辑器日志与历史缓存不纳入提交。
 - **账号开通**：两种新增方式统一使用 `src/enrollment.ts`；`src/client/enrollment.ts` 由每次设置页挂载持有，`AddAccountPanel` 只负责输入和意图。面板按设计稿：「网页登录／粘贴密钥」分段切换 → 备注名 →（粘贴模式）密钥框 → 右侧「取消」+「开始登录／添加」；进行中只剩「取消开通」，命名失败为「取消／接受已有名称／重试保存名称」，判定在导出纯函数 `addAccountPanelView`（`tests/section.test.ts`）。切回网页登录会清空已填密钥。离开设置页取消未完成过程，已登录待命名则接受已有名称；命名失败保留账号，清理失败保留恢复记录并提供手动重试。默认或已有账号的 `login*` 契约继续使用原控制器。
 - **自动打开授权页**：新增、默认和已有账号登录均在首次收到宿主授权地址后通过 `src/client/login-page.ts` 打开新页面，不预先打开空白页；同一尝试的轮询不重复打开，已取消尝试或已卸载的新增账号面板不会因迟到地址打开页面。浏览器可能拦截异步打开，界面始终保留授权链接及手动打开提示；打开失败不取消宿主登录。使用 `noopener,noreferrer` 隔离来源页，不能根据返回 `null` 判断是否拦截。
 - **页面生命期**：`enrollmentWatch({ pageId })` 是持续远端流，先确认就绪再允许 `enrollmentBegin`。所有过程调用带页面身份；宿主将它与实际调用对端共同绑定。单次调用完成不结束过程；页面卸载主动取消并释放流，刷新或关闭由网关流取消信号触发收尾。DSH 的 `OperatorPeer` 是宿主共享作用域，不能用它冒充单个浏览器连接。载体断开不会自动重建原过程。
@@ -328,8 +329,10 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   流式正文不会唤醒它）以感知弹窗开合；React 重渲染扔掉注入节点会自愈，行节点被替换会重新装饰，销毁时移除
   节点并还原齿轮，官方注册生效时兜底自动拆除——任何宿主上都只画一个图形。判据：`tests/settings-nav-icon.test.ts`
   （按标签识别而非位置、两种宿主行形状、弹窗开合、自愈、行替换、复原）与 `tests/client-boot.test.ts`
-  （宿主声明／不声明两条注册分支）。`src/client/settings-nav-slot.ts` 只是 SlotMap 的临时重述，dev 引擎升到
-  `0.2.2-alpha.3` 后必须删除；届时 `src/client/settings-nav-icon.ts` 也可一并删除，只留插槽注册。
+  （宿主声明／不声明两条注册分支）。`src/client/settings-nav-slot.ts` 是供旧开发类型使用的 SlotMap 补充声明；
+  2026-11-12 已补齐 `owner: { size: number; active: boolean }`，与 rc.2 官方声明结构一致，旧 `0.2.1-rc.3`
+  和全套 rc.2 类型检查均通过。开发依赖不再需要补充时可删除该类型文件；运行时 `settings-nav-icon.ts` 的
+  兜底是否删除取决于支持范围，仍支持 `0.2.1` 或 `0.2.2-alpha.2` 时必须保留，不能仅因开发依赖升级而删除。
 
 - **自定义上下文长度（issue #86）**：`Config.contextWindow`（全局值）与 `Config.contextWindowOverrides`
   （按模型，键为目录 id）覆盖宣告给宿主的上下文窗口，解析顺序为按模型 → 全局 → 目录。页面上是
