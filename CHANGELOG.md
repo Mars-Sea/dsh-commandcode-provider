@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 **v0.17.7 发布前检查（2026-11-12）**：隔离锁文件 `npm ci --dry-run --ignore-scripts`、本地类型检查、最终源码的完整 rc.2 依赖类型检查、**1243/1243** 单测、构建、八引擎加载矩阵 **8/8**、隔离安装矩阵 **8/8**、发布入口检查（16 个文件）及 `npm pack --dry-run` 均退出码 0。`test:update` 对当前已发布版本 `0.17.5 → 0.17.6` 的隔离更新资格检查通过；上传后再核对 `0.17.6 → 0.17.7`。设置页改造的新增回归使用 React 渲染树与原语替身，未做浏览器端到端或 macOS Desktop 交互验收；兼容矩阵使用合成网络和凭据。配套设计源文件一并提交，编辑器缓存与日志按既有忽略规则留在本机。
 
+**发布执行（2026-11-12）**：用户授权全部本地改动合入 `main` 并发布 `0.17.7`。发布提交 `2f45da31a7944438859b11dd57c6e2da5110ed00` 包含 40 个文件，注释标签 `v0.17.7` 指向同一提交，`main` 与标签均已推送。[可信发布工作流](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/runs/43164699435) 全部通过并实际上传 npm；[常规 CI](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/runs/43164691805) 与 [Security Scans](https://github.com/Mars-Sea/dsh-commandcode-provider/actions/runs/43164691796) 对该提交均成功。[GitHub Release](https://github.com/Mars-Sea/dsh-commandcode-provider/releases/tag/v0.17.7) 已创建，包含中英双语说明。注册表短暂传播延迟后确认版本与 `latest` 均为 `0.17.7`，`engines.dsh` 和 `dsh.bundle.patch` 齐全；包共 16 个文件，npm SLSA provenance 的提交引用与发布提交匹配，subject 的 SHA-512 与注册表 `dist.integrity` 匹配。发布后 `verify-plugin-update --installed 0.17.6 --target 0.17.7` 退出码 0，确认该版本可作为隔离注册表安装的更新目标；未在运行中的 GUI 点击更新。
+
 ## [0.17.6] - 2026-11-11
 
 ### Changed
