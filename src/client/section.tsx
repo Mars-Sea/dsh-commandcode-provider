@@ -355,6 +355,8 @@ export function ToggleField({
               <IconInfoOutlineRegular size={12} />
             </button>
           ) : null}
+          {/* The marker and its reset describe the field, so they sit with the
+              label; the control column then holds exactly one thing. */}
           <OverrideTag label={label} state={state} disabled={disabled} t={t} onReset={onReset} />
         </>
       }
@@ -916,18 +918,25 @@ function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormC
       </div>
 
       <div className="cc-overrideBlock">
-        <div className="cc-overrideHead">
-          <span className="cc-rowTitle">{t('contextOverridesTitle')}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="cc-press"
-            icon={<IconPlusOutlineRegular size={13} />}
-            disabled={disabled || available.length === 0}
-            onClick={addRow}
-          >
-            {t('contextOverrideAdd')}
-          </Button>
+        <div className="cc-row">
+          <div className="cc-rowText">
+            <div className="cc-rowTitleLine">
+              <span className="cc-rowTitle">{t('contextOverridesTitle')}</span>
+              {rows.length > 0 ? <Tag tone="neutral">{rows.length}</Tag> : null}
+            </div>
+          </div>
+          <div className="cc-rowControl">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="cc-press"
+              icon={<IconPlusOutlineRegular size={13} />}
+              disabled={disabled || available.length === 0}
+              onClick={addRow}
+            >
+              {t('contextOverrideAdd')}
+            </Button>
+          </div>
         </div>
         {state.catalogFailed ? <p className="cc-groupDesc">{t('contextOverrideNoCatalog')}</p> : null}
         {rows.length > 0 ? (
@@ -1015,18 +1024,25 @@ function ModelNamesCard({ state, disabled, t, onNames }: Pick<FormCardProps, 'st
   }
   return (
     <div className="cc-overrideBlock">
-      <div className="cc-overrideHead">
-        <span className="cc-rowTitle">{t('modelNamesTitle')}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          className="cc-press"
-          icon={<IconPlusOutlineRegular size={13} />}
-          disabled={disabled || available.length === 0}
-          onClick={addRow}
-        >
-          {t('modelNamesAdd')}
-        </Button>
+      <div className="cc-row">
+        <div className="cc-rowText">
+          <div className="cc-rowTitleLine">
+            <span className="cc-rowTitle">{t('modelNamesTitle')}</span>
+            {rows.length > 0 ? <Tag tone="neutral">{rows.length}</Tag> : null}
+          </div>
+        </div>
+        <div className="cc-rowControl">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="cc-press"
+            icon={<IconPlusOutlineRegular size={13} />}
+            disabled={disabled || available.length === 0}
+            onClick={addRow}
+          >
+            {t('modelNamesAdd')}
+          </Button>
+        </div>
       </div>
       {state.catalogFailed ? <p className="cc-groupDesc">{t('modelNamesNoCatalog')}</p> : null}
       {rows.length > 0 ? (
@@ -1420,7 +1436,7 @@ function MiniMeter({ label, limit }: { label: string; limit: NonNullable<Command
 
 function MonthlyBalance({ label, remaining }: { label: string; remaining: number }) {
   return (
-    <span className="cc-miniMeter">
+    <span className="cc-miniMeterPlain">
       <span className="cc-miniMeterLabel">{label}</span>
       <span className="cc-miniMeterValue">{formatMoney(Math.max(0, remaining))}</span>
     </span>
@@ -1581,28 +1597,33 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
             <span className="cc-dotSpacer" aria-hidden="true" />
           )}
           <span className="cc-accountName">{row.label}</span>
-          {accountName !== '' && accountName !== row.label ? <span className="cc-usageAccount">{accountName}</span> : null}
-          {planName !== '' ? <Tag tone="neutral">{planName}</Tag> : null}
-          {entry?.active && multi ? <Tag tone="success">{t('usageActive')}</Tag> : null}
-          {pinned ? <Tag tone="solid">{t('accountStatusPinned')}</Tag> : null}
-          {!row.credentialKnown || !row.configured ? <Tag tone="outline">{t(row.credentialKnown ? 'apiKeyUnset' : 'writeStateUnknown')}</Tag> : null}
-          {entry?.mark === 'invalid-credential' ? <Tag tone="danger">{t('usageInvalidKey')}</Tag> : null}
-          {entry !== undefined && entry.mark !== 'invalid-credential' && (entry.cooldownUntil > 0 || entry.mark === 'rate-limit') ? (
-            <Tag tone="warning">
-              {t('usageCooldown')}{entry.cooldownUntil > 0 ? ` ${formatResetAtShort(entry.cooldownUntil)}` : ''}
-            </Tag>
-          ) : null}
-          <span className="cc-spacer" />
+          <span className="cc-accountTags">
+            {accountName !== '' && accountName !== row.label ? <span className="cc-usageAccount">{accountName}</span> : null}
+            {planName !== '' ? <Tag tone="neutral">{planName}</Tag> : null}
+            {entry?.active && multi ? <Tag tone="success">{t('usageActive')}</Tag> : null}
+            {pinned ? <Tag tone="solid">{t('accountStatusPinned')}</Tag> : null}
+            {!row.credentialKnown || !row.configured ? <Tag tone="outline">{t(row.credentialKnown ? 'apiKeyUnset' : 'writeStateUnknown')}</Tag> : null}
+            {entry?.mark === 'invalid-credential' ? <Tag tone="danger">{t('usageInvalidKey')}</Tag> : null}
+            {entry !== undefined && entry.mark !== 'invalid-credential' && (entry.cooldownUntil > 0 || entry.mark === 'rate-limit') ? (
+              <Tag tone="warning">
+                {t('usageCooldown')}{entry.cooldownUntil > 0 ? ` ${formatResetAtShort(entry.cooldownUntil)}` : ''}
+              </Tag>
+            ) : null}
+          </span>
           <IconChevronDownOutlineRegular
             size={14}
-            className={expanded ? 'cc-foldChevron cc-chevronOpen' : 'cc-foldChevron'}
+            className={expanded ? 'cc-accountChevron cc-chevronOpen' : 'cc-accountChevron'}
           />
         </button>
+        {/* Unpinning is a settings write, so it stays reachable even for a
+            composition account the page cannot rename or remove. It reads as
+            quiet text rather than a second outlined button, so the header keeps
+            one visual weight and one right edge. */}
         {multi && pinned ? (
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
-            className="cc-press"
+            className="cc-press cc-unpin"
             disabled={disabled || state.accountBusy}
             onClick={() => void actions.setActive('')}
           >

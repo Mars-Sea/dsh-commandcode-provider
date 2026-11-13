@@ -145,6 +145,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // 1.81.0 -> 1.82.1 train. Three selectable levels, the same set the Gemini
   // Flash family carries.
   'google/gemini-4-argon': ['low', 'medium', 'high'],
+  // 2026-11-13 (catalog-only sync): `google/gemini-4-carbon`, the Pro-tier
+  // sibling of Argon — same three selectable levels, 1M context, text + image.
+  // The 1.88.5 artifact does not name it yet (catalog-first, like the rows
+  // above), so the levels come from `?view=client` `reasoningEfforts`.
+  'google/gemini-4-carbon': ['low', 'medium', 'high'],
   'google/gemini-3.1-flash-lite': ['low', 'medium', 'high'],
   'google/gemini-3.5-flash': ['low', 'medium', 'high'],
   'google/gemini-3.5-flash-lite': ['low', 'medium', 'high'],
@@ -270,10 +275,19 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // `ling-3.1-flash`. Text-only input (see `KNOWN_IMAGE_MODELS`) and Go tier
   // (see `KNOWN_PLANS`).
   'inclusionai/ling-3.1-flash-1019': ['low', 'medium', 'high'],
-  // 2026-11-04 (catalog-only sync): `stealth/crouton-alpha`, the newest stealth
-  // preview — and the widest effort set of the stealth rows at five levels
-  // (Glyph Cluster serves four; the retired Space Bunny Alpha stopped at `max`).
-  'stealth/crouton-alpha': ['low', 'medium', 'high', 'xhigh', 'max'],
+  // 2026-11-13 (catalog-only sync): `thinkingmachines/inkling-2-small:free`,
+  // the free Inkling 2 Small launch row — four selectable levels, the same
+  // `low`/`medium`/`high`/`max` set the free Glyph Cluster preview carries
+  // (no `xhigh`). Its paid siblings `thinkingmachines/inkling` and
+  // `thinkingmachines/inkling-small` stay in `KNOWN_THINKING_MODELS`: they
+  // serve no `reasoningEfforts` at all.
+  'thinkingmachines/inkling-2-small:free': ['low', 'medium', 'high', 'max'],
+  // `stealth/crouton-alpha` (the 2026-11-04 stealth preview, five levels) left
+  // this map on 2026-11-13 with the rest of the picker-facing tables: the row
+  // went `hidden` in `?view=client`, left the default catalog view, and was
+  // dropped by the pricing page, the models docs page and all four plan pages
+  // — the same retirement path Beam 1.0 and Laguna S 2.1 took. The 1.88.5
+  // artifact still names it, which is why `KNOWN_NON_ZDR_MODELS` keeps it.
   // command-code@1.75.0 ("Add Mistral Large 4") — the only model the 1.74.3 ->
   // 1.77.0 train added. A three-level set; Vision per the official registry and
   // the CLI's inputModalities:["text","image"] (see `KNOWN_IMAGE_MODELS`), and
@@ -359,6 +373,9 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // inputModalities:["text","image"] and the docs page's "Text input, Vision,
   // Reasoning" capability label.
   'google/gemini-4-argon',
+  // 2026-11-13 (catalog-only sync): inputModalities:["text","image"] in
+  // `?view=client` and the models docs page's Vision capability label.
+  'google/gemini-4-carbon',
   'google/gemini-3.1-flash-lite',
   'google/gemini-3.5-flash',
   'google/gemini-3.5-flash-lite',
@@ -428,11 +445,13 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // with the other snapshots (promo lapsed, row hidden).
   'ornith/ornith-1.5-122b',
   'sakana/fugu-ultra',
-  // 2026-11-04 (catalog-only sync): inputModalities:["text","image"] in the live
-  // `?view=client` catalog, and both the pricing page (`caps.vision: true`) and
-  // the models docs page mark the row Vision — the first stealth preview with
-  // image input (Glyph Cluster and its retired siblings were text-only).
-  'stealth/crouton-alpha',
+  // 2026-11-13 (catalog-only sync): inputModalities:["text","image"] in
+  // `?view=client`, and both the pricing page (`caps.vision: true`) and the
+  // models docs page mark the row Vision.
+  'thinkingmachines/inkling-2-small:free',
+  // `stealth/crouton-alpha` (the first stealth preview with image input) left
+  // this map on 2026-11-13 with the rest of the picker-facing tables — the row
+  // is `hidden` in `?view=client` and gone from every public page.
   // command-code@1.65.0; Vision per the official registry and inputModalities.
   'stepfun/Step-3.7-Flash',
   // command-code@1.60.0; Vision per the official registry and inputModalities.
@@ -611,12 +630,21 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // artifact); the 1.88.3 exclusion set lists it now, and the pricing page
   // states it in prose too — "Not routed under ZDR" — so the artifact and the
   // catalog agree again (19 == 19, the first exact match since 1.86.1).
+  // 2026-11-13: the row RETIRED (hidden in `?view=client`, gone from every
+  // public page) but STAYS here — both sources still serve `zdr:false`, and
+  // retirement alone is not coverage evidence (decision record chapter 7
+  // items 15/16).
   'stealth/crouton-alpha',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
   // 2026-10-21 (command-code@1.86.1 sync). New to the exclusion set: the catalog
   // serves `zdr:false` and the 1.86.1 artifact agrees.
   'tencent/hy4-preview',
+  // 2026-11-13 (catalog-only sync): the free Inkling 2 Small launch row. The
+  // 1.88.5 artifact names it nowhere while `?view=client` serves `zdr:false`,
+  // so the union admits the catalog verdict alone — and the pricing page states
+  // it in prose too ("Not routed under ZDR"). Same shape as `claude-fable-5-2`.
+  'thinkingmachines/inkling-2-small:free',
   'xiaomi/mimo-v2.6-pro-ultraspeed',
   'z-ai/glm-5.3-flashx',
 ])
@@ -864,6 +892,8 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['google/gemini-3.8-flash', 65536],
   // google
   ['google/gemini-4-argon', 32768],
+  // google
+  ['google/gemini-4-carbon', 32768],
   // openai
   ['gpt-5.3-codex', 128000],
   // openai
@@ -888,7 +918,7 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['gpt-6.1-sol', 128000],
   // openai
   ['gpt-6.1-terra', 128000],
-  // 1 provider(s), unanimous
+  // 2 provider(s), unanimous
   ['inclusionai/ling-3.1-flash-1019', 262144],
   // 1 provider(s), unanimous
   ['meituan/LongCat-2.0', 131072],
@@ -940,7 +970,7 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['Qwen/Qwen3.8-Flash', 131072],
   // alibaba
   ['Qwen/Qwen3.8-Max', 131072],
-  // 1 provider(s), unanimous
+  // 2 provider(s), unanimous
   ['Qwen/Qwen3.8-Max-0902', 131072],
   // alibaba
   ['Qwen/Qwen3.8-Omni-Flash', 131072],
@@ -956,6 +986,8 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['tencent/hy3-paid', 128000],
   // thinkingmachines
   ['thinkingmachines/inkling', 65536],
+  // 1 provider(s), unanimous
+  ['thinkingmachines/inkling-2-small:free', 131072],
   // thinkingmachines
   ['thinkingmachines/inkling-small', 65536],
   // xai
@@ -1091,11 +1123,14 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // `?view=client`, and the pricing page's embedded availability grants every
   // tier, the same "all":true shape as its `ling-3.1-flash` sibling).
   'inclusionai/ling-3.1-flash-1019': 'go',
-  // 2026-11-04 (catalog-only sync): the Crouton Alpha stealth preview is Go on
-  // every source — `minimumPlan: "individual-go"` and `"all": true` in the
-  // pricing page's embedded availability, so it appears on the go / goat / pro
-  // plan pages alike.
-  'stealth/crouton-alpha': 'go',
+  // 2026-11-13 (catalog-only sync): the free Inkling 2 Small launch row is Go on
+  // every source — `minimumPlan: "individual-go"` in `?view=client` and
+  // `"all": true` in the pricing page's embedded availability, so it appears on
+  // the go / goat / pro / max plan pages alike.
+  'thinkingmachines/inkling-2-small:free': 'go',
+  // `stealth/crouton-alpha` (Go on every source) left this map on 2026-11-13
+  // with the rest of the picker-facing tables: the row is `hidden` in
+  // `?view=client` and gone from the go / goat / pro / max plan pages.
   // command-code@1.44.0; on every plan including Go, like its 1.2 Contributor
   // sibling.
   'meta/muse-spark-1.2-contributor': 'go',
@@ -1224,6 +1259,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // command-code@1.82.0; individual-go / go-v1 / goat all false, Pro and every
   // higher tier true — one tier above the Gemini Flash family above it.
   'google/gemini-4-argon': 'pro',
+  // 2026-11-13 (catalog-only sync): `minimumPlan: "individual-pro"` in
+  // `?view=client`; the pricing page's embedded availability sets individual-go
+  // / go-v1 / goat false and Pro and above true — the same split as Argon.
+  'google/gemini-4-carbon': 'pro',
   'google/gemini-3.1-flash-lite': 'pro',
   'google/gemini-3.5-flash': 'pro',
   'google/gemini-3.5-flash-lite': 'pro',
@@ -1437,16 +1476,19 @@ export interface KnownDeal {
 
 export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   'MiniMaxAI/MiniMax-M3': { label: '50% off' },
-  // 2026-11-04 (catalog-only sync): `stealth/crouton-alpha` is one of the two
-  // live free previews in this map (the other is its Glyph Cluster sibling) and
-  // the first one with image input. Its terms are
-  // the undated kind — 100% off "while the stealth preview lasts", 1000
-  // requests a day, no published end instant — so it carries no `expiresAt` and
-  // is deleted (not lapsed) when the preview retires, like its Glyph Cluster
-  // sibling. The pricing page publishes it at a literal zero, which
-  // `modelPriceTable()` serves from this deal, so it gets no row in the
-  // vendored price table either.
-  'stealth/crouton-alpha': { label: 'FREE', free: true },
+  // 2026-11-13 (catalog-only sync): `thinkingmachines/inkling-2-small:free` is
+  // the free Inkling 2 Small launch row — the undated kind, 100% off "while the
+  // free tier lasts", up to 200 requests a day, no published end instant, so it
+  // carries no `expiresAt` and is deleted (not lapsed) when the tier ends, like
+  // the Glyph Cluster preview below. The pricing page publishes it at a literal
+  // zero, which `modelPriceTable()` serves from this deal, so it gets no row in
+  // the vendored price table either.
+  'thinkingmachines/inkling-2-small:free': { label: 'FREE', free: true },
+  // `stealth/crouton-alpha` (the 2026-11-04 free stealth preview, 1000 requests
+  // a day) left this map on 2026-11-13: the row went `hidden` in
+  // `?view=client`, left the default catalog view, and the pricing page (its
+  // deal list included), the models docs page and all four plan pages dropped
+  // it — the same retirement path Beam 1.0 and Laguna S 2.1 took.
   // `inclusionai/ling-3.1-flash-1019:free` (the dated 2026-11-02 promo, 100% off
   // through `2026-11-03T16:00Z`) left this map on 2026-11-04: the promo lapsed,
   // the row went `hidden` in `?view=client`, and both the default catalog view

@@ -171,7 +171,7 @@ button[role="switch"]:active:not(:disabled){transform:scale(0.95)}
       <!-- TAB 2: 模型与上下文 -->
       <sc-if value="{{ isTabModels }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column; gap: 12px; flex: 1">
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0">
             <div style="display: flex; flex-direction: column; gap: 2px">
               <span style="font-size: 13px; font-weight: 500; color: #0f1115">隐藏套餐外模型</span>
               <span style="font-size: 12px; color: #595e66">按主用账户当前套餐自动过滤不可用模型</span>
@@ -179,7 +179,7 @@ button[role="switch"]:active:not(:disabled){transform:scale(0.95)}
             <button type="button" role="switch" aria-checked="true" aria-label="隐藏套餐外模型" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
           </div>
 
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0">
             <div style="display: flex; flex-direction: column; gap: 2px">
               <span style="font-size: 13px; font-weight: 500; color: #0f1115">可见模型白名单</span>
               <span style="font-size: 12px; color: #595e66">控制选择器中公开的模型目录范围</span>
@@ -208,15 +208,15 @@ button[role="switch"]:active:not(:disabled){transform:scale(0.95)}
       <!-- TAB 3: 功能与网络 -->
       <sc-if value="{{ isTabNetwork }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column; gap: 12px; flex: 1">
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0">
             <span style="font-size: 13px; font-weight: 500; color: #0f1115">零数据保留（ZDR）</span>
             <button type="button" role="switch" aria-checked="true" aria-label="零数据保留" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
           </div>
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0">
             <span style="font-size: 13px; font-weight: 500; color: #0f1115">启用 Command Code 联网搜索</span>
             <button type="button" role="switch" aria-checked="true" aria-label="联网搜索" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
           </div>
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 0.5px solid rgba(0,0,0,0.10)">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0">
             <span style="font-size: 13px; font-weight: 500; color: #0f1115">侧栏显示额度卡片</span>
             <button type="button" role="switch" aria-checked="true" aria-label="侧栏显示额度卡片" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: #0f1115; display: inline-flex; align-items: center; box-sizing: border-box"><span style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: translateX(16px); display: block"></span></button>
           </div>

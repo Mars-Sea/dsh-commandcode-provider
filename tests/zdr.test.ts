@@ -79,6 +79,13 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
   // so the union admits the catalog verdict alone. The free Beam row retired the
   // same day still stays in the set — both sources still serve its `zdr:false`
   // — exactly like the retired free Laguna row.
+  //
+  // 2026-11-13 (catalog-only sync) adds `thinkingmachines/inkling-2-small:free`
+  // (20 -> 21) on the same catalog-only shape, and the pricing page states it in
+  // prose too ("Not routed under ZDR"). `stealth/crouton-alpha` RETIRED the same
+  // day (hidden in `?view=client`, gone from every public page) but STAYS: both
+  // sources still serve its `zdr:false`, and retirement alone is not coverage
+  // evidence.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
@@ -98,6 +105,7 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
     'stepfun/Step-3.7-Flash',
     'stepfun/Step-5-Preview',
     'tencent/hy4-preview',
+    'thinkingmachines/inkling-2-small:free',
     'xiaomi/mimo-v2.6-pro-ultraspeed',
     'z-ai/glm-5.3-flashx',
   ])

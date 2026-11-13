@@ -93,7 +93,7 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
       <!-- GROUP 1: 账户 -->
       <section style="display: flex; flex-direction: column; gap: 10px">
         <div style="display: flex; align-items: center; gap: 8px; min-height: 30px">
-          <button type="button" class="group-toggle" onClick="{{ toggleAccountsGroup }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+          <button type="button" class="group-toggle" onClick="{{ toggleAccountsGroup }}" style="display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
             <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ accGroupChevron }}"><path d="M4 6l4 4 4-4"/></svg>
             <span style="font-size: 14px; font-weight: 500; line-height: 22px">账户</span>
           </button>
@@ -107,26 +107,25 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
         </div>
 
         <sc-if value="{{ accountsOpen }}" hint-placeholder-val="{{ true }}">
-          <div style="display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; flex-direction: column; gap: 8px; padding-left: 22px">
 
-            <!-- Entity Card 1: Concentric outer R20 + pad 10px/12px -> inner module R10, ZERO nested bordered stat boxes! -->
+            <!-- Entity Card 1: Concentric outer R20 + pad 12px -> inner module R10, ZERO nested bordered stat boxes! -->
             <div style="border: 0.5px solid rgba(0,0,0,0.18); border-radius: 20px; background: #ffffff; padding: 12px; display: flex; flex-direction: column; gap: 10px">
-              <div style="display: flex; align-items: center; gap: 8px; padding: 0 2px">
-                <button type="button" onClick="{{ toggleAcc1 }}" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left">
+              <!-- One line, never wrapping: name truncates, tags keep their size, chevron pinned right -->
+              <div style="display: flex; align-items: center; gap: 4px; padding: 0 2px">
+                <button type="button" onClick="{{ toggleAcc1 }}" style="flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; overflow: hidden">
                   <span style="width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none"><span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: block"></span></span>
-                  <span style="font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Work · 主力研发</span>
-                  <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Max</span>
-                  <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #0f1115; color: #ffffff">固定使用</span>
+                  <span style="flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Work · 主力研发</span>
+                  <span style="flex: 0 1 auto; min-width: 0; overflow: hidden; display: inline-flex; align-items: center; gap: 6px">
+                    <span style="flex: none; display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Max</span>
+                    <span style="flex: none; display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #0f1115; color: #ffffff">已固定</span>
+                  </span>
+                  <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-left: auto; transform: {{ acc1Chevron }}"><path d="M4 6l4 4 4-4"/></svg>
                 </button>
-                <div style="display: inline-flex; align-items: center; gap: 4px; flex: none">
-                  <button type="button" class="btn-outline" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.20); background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">取消固定</button>
-                  <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="账户操作菜单" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12" cy="8" r="1.2"/></svg>
-                  </button>
-                  <button type="button" data-icon-btn="true" class="btn-ghost" onClick="{{ toggleAcc1 }}" aria-label="收起详情" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
-                    <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ acc1Chevron }}"><path d="M4 6l4 4 4-4"/></svg>
-                  </button>
-                </div>
+                <button type="button" class="btn-ghost" style="flex: none; height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">恢复自动切换</button>
+                <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="账户操作菜单" style="flex: none; width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12" cy="8" r="1.2"/></svg>
+                </button>
               </div>
 
               <sc-if value="{{ acc1Open }}" hint-placeholder-val="{{ true }}">
@@ -165,7 +164,7 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
                     </div>
 
                     <!-- Borderless hairline telemetry strip inside the same surface (eliminates 4 extra nested boxes!) -->
-                    <div style="border-top: 0.5px solid rgba(0,0,0,0.08); padding-top: 8px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+                    <div style="padding-top: 2px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
                       <div style="display: flex; align-items: baseline; gap: 5px">
                         <span style="font-size: 11px; color: #595e66">请求</span>
                         <span style="font-size: 13px; font-weight: 500; color: #0f1115; font-variant-numeric: tabular-nums">1,284</span>
@@ -197,20 +196,38 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
               </sc-if>
             </div>
 
-            <!-- Entity Card 2: Collapsed Account -->
-            <div style="border: 0.5px solid rgba(0,0,0,0.16); border-radius: 20px; background: #ffffff; padding: 10px 14px; display: flex; align-items: center; gap: 8px">
-              <span style="width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none"><span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: block"></span></span>
-              <span style="font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Personal · 备用</span>
-              <span style="display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Pro</span>
-              <span style="font-size: 12px; line-height: 18px; color: #595e66; margin-left: 4px; font-variant-numeric: tabular-nums">月余 $18.50 · 5h 12%</span>
-              <div style="margin-left: auto; display: inline-flex; align-items: center; gap: 4px">
-                <button type="button" class="btn-ghost" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">固定</button>
-                <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="更多操作" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
+            <!-- Entity Card 2: Collapsed Account — same single-line header, meters as a 3-column table -->
+            <div style="border: 0.5px solid rgba(0,0,0,0.16); border-radius: 20px; background: #ffffff; padding: 12px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; align-items: center; gap: 4px; padding: 0 2px">
+                <button type="button" style="flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; overflow: hidden">
+                  <span style="width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none"><span style="width: 6px; height: 6px; border-radius: 50%; background: #169c4b; display: block"></span></span>
+                  <span style="flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">Personal · 备用</span>
+                  <span style="flex: 0 1 auto; min-width: 0; overflow: hidden; display: inline-flex; align-items: center; gap: 6px">
+                    <span style="flex: none; display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 8px; font-size: 11px; line-height: 17px; font-weight: 500; background: #f5f6f7; color: #595e66">Pro</span>
+                  </span>
+                  <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-left: auto"><path d="M4 6l4 4 4-4"/></svg>
+                </button>
+                <button type="button" class="btn-ghost" style="flex: none; height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">固定</button>
+                <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="更多操作" style="flex: none; width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12" cy="8" r="1.2"/></svg>
                 </button>
-                <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="展开详情" style="width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0">
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
-                </button>
+              </div>
+              <!-- Three equal columns: label | track | value, every edge on the same x -->
+              <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 20px; padding: 0 2px 2px 18px">
+                <div style="display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; font-size: 12px; line-height: 18px">
+                  <span style="color: #595e66; white-space: nowrap">5 小时窗口</span>
+                  <span style="overflow: hidden; background: #f5f6f7; border-radius: 999px; height: 4px; min-width: 0"><span style="display: block; width: 100%; height: 100%; border-radius: 999px; background: #0f1115; transform: translateX(-88%)"></span></span>
+                  <span style="color: #595e66; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap">12%</span>
+                </div>
+                <div style="display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; font-size: 12px; line-height: 18px">
+                  <span style="color: #595e66; white-space: nowrap">每周窗口</span>
+                  <span style="overflow: hidden; background: #f5f6f7; border-radius: 999px; height: 4px; min-width: 0"><span style="display: block; width: 100%; height: 100%; border-radius: 999px; background: #0f1115; transform: translateX(-65%)"></span></span>
+                  <span style="color: #595e66; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap">35%</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; font-size: 12px; line-height: 18px">
+                  <span style="color: #595e66; white-space: nowrap">月额度剩余</span>
+                  <span style="color: #595e66; font-variant-numeric: tabular-nums; white-space: nowrap">$18.50</span>
+                </div>
               </div>
             </div>
 
@@ -258,7 +275,7 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
       <!-- GROUP 2: 模型与上下文 (Interactive instant fold!) -->
       <section style="border-top: 0.5px solid rgba(0,0,0,0.12); padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
-          <button type="button" class="group-toggle" onClick="{{ toggleModelsGroup }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+          <button type="button" class="group-toggle" onClick="{{ toggleModelsGroup }}" style="display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
             <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ modelsGroupChevron }}"><path d="M4 6l4 4 4-4"/></svg>
             <span style="font-size: 14px; font-weight: 500; line-height: 22px">模型与上下文</span>
           </button>
@@ -268,11 +285,57 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
           </div>
         </div>
         <sc-if value="{{ modelsOpen }}" hint-placeholder-val="{{ false }}">
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0 2px 20px">
-            <span style="font-size: 13px; color: #0f1115">隐藏套餐外模型</span>
-            <button type="button" role="switch" aria-checked="{{ zdrSwitchOn }}" aria-label="隐藏套餐外模型" onClick="{{ toggleZdrSwitch }}" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: {{ zdrSwitchBg }}; cursor: pointer; display: inline-flex; align-items: center; box-sizing: border-box">
-              <span class="switch-thumb" style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: {{ zdrSwitchThumb }}; display: block"></span>
-            </button>
+          <div style="display: flex; flex-direction: column; padding-left: 22px">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px 0">
+              <span style="font-size: 13px; font-weight: 500; color: #0f1115">隐藏套餐外模型</span>
+              <button type="button" role="switch" aria-checked="{{ zdrSwitchOn }}" aria-label="隐藏套餐外模型" onClick="{{ toggleZdrSwitch }}" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: {{ zdrSwitchBg }}; cursor: pointer; display: inline-flex; align-items: center; box-sizing: border-box">
+                <span class="switch-thumb" style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: {{ zdrSwitchThumb }}; display: block"></span>
+              </button>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px 0">
+              <span style="font-size: 13px; font-weight: 500; color: #0f1115">模型白名单</span>
+              <div style="display: inline-flex; align-items: center; gap: 6px; flex: none">
+                <button type="button" class="btn-ghost" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; cursor: pointer">显示全部</button>
+                <button type="button" class="btn-outline" style="height: 32px; width: 180px; padding: 0 10px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; display: inline-flex; align-items: center; justify-content: space-between; cursor: pointer">
+                  <span>已选 1 个模型</span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#595e66" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5"/></svg>
+                </button>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px">
+              <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 0; min-width: 0">
+                <div style="display: inline-flex; align-items: center; gap: 4px">
+                  <label for="f-ctx" style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115">自定义上下文长度</label>
+                  <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="上下文换算说明" style="width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.5M8 5.2v.01"/></svg>
+                  </button>
+                </div>
+                <input id="f-ctx" type="text" placeholder="跟随目录" style="height: 34px; padding: 0 12px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; box-sizing: border-box">
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 0; min-width: 0">
+                <div style="display: inline-flex; align-items: center; gap: 4px">
+                  <label for="f-out" style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115">单轮输出上限</label>
+                  <button type="button" data-icon-btn="true" class="btn-ghost" aria-label="输出上限说明" style="width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.5M8 5.2v.01"/></svg>
+                  </button>
+                </div>
+                <input id="f-out" type="text" placeholder="自动" style="height: 34px; padding: 0 12px; border-radius: 12px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; box-sizing: border-box">
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px 0">
+              <span style="font-size: 13px; font-weight: 500; color: #0f1115">按模型覆盖</span>
+              <button type="button" class="btn-ghost" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+                <span>添加模型</span>
+              </button>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px 0">
+              <span style="font-size: 13px; font-weight: 500; color: #0f1115">模型名称</span>
+              <button type="button" class="btn-ghost" style="height: 28px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #595e66; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+                <span>添加模型</span>
+              </button>
+            </div>
           </div>
         </sc-if>
       </section>
@@ -280,7 +343,7 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
       <!-- GROUP 3: 功能与服务状态 (Interactive instant fold + Switch triggers SettingsForm save bar!) -->
       <section style="border-top: 0.5px solid rgba(0,0,0,0.12); padding-top: 12px; display: flex; flex-direction: column; gap: 8px">
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
-          <button type="button" class="group-toggle" onClick="{{ toggleFeaturesGroup }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+          <button type="button" class="group-toggle" onClick="{{ toggleFeaturesGroup }}" style="display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
             <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: {{ featuresGroupChevron }}"><path d="M4 6l4 4 4-4"/></svg>
             <span style="font-size: 14px; font-weight: 500; line-height: 22px">功能与服务状态</span>
           </button>
@@ -290,7 +353,7 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
           </div>
         </div>
         <sc-if value="{{ featuresOpen }}" hint-placeholder-val="{{ false }}">
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0 2px 20px">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0 2px 22px">
             <div style="display: flex; flex-direction: column; gap: 1px">
               <span style="font-size: 13px; font-weight: 500; color: #0f1115">零数据保留（ZDR）</span>
               <span style="font-size: 12px; color: #595e66">切换此开关可立即预览底部 SettingsForm 保存栏入场</span>
@@ -304,7 +367,7 @@ button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:di
 
       <!-- GROUP 4: 高级设置 -->
       <section style="border-top: 0.5px solid rgba(0,0,0,0.12); padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px">
-        <button type="button" class="group-toggle" style="display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
+        <button type="button" class="group-toggle" style="display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: #0f1115; font: inherit; cursor: pointer">
           <svg class="fold-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: rotate(-90deg)"><path d="M4 6l4 4 4-4"/></svg>
           <span style="font-size: 14px; font-weight: 500; line-height: 22px">高级设置</span>
         </button>

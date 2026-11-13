@@ -1090,7 +1090,12 @@ async function checkStreamSettlement(staged, engineModules) {
         assert.equal(assembly.finish.kind, expected)
         assert.equal(chunks.filter(chunk => chunk.type === 'usage').length <= 1, true)
         if (['empty-limit', 'tool-cut', 'tail-error'].includes(scenario)) {
-          assert.equal(assembly.finish.failure.code, scenario === 'empty-limit' ? 'OUTPUT_TOKEN_LIMIT' : scenario === 'tool-cut' ? 'STREAM_CLOSED' : 'PROVIDER_STREAM_ERROR')
+          // `empty-limit` sends maxTokens: 100 and the upstream reports 3 output
+          // tokens, so the budget was NOT exhausted: since 0.18.0 that is
+          // REASONING_LIMIT (upstream stopped on its own, usually a reasoning
+          // loop), not OUTPUT_TOKEN_LIMIT. The at-budget boundary stays
+          // OUTPUT_TOKEN_LIMIT and is covered by tests/adapter.test.ts.
+          assert.equal(assembly.finish.failure.code, scenario === 'empty-limit' ? 'REASONING_LIMIT' : scenario === 'tool-cut' ? 'STREAM_CLOSED' : 'PROVIDER_STREAM_ERROR')
           assert.equal(assembly.finish.failure.requestId, 'settlement-request')
         }
         if (scenario.startsWith('cancel') || scenario === 'tool-cut') {

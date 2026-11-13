@@ -386,11 +386,36 @@ for (const protocol of ['cli', 'openai'] as const) {
       })
       const ends = records(path).filter(record => record.event === 'end')
       assert.equal(ends.length, 1)
-      assert.equal(ends[0]!.outcome, reason === 'length' ? 'output-token-limit' : 'empty')
+      // A `length` finish at 8 output tokens is far below the budget the
+      // adapter sent, so it is the upstream stopping on its own — recorded as
+      // `reasoning-limit`, distinct from a genuinely exhausted budget.
+      assert.equal(ends[0]!.outcome, reason === 'length' ? 'reasoning-limit' : 'empty')
       assert.equal(ends[0]!.finishReason, reason)
       assert.equal(ends[0]!.sawContent, false)
       assert.equal((ends[0]!.usage as { reasoningTokens: number }).reasoningTokens, 8)
       assert.equal(records(path).at(-1)?.event, 'stream-close')
     })
   }
+}
+
+for (const protocol of ['cli', 'openai'] as const) {
+  test(`${protocol}: trace records an exhausted output budget as output-token-limit`, async (t) => {
+    const path = join(scratch(t), 'trace.jsonl')
+    // 131 072 is the budget the adapter sends for an unlisted model, so the
+    // usage figure equals it and the budget really was spent.
+    const events = protocol === 'cli' ? [
+      { type: 'reasoning-delta', text: 'thinking' },
+      { type: 'finish', finishReason: 'length', totalUsage: { outputTokens: 131_072, outputTokenDetails: { reasoningTokens: 131_072 } } },
+    ] : [
+      { choices: [{ delta: { reasoning: 'thinking' } }] },
+      { choices: [{ delta: {}, finish_reason: 'length' }], usage: { completion_tokens: 131_072, completion_tokens_details: { reasoning_tokens: 131_072 } } },
+    ]
+    await withTraceEnv(path, async () => {
+      await assert.rejects(drain(makeAdapter(fetchStreaming(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')), protocol)))
+    })
+    const ends = records(path).filter(record => record.event === 'end')
+    assert.equal(ends.length, 1)
+    assert.equal(ends[0]!.outcome, 'output-token-limit')
+    assert.equal(ends[0]!.code, 'OUTPUT_TOKEN_LIMIT')
+  })
 }

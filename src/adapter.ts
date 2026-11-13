@@ -2700,7 +2700,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       {
         mode: 'normal',
         maxRetries: 1000,
-        retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', THROTTLED_CODE, 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+        retryableCodes: ['EMPTY_RESPONSE', 'REASONING_LIMIT', 'RATE_LIMIT', THROTTLED_CODE, 'SERVER', 'TIMEOUT', 'TRANSPORT'],
         backoff: { initialDelayMs: 500, maxDelayMs: RETRY_MAX_DELAY_MS, jitterRatio: 0.1 },
       },
       'llm-commandcode: retryPolicy',

@@ -284,7 +284,9 @@ async function* readResponse(response: Response, context: StreamResponseContext)
           ? 'finished'
           : failure.code === 'OUTPUT_TOKEN_LIMIT'
             ? 'output-token-limit'
-            : 'empty',
+            : failure.code === 'REASONING_LIMIT'
+              ? 'reasoning-limit'
+              : 'empty',
         finishReason: asm.finishReason,
         ...(failure === undefined ? {} : { code: failure.code }),
         maxTokens,
@@ -1015,6 +1017,27 @@ function emptyCompletionError(
 ): LlmError {
   const detail = `finish_reason=${reason ?? 'unknown'}, max_tokens=${maxTokens}, outputTokens=${usage?.outputTokens ?? 'unknown'}, reasoningTokens=${usage?.reasoningTokens ?? 'unknown'}`
   if (mapFinishReason(reason).kind === 'max-tokens') {
+    // A `length` finish below the budget we sent is not budget exhaustion: the
+    // upstream stopped the model for its own reason. Measured 2026-11-13 on
+    // `deepseek/deepseek-v4.1-flash` at `reasoningEffort: max`, the model
+    // degenerated into a repetition loop ("Let me write. / Go. / OK." 7 265
+    // times, 87 % of 208 766 reasoning chars) and was cut at 65 536 reasoning
+    // tokens — exactly half of the 131 072 sent. Calling that
+    // OUTPUT_TOKEN_LIMIT told the user to raise a budget that was never
+    // reached, and hid the real failure. Retryable: a sampling loop is
+    // stochastic, so a fresh attempt usually produces an answer.
+    if (usage !== undefined && usage.outputTokens < maxTokens) {
+      return bilingual(
+        'REASONING_LIMIT',
+        `Command Code stopped the model before it produced answer text or a tool call (${detail}). `
+          + 'The output budget was not exhausted, so the upstream ended the generation on its own — '
+          + 'a reasoning phase that never converged is the usual cause. '
+          + `Retrying usually recovers; if it repeats, lower the reasoning effort or capture the raw stream with ${STREAM_TRACE_ENV}`,
+        'Command Code 在生成正文或工具调用之前就结束了本次响应（' + detail + '）。'
+          + '输出预算并未耗尽，是上游自行终止了生成——常见原因是思考阶段陷入重复、迟迟不收敛。'
+          + `重试通常可恢复；若反复出现，可降低思考强度，或用 ${STREAM_TRACE_ENV} 抓取原始流排查`,
+      )
+    }
     // Preserve the provider's limit signal, but do not present it as measured
     // exhaustion of our request budget: the gateway can omit usage entirely.
     // Keep this outside the retry whitelist: replaying the identical budget

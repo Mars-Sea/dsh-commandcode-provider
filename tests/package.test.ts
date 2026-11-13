@@ -244,3 +244,34 @@ test('the published manifest keeps the bundle eligible for dsh plugin updates', 
     assert.ok(pkg.files?.includes(file), `files must ship ${file} so an updated bundle still loads`)
   }
 })
+
+test('every declared detail document exists and ships in the tarball', () => {
+  // 插件页的「详细介绍」不是固定文件名，而是 locale 里的 `meta.detail` 指向的 Markdown：
+  // dsh-plugin-detail 的 `readPackageDocument()` 沿语言链（zh-CN → zh-cn → zh → en）取第一个
+  // 声明了 `meta.detail` 的 locale 文件，都没有才回退到包 README。两个后果必须在这里钉死：
+  //   - 声明的文件**必须存在**：缺失或路径非法时详情区直接显示失败与「重试」，不会回退 README；
+  //   - 声明的文件**必须进 `files`**：漏了它，本地 link 安装能读到（`files` 不过滤链接目录），
+  //     但 npm 安装的副本读不到，只有发布后才暴露。
+  // 另外 `docs/` 是内部工程笔记（提交历史、决策记录等），不能整个目录进 `files`，所以逐个文件列。
+  const locales = ['en', 'zh'] as const
+  const declared: string[] = []
+  for (const language of locales) {
+    const file = new URL(`../locale/${language}.json`, import.meta.url)
+    const meta = (JSON.parse(readFileSync(file, 'utf8')) as { meta?: { detail?: unknown } }).meta
+    const detail = meta?.detail
+    assert.equal(typeof detail, 'string', `locale/${language}.json must declare meta.detail`)
+    assert.match(detail as string, /^[^\\:]+\.(?:md|markdown)$/u, 'meta.detail must be a relative Markdown path')
+    assert.ok(!(detail as string).split('/').includes('..'), 'meta.detail must stay inside the package')
+    // 声明的文件必须真的存在，否则详情区只会报错。
+    assert.doesNotThrow(
+      () => readFileSync(new URL(`../${detail as string}`, import.meta.url)),
+      `locale/${language}.json declares ${detail as string}, which does not exist`,
+    )
+    assert.ok(pkg.files?.includes(detail as string), `files must ship ${detail as string} or npm installs lose the detail page`)
+    declared.push(detail as string)
+  }
+  // 中文界面必须拿到中文文档，不能靠英文回退。
+  assert.notEqual(declared[0], declared[1], 'the Chinese locale must declare its own document')
+  // 内部工程笔记不进发布包：`docs` 目录本身不能被整体列出。
+  assert.equal(pkg.files?.includes('docs'), false, 'docs/ holds internal notes; list detail files individually')
+})

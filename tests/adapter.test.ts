@@ -2668,7 +2668,7 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', context_length: 1_000_000 },
       { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
       { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', context_length: 1_000_000 },
-      { id: 'stealth/crouton-alpha', name: 'Crouton Alpha', context_length: 1_048_576 },
+      { id: 'thinkingmachines/inkling-2-small:free', name: 'Inkling 2 Small', context_length: 1_048_576 },
     ],
   }
   const adapter = makeAdapter({ fetchImpl: fetchReturning(200, JSON.stringify(catalog)) })
@@ -2686,16 +2686,17 @@ test('listModels() annotates catalog models with plan, deal, Image, context', as
   assert.deepEqual(v4Flash.inputModalities, ['text'])
   assert.ok(v4Flash.description !== undefined)
   assert.match(v4Flash.description, /^Go · (?:Peak|Half) · 1M$/)
-  // The free stealth preview is Go-tier, image-capable and 1M: the FREE deal
-  // leads the picker and the Image marker rides along. (`reflection/beam:free`
-  // held this case until its 2026-11-10 retirement.)
-  assert.equal(byId.get('stealth/crouton-alpha')!.description, 'Go · FREE · Image · 1M')
+  // The free Inkling 2 Small launch row is Go-tier, image-capable and 1M: the
+  // FREE deal leads the picker and the Image marker rides along. (Crouton Alpha
+  // held this case until its 2026-11-13 retirement, and `reflection/beam:free`
+  // before that.)
+  assert.equal(byId.get('thinkingmachines/inkling-2-small:free')!.description, 'Go · FREE · Image · 1M')
   // Picker order: free models, then Go, then Pro, alphabetically within a tier
   // (the fixture's input order is deliberately shuffled).
   assert.deepEqual(
     models.map((m) => m.id),
     [
-      'stealth/crouton-alpha',
+      'thinkingmachines/inkling-2-small:free',
       'deepseek/deepseek-v4-flash',
       'deepseek/deepseek-v4-pro',
       'claude-sonnet-5',
@@ -2709,7 +2710,7 @@ test('listModels() advertises active deal badges and leaves paid models unbadged
     const catalog = {
       object: 'list',
       data: [
-        { id: 'stealth/crouton-alpha', name: 'Crouton Alpha', context_length: 1_048_576 },
+        { id: 'thinkingmachines/inkling-2-small:free', name: 'Inkling 2 Small', context_length: 1_048_576 },
         { id: 'MiniMaxAI/MiniMax-M3', name: 'MiniMax M3', context_length: 1_000_000 },
         { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', context_length: 1_000_000 },
       ],
@@ -2729,7 +2730,7 @@ test('listModels() advertises active deal badges and leaves paid models unbadged
     const badgeOf = (id: string): unknown => (byId.get(id) as { badge?: unknown }).badge
     // A free promo: the selector renders a `success`-toned FREE Tag and the host
     // resolves the localized text through its own locale service.
-    assert.deepEqual(badgeOf('stealth/crouton-alpha'), {
+    assert.deepEqual(badgeOf('thinkingmachines/inkling-2-small:free'), {
       text: { en: 'FREE', zh: '免费' },
       tone: 'success',
     })
@@ -3466,7 +3467,7 @@ test('modelVisibleInPlan() fails open on every uncertainty', async () => {
 test('compareByPlan() sorts free models first, then plan tier, then name', () => {
   // Free models (KNOWN_DEALS free: true) lead the list regardless of tier.
   assert.ok(compareByPlan(
-    { id: 'stealth/crouton-alpha', name: 'Crouton Alpha (CC)' },
+    { id: 'thinkingmachines/inkling-2-small:free', name: 'Inkling 2 Small (CC)' },
     { id: 'claude-opus-5', name: 'Claude Opus 5 (CC)' },
   ) < 0)
   // A paid Go model sorts before a higher tier, but after every free model.
@@ -3475,17 +3476,17 @@ test('compareByPlan() sorts free models first, then plan tier, then name', () =>
     { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (CC)' },
   ) < 0)
   assert.ok(compareByPlan(
-    { id: 'stealth/crouton-alpha', name: 'Crouton Alpha (CC)' },
+    { id: 'thinkingmachines/inkling-2-small:free', name: 'Inkling 2 Small (CC)' },
     { id: 'zai-org/GLM-5.2', name: 'GLM-5.2 (CC)' },
   ) < 0)
-  // Both are Go-tier free models, so the tie falls through to the name:
-  // Crouton Alpha leads its Glyph Cluster sibling. (`reflection/beam:free`
-  // covered this tie until its 2026-11-10 retirement took it out of
-  // `KNOWN_DEALS`; the 2026-10-20 catalog sync had already dropped the
-  // `stealth/cat-jam:free` deal, far enough back that cat-jam no longer ranks.)
+  // Both are Go-tier free models, so the tie falls through to the name: Glyph
+  // Cluster leads Inkling 2 Small. (Crouton Alpha covered this tie until its
+  // 2026-11-13 retirement took it out of `KNOWN_DEALS`; `reflection/beam:free`
+  // before that on 2026-11-10, and the 2026-10-20 catalog sync had already
+  // dropped the `stealth/cat-jam:free` deal.)
   assert.ok(compareByPlan(
-    { id: 'stealth/crouton-alpha', name: 'Crouton Alpha (CC)' },
     { id: 'stealth/glyph-cluster:free', name: 'Glyph Cluster (CC)' },
+    { id: 'thinkingmachines/inkling-2-small:free', name: 'Inkling 2 Small (CC)' },
   ) < 0)
   assert.ok(compareByPlan(
     { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro (CC)' },
@@ -6709,11 +6710,16 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.equal(KNOWN_EFFORTS['inclusionai/ling-3.1-flash-1019:free'], undefined)
   assert.equal(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash-1019'), false)
   assert.equal(KNOWN_THINKING_MODELS.has('inclusionai/ling-3.1-flash-1019:free'), false)
-  // 2026-11-04 (catalog-only sync): the Crouton Alpha stealth preview serves five
-  // levels (`?view=client` `reasoningEfforts`), the widest stealth set — and it
-  // is a selectable-effort row, not an automatic-reasoning one.
-  assert.deepEqual(KNOWN_EFFORTS['stealth/crouton-alpha'], ['low', 'medium', 'high', 'xhigh', 'max'])
-  assert.equal(KNOWN_THINKING_MODELS.has('stealth/crouton-alpha'), false)
+  // 2026-11-13 (catalog-only sync): the free Inkling 2 Small launch row serves
+  // four levels (`?view=client` `reasoningEfforts`), so it is a
+  // selectable-effort row, not an automatic-reasoning one — unlike its paid
+  // `thinkingmachines/inkling` / `inkling-small` siblings, which serve none.
+  assert.deepEqual(KNOWN_EFFORTS['thinkingmachines/inkling-2-small:free'], ['low', 'medium', 'high', 'max'])
+  assert.equal(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling-2-small:free'), false)
+  assert.equal(KNOWN_EFFORTS['thinkingmachines/inkling'], undefined)
+  assert.equal(KNOWN_EFFORTS['thinkingmachines/inkling-small'], undefined)
+  // Crouton Alpha's five-level set left with its 2026-11-13 retirement.
+  assert.equal(KNOWN_EFFORTS['stealth/crouton-alpha'], undefined)
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3-contributor'))
   assert.ok(!KNOWN_EFFORTS['meituan/LongCat-2.0'])
@@ -6796,7 +6802,11 @@ test('known image models snapshot has stable anchor entries', () => {
   // marker; its Crouton Alpha neighbour is the first stealth row that does.
   assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.1-flash-1019'))
   assert.ok(!KNOWN_IMAGE_MODELS.has('inclusionai/ling-3.1-flash-1019:free'))
-  assert.ok(KNOWN_IMAGE_MODELS.has('stealth/crouton-alpha'))
+  // 2026-11-13: the free Inkling 2 Small row is image-capable; Crouton Alpha's
+  // Image marker left with its retirement.
+  assert.ok(KNOWN_IMAGE_MODELS.has('thinkingmachines/inkling-2-small:free'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('google/gemini-4-carbon'))
+  assert.ok(!KNOWN_IMAGE_MODELS.has('stealth/crouton-alpha'))
   assert.ok(KNOWN_IMAGE_MODELS.has('xai/grok-4.6'))
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash'))
   // Both 1.67.0/1.68.0 additions declare inputModalities ["text","image"] and carry
@@ -6940,10 +6950,15 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash-1019'], 'go')
   assert.equal(planLabel('inclusionai/ling-3.1-flash-1019'), 'Go')
   assert.equal(KNOWN_PLANS['inclusionai/ling-3.1-flash-1019:free'], undefined)
-  // 2026-11-04 (catalog-only sync): Crouton Alpha's `"all": true` embedded
-  // availability puts the stealth preview on Go too.
-  assert.equal(KNOWN_PLANS['stealth/crouton-alpha'], 'go')
-  assert.equal(planLabel('stealth/crouton-alpha'), 'Go')
+  // 2026-11-13 (catalog-only sync): the free Inkling 2 Small row is Go on every
+  // source (`minimumPlan: "individual-go"` plus `"all": true`), and Gemini 4
+  // Carbon is Pro-only like its Argon sibling. Crouton Alpha left the map with
+  // its retirement.
+  assert.equal(KNOWN_PLANS['thinkingmachines/inkling-2-small:free'], 'go')
+  assert.equal(planLabel('thinkingmachines/inkling-2-small:free'), 'Go')
+  assert.equal(KNOWN_PLANS['google/gemini-4-carbon'], 'pro')
+  assert.equal(planLabel('google/gemini-4-carbon'), 'Pro')
+  assert.equal(KNOWN_PLANS['stealth/crouton-alpha'], undefined)
   // 2026-10-24: Kimi K3.1 Pro is Go on every source — `minimumPlan:
   // "individual-go"` in the live catalog and `"all": true` in the pricing page's
   // embedded availability, so it appears on the go/goat/pro plan pages alike.
@@ -7012,13 +7027,16 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(isFreeModel('inclusionai/ling-3.1-flash-1019:free'), false)
   // The paid graduation is priced normally and carries no deal.
   assert.equal(KNOWN_DEALS['inclusionai/ling-3.1-flash-1019'], undefined)
-  // 2026-11-04 (catalog-only sync): Crouton Alpha is the fourth live free
-  // preview, with the undated "while the stealth preview lasts" terms — no
-  // `expiresAt`, so the badge never lapses on a clock.
-  assert.equal(KNOWN_DEALS['stealth/crouton-alpha']?.label, 'FREE')
-  assert.equal(KNOWN_DEALS['stealth/crouton-alpha']?.free, true)
-  assert.equal(KNOWN_DEALS['stealth/crouton-alpha']?.expiresAt, undefined)
-  assert.equal(isFreeModel('stealth/crouton-alpha'), true)
+  // 2026-11-13 (catalog-only sync): the free Inkling 2 Small launch row carries
+  // the undated "while the free tier lasts" terms — no `expiresAt`, so the badge
+  // never lapses on a clock. Crouton Alpha's FREE entry left with its
+  // retirement.
+  assert.equal(KNOWN_DEALS['thinkingmachines/inkling-2-small:free']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['thinkingmachines/inkling-2-small:free']?.free, true)
+  assert.equal(KNOWN_DEALS['thinkingmachines/inkling-2-small:free']?.expiresAt, undefined)
+  assert.equal(isFreeModel('thinkingmachines/inkling-2-small:free'), true)
+  assert.equal(KNOWN_DEALS['stealth/crouton-alpha'], undefined)
+  assert.equal(isFreeModel('stealth/crouton-alpha'), false)
   // command-code@1.79.0; the free Glyph Cluster preview carries the same
   // permanent-style terms as its Ling predecessors — 100% off "Free while the
   // preview lasts" with no published end date, so no `expiresAt` to lapse.
@@ -8134,15 +8152,22 @@ test('windowVerdict() gives the usage report the same answer the pool probe read
 
 test('providerRetryPolicy() pins the near-unbounded transient-only retry policy', () => {
   // dsh-llm-retry executes this at the agent-step boundary: normal mode with an
-  // explicit 1000-attempt cap retries the five transient codes (failing fast on
+  // explicit 1000-attempt cap retries the transient codes (failing fast on
   // permanent errors such as INVALID_CREDENTIAL), waits double from 500 ms capped at
   // 15 minutes with ±10% jitter, and honors an attached providerRetryAfterMs at or
   // below the cap.
+  //
+  // REASONING_LIMIT joins the whitelist: it reports a generation the upstream
+  // ended before any answer text or tool call, below the budget we sent — a
+  // sampling loop, which a fresh attempt usually escapes. OUTPUT_TOKEN_LIMIT
+  // stays out: replaying an identical budget that really was exhausted can
+  // repeatedly charge for reasoning without ever producing an answer.
   const adapter = makeAdapter()
   const policy = adapter.providerRetryPolicy('commandcode')
   assert.equal(policy.mode, 'normal')
   assert.equal(policy.maxRetries, 1000)
-  assert.deepEqual([...policy.retryableCodes], ['EMPTY_RESPONSE', 'RATE_LIMIT', 'THROTTLED', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
+  assert.deepEqual([...policy.retryableCodes], ['EMPTY_RESPONSE', 'REASONING_LIMIT', 'RATE_LIMIT', 'THROTTLED', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
+  assert.ok(!(policy.retryableCodes as readonly string[]).includes('OUTPUT_TOKEN_LIMIT'))
   // IMAGE_OFFLOAD_REQUIRED is deliberately outside the whitelist (issue #43):
   // the harness mutates the session surface and retries, so a byte-identical
   // resend from dsh-llm-retry could never succeed.
@@ -8700,6 +8725,64 @@ for (const standalone of [false, true]) {
   })
 }
 
+// A reasoning-only `length` finish is NOT proof that the request budget ran
+// out. Measured 2026-11-13 on `deepseek/deepseek-v4.1-flash` with
+// `reasoningEffort: max`: the model degenerated into a repetition loop
+// ("Let me write. / Go. / OK." 7 265 times, 87 % of 208 766 reasoning chars)
+// and the upstream cut it at 65 536 reasoning tokens — exactly half of the
+// 131 072 budget that was sent. Reporting that as OUTPUT_TOKEN_LIMIT told the
+// user to raise a budget that was never reached and hid the real failure.
+for (const protocol of ['cli', 'openai'] as const) {
+  test(`${protocol}: a reasoning-only length finish below the sent budget is not budget exhaustion`, async () => {
+    const events = protocol === 'cli' ? [
+      { type: 'reasoning-delta', text: 'Let me write. Go. OK.' },
+      { type: 'finish', finishReason: 'length', totalUsage: { inputTokens: 854, outputTokens: 65_536, outputTokenDetails: { reasoningTokens: 65_536 } } },
+    ] : [
+      { choices: [{ delta: { reasoning_content: 'Let me write. Go. OK.', tool_calls: [] } }] },
+      { choices: [{ delta: {}, finish_reason: 'length' }], usage: { prompt_tokens: 854, completion_tokens: 65_536, completion_tokens_details: { reasoning_tokens: 65_536 } } },
+    ]
+    const adapter = makeAdapter({
+      ...(protocol === 'openai' ? { options: OPENAI_OPTIONS } : {}),
+      fetchImpl: fetchReturning(200, events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')),
+    })
+    const seen: StreamChunk[] = []
+    await assert.rejects(async () => {
+      for await (const chunk of adapter.stream({ provider: 'commandcode', model: 'm', maxTokens: 131_072, messages: [userMessage('hi')] })) seen.push(chunk)
+    }, (error: unknown) => {
+      const e = error as { code: string; message: string }
+      assert.equal(e.code, 'REASONING_LIMIT')
+      assert.match(e.message, /max_tokens=131072/)
+      assert.match(e.message, /outputTokens=65536/)
+      return true
+    })
+    assert.equal(seen.some(chunk => chunk.type === 'finish'), false, 'DSH must receive only its error finish')
+    assert.equal(seen.filter(chunk => chunk.type === 'usage').length, 1, 'keep billed usage on failed attempts')
+    const policy = adapter.providerRetryPolicy('commandcode')
+    assert.ok(policy.mode === 'normal' && policy.retryableCodes.includes('REASONING_LIMIT'), 'a sampling loop is worth one more attempt')
+  })
+}
+
+test('a reasoning-only length finish AT the sent budget is still budget exhaustion', async () => {
+  // The boundary the REASONING_LIMIT branch must not cross: when the upstream
+  // reports as many output tokens as we allowed, the budget really was spent,
+  // and raising it is the actionable advice. Not retryable — replaying the
+  // identical budget can charge for reasoning again without ever answering.
+  const adapter = makeAdapter({ options: OPENAI_OPTIONS, fetchImpl: fetchReturning(200,
+    'data: {"choices":[{"delta":{"reasoning_content":"still thinking"}}]}\n\n'
+    + 'data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":854,"completion_tokens":131072,"completion_tokens_details":{"reasoning_tokens":131072}}}\n\n') })
+  await assert.rejects(
+    collect(adapter.stream({ provider: 'commandcode', model: 'm', maxTokens: 131_072, messages: [userMessage('hi')] })),
+    (error: unknown) => {
+      const e = error as { code: string; message: string }
+      assert.equal(e.code, 'OUTPUT_TOKEN_LIMIT')
+      assert.match(e.message, /outputTokens=131072/)
+      return true
+    },
+  )
+  const policy = adapter.providerRetryPolicy('commandcode')
+  assert.ok(policy.mode === 'normal' && !policy.retryableCodes.includes('OUTPUT_TOKEN_LIMIT'))
+})
+
 test('an explicit content filter is not retried as an empty response', async () => {
   const adapter = makeAdapter({ options: OPENAI_OPTIONS, fetchImpl: fetchReturning(200,
     'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n') })
@@ -9191,10 +9274,16 @@ test('every new-arrival model carries an output ceiling or is left to runtime le
   // scripts/sync-output-limits.mjs).
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('claude-fable-5-2'), 128_000)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('meta/muse-ember'), undefined)
-  // Crouton Alpha's 943 718 row did NOT survive that check: models.dev renamed
-  // its entries to `crouton-alpha-free` and files 270 000, so the generator
-  // found neither a vendor row nor a unanimous one and left the id to runtime
-  // learning instead of writing the new number.
+  // 2026-11-13: Gemini 4 Carbon resolves on the vendor row (google files 32 768
+  // for both Carbon and Argon), and the free Inkling 2 Small row resolves on a
+  // two-provider unanimous vote (openrouter and opencode both file 131 072).
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('google/gemini-4-carbon'), 32_768)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('thinkingmachines/inkling-2-small:free'), 131_072)
+  // Crouton Alpha's 943 718 row did NOT survive the 2026-11-10 check: models.dev
+  // renamed its entries to `crouton-alpha-free` and files 270 000, so the
+  // generator found neither a vendor row nor a unanimous one and left the id to
+  // runtime learning instead of writing the new number. Its 2026-11-13
+  // retirement keeps it out of the table for the same reason.
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('stealth/crouton-alpha'), undefined)
   // A ceiling is a CEILING, not a window: both are far below their own context,
   // which is the whole point of the table — deriving `max_tokens` from

@@ -299,6 +299,49 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `typecheck` 0, `npm test` 1220/1220, `build` twice; no authenticated, paid-generation or
   browser-render check.
 
+  **Follow-up check (2026-11-13, CLI stays 1.88.5):** npm `latest` is still `1.88.5`
+  (11-06T21:18:22Z) and the official changelog's newest CLI entry is still 11-07 `v1.88.5`, so
+  all of this round's drift is server-side. DSH has no new release either (`latest`
+  `0.2.2-rc.1`, `next` `0.2.2-rc.2`, `alpha` `0.2.2-alpha.3`). The live catalog's
+  `catalogVersion` moves `c6350c34…` → `709028a9…`: the default view 97 → 98 ids and
+  `?view=client` 112 → 114 (sixteen `hidden` rows). Two new ids, both catalog-first — the
+  1.88.5 artifact names neither, which is the whole of the audit's two NEW errors (the other two
+  are the 2026-11-10 pair, still absent from the artifact): `google/gemini-4-carbon`
+  ("Gemini 4 Carbon", premium, 1M context, text + image, efforts `low`/`medium`/`high`,
+  `minimumPlan: individual-pro` — go, go-v1 and goat false, Pro and above true —
+  `$2/$10/$0.1`, `zdr:true`, `maxOutputTokens: null`, order 71) and
+  `thinkingmachines/inkling-2-small:free` ("Inkling 2 Small", opensource, Go tier with every
+  availability flag true, 1,048,576 context, text + image, efforts `low`/`medium`/`high`/`max`,
+  `$0` under a 100%-off "while the free tier lasts" deal capped at 200 requests a day,
+  `zdr:false`, `maxOutputTokens: 131072`). Both are on the models docs page and the pricing
+  page; Gemini 4 Carbon also appears on the pro and max plan pages (matching its Pro tier) and
+  Inkling 2 Small on all four. Retirement: `stealth/crouton-alpha` ("Crouton Alpha") now serves
+  `hidden: true`, has left the default view, and was dropped by the pricing page (its deal list
+  included), the models docs page and all four plan pages — the same path Beam 1.0 and Laguna
+  S 2.1 took, while the 1.88.5 registry still names it. It is treated as a retirement (decision
+  record chapter 7 item 17) rather than a removal on missing evidence: the row is no longer
+  served anywhere a user can reach it. Snapshot sync (user decision: sync): `KNOWN_PLANS`
+  97 → 98 (rebuild — +2 new, −Crouton), `KNOWN_EFFORTS` 71 → 72, `KNOWN_IMAGE_MODELS` 77 → 78,
+  `KNOWN_NON_ZDR_MODELS` 20 → 21 (`thinkingmachines/inkling-2-small:free` enters on the catalog
+  `zdr:false` verdict, which the pricing page's own prose confirms — "Not routed under ZDR";
+  Crouton stays, since both sources still serve its `zdr:false` and retirement alone is not
+  coverage evidence) and `KNOWN_DEALS` 3 → 3 (−Crouton FREE, +Inkling FREE). Thinking 15, peak
+  rows 5 and subscriptions 9 are unchanged. Vendored price rows 97 → 98 — Gemini 4 Carbon
+  `[2, 10, 0.1]` with allowance go 6 / GOAT 20 / Pro 30; the free Inkling row needs no price row
+  because `modelPriceTable()` serves `isFreeModel()` ids at zero from `KNOWN_DEALS`, the same
+  shape Glyph Cluster uses. The same regeneration also corrects `glm-5.3`'s monthly allowance
+  20/30 → **70/80**: the pricing page's DEAL block reads "glm-5.3 boosted usage: $10 Go, $70
+  GOAT, $80 Pro" and the embedded `planAllowanceUsd` agrees, so this was a stale allowance the
+  2026-11-10 round did not follow. The generated output-limit table goes 82 → 84 rows:
+  `google/gemini-4-carbon` gains 32,768 (the google models.dev row, the same figure Argon
+  files) and `thinkingmachines/inkling-2-small:free` gains 131,072 (openrouter and opencode
+  agree, rule 3); two provenance comments move from "1 provider(s)" to "2 provider(s)"
+  (`inclusionai/ling-3.1-flash-1019`, `Qwen/Qwen3.8-Max-0902`) with their values unchanged.
+  Audit: 14 sources HTTP 200, 4 errors (the two new catalog-first ids plus the two from
+  2026-11-10), `candidateDiffs` naming exactly the maps above. `status=review-required`,
+  `readyToApply=false`, protocol `not-verified`. Verification: `typecheck` 0, `npm test`
+  1243/1243, `build` twice; no authenticated, paid-generation or browser-render check.
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot
