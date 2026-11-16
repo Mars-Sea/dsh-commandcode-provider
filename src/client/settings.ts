@@ -182,6 +182,8 @@ export interface SettingsPageState {
   filterModelsByPlan: StagedField
   /** webSearch draft; `''` = "inherit the default" (on — this route serves dsh's web_search). */
   webSearch: StagedField
+  /** webFetch draft; `''` = "inherit the default" (on — this route serves dsh's web_fetch). */
+  webFetch: StagedField
   /** showSidebarQuota draft; `''` = "inherit the default" (off — the card is opt-in). */
   showSidebarQuota: StagedField
   /** zdr draft; `''` = "inherit the default" (off — ZDR is opt-in). */
@@ -453,6 +455,10 @@ const SECTION_FIELDS: FieldSpec[] = [
   booleanField('offloadSeenImagesForCache'),
   booleanField('filterModelsByPlan'),
   booleanField('webSearch'),
+  // Independent of `webSearch`: the two are separate web-seam capabilities with
+  // separate provider registries, and the local `http` fetch is free, so a
+  // profile may well keep the remote search but not the remote fetch.
+  booleanField('webFetch'),
   booleanField('showSidebarQuota'),
   booleanField('zdr'),
 ]
@@ -570,6 +576,7 @@ export class CommandCodeSettingsController {
       offloadSeenImagesForCache: this.field('offloadSeenImagesForCache'),
       filterModelsByPlan: this.field('filterModelsByPlan'),
       webSearch: this.field('webSearch'),
+      webFetch: this.field('webFetch'),
       showSidebarQuota: this.field('showSidebarQuota'),
       zdr: this.field('zdr'),
       sidebarQuota: this.sectionValue('showSidebarQuota') === true,

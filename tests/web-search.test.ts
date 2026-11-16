@@ -517,13 +517,19 @@ interface SelectionRow {
  * `searchProvider` 是每次 `search()` 都读一次的易变引用。这里按运行时形状读取，
  * 断言落在 `search()` 真正会用的那个值上。
  */
-function runtimeConfig(web: WebRuntime): { searchProvider: { get(): unknown } } {
-  return (web as unknown as { config: { searchProvider: { get(): unknown } } }).config
+function runtimeConfig(web: WebRuntime): { searchProvider: { get(): unknown }; fetchProvider: { get(): unknown } } {
+  return (web as unknown as { config: { searchProvider: { get(): unknown }; fetchProvider: { get(): unknown } } }).config
 }
 
 /** `search()` 会选中的后端 id；字段未设置时为 `undefined`。 */
 function runtimeSelection(web: WebRuntime): string | undefined {
   const value: unknown = runtimeConfig(web).searchProvider.get()
+  return typeof value === 'string' ? value : undefined
+}
+
+/** `fetch()` 会选中的后端 id；字段未设置时为 `undefined`。 */
+function runtimeFetchSelection(web: WebRuntime): string | undefined {
+  const value: unknown = runtimeConfig(web).fetchProvider.get()
   return typeof value === 'string' ? value : undefined
 }
 
@@ -684,10 +690,17 @@ function notifyOwnEntry(ctx: unknown): void {
     .emit('loader/volatile-update', [['webSearch']])
 }
 
-/** 轮询等待异步写入落定（真实文件写入 + loader 提交跨多个 tick）。 */
-async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+/**
+ * 轮询等待异步写入落定（真实文件写入 + loader 提交跨多个 tick）。
+ *
+ * 谓词可以是 async：selection seam 的写盘是它的内部队列做的，`apply()` 只记
+ * 意图，所以「运行中的引用已经是新值」并不代表「profile 已经写下去」。只等
+ * 引用、随后立刻 `assert.equal(await patch(), '[]')` 会和一个更慢的磁盘写抢跑
+ * （实测约 1/8 失败）。凡是断言落盘内容的用例，都必须把 patch 结果本身交给这里。
+ */
+async function waitFor(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
   assert.fail(message)
@@ -1001,16 +1014,18 @@ test('host apply()：webSearch 开夺取、关归还、再开重新夺取', asyn
   try {
     const { fiber, config } = await mountHost(sandbox, { webSearch: true })
     await waitFor(() => runtimeSelection(sandbox.web) === 'commandcode', 'boot 时没有夺取 commandcode')
-    assert.match(await sandbox.patch(), /searchProvider: commandcode/)
+    await waitFor(async () => /searchProvider: commandcode/.test(await sandbox.patch()), 'boot 时没有把夺取写进 profile')
 
     config.set('webSearch', false)
     notifyOwnEntry(sandbox.ctx)
     await waitFor(() => runtimeSelection(sandbox.web) === 'deepseek-official', '关闭后没有归还组合基值')
-    assert.equal(await sandbox.patch(), '[]\n')
+    // 归还同时写盘：等 profile 真的回到空覆盖，而不是等内存引用就断言磁盘。
+    await waitFor(async () => (await sandbox.patch()) === '[]\n', '关闭后 profile 覆盖没有被删除')
 
     config.set('webSearch', true)
     notifyOwnEntry(sandbox.ctx)
     await waitFor(() => runtimeSelection(sandbox.web) === 'commandcode', '重新打开后没有再次夺取')
+    await waitFor(async () => /searchProvider: commandcode/.test(await sandbox.patch()), '重新打开后没有写回 profile')
 
     await fiber.dispose()
   } finally {
@@ -1021,9 +1036,10 @@ test('host apply()：webSearch 开夺取、关归还、再开重新夺取', asyn
 test('host apply()：组合已 pin commandcode 时，关闭不动它', async () => {
   // 这条路径不能用 undefined 归还：dsh-web 会把「未设置」读成自动选择，而第二个
   // 可用提供方一出现，之后每次搜索都是 WEB_PROVIDER_AMBIGUOUS（issue #26）。
+  // 获取开关关掉，让这条用例只钉搜索字段的组合基值语义。
   const sandbox = await selectionSandbox({ base: { searchProvider: 'commandcode', fetchProvider: 'http' } })
   try {
-    const { fiber, config } = await mountHost(sandbox, { webSearch: true })
+    const { fiber, config } = await mountHost(sandbox, { webSearch: true, webFetch: false })
     await quietWindow()
     assert.equal(runtimeSelection(sandbox.web), 'commandcode')
 
@@ -1031,6 +1047,7 @@ test('host apply()：组合已 pin commandcode 时，关闭不动它', async () 
     notifyOwnEntry(sandbox.ctx)
     await quietWindow()
     assert.equal(runtimeSelection(sandbox.web), 'commandcode')
+    assert.equal(runtimeFetchSelection(sandbox.web), 'http')
     assert.equal(await sandbox.patch(), '[]\n')
 
     await fiber.dispose()
@@ -1059,10 +1076,16 @@ test('host apply()：官方设置页已 pin 时 boot 不夺取，也不动 profi
 test('host apply()：卸载只交还运行中的引用，不调用 settings', async () => {
   const sandbox = await selectionSandbox()
   try {
-    const { fiber } = await mountHost(sandbox, { webSearch: true })
+    // The fetch toggle is off here so this case isolates ONE capability: its
+    // disposal path must hand back only the search field, leaving the fetch
+    // field (still commanded by its own, separate toggle) alone.
+    const { fiber } = await mountHost(sandbox, { webSearch: true, webFetch: false })
     await waitFor(() => runtimeSelection(sandbox.web) === 'commandcode', 'boot 时没有夺取 commandcode')
+    // 同样要等落盘：这份 persisted 就是后面「卸载不写盘」的基线。
+    await waitFor(async () => /searchProvider: commandcode/.test(await sandbox.patch()), 'boot 时没有把夺取写进 profile')
     const persisted = await sandbox.patch()
     assert.match(persisted, /searchProvider: commandcode/)
+    assert.equal(runtimeFetchSelection(sandbox.web), 'http')
 
     await fiber.dispose()
     await quietWindow()
@@ -1070,7 +1093,34 @@ test('host apply()：卸载只交还运行中的引用，不调用 settings', as
     // WEB_PROVIDER_CONFIGURED_MISSING），而 profile 覆盖保持不动 —— 归还写盘
     // 会把整行删掉，所以这份文档本身就是「卸载不写盘」的证据。
     assert.equal(runtimeSelection(sandbox.web), 'deepseek-official')
+    assert.equal(runtimeFetchSelection(sandbox.web), 'http')
     assert.equal(await sandbox.patch(), persisted)
+  } finally {
+    await sandbox.dispose()
+  }
+})
+
+test('host apply()：两个开关互不牵连，各自只动自己的字段', async () => {
+  const sandbox = await selectionSandbox()
+  try {
+    const { fiber, config } = await mountHost(sandbox, { webSearch: true, webFetch: true })
+    await waitFor(() => runtimeSelection(sandbox.web) === 'commandcode', 'boot 时没有夺取搜索')
+    await waitFor(() => runtimeFetchSelection(sandbox.web) === 'commandcode', 'boot 时没有夺取获取')
+
+    // 关掉获取：搜索字段必须原地不动。
+    config.set('webFetch', false)
+    notifyOwnEntry(sandbox.ctx)
+    await waitFor(() => runtimeFetchSelection(sandbox.web) === 'http', '关闭获取后没有归还 http')
+    assert.equal(runtimeSelection(sandbox.web), 'commandcode')
+
+    // 再关掉搜索：获取字段同样不能被这次归还牵连。
+    config.set('webSearch', false)
+    notifyOwnEntry(sandbox.ctx)
+    await waitFor(() => runtimeSelection(sandbox.web) === 'deepseek-official', '关闭搜索后没有归还组合基值')
+    assert.equal(runtimeFetchSelection(sandbox.web), 'http')
+    assert.equal(await sandbox.patch(), '[]\n')
+
+    await fiber.dispose()
   } finally {
     await sandbox.dispose()
   }

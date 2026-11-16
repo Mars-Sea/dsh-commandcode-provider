@@ -1300,6 +1300,7 @@ function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onTog
             parts={[
               stagedSwitch(state.zdr, false) ? t('zdrSummaryOn') : t('zdrSummaryOff'),
               stagedSwitch(state.webSearch, true) ? t('webSearchSummaryOn') : t('webSearchSummaryOff'),
+              stagedSwitch(state.webFetch, true) ? t('webFetchSummaryOn') : t('webFetchSummaryOff'),
             ]}
           />
         </>
@@ -1327,6 +1328,17 @@ function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onTog
           defaultChecked
           onEdit={(text) => onEdit('webSearch', text)}
           onReset={() => onReset('webSearch')}
+          t={t}
+        />
+        <ToggleField
+          id="cc-web-fetch"
+          label={t('webFetch')}
+          hint={t('webFetchHint')}
+          state={state.webFetch}
+          disabled={disabled}
+          defaultChecked
+          onEdit={(text) => onEdit('webFetch', text)}
+          onReset={() => onReset('webFetch')}
           t={t}
         />
         <ToggleField

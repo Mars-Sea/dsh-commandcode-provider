@@ -52,10 +52,14 @@ export type SettingsCommandCodeKey =
   | 'zdrSummaryOff'
   | 'webSearchSummaryOn'
   | 'webSearchSummaryOff'
+  | 'webFetchSummaryOn'
+  | 'webFetchSummaryOff'
   | 'filterModelsByPlan'
   | 'filterModelsByPlanHint'
   | 'webSearch'
   | 'webSearchHint'
+  | 'webFetch'
+  | 'webFetchHint'
   | 'showSidebarQuota'
   | 'showSidebarQuotaHint'
   | 'zdr'
@@ -318,10 +322,16 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   zdrSummaryOff: 'ZDR 关闭',
   webSearchSummaryOn: '联网搜索开启',
   webSearchSummaryOff: '联网搜索关闭',
+  webFetchSummaryOn: '网页获取开启',
+  webFetchSummaryOff: '网页获取关闭',
   filterModelsByPlan: '隐藏套餐外模型',
   filterModelsByPlanHint: '只显示套餐内模型；按需余额账户仍显示全部。',
   webSearch: '用 Command Code 承载联网搜索',
   webSearchHint: '用同一密钥承载 dsh 的 web_search；「网页搜索」里已指定其他后端时本开关不生效。',
+  // Key name matches the Config field (`webFetch`) on purpose; they are different
+  // maps — a label for `t(...)` here, a settings path for `onEdit(...)`.
+  webFetch: '用 Command Code 承载网页获取',
+  webFetchHint: '用同一密钥承载 dsh 的 web_fetch；「网页获取」里已指定其他后端时本开关不生效。无法访问内网和本机地址。',
   showSidebarQuota: '在侧边栏显示额度卡片',
   showSidebarQuotaHint: '在侧边栏底部显示套餐与额度卡片，点击打开完整仪表盘；关闭时不在后台刷新用量。',
   zdr: '零数据保留（ZDR）',
@@ -607,10 +617,14 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   zdrSummaryOff: 'ZDR off',
   webSearchSummaryOn: 'Web search on',
   webSearchSummaryOff: 'Web search off',
+  webFetchSummaryOn: 'Web fetch on',
+  webFetchSummaryOff: 'Web fetch off',
   filterModelsByPlan: 'Hide out-of-plan models',
   filterModelsByPlanHint: 'Show only models in your plan; on-demand credit accounts still see the full catalog.',
   webSearch: 'Serve dsh web search with Command Code',
   webSearchHint: 'Use the same key for dsh web search. No effect while the Web search settings pin another backend.',
+  webFetch: 'Serve dsh web fetch with Command Code',
+  webFetchHint: 'Use the same key for dsh web_fetch. No effect while the Web fetch settings pin another backend. Cannot reach intranet or local addresses.',
   showSidebarQuota: 'Show the quota card in the sidebar',
   showSidebarQuotaHint: 'Show a plan and quota card at the bottom of the sidebar that opens the full dashboard; while off, nothing refreshes in the background.',
   zdr: 'Zero data retention (ZDR)',
