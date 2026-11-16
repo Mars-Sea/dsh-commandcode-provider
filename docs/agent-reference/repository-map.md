@@ -183,9 +183,40 @@ src/login.ts           Host half of the browser login: loopback callback
                        state token, whoami validation) → storeKey seam.
 src/login-wire.ts      Login Remote contract: `commandcode/login*` endpoints'
                        descriptors + strict status parser (dependency-free).
-src/web-search.ts      CommandCode web-search provider over `ctx.web` (registered
-                       only when the profile mounts the web seam; reuses the
-                       plugin's apiBase + credential chain for `/alpha/web-search`).
+src/web-search.ts      CommandCodeSearchProvider over `ctx.web`'s SEARCH registry
+                       (registered only when the profile mounts the web seam;
+                       reuses the plugin's apiBase + credential chain for
+                       `/alpha/web-search`, maps `{title,url,snippet}` →
+                       `WebSearchSource`). Re-exports the shared selection seam
+                       plus `createCommandCodeSearchSelection()` and the
+                       historical names (`searchRetryDelayMs`,
+                       `SEARCH_MAX_ATTEMPTS`).
+src/web-fetch.ts       CommandCodeFetchProvider over `ctx.web`'s FETCH registry:
+                       `POST /alpha/web-fetch` with `{ url, format: 'markdown' }`,
+                       `{ content, url?, status? }` → dsh's CLOSED `WebFetchResult`
+                       union as a `text` body, a non-2xx status as a RESULT (per
+                       the seam's contract), an empty 2xx as a failure, and
+                       `fetchUrlGuard()` — the network-free URL policy (scheme,
+                       embedded credentials, private/loopback/link-local
+                       literals, single-label names, `http` → `https`) that runs
+                       before any billable call. Owns
+                       `createCommandCodeFetchSelection()`.
+src/web-selection.ts   The field-generic selection seam shared by BOTH web
+                       capabilities: `field` (`searchProvider` / `fetchProvider`)
+                       + `providerId` + `subject`, one settings-first writer with
+                       the running-reference fallback, the
+                       never-displace-a-foreign-pin rule, `owner`/`preexisting`/
+                       `displaced`, the coalescing write queue, and a `release()`
+                       that never writes the profile. Parameterized out of
+                       `web-search.ts` when fetch needed the identical policy, so
+                       the two toggles cannot drift apart.
+src/web-request.ts     Shared request plumbing for the two providers: the bounded
+                       retry cadence (`WEB_REQUEST_MAX_ATTEMPTS`, 500 ms → 1 s
+                       jittered) that covers only a request which received NO
+                       response, the abortable retry wait, the cancellation error,
+                       the transport diagnosis naming cause/origin/attempts
+                       without echoing a credential, and the header set both
+                       endpoints send.
 src/tui-settings.ts    dsh-TUI settings section over the optional
                        `tuiSettingsSections` seam: declares the Command Code
                        page (`apiKey` secret field, apiBase, plan filter, a
@@ -306,7 +337,18 @@ tests/package.test.ts package-metadata contract (one Harness peer range,
 tests/config-schema.test.ts Config credential contract: literal apiKey fields
                       carry role('secret') and are stripped by redactSecrets.
 tests/web-search.test.ts web-search provider tests (wire body, result mapping,
-                      failure taxonomy, selection-field rewrite).
+                      failure taxonomy, selection-field rewrite), plus the
+                      real-engine selection sandbox shared with the fetch half.
+                      Its host cases also pin that the two toggles are
+                      INDEPENDENT: flipping one leaves the other's field alone.
+tests/web-fetch.test.ts web-fetch provider tests: the `{ format, url }` body and
+                      header set, mapping into the closed `WebFetchResult` union,
+                      a non-2xx status as a result, an empty 2xx as a failure, the
+                      100,000-char truncation boundary, the whole URL-guard table
+                      (asserting NO request was made), credential/abort/status
+                      error codes, the retry-and-stop rules, and the fetch
+                      selection against the REAL engine (fetchProvider taken,
+                      searchProvider untouched, foreign pin kept, preexisting).
 tests/tui-settings.test.ts dsh-TUI settings-section tests (declared fields,
                       secret-ref safety, unset-reachable options, effective
                       boolean defaults, registration lifecycle).
@@ -326,8 +368,17 @@ scripts/verify-messages-live.mjs  LIVE end-to-end run of the plugin's OWN
                       catches what unit tests cannot — it found the `temperature`
                       rejection that failed every real request while the suite
                       was green. `VERIFY_DRY_RUN=1` sends nothing.
-scripts/probe-messages-contract.mjs  LIVE `/provider/v1/messages` request-shape
-                      probes that the gateway rejects early (routing, tool-schema
+scripts/verify-web-fetch-live.mjs  LIVE check of the plugin's OWN web-fetch
+                      provider against `/alpha/web-fetch`: the real response
+                      shape, `http` → `https` upgrade, a non-2xx arriving as a
+                      RESULT rather than a throw, the exact `{format,url}` body,
+                      and every URL-guard case refused with zero requests. Writes
+                      a JSON report to `--out`. Credential order is
+                      `COMMANDCODE_API_KEY` → `--credential-ref <name>` from the
+                      dsh credential store (the path that works on a machine
+                      whose keys never reach the process environment) →
+                      `~/.commandcode/auth.json`. `VERIFY_DRY_RUN=1` sends nothing.
+scripts/probe-messages-contract.mjs  LIVE `/provider/v1/messages` request-shape                      probes that the gateway rejects early (routing, tool-schema
                       root, `max_tokens` ceiling, bare-prose validation), so
                       most of the contract costs no output tokens.
 scripts/probe-messages-stream.mjs     LIVE Messages success-path probes: the

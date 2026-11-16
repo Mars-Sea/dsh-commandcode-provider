@@ -1,4 +1,4 @@
-# Accounts, web search, and retry
+# Accounts, web search and fetch, and retry
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
@@ -245,6 +245,76 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   elapsed-time rule is not used (it would skip the very slow failure this issue reported).
   `tests/web-search.test.ts` pins the retry, the once-only key resolution, the no-retry-on-status rule, the
   abortable wait and the diagnostic suffix.
+- **Web fetch (`src/web-fetch.ts` + the same `web` seam)**: the model-facing `web_fetch` tool is served by a
+  `CommandCodeFetchProvider` registered as `commandcode` on `ctx.web`'s **FETCH** registry
+  (`registerFetchProvider`), reusing the SAME key, `apiBase`, headers and account pool as chat and as search.
+  It POSTs `{ url, format: 'markdown' }` to `/alpha/web-fetch` and maps `{ content, url?, status? }` into
+  dsh's CLOSED `WebFetchResult` union as `{ kind: 'text' }`. Evidence for the wire: command-code@1.89.1
+  bundles the route as a literal (`Kc="/alpha/web-fetch"`) in `createWebFetchTool`, which posts
+  `{ url, format }` and reads `c.url || a.url`, `c.status ?? 0`, `c.content ?? ""`; the official tools
+  reference documents the same four user-facing parameters. **Search and fetch are two independent seam
+  capabilities**: separate registries (each with its own duplicate-id check), separate volatile fields
+  (`searchProvider` / `fetchProvider`), separate toggles (`Config.webSearch` /
+  `Config.webFetch`, both default on) and separate selection handles — search pairs with the
+  shipped `deepseek-official`, fetch with the shipped local `http` provider, which is free and reaches
+  intranet addresses.
+  - The picker `description` states what the provider CAN and CANNOT do ("fetched by Command Code's servers, so it handles JavaScript-rendered pages; cannot reach intranet or local addresses") and deliberately says NOTHING about cost — the shipped local provider's own copy follows the same shape ("free, can reach intranet and local addresses, does not support JavaScript/sign-in pages or PDFs"), and billing belongs to the account page. `tests/web-fetch.test.ts` pins that no charge/cost wording creeps back in.
+  - The provider declares **no `title`**: the shipped web settings page renders a provider as `title ?? id`, and the search provider declares none, so BOTH menus show `commandcode`. A title on only one half would label the same route two different ways in one page. `description` is still declared (bilingual, `en` required) because it is only shown for the selected provider.
+  - Both toggles live in **Settings → Command Code → Integrations & display** (`section.tsx`, `cc-web-search` / `cc-web-fetch`), and both surface in that group's summary badge. The settings page renders from the explicit `SECTION_FIELDS` whitelist in `client/settings.ts`, so a field missing there vanishes silently — `tests/accounts-card-render.test.ts` pins that both toggles render.
+  - **`startIndex` and `timeout` are deliberately NOT sent.** `WebFetchRequest` carries only a URL, and
+    `dsh-tool-web` owns both the windowing (a 200,000-char output cap plus its own truncation notice) and
+    the cooperative deadline. Do not "complete" the CLI parity here without a seam change first.
+  - **`format` is fixed to `markdown`**, the CLI default and the only format the tool renders usefully, and
+    the body is delivered as `text` so `dsh-tool-web` passes it through verbatim. Requesting `html` would
+    hand dsh a body it converts with its own DOM pipeline, which means shipping a second converter for no
+    reader.
+  - **The local URL guard runs BEFORE any billable call** (`fetchUrlGuard`, exported for tests). It refuses
+    non-http(s) schemes and embedded credentials (`WEB_INVALID_URL` / `WEB_BLOCKED_URL`), private/loopback/
+    link-local IPv4 and IPv6 literals (including IPv4-mapped forms), reserved names (`localhost`,
+    `ip6-loopback`, …) and single-label hostnames, and upgrades `http` to `https` exactly as the CLI does.
+    It is network-free by design: resolving a NAME to a private address would be a DNS lookup on the request
+    path, and the gateway repeats this guard server-side. The CLI performs the same check client-side before
+    billing, so this is behavioral parity, not a new policy.
+  - **A non-2xx upstream status is a RESULT, not a throw.** `dsh-web` documents that "a successful network
+    fetch of a non-2xx response is a result, not an error", so the status travels to the model in
+    `statusCode`. Verified live: a 404 answered `{ status: 404, content: "Example Domain", … }` with HTTP 200
+    from the gateway. A 2xx with EMPTY content is the one case that cannot represent a page and fails as
+    `WEB_PROVIDER_ERROR` instead of looking like a success.
+  - **Retries reuse the search budget** (`WEB_REQUEST_MAX_ATTEMPTS` in the shared `src/web-request.ts`):
+    only a fetch that received no response is retried, because a received status is the server's answer and
+    a body failure may already have been billed. Cancellation always wins. Moving the cadence into
+    `src/web-request.ts` is what keeps search and fetch from growing two divergent retry policies.
+  - **Selection** uses the same field-generic seam as search (`src/web-selection.ts`,
+    `createCommandCodeSelection({ field, providerId, subject })`). `createCommandCodeFetchSelection()`
+    passes `fetchProvider`; `createCommandCodeSearchSelection()` passes `searchProvider`. Every rule
+    documented above for search — the settings-first write, the running-reference fallback, the
+    never-displace-a-foreign-pin rule, `owner`/`preexisting`/`displaced`, the coalescing queue, and
+    `release()` never writing the profile — applies to fetch VERBATIM, because it is literally the same
+    code. The shipped settings page's fetch counterpart is `deepseek-fetch-api`, which is the foreign pin
+    that stops the takeover.
+  - **Known risk, deliberately accepted.** The seam auto-selects only when EXACTLY ONE provider is usable;
+    with two usable fetch providers and no configured id, both `search()` and `fetch()` raise
+    `WEB_PROVIDER_AMBIGUOUS`. Today the composed default pins `fetchProvider: http`, and this plugin pins
+    its own id on boot, so neither gap exists. If a future engine stops composing a default, uninstalling or
+    disabling this plugin leaves TWO usable fetch providers and an unset field, and fetches then fail until
+    one is pinned. That is the same hazard issue #26 records for search; keep both fields pinned when
+    changing composition.
+  - **Verification.** `tests/web-fetch.test.ts` pins the wire body (`{ format, url }` exactly), the result
+    mapping, the 100,000-char truncation boundary, the URL guard table (with "no request was made"
+    asserted), `WEB_PROVIDER_CREDENTIAL_MISSING` / `WEB_PROVIDER_ERROR` / `WEB_ABORTED`, the retry-and-stop
+    rules, and the fetch selection against the REAL engine. `scripts/verify-web-fetch-live.mjs` is the LIVE
+    check: it drives this plugin's own provider against the real gateway and reports `PASS`/`FAIL` per case
+    (default `VERIFY_DRY_RUN=1` sends nothing). Its credential order is `COMMANDCODE_API_KEY` in the process
+    environment → `--credential-ref <name>` resolved from `$DSH_HOME/.credentials.yaml` → `~/.commandcode/
+    auth.json`; on a machine whose keys live only in the dsh credential store, the middle path is THE way to
+    run it, because a headless `node` process never sees those keys as environment variables. **Live result
+    (2026-11-16, credential `COMMANDCODE_API_KEY` from the local store): 12/12 checks passed** — a docs page
+    (37,584 chars), a Wikipedia article (99,505 chars, i.e. just under the window, `truncated: false`), an
+    `http` target upgraded before sending, a 404 returned as a result, every request body exactly
+    `{format,url}`, and all six guard cases refused with zero requests. **Evidence boundary**: that run proves
+    the route, the body shape, the response fields and the non-2xx behavior on THIS account and gateway. It
+    does not prove per-plan availability, billing amounts, ZDR interaction, or whether a 2xx empty page is
+    ever legitimate upstream.
 - **`TRANSPORT` carries its own bounded budget, and the route policy cannot express it**
   (`src/transport-retry.ts` + the `agent/request-error` listener in `src/index.ts`; issue #39's second
   report). `providerRetryPolicy()` is captured once per route, so every code in its whitelist shares one

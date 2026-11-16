@@ -37,7 +37,7 @@ Unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harnes
 - **Plans & quota panel** — optional sidebar card with the serving account's plan, 5-hour and weekly windows, balances and reset times.
 - **Session cost estimate** — published-rate estimates (`≈`) beside the composer token counter, priced per request from durable session history.
 - **Model analysis** — tokens, estimated cost, response timing and failures by session or date range. [Scope](docs/模型成本与性能分析.md).
-- **Web search** — the dsh `web_search` tool is served by Command Code (`/alpha/web-search`) with the same key and endpoint as chat.
+- **Web search & fetch** — both dsh web tools are served by Command Code (`/alpha/web-search` and `/alpha/web-fetch`) with the same key and endpoint as chat; the search and fetch backends are chosen independently.
 - **Zero data retention** — optional ZDR routing (`x-cmd-zdr: 1`), off by default.
 - **Context & output limits** — override the metered context window globally or per model, and cap or omit the per-turn `max_tokens`.
 - **Reasoning effort & images** — effort levels in the picker; Vision models accept images.
@@ -203,6 +203,8 @@ llm-commandcode:
   # offloadSeenImagesForCache: true     # opt in to CLI cache mitigation
   showSidebarQuota: true                 # optional: sidebar plans & quota card (default off)
   zdr: true                              # optional: zero-data-retention upstreams only (default off)
+  # webSearch: false                     # optional: keep the previous web_search backend (default on)
+  # webFetch: false                      # optional: keep the free local web_fetch backend (default on)
   # contextWindow: 131072                # optional: custom context length for every model
   # contextWindowOverrides:              # optional: per-model context lengths; wins over contextWindow
   #   deepseek/deepseek-v4-pro: 65536
@@ -219,15 +221,17 @@ llm-commandcode:
 | `offloadSeenImagesForCache` | On the CLI transport a new image can make the reported prompt cache retreat to the first historical image even when every previous request message is byte-identical. Enabling it replaces an older image with a stable text placeholder once this model has answered with it, so later text stays cached without replaying old pixels. It mitigates the cost spike but does not repair Command Code's multimodal cache behavior, and the model cannot inspect an offloaded image again without rereading the source file. Off by default. [Live evidence](docs/issue-64-cache-review.md). |
 | `modelNames` | Optional map of catalog model id → custom display name; only the picker label (`LlmModelInfo.name`) changes, so external tools that match on the model name string (peak-hour reminders, cache-pricing plugins) can be made to line up — our default ` (CC)` suffix and upstream's ` (latest)` suffix are what break them. **Unset or empty (the default) keeps the name exactly as today: `${catalogName} (CC)`**, with any upstream ` (latest)` preserved; an unknown model with no catalog row still shows the bare id. The model id, request body, pricing, peak labels, price table, `commandcode/prices` wire and Remote descriptor count are unchanged; sorting still uses the catalog original name, so renaming never reorders the picker. Configurable on the Web settings page only for now — the terminal settings page is not wired up. |
 
-## Web search
+## Web search and web fetch
 
-When your deployment mounts the web capability (`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`), the model's `web_search` tool is served by this plugin's `commandcode` search provider — it calls the Command Code Provider API's `/alpha/web-search` endpoint with the **same API key and base URL** as chat, so no separate search key, endpoint or model is needed.
+When your deployment mounts the web capability (`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`), the model's `web_search` tool is served by this plugin's `commandcode` search provider — it calls the Command Code Provider API's `/alpha/web-search` endpoint with the **same API key and base URL** as chat, so no separate search key, endpoint or model is needed. The same holds for `web_fetch` through `/alpha/web-fetch`, which pairs with the shipped local `http` provider.
 
-**On by default.** The *"Serve dsh web search with Command Code"* toggle (`webSearch`) selects `commandcode` as the active search backend; turning it off hands the selection back to whichever backend was there before (a sibling search plugin such as modsearch keeps working). The change takes effect on the next search — no restart.
+**On by default.** The *"Serve dsh web search with Command Code"* toggle (`webSearch`) selects `commandcode` as the active search backend; turning it off hands the selection back to whichever backend was there before (a sibling search plugin such as modsearch keeps working). The change takes effect on the next search — no restart. The fetch toggle (`webFetch`) works the same way and is independent of it: the two capabilities are separate registries with separate settings fields, so either can be turned off on its own.
 
 - The provider registers as `commandcode` on `ctx.web` only when the web service is present; without it this stays a chat-only plugin.
-- When the official **Web search** settings already pin another backend, that explicit choice wins: the plugin keeps `commandcode` registered but unselected and reports that state. It takes over only while nothing else pins the field, remembers the backend it displaced, and restores it when the toggle goes off or the plugin unloads. To pin it durably, set `searchProvider: commandcode` (or `$DSH_WEB_SEARCH_PROVIDER=commandcode`).
+- When the official **Web search** settings already pin another backend, that explicit choice wins: the plugin keeps `commandcode` registered but unselected and reports that state. It takes over only while nothing else pins the field, remembers the backend it displaced, and restores it when the toggle goes off or the plugin unloads. To pin it durably, set `searchProvider: commandcode` (or `$DSH_WEB_SEARCH_PROVIDER=commandcode`); the fetch side is `fetchProvider` / `$DSH_WEB_FETCH_PROVIDER`.
 - `numResults` from the dsh tool is clamped to the Command Code range (1–10, default 5); results map to the dsh `WebSearchSource` shape (`url`/`title`/`snippet`).
+- A fetch returns the page as Markdown. A non-2xx status from the target is a **result**, not an error, so the model sees the real status; a 2xx with an empty body fails.
+- Fetches run on Command Code's servers, so **intranet and local addresses are unreachable** (the local `http` provider can reach them). Before a request is sent, URLs that cannot succeed are rejected: non-http(s) schemes, credentials embedded in the URL, private/loopback/link-local addresses, and hostnames without a dot. `http` is upgraded to `https` first.
 
 > This reuses the Command Code Provider API directly (like the official CLI's built-in `web_search`), so it is distinct from a DeepSeek-native search backend.
 

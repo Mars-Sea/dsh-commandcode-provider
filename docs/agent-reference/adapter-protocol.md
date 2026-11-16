@@ -315,6 +315,15 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   - Web search: `POST {apiBase}/alpha/web-search` — body `{ query, numResults, allowedDomains?,
     blockedDomains? }` → `{ results: [{ title, url, snippet }] }`; same `Authorization: Bearer <key>` +
     `x-command-code-version` as generate.
+  - Web fetch: `POST {apiBase}/alpha/web-fetch` — body `{ url, format }` (this plugin always sends
+    `format: "markdown"`, the CLI default) → `{ content, url?, status? }`; same headers as web search. The
+    route is a literal in command-code@1.89.1's `createWebFetchTool` (`Kc="/alpha/web-fetch"`), which reads
+    `url`/`status`/`content` from the answer and appends its own pagination notice. The CLI's `startIndex`
+    and `timeout` tool parameters are NOT wire fields of this request body (the CLI windows the returned
+    content itself), which is why dsh's URL-only `WebFetchRequest` loses nothing. Live-verified
+    2026-11-16: a 404 came back as `{ status: 404, content, url }` inside an HTTP 200 envelope, so the
+    status is the TARGET's, not the gateway's. The CLI also upgrades `http` to `https` and refuses
+    private/loopback targets before calling; this plugin reproduces both locally (see accounts-and-retry).
   - `GET {apiBase}/provider/v1/notices` — the CLI's startup-announcement feed, added in
     command-code@1.89.1 (absent from 1.88.5 and 1.89.0). Public, unauthenticated, `{ data: [...] }`
     where each entry carries `id`, `line`, `url` and `endsAt`; the CLI shows the first unexpired,
