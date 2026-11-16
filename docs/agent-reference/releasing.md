@@ -19,6 +19,11 @@ npm run test:update                # 隔离 home 验证插件更新资格（见�
 npm pack --dry-run --ignore-scripts # 查看实际发布文件清单
 ```
 
+**Windows 上跑这三个校验脚本**：`test:engine`、`test:install`、`test:pack` 都会 spawn npm，而
+`npm.cmd` 是批处理脚本——Node 自 CVE-2024-27980 修复起拒绝无 shell 地 spawn 它（报
+`spawnSync npm.cmd EINVAL`，看着像脚本报错，其实是平台限制）。三个脚本已按平台补 `shell: true`，
+POSIX 分支不变；新增同类脚本时照此处理，并保证参数里不放环境变量来的文本。
+
 锁文件校验必须通过：本地 `npm install` 成功不能证明 `package-lock.json` 与 `package.json` 同步，
 平台可选依赖条目缺失时只有 `npm ci` 会以 `EUSAGE` 报出。重建锁文件后若发现平台分支缺失，
 按上一版锁文件的 `resolved`（解析地址）与 `integrity`（完整性摘要）精准补回、**不重新解析依赖**；

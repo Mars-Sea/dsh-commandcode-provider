@@ -25,8 +25,11 @@ export function verifyPackedExports(manifest, files) {
 function main() {
   const root = fileURLToPath(new URL('../', import.meta.url))
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  // `npm.cmd` is a batch script: on Windows Node refuses to spawn one without a
+  // shell (`spawnSync npm.cmd EINVAL`), and every argument here is a literal.
   const packed = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root, encoding: 'utf8',
+    ...process.platform === 'win32' ? { shell: true } : {},
   })
   if (packed.error !== undefined) throw packed.error
   if (packed.status !== 0) throw new Error(packed.stderr || `打包检查退出 ${packed.status}`)

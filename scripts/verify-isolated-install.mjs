@@ -97,12 +97,20 @@ for (const version of declaredVersions) {
   }
 }
 
-/** Run a child command and return its captured streams or throw with diagnostics. */
+/**
+ * Run a child command and return its captured streams or throw with diagnostics.
+ *
+ * On Windows the command is `npm.cmd`, a batch script Node refuses to spawn
+ * without a shell (`spawnSync npm.cmd EINVAL`), so `shell: true` is required
+ * there. The only caller passes literal flags plus a temp path and a version
+ * spec this script already validated — never text from the environment.
+ */
 function run(command, args, cwd) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
     env: { ...process.env, npm_config_cache: npmCache },
+    ...process.platform === 'win32' ? { shell: true } : {},
   })
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
   if (result.error !== undefined) throw result.error
