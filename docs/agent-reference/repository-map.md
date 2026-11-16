@@ -120,8 +120,8 @@ src/client/section.tsx  The settings page React component: the unified
                       account list (immediate operations, inline quota,
                       per-account dedicated models) over the staged form
                       (Models & context — plan filter, visible-model allowlist,
-                      then the flat custom-context-length field and the
-                      per-model override rows — Privacy & security,
+                      the row-style context-length and output-cap fields, then
+                      the two per-model override tables — Privacy & security,
                       Integrations & display, Advanced). All five groups fold
                       from one `FoldableGroup` heading with summary badges; the
                       pure judgements behind the badges and the save bar's

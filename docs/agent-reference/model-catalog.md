@@ -342,6 +342,55 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `readyToApply=false`, protocol `not-verified`. Verification: `typecheck` 0, `npm test`
   1243/1243, `build` twice; no authenticated, paid-generation or browser-render check.
 
+  **Follow-up check (2026-11-16, CLI 1.88.5 -> 1.89.1):** npm `latest` moves to `1.89.1`
+  (`2026-11-13T23:07:47Z`), with `1.89.0` on `2026-11-13T17:01:32Z` in between — the first CLI
+  move since 2026-11-06. Package `CHANGELOG.md` (the website `/changelog` covers only the Desktop
+  line) lists seven items for 1.89.0 — background sub-agents via `Ctrl+B`, a finished background
+  sub-agent waking the main agent, sub-agent rows in the background panel and status bar, a
+  configurable sub-agent turn limit (default 100 -> 200), a configurable default sub-agent model,
+  Markdown-list rendering fixes, and the free Beam 1.0 retirement — plus one for 1.89.1: startup
+  announcements so new models and free tiers no longer need a CLI release. That announcement
+  feature adds the only new endpoint on either train, `GET {apiBase}/provider/v1/notices` (absent
+  from both the 1.88.5 and 1.89.0 artifacts; filtered by `endsAt`, deduped by seen id, cached under
+  `~/.commandcode/cache/notices/v1/`, disabled by `CMD_DISABLE_NOTICES=1`). The live endpoint
+  answers `{"data":[]}` today, and this adapter never calls it. Everything else is unchanged
+  statically: the 25 route literals and 13 custom headers, `buildModelGroups` / `getPlanInfo` /
+  `getSupportedEfforts` / `modelSupportsZdr` / `knownModelSupportsZdr`, both ZDR anchors, the
+  `/alpha/generate` call site and the `promptCache` (5) / `reasoning_effort` (7) / `max_tokens`
+  (12) / `cache_control` (1) counts all match, and no chat wire body gained a field.
+
+  The catalog does not move at all: `catalogVersion` is still `709028a9…`, the default view still
+  serves 98 ids and `?view=client` 114 (the same sixteen `hidden`), and `candidateDiffs` is empty
+  across all seven maps. Re-checked by hand this round: plan tiers are still a strict superset chain
+  (Go 58 / GOAT 12 / Pro 17 / Provider 9 / Max 2, no monotonicity violation), effort lists, vision
+  flags, the ZDR verdict, deals (three, `minimax-m3-2x-usage` / `glyph-cluster-free` /
+  `inkling-2-small-free`) and the peak windows (01–04 & 06–10 UTC Mon–Fri, 7h/day) all match the
+  snapshot, and the vendored price table reports 98 rows up to date.
+
+  What changes is the artifact's own agreement. The 1.89.0 registry finally names the four
+  "catalog-first" rows synced here earlier — `claude-fable-5-2` (Provider, five levels,
+  `zdr:false`), `google/gemini-4-carbon` (Pro, three levels), `meta/muse-ember` (Go, five levels,
+  `zdr:true`) and `thinkingmachines/inkling-2-small:free` (Go, four levels, `zdr:false`) — each
+  field-for-field identical to this snapshot, so the audit's four "absent from CLI registry" errors
+  drop to **zero**; the artifact's `modelSupportsZdr` set (21) now equals the catalog's `zdr:false`
+  rows exactly. The same snapshot marks `reflection/beam:free` and `stealth/crouton-alpha` `hidden`
+  (the verdict the catalog already gave those rows before this snapshot retired them) and renames
+  the Beam row `Beam 1.0 (Free)`. No snapshot table changes: 98 / 72 / 78 / 21, thinking 15, peak 5,
+  subscriptions 9, deals 3.
+
+  The one generated-table change is `MODEL_OUTPUT_TOKEN_LIMITS`, 84 -> 87 rows:
+  `ornith/ornith-1.5-122b` 32,768, `Qwen/Qwen3.8-Max-Prime` 131,072 and
+  `stealth/glyph-cluster:free` 256,000 each now carry a unanimous provider vote, and the provenance
+  comments on `meituan/LongCat-2.0` (1 -> 2 providers) and `mistral/mistral-large-4` (8 -> 9) move
+  with their values unchanged; 11 models still defer to runtime learning. `COMMAND_CODE_CLI_VERSION`
+  moves to `1.89.1`, a request-header sync with no runtime behavior change. DSH side: `latest` is
+  still `0.2.2-rc.1` and `alpha` `0.2.2-alpha.3`, while `next` moves to `0.2.2-rc.3` — already inside
+  the declared peer range, so no engine-compatibility change. Audit: 14 sources HTTP 200, `errors 0`,
+  96 review items of the same shapes as before, `status=review-required`, `readyToApply=false`,
+  protocol `not-verified`. Verification: `typecheck` 0, `npm test` 1252/1252, `build` twice, both
+  generator `--check`s exit 0; no authenticated, paid-generation, protocol or browser-render check.
+  Evidence in `/tmp/commandcode-check-20261116/`.
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot

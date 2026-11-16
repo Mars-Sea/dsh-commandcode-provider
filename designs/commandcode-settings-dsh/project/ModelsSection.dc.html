@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>模型与上下文 · 重设计</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--cc-ease-out:cubic-bezier(0.23,1,0.32,1)}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+a{color:#2b63d9;text-decoration:none}
+button{transition:transform 150ms var(--cc-ease-out),background-color 150ms ease,color 150ms ease,border-color 150ms ease,opacity 150ms ease}
+button:active:not(:disabled){transform:scale(0.97)}
+button[role="switch"]:active:not(:disabled),button[data-icon-btn]:active:not(:disabled){transform:scale(0.95)}
+.quiet-link{transition:color 150ms ease}
+.switch-thumb{transition:transform 160ms var(--cc-ease-out)}
+input{transition:border-color 150ms ease}
+input:focus-visible{outline:none;border-color:#4176e6!important}
+@media (hover:hover) and (pointer:fine){
+  .quiet-link:hover{color:#0f1115!important}
+  .btn-ghost:hover:not(:disabled){background-color:rgba(38,49,72,0.06)!important;color:#0f1115!important}
+  .icon-btn:hover:not(:disabled){background-color:rgba(38,49,72,0.06)!important;color:#0f1115!important}
+  .icon-btn-danger:hover:not(:disabled){background-color:rgba(236,19,19,0.06)!important;color:#c81e1e!important}
+}
+@media (prefers-reduced-motion:reduce){
+  button,.switch-thumb{transition:background-color 150ms ease,color 150ms ease,opacity 150ms ease!important;transform:none}
+}
+</style>
+</helmet>
+<div style="width: 880px; height: 880px; box-sizing: border-box; background: #e9ecf1; display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 32px">
+
+  <!-- 有内容：一组三块（可见性 / 默认预算 / 每模型），块内 0 间距、块间 24px -->
+  <div style="width: 800px; box-sizing: border-box; background: #ffffff; border: 0.5px solid rgba(0,0,0,0.14); border-radius: 20px; padding: 28px 40px; display: flex; flex-direction: column; color: #0f1115">
+
+    <!-- 分组头：标题 + 一句摘要，箭头挂在标题左侧的同一行 -->
+    <div style="display: flex; align-items: center; gap: 8px; min-height: 28px">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#595e66" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+      <h3 style="margin: 0; font-size: 14px; font-weight: 500; line-height: 22px; color: #0f1115">模型与上下文</h3>
+      <span style="font-size: 12px; line-height: 18px; color: #595e66; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums">{{ groupSummary }}</span>
+    </div>
+
+    <div style="padding-left: 22px; display: flex; flex-direction: column; padding-top: 8px">
+
+      <!-- A · 可见性：行式，右端一条控制边 -->
+      <div style="display: flex; align-items: center; gap: 24px; min-height: 40px; padding: 10px 0; box-sizing: border-box">
+        <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115; white-space: nowrap">隐藏套餐外模型</span>
+        <div style="margin-left: auto; display: inline-flex; align-items: center; gap: 16px; flex: none">
+          <button type="button" class="quiet-link" onClick="{{ resetPlan }}" style="display: {{ planResetDisplay }}; border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; line-height: 18px; color: #595e66; cursor: pointer">重置</button>
+          <button type="button" role="switch" aria-checked="{{ planFilterOn }}" aria-label="隐藏套餐外模型" onClick="{{ togglePlanFilter }}" style="width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: {{ planSwitchBg }}; cursor: pointer; display: inline-flex; align-items: center; flex: none; box-sizing: border-box">
+            <span class="switch-thumb" style="width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transform: {{ planSwitchThumb }}; display: block"></span>
+          </button>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 24px; min-height: 40px; padding: 10px 0; box-sizing: border-box">
+        <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115; white-space: nowrap">模型白名单</span>
+        <div style="margin-left: auto; display: inline-flex; align-items: center; gap: 16px; flex: none">
+          <button type="button" class="quiet-link" onClick="{{ resetAllowlist }}" style="display: {{ allowlistResetDisplay }}; border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; line-height: 18px; color: #595e66; cursor: pointer">显示全部</button>
+          <button type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="模型白名单" style="height: 32px; width: 200px; padding: 0 10px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; box-sizing: border-box">
+            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums">{{ allowlistLabel }}</span>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#595e66" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- B · 默认预算：两个短值走行式，不再各占半列宽 -->
+      <div style="display: flex; flex-direction: column; margin-top: 24px">
+        <div style="display: flex; align-items: center; gap: 24px; min-height: 40px; padding: 10px 0; box-sizing: border-box">
+          <div style="display: inline-flex; align-items: center; gap: 4px; min-width: 0">
+            <label for="cc-ctx-window" style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115; white-space: nowrap">自定义上下文长度</label>
+            <button type="button" data-icon-btn="true" class="icon-btn" aria-label="上下文长度换算说明" style="width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.5M8 5.2v.01"/></svg>
+            </button>
+          </div>
+          <div style="margin-left: auto; display: inline-flex; align-items: center; gap: 16px; flex: none">
+            <input id="cc-ctx-window" type="text" placeholder="跟随目录" style="height: 32px; width: 140px; padding: 0 10px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; box-sizing: border-box">
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 24px; min-height: 40px; padding: 10px 0; box-sizing: border-box">
+          <div style="display: inline-flex; align-items: center; gap: 4px; min-width: 0">
+            <label for="cc-max-output" style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115; white-space: nowrap">单轮输出上限</label>
+            <button type="button" data-icon-btn="true" class="icon-btn" aria-label="单轮输出上限说明" style="width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.5M8 5.2v.01"/></svg>
+            </button>
+          </div>
+          <div style="margin-left: auto; display: inline-flex; align-items: center; gap: 16px; flex: none">
+            <input id="cc-max-output" type="text" placeholder="自动推导" style="height: 32px; width: 140px; padding: 0 10px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.20); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; box-sizing: border-box">
+          </div>
+        </div>
+      </div>
+
+      <!-- C · 每模型：表头行（标题 + 条目数 + 添加）与统一的列 -->
+      <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 24px">
+        <div style="display: flex; align-items: center; gap: 8px; min-height: 28px">
+          <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115">按模型覆盖</span>
+          <span style="font-size: 11px; line-height: 16px; color: #595e66; font-variant-numeric: tabular-nums">1 项</span>
+          <button type="button" class="btn-ghost" style="margin-left: auto; height: 28px; padding: 0 8px; border-radius: 8px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; flex: none">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+            <span>添加模型</span>
+          </button>
+        </div>
+        <div style="display: grid; grid-template-columns: minmax(0, 1fr) 160px 28px; align-items: center; gap: 6px; padding: 0 4px">
+          <span style="padding-left: 6px; font-size: 11px; line-height: 16px; color: #595e66">模型</span>
+          <span style="padding-right: 8px; font-size: 11px; line-height: 16px; color: #595e66; text-align: right">上下文长度</span>
+          <span></span>
+        </div>
+        <div style="border: 0.5px solid rgba(0,0,0,0.18); border-radius: 14px; padding: 4px; display: grid; grid-template-columns: minmax(0, 1fr) 160px 28px; align-items: center; gap: 6px">
+          <div style="height: 30px; padding: 0 10px; border-radius: 10px; background: #f5f6f7; display: flex; align-items: center; gap: 6px; min-width: 0; box-sizing: border-box">
+            <span style="font-family: 'SF Mono',Menlo,monospace; font-size: 12px; line-height: 18px; color: #0f1115; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">claude-opus-4-6</span>
+          </div>
+          <input type="text" value="1M" aria-label="claude-opus-4-6 的上下文长度" style="height: 30px; width: 100%; padding: 0 8px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.16); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; text-align: right; font-variant-numeric: tabular-nums; box-sizing: border-box">
+          <button type="button" data-icon-btn="true" class="icon-btn-danger" aria-label="移除 claude-opus-4-6 的上下文覆盖" style="width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 4.5h9M6.2 4.5V3.2h3.6v1.3M5 4.5l.5 8.3h5l.5-8.3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 20px">
+        <div style="display: flex; align-items: center; gap: 8px; min-height: 28px">
+          <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115">模型名称</span>
+          <span style="font-size: 11px; line-height: 16px; color: #595e66; font-variant-numeric: tabular-nums">2 项</span>
+          <button type="button" class="btn-ghost" style="margin-left: auto; height: 28px; padding: 0 8px; border-radius: 8px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; flex: none">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+            <span>添加模型</span>
+          </button>
+        </div>
+        <div style="display: grid; grid-template-columns: minmax(0, 1fr) 160px 28px; align-items: center; gap: 6px; padding: 0 4px">
+          <span style="padding-left: 6px; font-size: 11px; line-height: 16px; color: #595e66">模型</span>
+          <span style="padding-right: 8px; font-size: 11px; line-height: 16px; color: #595e66; text-align: right">显示名称</span>
+          <span></span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <div style="border: 0.5px solid rgba(0,0,0,0.18); border-radius: 14px; padding: 4px; display: grid; grid-template-columns: minmax(0, 1fr) 160px 28px; align-items: center; gap: 6px">
+            <div style="height: 30px; padding: 0 10px; border-radius: 10px; background: #f5f6f7; display: flex; align-items: center; min-width: 0; box-sizing: border-box">
+              <span style="font-family: 'SF Mono',Menlo,monospace; font-size: 12px; line-height: 18px; color: #0f1115; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">deepseek-v4.1-flash</span>
+            </div>
+            <input type="text" value="Flash" aria-label="deepseek-v4.1-flash 的显示名称" style="height: 30px; width: 100%; padding: 0 8px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.16); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; box-sizing: border-box">
+            <button type="button" data-icon-btn="true" class="icon-btn-danger" aria-label="移除 deepseek-v4.1-flash 的显示名称" style="width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 4.5h9M6.2 4.5V3.2h3.6v1.3M5 4.5l.5 8.3h5l.5-8.3"/></svg>
+            </button>
+          </div>
+          <div style="border: 0.5px solid rgba(0,0,0,0.18); border-radius: 14px; padding: 4px; display: grid; grid-template-columns: minmax(0, 1fr) 160px 28px; align-items: center; gap: 6px">
+            <div style="height: 30px; padding: 0 10px; border-radius: 10px; background: #f5f6f7; display: flex; align-items: center; min-width: 0; box-sizing: border-box">
+              <span style="font-family: 'SF Mono',Menlo,monospace; font-size: 12px; line-height: 18px; color: #0f1115; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">claude-opus-4-6</span>
+            </div>
+            <input type="text" value="Opus" aria-label="claude-opus-4-6 的显示名称" style="height: 30px; width: 100%; padding: 0 8px; border-radius: 10px; border: 0.5px solid rgba(0,0,0,0.16); background: #ffffff; color: #0f1115; font: inherit; font-size: 13px; line-height: 20px; box-sizing: border-box">
+            <button type="button" data-icon-btn="true" class="icon-btn-danger" aria-label="移除 claude-opus-4-6 的显示名称" style="width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #595e66; display: inline-flex; align-items: center; justify-content: center; cursor: pointer">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 4.5h9M6.2 4.5V3.2h3.6v1.3M5 4.5l.5 8.3h5l.5-8.3"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 空状态：同样两张表，没有条目时的样子 -->
+  <div style="width: 800px; box-sizing: border-box; background: #ffffff; border: 0.5px solid rgba(0,0,0,0.14); border-radius: 20px; padding: 24px 40px; display: flex; flex-direction: column; gap: 4px; color: #0f1115">
+    <span style="font-size: 11px; line-height: 16px; color: #595e66">空状态 · 同一组件，列表还没有条目</span>
+    <div style="display: flex; flex-direction: column; gap: 6px; padding-left: 22px; padding-top: 12px">
+      <div style="display: flex; align-items: center; gap: 8px; min-height: 28px">
+        <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115">按模型覆盖</span>
+        <span style="font-size: 11px; line-height: 16px; color: #595e66; font-variant-numeric: tabular-nums">0 项</span>
+        <button type="button" class="btn-ghost" style="margin-left: auto; height: 28px; padding: 0 8px; border-radius: 8px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; flex: none">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+          <span>添加模型</span>
+        </button>
+      </div>
+      <p style="margin: 0; padding: 0 4px 0 6px; font-size: 12px; line-height: 18px; color: #595e66">暂无覆盖 · 所有模型跟随目录默认</p>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px; padding-left: 22px; padding-top: 16px">
+      <div style="display: flex; align-items: center; gap: 8px; min-height: 28px">
+        <span style="font-size: 13px; font-weight: 500; line-height: 20px; color: #0f1115">模型名称</span>
+        <span style="font-size: 11px; line-height: 16px; color: #595e66; font-variant-numeric: tabular-nums">0 项</span>
+        <button type="button" class="btn-ghost" style="margin-left: auto; height: 28px; padding: 0 8px; border-radius: 8px; border: 0; background: transparent; color: #0f1115; font: inherit; font-size: 12px; line-height: 18px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; flex: none">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+          <span>添加模型</span>
+        </button>
+      </div>
+      <p style="margin: 0; padding: 0 4px 0 6px; font-size: 12px; line-height: 18px; color: #595e66">暂无重命名 · 列表使用目录给出的名称</p>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":880,"height":880}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      planFilter: true,
+      planOverridden: true,
+      allowlistOverridden: true
+    };
+  }
+  renderVals() {
+    const planFilterOn = this.state.planFilter;
+    const overrides = (this.state.planOverridden ? 1 : 0) + (this.state.allowlistOverridden ? 1 : 0);
+    const allowlist = this.state.allowlistOverridden ? '白名单 2 个' : '白名单 全部';
+    return {
+      planFilterOn,
+      planSwitchBg: planFilterOn ? '#0f1115' : 'rgba(0,0,0,0.18)',
+      planSwitchThumb: planFilterOn ? 'translateX(16px)' : 'translateX(0px)',
+      planResetDisplay: this.state.planOverridden ? 'inline-flex' : 'none',
+      allowlistResetDisplay: this.state.allowlistOverridden ? 'inline-flex' : 'none',
+      allowlistLabel: this.state.allowlistOverridden ? '2 / 18 个模型' : '全部 18 个模型',
+      groupSummary: allowlist + ' · ' + (overrides === 0 ? '跟随默认' : '已自定义 ' + overrides + ' 项'),
+      togglePlanFilter: () => this.setState({ planFilter: !this.state.planFilter, planOverridden: true }),
+      resetPlan: () => this.setState({ planOverridden: false }),
+      resetAllowlist: () => this.setState({ allowlistOverridden: false })
+    };
+  }
+}
+</script>
+</body>
+</html>

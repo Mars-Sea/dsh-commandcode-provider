@@ -17,7 +17,7 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.5)', () => {
+test('the ZDR exception list is the live catalog zdr verdict (command-code@1.89.1)', () => {
   // command-code@1.82.4 moved the authority for this verdict out of the CLI
   // artifact: `knownModelSupportsZdr` no longer negates a bundled Set, it reads
   // `resolveKnownCatalogModel({model,catalog})?.zdr ?? false`. So this list is
@@ -75,10 +75,11 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
   // id, and retirement alone is not coverage evidence, so it stays (19 == 19).
   //
   // 2026-11-10 (catalog-only sync) adds `claude-fable-5-2` (19 -> 20): the
-  // 1.88.5 artifact names it nowhere while `?view=client` serves `zdr:false`,
-  // so the union admits the catalog verdict alone. The free Beam row retired the
-  // same day still stays in the set — both sources still serve its `zdr:false`
-  // — exactly like the retired free Laguna row.
+  // 1.88.5 artifact named it nowhere while `?view=client` served `zdr:false`,
+  // so the union admitted the catalog verdict alone (the 1.89.0 registry now
+  // agrees). The free Beam row retired the same day still stays in the set —
+  // both sources still serve its `zdr:false` — exactly like the retired free
+  // Laguna row.
   //
   // 2026-11-13 (catalog-only sync) adds `thinkingmachines/inkling-2-small:free`
   // (20 -> 21) on the same catalog-only shape, and the pricing page states it in
@@ -86,6 +87,14 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.88.
   // day (hidden in `?view=client`, gone from every public page) but STAYS: both
   // sources still serve its `zdr:false`, and retirement alone is not coverage
   // evidence.
+  //
+  // 2026-11-16 (command-code@1.89.1 sync) changes no membership: the artifact's
+  // `modelSupportsZdr` set is now 21 ids and equals the catalog's `zdr:false`
+  // rows exactly, so both now name `claude-fable-5-2` and
+  // `thinkingmachines/inkling-2-small:free` — the two rows that entered on
+  // catalog-only evidence above. Every id below is served `zdr:false` by both
+  // sources; the retired rows (Beam, Laguna, Crouton, the free MiniMax twin)
+  // keep their membership on the same rule.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',

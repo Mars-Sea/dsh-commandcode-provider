@@ -4,7 +4,7 @@
  * subscription-plan labels, deals, and hourly (peak/off-peak) pricing.
  *
  * Everything here is synced from official sources — the command-code CLI
- * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.88.5), the
+ * bundle's model table (`dist/cli.mjs`, re-verified at command-code@1.89.1), the
  * live model catalog (`GET /provider/v1/models?view=client`, the authority for
  * capability fields since 1.82.4), and the official plan/pricing/model docs; see
  * the dsh-commandcode-upstream skill for the extraction procedures. The
@@ -62,8 +62,25 @@
  * `KNOWN_PLANS`, `KNOWN_EFFORTS` and `KNOWN_DEALS`, but `KNOWN_NON_ZDR_MODELS`
  * keeps it (both sources still serve `zdr:false`). Fable 5.2 joins that ZDR
  * set: the artifact does not name it, `?view=client` serves `zdr:false`, and
- * the union rule is the membership this file mirrors. Keeping the
- * snapshot in its own module
+ * the union rule is the membership this file mirrors. The 2026-11-13 check adds
+ * Gemini 4 Carbon at Pro and the free Inkling 2 Small row at Go (both
+ * catalog-first) and retires the free Crouton Alpha preview, taking the maps to
+ * 98 / 72 / 78 / 21 / 3. The 2026-11-16 check is the first CLI move since
+ * 1.88.5 — 1.88.5 -> 1.89.1 — and moves NO capability table: `catalogVersion`
+ * is still `709028a9…` (98 default-view rows, 114 `?view=client` rows, the same
+ * sixteen `hidden` ones), every plan tier, effort list, vision flag, ZDR
+ * verdict, deal and peak window matches this snapshot, and `candidateDiffs` is
+ * empty across all seven maps. What changes is the artifact's agreement: 1.89.0
+ * finally names the four catalog-first rows synced above (`claude-fable-5-2`,
+ * `google/gemini-4-carbon`, `meta/muse-ember`,
+ * `thinkingmachines/inkling-2-small:free`) with identical levels, context and
+ * ZDR verdicts, so the audit's four "absent from CLI registry" errors go to
+ * zero and the artifact's `modelSupportsZdr` set now equals the catalog's
+ * `zdr:false` rows exactly (21 == 21). It also marks the retired
+ * `reflection/beam:free` and `stealth/crouton-alpha` `hidden`, matching the
+ * catalog verdict this file already followed. The only generated-table change
+ * is `MODEL_OUTPUT_TOKEN_LIMITS` (84 -> 87 rows; see the entry below). Keeping
+ * the snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
  * wire/runtime logic. The read helpers live here too, for the same reason.
  *
@@ -76,7 +93,7 @@ import { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 export { PLAN_LABELS, PLAN_ORDER } from './plan-tiers.ts'
 
 export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
-  // Re-verified against the authoritative command-code@1.88.5 model table. From
+  // Re-verified against the authoritative command-code@1.89.1 model table. From
   // 1.82.4 the CLI no longer keeps this map bundled: `getSupportedEfforts()`
   // resolves it through the model catalog (`reasoningEfforts`), served live at
   // `GET /provider/v1/models?view=client` and falling back to an embedded
@@ -108,10 +125,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // same three selectable levels. It is also the only model the 1.82.2 -> 1.82.4
   // train added to the artifact's own effort table.
   'Qwen/Qwen3.8-Max-Prime': ['low', 'medium', 'xhigh'],
-  // 2026-11-10 (catalog-only sync): the Fable family's newest and most capable
-  // member serves the same five selectable levels as 5.1 and 5. Catalog-only
-  // evidence — command-code@1.88.5 does not name the model at all (see
-  // KNOWN_NON_ZDR_MODELS, where it joins on the `?view=client` `zdr:false`).
+  // 2026-11-10 (catalog-only sync; the 1.89.0 artifact finally names it): the
+  // Fable family's newest and most capable member serves the same five
+  // selectable levels as 5.1 and 5. It entered on `?view=client` alone; the
+  // command-code@1.89.0 registry row now agrees on levels, context and
+  // `zdr:false` (see KNOWN_NON_ZDR_MODELS).
   'claude-fable-5-2': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-fable-5-1': ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-fable-5': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -145,10 +163,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // 1.81.0 -> 1.82.1 train. Three selectable levels, the same set the Gemini
   // Flash family carries.
   'google/gemini-4-argon': ['low', 'medium', 'high'],
-  // 2026-11-13 (catalog-only sync): `google/gemini-4-carbon`, the Pro-tier
-  // sibling of Argon — same three selectable levels, 1M context, text + image.
-  // The 1.88.5 artifact does not name it yet (catalog-first, like the rows
-  // above), so the levels come from `?view=client` `reasoningEfforts`.
+  // 2026-11-13 (catalog-only sync; the 1.89.0 artifact names it now):
+  // `google/gemini-4-carbon`, the Pro-tier sibling of Argon — same three
+  // selectable levels, 1M context, text + image. It entered on the
+  // `?view=client` `reasoningEfforts`, which the artifact registry row repeats
+  // verbatim.
   'google/gemini-4-carbon': ['low', 'medium', 'high'],
   'google/gemini-3.1-flash-lite': ['low', 'medium', 'high'],
   'google/gemini-3.5-flash': ['low', 'medium', 'high'],
@@ -204,9 +223,9 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // the only registry addition in the 1.79.2 -> 1.81.0 train. It carries the
   // same four-level set as Muse Spark 1.1/1.2 (no `max`).
   'meta/muse-wonder-1.0': ['low', 'medium', 'high', 'xhigh'],
-  // 2026-11-10 (catalog-only sync): Muse Ember is the Muse family's newest
-  // member and the second one to serve `max` (Muse Spark 1.3 is the other).
-  // Catalog-only evidence — command-code@1.88.5 does not name it.
+  // 2026-11-10 (catalog-only sync; the 1.89.0 artifact names it now): Muse Ember
+  // is the Muse family's newest member and the second one to serve `max` (Muse
+  // Spark 1.3 is the other). The registry row repeats the five levels verbatim.
   'meta/muse-ember': ['low', 'medium', 'high', 'xhigh', 'max'],
   // 2026-10-15; the open-weight Muse Spark. Vision-capable, Go-tier and
   // served only by the live catalog - it postdates the 1.82.4 artifact's own
@@ -275,10 +294,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // `ling-3.1-flash`. Text-only input (see `KNOWN_IMAGE_MODELS`) and Go tier
   // (see `KNOWN_PLANS`).
   'inclusionai/ling-3.1-flash-1019': ['low', 'medium', 'high'],
-  // 2026-11-13 (catalog-only sync): `thinkingmachines/inkling-2-small:free`,
-  // the free Inkling 2 Small launch row — four selectable levels, the same
-  // `low`/`medium`/`high`/`max` set the free Glyph Cluster preview carries
-  // (no `xhigh`). Its paid siblings `thinkingmachines/inkling` and
+  // 2026-11-13 (catalog-only sync; the 1.89.0 artifact names it now):
+  // `thinkingmachines/inkling-2-small:free`, the free Inkling 2 Small launch
+  // row — four selectable levels, the same `low`/`medium`/`high`/`max` set the
+  // free Glyph Cluster preview carries (no `xhigh`), repeated by the registry
+  // row. Its paid siblings `thinkingmachines/inkling` and
   // `thinkingmachines/inkling-small` stay in `KNOWN_THINKING_MODELS`: they
   // serve no `reasoningEfforts` at all.
   'thinkingmachines/inkling-2-small:free': ['low', 'medium', 'high', 'max'],
@@ -286,8 +306,9 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // this map on 2026-11-13 with the rest of the picker-facing tables: the row
   // went `hidden` in `?view=client`, left the default catalog view, and was
   // dropped by the pricing page, the models docs page and all four plan pages
-  // — the same retirement path Beam 1.0 and Laguna S 2.1 took. The 1.88.5
-  // artifact still names it, which is why `KNOWN_NON_ZDR_MODELS` keeps it.
+  // — the same retirement path Beam 1.0 and Laguna S 2.1 took. The artifact
+  // still names it (and the 1.89.0/1.89.1 snapshot marks it `hidden`), which is
+  // why `KNOWN_NON_ZDR_MODELS` keeps it.
   // command-code@1.75.0 ("Add Mistral Large 4") — the only model the 1.74.3 ->
   // 1.77.0 train added. A three-level set; Vision per the official registry and
   // the CLI's inputModalities:["text","image"] (see `KNOWN_IMAGE_MODELS`), and
@@ -579,10 +600,11 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // live catalog both serve `zdr:false` for them.
   'claude-fable-5',
   'claude-fable-5-1',
-  // 2026-11-10 (catalog-only sync). `?view=client` serves `zdr:false` for the
-  // Fable 5.2 flagship while command-code@1.88.5 names it nowhere; the union
-  // rule admits the catalog verdict alone — the same path the free Beam preview
-  // took at 1.84.0.
+  // 2026-11-10 (catalog-only sync). `?view=client` served `zdr:false` for the
+  // Fable 5.2 flagship while the 1.88.5 artifact named it nowhere; the union
+  // rule admitted the catalog verdict alone — the same path the free Beam
+  // preview took at 1.84.0 — and command-code@1.89.0 now serves the same
+  // `zdr:false` in its registry row.
   'claude-fable-5-2',
   // command-code@1.67.0. The 1.67.0 artifact lists it in BOTH anchor sets, so
   // the CLI's own ZDR predicate excludes it. Unlike the retired stealth
@@ -640,10 +662,11 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   // 2026-10-21 (command-code@1.86.1 sync). New to the exclusion set: the catalog
   // serves `zdr:false` and the 1.86.1 artifact agrees.
   'tencent/hy4-preview',
-  // 2026-11-13 (catalog-only sync): the free Inkling 2 Small launch row. The
-  // 1.88.5 artifact names it nowhere while `?view=client` serves `zdr:false`,
-  // so the union admits the catalog verdict alone — and the pricing page states
-  // it in prose too ("Not routed under ZDR"). Same shape as `claude-fable-5-2`.
+  // 2026-11-13 (catalog-only sync; the 1.89.0 artifact names it now): the free
+  // Inkling 2 Small launch row. `?view=client` served `zdr:false` while the
+  // 1.88.5 artifact named it nowhere, so the union admitted the catalog verdict
+  // alone — and the pricing page states it in prose too ("Not routed under
+  // ZDR"). Same shape as `claude-fable-5-2`, and both are now artifact-confirmed.
   'thinkingmachines/inkling-2-small:free',
   'xiaomi/mimo-v2.6-pro-ultraspeed',
   'z-ai/glm-5.3-flashx',
@@ -816,12 +839,17 @@ export function pinsTemperature(modelId: string): boolean {
  * **Generated — do not hand-edit.** `scripts/sync-output-limits.mjs` rewrites
  * this literal from models.dev; run it after a catalog sync, and use its
  * `--check` in CI. Command Code resells these models through their VENDOR's own
- * API, so the vendor's published ceiling is the value recorded: 82 of the 95
- * ids in `KNOWN_PLANS` as of 2026-11-06. Each row carries a comment naming the
+ * API, so the vendor's published ceiling is the value recorded: 87 of the 98
+ * ids in `KNOWN_PLANS` as of 2026-11-16. Each row carries a comment naming the
  * entry it came from. The table follows that map, so a row retired from it —
  * `poolside/laguna-s-2.1-free` (32768) on 2026-11-06 — leaves this literal
  * too; a stale session asking for it falls back to the learned ceiling (one
- * refused request), per the paragraph below.
+ * refused request), per the paragraph below. The 2026-11-16 regeneration is a
+ * pure catch-up: `ornith/ornith-1.5-122b` (32768) and
+ * `Qwen/Qwen3.8-Max-Prime` (131072) now have a single unanimous provider vote,
+ * `stealth/glyph-cluster:free` (256000) gained one, and the provenance counts on
+ * `meituan/LongCat-2.0` and `mistral/mistral-large-4` move 1 -> 2 and 8 -> 9
+ * with their values unchanged.
  *
  * No row needs a hand-recorded pin as of 2026-10-16: the one that did
  * (`inclusionai/ling-3.0-flash-sante:free`, pinned at 32768 because it had lost
@@ -833,7 +861,7 @@ export function pinsTemperature(modelId: string): boolean {
  * correctable — a stricter gateway costs one refused request, and
  * `streamRequest()` remembers what the endpoint said.
  *
- * The 13 unlisted models are ones no vendor publishes and the aggregators
+ * The 11 unlisted models are ones no vendor publishes and the aggregators
  * disagree about. They are NOT a gap: a refusal states the ceiling in full, and
  * `streamRequest()` reads it off, retries once and remembers it for the model
  * (issue #71). A vendor figure the gateway turns out to be stricter than costs
@@ -920,7 +948,7 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['gpt-6.1-terra', 128000],
   // 2 provider(s), unanimous
   ['inclusionai/ling-3.1-flash-1019', 262144],
-  // 1 provider(s), unanimous
+  // 2 provider(s), unanimous
   ['meituan/LongCat-2.0', 131072],
   // meta
   ['meta/muse-spark-1.1', 131072],
@@ -942,7 +970,7 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['MiniMaxAI/MiniMax-M2.7', 131072],
   // minimax
   ['MiniMaxAI/MiniMax-M3', 524288],
-  // 8 provider(s), unanimous
+  // 9 provider(s), unanimous
   ['mistral/mistral-large-4', 262144],
   // moonshotai
   ['moonshotai/Kimi-K2.6', 262144],
@@ -956,6 +984,8 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['moonshotai/Kimi-K3.1-Pro', 1048576],
   // nvidia
   ['nvidia/nemotron-3-ultra-550b-a55b', 65536],
+  // 1 provider(s), unanimous
+  ['ornith/ornith-1.5-122b', 32768],
   // alibaba
   ['Qwen/Qwen3.6-Max-Preview', 65536],
   // alibaba
@@ -972,10 +1002,14 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['Qwen/Qwen3.8-Max', 131072],
   // 2 provider(s), unanimous
   ['Qwen/Qwen3.8-Max-0902', 131072],
+  // 1 provider(s), unanimous
+  ['Qwen/Qwen3.8-Max-Prime', 131072],
   // alibaba
   ['Qwen/Qwen3.8-Omni-Flash', 131072],
   // sakana
   ['sakana/fugu-ultra', 1000000],
+  // 1 provider(s), unanimous
+  ['stealth/glyph-cluster:free', 256000],
   // stepfun
   ['stepfun/Step-3.5-Flash', 256000],
   // stepfun
@@ -1038,8 +1072,8 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * `/docs/plans/max` and `/docs/resources/pricing-limits`). Each plan's model
  * list is a superset of the one below it: Go ⊂ GOAT ⊂ Pro ⊂ Provider/Max.
  * Models absent from every plan list (Claude Opus/Fable, Fugu Ultra) are
- * Provider-tier. Re-verified at command-code@1.88.5 (2026-11-07) against the
- * live `?view=client` catalog: 110 ids, still a strict superset chain. Mistral
+ * Provider-tier. Re-verified at command-code@1.89.1 (2026-11-16) against the
+ * live `?view=client` catalog: 114 ids, still a strict superset chain. Mistral
  * Large 4 (1.75.0) was the only addition at the 1.77.0 check; the 1.78.0/1.79.0 pair
  * added Claude Haiku 5.5 at Pro and the free Glyph Cluster preview at Go.
  * 1.79.2 lowers Haiku 5.5's minimum plan to GOAT; 1.80.0 adds Muse Wonder at
@@ -1141,8 +1175,8 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // 2026-11-10 (catalog-only sync): Muse Ember is Go on every source —
   // `minimumPlan: "individual-go"` in `?view=client` and every tier true in the
   // pricing page's embedded availability, so the go / goat / pro / max plan
-  // pages all list it. Catalog-only evidence: the 1.88.5 artifact does not name
-  // it.
+  // pages all list it. It entered on catalog-only evidence; the 1.89.0 artifact
+  // registry row now carries `minimumPlan: "individual-go"` as well.
   'meta/muse-ember': 'go',
   // command-code@1.75.0; the pricing page's embedded availability grants every
   // tier (individual-go through teams-pro) — the "all":true shape shared by the
@@ -1283,8 +1317,9 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // 2026-11-10 (catalog-only sync): the Fable 5.2 flagship is Provider/Max like
   // its siblings — `minimumPlan: "individual-provider"`, while the pricing
   // page's embedded availability sets go / go-v1 / goat / pro / pro-v1 false and
-  // max / ultra / provider / teams-pro true. Catalog-only evidence: the 1.88.5
-  // artifact does not name it.
+  // max / ultra / provider / teams-pro true. It entered on catalog-only
+  // evidence; the 1.89.0 artifact registry row now carries
+  // `minimumPlan: "individual-provider"` as well.
   'claude-fable-5-2': 'provider',
   // command-code@1.40.0; Provider/Max exactly like its `claude-fable-5`
   // predecessor — individual-provider/max/ultra and teams-pro only.

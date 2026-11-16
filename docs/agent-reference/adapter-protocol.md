@@ -36,7 +36,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   snapshot in `src/capabilities.ts` is informational and may lag provider coverage or capacity.
   `tests/adapter.test.ts` checks the chat transports, off by default, unsupported models retaining the header,
   and 422 diagnosis.
-- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.88.5):
+- **Wire protocol** (reverse-engineered, command-code@1.28.4; re-verified through 1.89.1):
   - `POST {apiBase}/alpha/generate` — CLI transport body `{ config, memory, taste, skills, permissionMode,
     params: { model, messages, tools, system, max_tokens, temperature, stream, reasoning_effort? },
     threadId }`. The real CLI's request also carries `mode` (server-validated against a fixed enum —
@@ -315,6 +315,13 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   - Web search: `POST {apiBase}/alpha/web-search` — body `{ query, numResults, allowedDomains?,
     blockedDomains? }` → `{ results: [{ title, url, snippet }] }`; same `Authorization: Bearer <key>` +
     `x-command-code-version` as generate.
+  - `GET {apiBase}/provider/v1/notices` — the CLI's startup-announcement feed, added in
+    command-code@1.89.1 (absent from 1.88.5 and 1.89.0). Public, unauthenticated, `{ data: [...] }`
+    where each entry carries `id`, `line`, `url` and `endsAt`; the CLI shows the first unexpired,
+    unseen entry, caches the body under `~/.commandcode/cache/notices/v1/` with its ETag and
+    remembers seen ids under `~/.commandcode/notices/seen-*`, and `CMD_DISABLE_NOTICES=1` turns it
+    off. It is TUI presentation only — announcement text is not a capability signal, so this adapter
+    neither fetches it nor derives anything from it. A live GET on 2026-11-16 returned `{"data": []}`.
   - Defaults: `apiBase = https://api.commandcode.ai`, and `COMMAND_CODE_CLI_VERSION` — the pinned
     official CLI version sent as `x-command-code-version` (see `src/adapter.ts`).
   - **Request image budget (issue #37)**: the gateway caps a whole request body at a measured ~50.17 MB

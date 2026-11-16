@@ -71,6 +71,7 @@ export type SettingsCommandCodeKey =
   | 'visibleModelsHint'
   | 'visibleModelsPick'
   | 'visibleModelsCount'
+  | 'visibleModelsCountOf'
   | 'visibleModelsShowAll'
   | 'visibleModelsStaleHint'
   | 'visibleModelsCleanStale'
@@ -83,6 +84,7 @@ export type SettingsCommandCodeKey =
   | 'contextOverrideModel'
   | 'contextOverrideValue'
   | 'contextOverrideNoCatalog'
+  | 'contextOverrideEmpty'
   | 'modelNamesTitle'
   | 'modelNamesHint'
   | 'modelNamesAdd'
@@ -90,6 +92,9 @@ export type SettingsCommandCodeKey =
   | 'modelNamesModel'
   | 'modelNamesValue'
   | 'modelNamesNoCatalog'
+  | 'modelNamesEmpty'
+  | 'listCountOne'
+  | 'listCountMany'
   | 'contextWindowTooSmall'
   | 'contextWindowTooLarge'
   | 'contextWindowInvalid'
@@ -334,6 +339,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   visibleModelsHint: '只列出勾选的模型，都不勾选＝显示全部。网页与终端共用。',
   visibleModelsPick: '选择要保留的模型…',
   visibleModelsCount: '已选 {count} 个模型',
+  visibleModelsCountOf: '已选 {count} / {total} 个模型',
   visibleModelsShowAll: '显示全部',
   visibleModelsStaleHint: '有 {count} 个已选模型在目录中找不到了（可能已下架），不影响其他模型；可清理或保留。',
   visibleModelsCleanStale: '清理失效（{count}）',
@@ -346,6 +352,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   contextOverrideModel: '模型',
   contextOverrideValue: '上下文长度',
   contextOverrideNoCatalog: '模型目录尚未加载，暂时无法添加按模型覆盖。',
+  contextOverrideEmpty: '暂无覆盖 · 所有模型跟随目录默认',
   modelNamesTitle: '模型名称',
   modelNamesHint: '为单个模型指定选择器里显示的名称，便于按名称判断条件的插件匹配；留空沿用目录名。',
   modelNamesAdd: '添加模型',
@@ -353,6 +360,9 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   modelNamesModel: '模型',
   modelNamesValue: '显示名称',
   modelNamesNoCatalog: '模型目录尚未加载，暂时无法添加模型名称。',
+  modelNamesEmpty: '暂无重命名 · 列表使用目录给出的名称',
+  listCountOne: '1 项',
+  listCountMany: '{count} 项',
   contextWindowTooSmall: '上下文长度不能小于 1',
   contextWindowTooLarge: '上下文长度不能大于 10,000,000',
   contextWindowInvalid: '请输入有效的整数 token 数',
@@ -618,6 +628,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   visibleModelsHint: 'Only checked models are listed; none checked shows all. Web and terminal share this.',
   visibleModelsPick: 'Select models to keep…',
   visibleModelsCount: '{count} model(s) selected',
+  visibleModelsCountOf: '{count} of {total} models selected',
   visibleModelsShowAll: 'Show all',
   visibleModelsStaleHint: '{count} selected model(s) are no longer in the catalog (possibly retired);'
     + ' other models are unaffected. Clean them up or keep them.',
@@ -631,6 +642,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   contextOverrideModel: 'Model',
   contextOverrideValue: 'Context length',
   contextOverrideNoCatalog: 'The model catalog has not loaded yet; per-model overrides cannot be added right now.',
+  contextOverrideEmpty: 'No overrides yet · every model follows the catalog default',
   modelNamesTitle: 'Model names',
   modelNamesHint: 'Set the name a model shows in the picker so plugins that match on the name can identify it. Leave empty to use the catalog name.',
   modelNamesAdd: 'Add model',
@@ -638,6 +650,9 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   modelNamesModel: 'Model',
   modelNamesValue: 'Display name',
   modelNamesNoCatalog: 'The model catalog has not loaded yet; custom names cannot be added right now.',
+  modelNamesEmpty: 'No custom names yet · the list uses catalog names',
+  listCountOne: '1 item',
+  listCountMany: '{count} items',
   contextWindowTooSmall: 'Context length must be at least 1',
   contextWindowTooLarge: 'Context length must not exceed 10,000,000',
   contextWindowInvalid: 'Enter a valid whole-token count',

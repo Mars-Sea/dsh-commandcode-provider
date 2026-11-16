@@ -97,23 +97,38 @@ type GenerateOptions = Omit<HarnessGenerateOptions, 'purpose'> & { purpose?: str
 // Request / connection defaults (protocol constants). The model/plan/deal
 // capability snapshot lives in ./capabilities.ts — the sync-only surface.
 // ---------------------------------------------------------------------------
-// Rides every request as `x-command-code-version`. The 1.88.5 bump is a pure
-// header sync: the npm package's own CHANGELOG.md — the website
-// https://commandcode.ai/changelog covers only the Desktop app — has one entry,
-// "fix: cmd login and /login start a new login if API key is wrong, deleted or
-// expired", which is CLI-side login UX this plugin never renders (its login
-// flow is its own device-code flow). Static artifact comparison against 1.88.4
-// finds no protocol change: 26 endpoint paths, 13 custom headers, the ZDR
-// exception set (19), `buildModelGroups` / `getPlanInfo`, the `/alpha/generate`
-// call site and the `promptCache` / `reasoning_effort` / `max_tokens` /
-// `cache_control` counts all match; the subscription map and ZDR diff are empty.
-// The only new literal is `DEEPSEEK_V4_1_FLASH_ULTRAFAST`, bound to the model
-// the server catalog added first: `catalogVersion` moves `b21583db…` ->
-// `d4517aa3…`, the default view 95 -> 96 and `?view=client` 109 -> 110 with
-// `deepseek/deepseek-v4.1-flash-ultrafast` (1M context, text + image, efforts
-// `off/low/high/max`, `individual-goat`, `zdr:true`, $2.40/$9.60/$0.048). That
-// row is a capabilities-snapshot sync, not a runtime change.
-export const COMMAND_CODE_CLI_VERSION = '1.88.5'
+// Rides every request as `x-command-code-version`. The 1.88.5 -> 1.89.1 bump is
+// a header sync plus one additive endpoint the plugin never calls.
+//
+// 1.89.0 (minor): sub-agents move to the background with `Ctrl+B`, a finished
+// background sub-agent wakes the main agent, sub-agent rows render in the
+// background panel and status bar, the sub-agent turn limit becomes
+// configurable (default 100 -> 200) and a default sub-agent model can be picked
+// in `/config`; Markdown list rendering is fixed; the free Beam 1.0 row is
+// retired — it stays in the registry under the new name `Beam 1.0 (Free)`, now
+// `hidden`, the same path Crouton Alpha took. 1.89.1 (patch): startup
+// announcements fetched from `GET {apiBase}/provider/v1/notices` so new models
+// and free tiers no longer need a CLI release — a new literal in the artifact,
+// but not a route this adapter speaks, and the live endpoint currently answers
+// `{"data":[]}`.
+//
+// Static artifact comparison against 1.88.5 finds no protocol change on either
+// train: the 25 `/alpha` + `/provider` + `/api` route literals, 13 custom
+// headers, `buildModelGroups` /
+// `getPlanInfo` / `getSupportedEfforts` / `modelSupportsZdr` /
+// `knownModelSupportsZdr`, both ZDR anchors, the `/alpha/generate` call site and
+// the `promptCache` (5) / `reasoning_effort` (7) / `max_tokens` (12) /
+// `cache_control` (1) counts all match; `x-command-code-version` and
+// `x-cmd-zdr` are unchanged, and the chat wire bodies gained no field. The
+// registry-side change is four "catalog-first" rows finally landing in the
+// artifact — `claude-fable-5-2`, `google/gemini-4-carbon`, `meta/muse-ember`,
+// `thinkingmachines/inkling-2-small:free` — each identical to the entry this
+// snapshot already carries, so the audit's four "absent from CLI registry"
+// errors drop to zero. The embedded snapshot also starts marking
+// `reflection/beam:free` and `stealth/crouton-alpha` `hidden: true`, the
+// verdict the catalog already gave those two rows before this snapshot retired
+// them. `catalogVersion` stays `709028a9…`, so no capability table moves.
+export const COMMAND_CODE_CLI_VERSION = '1.89.1'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**

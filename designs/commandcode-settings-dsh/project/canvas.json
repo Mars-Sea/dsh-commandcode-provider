@@ -48,6 +48,14 @@
       "w": 1680,
       "h": 880,
       "title": "原语复用对照表 · 移除自写组件映射清单"
+    },
+    "ModelsSection.dc.html": {
+      "x": 0,
+      "y": 2540,
+      "w": 880,
+      "h": 880,
+      "title": "模型与上下文 · 重设计（行式对齐 + 每模型表格）",
+      "is_interactive": true
     }
   },
   "order": [
@@ -55,7 +63,8 @@
     "FormAndOverrides.dc.html",
     "SegmentedTabsVariant.dc.html",
     "DarkAndOverlays.dc.html",
-    "ComponentReuseSpec.dc.html"
+    "ComponentReuseSpec.dc.html",
+    "ModelsSection.dc.html"
   ],
   "notes": {
     "row1_title": {
@@ -71,6 +80,12 @@
       "text": "深色主题、浮层菜单与原语收敛清单",
       "kind": "title1",
       "maxW": 2680
+    },
+    "modelsSectionNote": {
+      "x": 920,
+      "y": 2540,
+      "w": 320,
+      "text": "已按此稿落地（2026-11-15）：三块间距、表头带条目数与「添加模型」、两张表统一列宽、空状态说明、行内「重置」回到控制列。\n\n首轮落地时两个数字字段仍按宿主 SettingsValueField 的「标签在上、输入在下」堆叠，看起来像没改；现已按本稿改成行式（SettingsRowField），帮助、aria、错误态都保留。"
     }
   },
   "designSystems": []

@@ -47,7 +47,6 @@ export const PAGE_CSS = `
  * padding, so adjacent blocks are always 24px apart — no stacked gaps. */
 .cc-groupBody{flex-direction:column;padding-left:22px;display:flex}
 .cc-groupBody[hidden]{display:none}
-.cc-groupDesc{margin:0;padding:0 0 8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 /* Rows inside a flat group (GeneralSection / WebSearchCard geometry).
  * No hairline between rows: a divider is reserved for separating top-level
  * groups, so rows are told apart by spacing alone. A row never wraps: the text
@@ -69,19 +68,18 @@ export const PAGE_CSS = `
 /* The override marker sits with the control it describes, so the row keeps a
  * single right edge instead of a badge floating mid-row. */
 .cc-rowControl{flex:none;align-items:center;gap:8px;margin-left:auto;display:inline-flex}
-.cc-overrideTag{align-items:center;gap:8px;display:inline-flex}
+.cc-overrideTag{align-items:center;gap:8px;margin-right:4px;display:inline-flex}
 .cc-resetLink{padding:0;border:0;background:0 0;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;transition:transform .15s var(--cc-ease-out),color .15s ease}
 .cc-resetLink:active:not(:disabled){transform:scale(.95)}
 .cc-resetLink:disabled{cursor:default;opacity:.4}
 .cc-resetLink:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:4px}
 /* Multi-column SettingsValueField grids (SubagentLimitsFields pattern).
  * No padding of their own: each field already brings the shared 12px rhythm. */
-.cc-fieldGrid2{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px;display:grid}
 .cc-fieldGrid3{grid-template-columns:repeat(3,minmax(0,1fr));gap:0 12px;display:grid}
 .cc-fieldCell{min-width:0}
 .cc-monoField input{font-family:var(--ds-font-family-code)}
 .cc-numField input{font-variant-numeric:tabular-nums}
-@media (max-width:560px){.cc-fieldGrid2,.cc-fieldGrid3{grid-template-columns:minmax(0,1fr);gap:0}}
+@media (max-width:560px){.cc-fieldGrid3{grid-template-columns:minmax(0,1fr);gap:0}}
 /* Press feedback added onto primitive Buttons & action controls. */
 .cc-press{transition:transform .15s var(--cc-ease-out),background-color .15s ease,color .15s ease,border-color .15s ease}
 .cc-press:active:not(:disabled){transform:scale(.97)}
@@ -105,27 +103,53 @@ export const PAGE_CSS = `
 .cc-check:checked{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
 .cc-check:checked::after{content:'';position:absolute;top:2px;left:4.5px;width:3px;height:7px;border:solid var(--dsw-alias-label-primary-foreground,#fff);border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
 .cc-checkName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Per-model overrides (ModelsSection.modelEntry: concentric R14 = 4px pad + R10 controls).
- * The head is an ordinary row, so an empty block is exactly one row tall and
- * its add button sits on the same right edge as every other row control. */
-.cc-overrideBlock{flex-direction:column;display:flex}
-.cc-overrideList{flex-direction:column;gap:6px;padding-bottom:12px;display:flex}
-.cc-overrideCols{grid-template-columns:minmax(0,1.35fr) 136px 28px;gap:6px;padding:0 6px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;display:grid}
-.cc-overrideColsName{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 28px}
-.cc-overrideColRight{text-align:right;padding-right:4px}
-.cc-modelEntry{border:.5px solid var(--dsw-alias-border-l4);border-radius:14px;grid-template-columns:minmax(0,1.35fr) 136px 28px;align-items:center;gap:6px;padding:4px;display:grid}
-.cc-modelEntryName{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 28px}
+/* Sub-blocks inside one group (2026-11-15 layout pass): the group body itself
+ * stays flush, so a block that starts a new sub-topic carries one 24px lift —
+ * visibility rows, the default budget fields, then each per-model table.
+ * Spacing does the grouping; no extra rule and no extra heading. */
+.cc-block{margin-top:24px}
+/* A block built from cc-row elements already carries 12px above and below each row,
+ * so it needs no lift of its own, and the block under it only the remaining
+ * 12px of the 24px rhythm. Keeps every gap in the group at the same 24px. */
+.cc-blockRows{margin-top:0}
+.cc-blockRows+.cc-block{margin-top:12px}
+/* One per-model list: title + count + add on ONE line, then the shared columns.
+ * Both tables use the same tracks, so 上下文长度 and 显示名称 line up as a
+ * table instead of each table inventing its own widths. */
+.cc-list{flex-direction:column;gap:6px;display:flex}
+.cc-listHead{align-items:center;gap:8px;min-height:28px;display:flex}
+.cc-listTitle{flex:none;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:20px}
+.cc-listCount{flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.cc-listAdd{flex:none;margin-left:auto}
+.cc-listHint{margin:0;padding:0 4px 0 6px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.cc-listRows{flex-direction:column;gap:6px;display:flex}
+.cc-overrideCols{grid-template-columns:minmax(0,1fr) 160px 28px;gap:6px;padding:0 4px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;display:grid}
+.cc-listColName{padding-left:6px}
+.cc-listColValue{padding-right:8px;text-align:right}
+/* The names column holds text, so its header follows the input's own alignment. */
+.cc-listColValueStart{padding-right:0;padding-left:8px;text-align:left}
+.cc-modelEntry{border:.5px solid var(--dsw-alias-border-l4);border-radius:14px;grid-template-columns:minmax(0,1fr) 160px 28px;align-items:center;gap:6px;padding:4px;display:grid}
 .cc-contextSelect{position:relative;min-width:0;display:block}
 .cc-fieldInput{box-sizing:border-box;width:100%;height:30px;min-width:0;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;transition:border-color .15s ease}
 .cc-fieldInput::placeholder{color:var(--dsw-alias-label-dimmed)}
 .cc-fieldInput:focus-visible{border-color:var(--dsw-alias-state-business-primary);outline:none}
 .cc-fieldInput:disabled{opacity:.5;cursor:default}
 .cc-fieldInputNum{text-align:right;font-variant-numeric:tabular-nums}
+/* Value rows (SettingsRowField): the box is as wide as the value it holds. */
+.cc-fieldRowInput{width:140px;height:32px;padding:0 10px}
 .cc-fieldInputInvalid{border-color:var(--dsw-alias-state-error-primary)}
 .cc-contextModel{appearance:none;-webkit-appearance:none;background:var(--dsw-alias-bg-module-platform);font-family:var(--ds-font-family-code);font-size:12px;padding-inline-end:26px;text-overflow:ellipsis;cursor:pointer}
 .cc-contextCaret{position:absolute;inset-inline-end:8px;top:50%;color:var(--dsw-alias-label-tertiary);transform:translateY(-50%);pointer-events:none}
 .cc-contextError{grid-column:1/-1;padding:2px 6px 2px}
-/* Accounts section: entity cards (--dsw-alias-settings-card-*, R20) + concentric R10 inner surface. */
+/* Accounts section: entity cards (--dsw-alias-settings-card-*, R20) + concentric R10 inner surface.
+ * This ONE body runs full-bleed instead of under the group title's 22px gutter:
+ * the gutter lines text up under the title, while these entity cards are
+ * surfaces — inset by it they read as a box nested inside the group rather than
+ * as content of the page (user report, 2026-11-15). They take the group head's
+ * own width, and the body carries a single 8px rhythm — the same gap two cards
+ * already use between each other — so the add-account / analytics row is no
+ * longer flush against the card above it. Every other group keeps the gutter. */
+.cc-accountGroupBody{padding-left:0;gap:8px}
 .cc-accountList{flex-direction:column;gap:8px;display:flex}
 .cc-accountItem{border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l4));border-radius:var(--dsw-radius-xl,20px);background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));flex-direction:column;gap:10px;padding:12px;display:flex}
 .cc-accountItemActive{border-color:var(--dsw-alias-border-l3)}
@@ -140,7 +164,6 @@ export const PAGE_CSS = `
 .cc-accountTags{flex:0 1 auto;align-items:center;gap:6px;min-width:0;overflow:hidden;display:inline-flex}
 .cc-accountTags>*{flex:none}
 .cc-unpin{flex:none;color:var(--dsw-alias-label-secondary)}
-.cc-accountChevron{flex:none;margin-left:auto;color:var(--dsw-alias-label-tertiary)}
 .cc-iconButton{box-sizing:border-box;flex:none;justify-content:center;align-items:center;width:28px;height:28px;padding:0;border:0;border-radius:var(--dsw-radius-sm,8px);background:0 0;color:var(--dsw-alias-label-tertiary);cursor:pointer;display:inline-flex;transition:transform .15s var(--cc-ease-out),background-color .15s ease,color .15s ease}
 .cc-iconButton:active:not(:disabled){transform:scale(.95)}
 .cc-iconButton:disabled{cursor:default;opacity:.4}

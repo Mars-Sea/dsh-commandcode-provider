@@ -232,13 +232,15 @@ export function accountIssues(entries: readonly (Pick<CommandCodeAccountUsage, '
 }
 
 /** One horizontal setting row (GeneralSection / WebSearchCard geometry). */
-function SettingRow({ title, titleFor, titleId, tag, description, error, control, className }: {
+function SettingRow({ title, titleFor, titleId, tag, description, error, errorId, control, className }: {
   title: string
   titleFor?: string
   titleId?: string
   tag?: ReactNode
   description?: ReactNode
   error?: string | undefined
+  /** `id` on the error line, so the control can name it in `aria-describedby`. */
+  errorId?: string | undefined
   control?: ReactNode
   className?: string | undefined
 }) {
@@ -251,7 +253,7 @@ function SettingRow({ title, titleFor, titleId, tag, description, error, control
             : <span className="cc-rowTitle" id={titleId}>{title}</span>}
           {tag}
         </div>
-        {error !== undefined ? <p className="cc-rowError">{error}</p> : null}
+        {error !== undefined ? <p className="cc-rowError" id={errorId}>{error}</p> : null}
         {error === undefined && description !== undefined ? <div className="cc-rowDesc">{description}</div> : null}
       </div>
       {control !== undefined ? <div className="cc-rowControl">{control}</div> : null}
@@ -260,8 +262,11 @@ function SettingRow({ title, titleFor, titleId, tag, description, error, control
 }
 
 /**
- * Overridden marker for non-text rows (`ToggleField`), matching `SettingsValueField`'s
- * `Tag` + quiet `reset` button pair so every overridden row reads identically.
+ * Reset control for non-text rows (`ToggleField`). The reset IS the overridden
+ * marker: it appears only while the row carries a draft, so the row no longer
+ * also paints an `已自定义` chip beside its label — that chip put a
+ * variable-width element in the middle of every row and left the control
+ * alone at the far edge (2026-11-15 layout pass).
  */
 function OverrideTag({ label, state, disabled, t, onReset }: {
   label: string
@@ -273,7 +278,6 @@ function OverrideTag({ label, state, disabled, t, onReset }: {
   if (!state.overridden && !state.clear) return null
   return (
     <span className="cc-overrideTag">
-      {state.overridden ? <Tag tone="neutral">{t('overridden')}</Tag> : null}
       <button
         type="button"
         className="cc-resetLink"
@@ -342,33 +346,33 @@ export function ToggleField({
       title={label}
       titleId={id}
       tag={
-        <>
-          {hint !== undefined && hint !== '' ? (
-            <button
-              type="button"
-              className="cc-helpButton"
-              aria-label={label}
-              aria-expanded={helpOpen}
-              aria-controls={helpId}
-              onClick={() => setHelpOpen((open) => !open)}
-            >
-              <IconInfoOutlineRegular size={12} />
-            </button>
-          ) : null}
-          {/* The marker and its reset describe the field, so they sit with the
-              label; the control column then holds exactly one thing. */}
-          <OverrideTag label={label} state={state} disabled={disabled} t={t} onReset={onReset} />
-        </>
+        hint !== undefined && hint !== '' ? (
+          <button
+            type="button"
+            className="cc-helpButton"
+            aria-label={label}
+            aria-expanded={helpOpen}
+            aria-controls={helpId}
+            onClick={() => setHelpOpen((open) => !open)}
+          >
+            <IconInfoOutlineRegular size={12} />
+          </button>
+        ) : undefined
       }
       description={helpOpen && hint !== undefined && hint !== '' ? <p id={helpId}>{hint}</p> : undefined}
       control={
-        <Switch
-          className="cc-switch"
-          checked={checked}
-          label={label}
-          disabled={disabled}
-          onChange={(next) => onEdit(next ? 'true' : 'false')}
-        />
+        <>
+          {/* The reset sits in the control column, immediately beside the
+              control it resets: one label column, one control edge. */}
+          <OverrideTag label={label} state={state} disabled={disabled} t={t} onReset={onReset} />
+          <Switch
+            className="cc-switch"
+            checked={checked}
+            label={label}
+            disabled={disabled}
+            onChange={(next) => onEdit(next ? 'true' : 'false')}
+          />
+        </>
       }
     />
   )
@@ -684,9 +688,12 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
   onClear(): void
 }) {
   const count = state.visibleModels.length
+  const total = state.catalogModels.length
   const pickT: Translate<SettingsCommandCodeKey> = (key, params) => {
     if (key === 'modelPick' || key === 'modelCount') {
-      return state.visibleModelsAll ? t('visibleModelsShowAll') : t('visibleModelsCount', { count })
+      if (state.visibleModelsAll) return t('visibleModelsShowAll')
+      if (total > 0 && count <= total) return t('visibleModelsCountOf', { count, total })
+      return t('visibleModelsCount', { count })
     }
     return t(key, params)
   }
@@ -697,7 +704,6 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
     <SettingRow
       title={t('visibleModelsTitle')}
       titleFor="cc-visible-models"
-      tag={!state.visibleModelsAll ? <Tag tone="outline">{t('overridden')}</Tag> : undefined}
       description={
         staleIds.length > 0 && catalogReady ? <p>{t('visibleModelsStaleHint', { count: staleIds.length })}</p> : undefined
       }
@@ -737,14 +743,19 @@ function VisibleModelsRow({ t, state, disabled, onSelect, onClear }: {
 /**
  * Native flat group (`PluginInventorySettingsTab.group` geometry): `0.5px`
  * hairline divider between groups, instant `hidden` toggle, `160ms` chevron.
+ *
+ * `bodyClassName` is the group body's escape hatch for the one place whose
+ * geometry is not the default gutter — the accounts block renders surface
+ * cards, not text rows (see `.cc-accountGroupBody` in `page-styles`).
  */
-function FoldableGroup({ id, title, expanded, onToggle, badges, action, children }: {
+function FoldableGroup({ id, title, expanded, onToggle, badges, action, bodyClassName, children }: {
   id: FoldGroup
   title: string
   expanded: boolean
   onToggle(): void
   badges?: ReactNode
   action?: ReactNode
+  bodyClassName?: string
   children: ReactNode
 }) {
   const titleId = `cc-group-${id}-title`
@@ -764,7 +775,7 @@ function FoldableGroup({ id, title, expanded, onToggle, badges, action, children
         </h3>
         {action}
       </div>
-      <div id={bodyId} className="cc-groupBody" hidden={!expanded}>
+      <div id={bodyId} className={bodyClassName === undefined ? 'cc-groupBody' : `cc-groupBody ${bodyClassName}`} hidden={!expanded}>
         {children}
       </div>
     </section>
@@ -850,6 +861,112 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, on
 }
 
 /**
+ * Header of one per-model list: title, how many entries it holds, and the add
+ * button pinned to the control edge. Reading the count here means an empty
+ * list still looks like a table with nothing in it rather than like a heading
+ * (the empty line under it says what "nothing" means).
+ */
+function ModelListHead({ title, count, addLabel, addDisabled, onAdd, t }: {
+  title: string
+  count: number
+  addLabel: string
+  addDisabled: boolean
+  onAdd(): void
+  t: Translate<SettingsCommandCodeKey>
+}) {
+  return (
+    <div className="cc-listHead">
+      <span className="cc-listTitle">{title}</span>
+      <span className="cc-listCount">{count === 1 ? t('listCountOne') : t('listCountMany', { count })}</span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="cc-press cc-listAdd"
+        icon={<IconPlusOutlineRegular size={13} />}
+        disabled={addDisabled}
+        onClick={onAdd}
+      >
+        {addLabel}
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * One-line staged value row — `标签 ⓘ ……… 重置 [ 输入框 ]`.
+ *
+ * The host's `SettingsValueField` stacks its input under the label; that shape
+ * made the two model defaults the heaviest object in the group (two half-page
+ * boxes for values like `200K`), and it was the one part of the models redesign
+ * that did not land. These two rows borrow the switch row's anatomy instead, so
+ * every row in the group ends on the same control edge. Everything the
+ * primitive gave us is kept: `<label for>`, the ⓘ help region, `aria-invalid`,
+ * `aria-describedby`, the reset, `inputMode="numeric"`.
+ */
+function SettingsRowField({ id, label, hint, text, overridden, invalid, invalidLabel, resetLabel, placeholder, disabled, numeric, onEdit, onReset }: {
+  id: string
+  label: string
+  hint?: string | undefined
+  text: string
+  overridden: boolean
+  invalid: boolean
+  invalidLabel: string
+  resetLabel: string
+  placeholder?: string | undefined
+  disabled: boolean
+  numeric?: boolean
+  onEdit(text: string): void
+  onReset(): void
+}) {
+  const [helpOpen, setHelpOpen] = useState(false)
+  const helpId = `${id}-help`
+  const messageId = `${id}-message`
+  const describedBy = [invalid ? messageId : undefined, helpOpen ? helpId : undefined].filter(Boolean).join(' ')
+  return (
+    <SettingRow
+      title={label}
+      titleFor={id}
+      tag={hint === undefined || hint === '' ? undefined : (
+        <button
+          type="button"
+          className="cc-helpButton"
+          aria-label={label}
+          aria-expanded={helpOpen}
+          aria-controls={helpId}
+          onClick={() => setHelpOpen((open) => !open)}
+        >
+          <IconInfoOutlineRegular size={12} />
+        </button>
+      )}
+      description={helpOpen && hint !== undefined && hint !== '' ? <p id={helpId}>{hint}</p> : undefined}
+      error={invalid ? invalidLabel : undefined}
+      errorId={invalid ? messageId : undefined}
+      control={
+        <>
+          {overridden ? (
+            <button type="button" className="cc-resetLink" disabled={disabled} onClick={onReset}>
+              {resetLabel}
+            </button>
+          ) : null}
+          <input
+            id={id}
+            className="cc-fieldInput cc-fieldRowInput"
+            type="text"
+            inputMode={numeric === true ? 'numeric' : undefined}
+            aria-invalid={invalid || undefined}
+            aria-describedby={describedBy === '' ? undefined : describedBy}
+            placeholder={placeholder ?? ''}
+            value={text}
+            disabled={disabled}
+            onChange={(event) => onEdit(event.target.value)}
+          />
+        </>
+      }
+    />
+  )
+}
+
+/**
  * Global context & output fields (reusing `SettingsValueField` in a 2-column
  * `SubagentLimitsFields` grid) plus concentric `R14 → R10` per-model rows.
  */
@@ -884,108 +1001,99 @@ function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormC
   }
   return (
     <>
-      <div className="cc-fieldGrid2">
-        <div className="cc-fieldCell cc-numField">
-          <SettingsValueField
-            id="cc-context-window"
-            label={t('contextWindow')}
-            help={{ label: t('contextWindow'), content: <p>{t('contextWindowHint')}</p> }}
-            overriddenLabel={t('overridden')}
-            resetLabel={t('reset')}
-            invalidLabel={invalidCopy(state.contextWindow.invalidReason, t, 'context')}
-            disabled={disabled}
-            placeholder={t('placeholderCatalog')}
-            {...state.contextWindow}
-            onEdit={(text) => onEdit('contextWindow', text)}
-            onReset={() => onReset('contextWindow')}
-          />
-        </div>
-        <div className="cc-fieldCell cc-numField">
-          <SettingsValueField
-            id="cc-max-output-tokens"
-            label={t('maxOutputTokens')}
-            help={{ label: t('maxOutputTokens'), content: <p>{t('maxOutputTokensHint')}</p> }}
-            overriddenLabel={t('overridden')}
-            resetLabel={t('reset')}
-            invalidLabel={invalidCopy(state.maxOutputTokens.invalidReason, t, 'output')}
-            disabled={disabled}
-            placeholder={t('placeholderAuto')}
-            {...state.maxOutputTokens}
-            onEdit={(text) => onEdit('maxOutputTokens', text)}
-            onReset={() => onReset('maxOutputTokens')}
-          />
-        </div>
+      {/* 默认预算：两个短值走行式，和上面的开关行同一条控制边。 */}
+      <div className="cc-block cc-blockRows">
+        <SettingsRowField
+          id="cc-context-window"
+          label={t('contextWindow')}
+          hint={t('contextWindowHint')}
+          placeholder={t('placeholderCatalog')}
+          resetLabel={t('reset')}
+          invalidLabel={invalidCopy(state.contextWindow.invalidReason, t, 'context')}
+          disabled={disabled}
+          numeric
+          {...state.contextWindow}
+          onEdit={(text) => onEdit('contextWindow', text)}
+          onReset={() => onReset('contextWindow')}
+        />
+        <SettingsRowField
+          id="cc-max-output-tokens"
+          label={t('maxOutputTokens')}
+          hint={t('maxOutputTokensHint')}
+          placeholder={t('placeholderAuto')}
+          resetLabel={t('reset')}
+          invalidLabel={invalidCopy(state.maxOutputTokens.invalidReason, t, 'output')}
+          disabled={disabled}
+          numeric
+          {...state.maxOutputTokens}
+          onEdit={(text) => onEdit('maxOutputTokens', text)}
+          onReset={() => onReset('maxOutputTokens')}
+        />
       </div>
 
-      <div className="cc-overrideBlock">
-        <div className="cc-row">
-          <div className="cc-rowText">
-            <div className="cc-rowTitleLine">
-              <span className="cc-rowTitle">{t('contextOverridesTitle')}</span>
-              {rows.length > 0 ? <Tag tone="neutral">{rows.length}</Tag> : null}
-            </div>
-          </div>
-          <div className="cc-rowControl">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="cc-press"
-              icon={<IconPlusOutlineRegular size={13} />}
-              disabled={disabled || available.length === 0}
-              onClick={addRow}
-            >
-              {t('contextOverrideAdd')}
-            </Button>
-          </div>
-        </div>
-        {state.catalogFailed ? <p className="cc-groupDesc">{t('contextOverrideNoCatalog')}</p> : null}
+      <div className="cc-block cc-list">
+        <ModelListHead
+          title={t('contextOverridesTitle')}
+          count={rows.length}
+          addLabel={t('contextOverrideAdd')}
+          addDisabled={disabled || available.length === 0}
+          onAdd={addRow}
+          t={t}
+        />
+        {state.catalogFailed ? (
+          <p className="cc-listHint">{t('contextOverrideNoCatalog')}</p>
+        ) : rows.length === 0 ? (
+          <p className="cc-listHint">{t('contextOverrideEmpty')}</p>
+        ) : null}
         {rows.length > 0 ? (
-          <div className="cc-overrideList">
+          <>
             <div className="cc-overrideCols">
-              <span>{t('contextOverrideModel')}</span>
-              <span className="cc-overrideColRight">{t('contextOverrideValue')}</span>
+              <span className="cc-listColName">{t('contextOverrideModel')}</span>
+              <span className="cc-listColValue">{t('contextOverrideValue')}</span>
               <span aria-hidden="true" />
             </div>
-            {rows.map((row) => (
-              <div className="cc-modelEntry" key={row.model}>
-                <span className="cc-contextSelect">
-                  <select
-                    className="cc-fieldInput cc-contextModel"
-                    value={row.model}
-                    aria-label={t('contextOverrideModel')}
+            <div className="cc-listRows">
+              {rows.map((row) => (
+                <div className="cc-modelEntry" key={row.model}>
+                  <span className="cc-contextSelect">
+                    <select
+                      className="cc-fieldInput cc-contextModel"
+                      value={row.model}
+                      aria-label={t('contextOverrideModel')}
+                      disabled={disabled}
+                      onChange={(event) => setModel(row.model, event.target.value)}
+                    >
+                      <option value={row.model}>{labelOf(row.model)}</option>
+                      {available.map((model) => (
+                        <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
+                      ))}
+                    </select>
+                    <IconChevronDownOutlineRegular size={12} className="cc-contextCaret" />
+                  </span>
+                  <input
+                    className={row.invalid ? 'cc-fieldInput cc-fieldInputNum cc-fieldInputInvalid' : 'cc-fieldInput cc-fieldInputNum'}
+                    type="text"
+                    aria-label={t('contextOverrideValue')}
+                    aria-invalid={row.invalid || undefined}
+                    placeholder={t('unitTokens')}
+                    value={row.text}
                     disabled={disabled}
-                    onChange={(event) => setModel(row.model, event.target.value)}
+                    onChange={(event) => setText(row.model, event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="cc-iconButton cc-iconButtonDanger"
+                    aria-label={t('contextOverrideRemove')}
+                    disabled={disabled}
+                    onClick={() => removeRow(row.model)}
                   >
-                    <option value={row.model}>{labelOf(row.model)}</option>
-                    {available.map((model) => (
-                      <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
-                    ))}
-                  </select>
-                  <IconChevronDownOutlineRegular size={12} className="cc-contextCaret" />
-                </span>
-                <input
-                  className={row.invalid ? 'cc-fieldInput cc-fieldInputNum cc-fieldInputInvalid' : 'cc-fieldInput cc-fieldInputNum'}
-                  type="text"
-                  aria-label={t('contextOverrideValue')}
-                  aria-invalid={row.invalid || undefined}
-                  placeholder={t('unitTokens')}
-                  value={row.text}
-                  disabled={disabled}
-                  onChange={(event) => setText(row.model, event.target.value)}
-                />
-                <button
-                  type="button"
-                  className="cc-iconButton cc-iconButtonDanger"
-                  aria-label={t('contextOverrideRemove')}
-                  disabled={disabled}
-                  onClick={() => removeRow(row.model)}
-                >
-                  <IconTrashOutlineRegular size={14} />
-                </button>
-                {row.invalid ? <p className="cc-rowError cc-contextError">{invalidCopy(row.invalidReason, t, 'context')}</p> : null}
-              </div>
-            ))}
-          </div>
+                    <IconTrashOutlineRegular size={14} />
+                  </button>
+                  {row.invalid ? <p className="cc-rowError cc-contextError">{invalidCopy(row.invalidReason, t, 'context')}</p> : null}
+                </div>
+              ))}
+            </div>
+          </>
         ) : null}
       </div>
     </>
@@ -1023,72 +1131,66 @@ function ModelNamesCard({ state, disabled, t, onNames }: Pick<FormCardProps, 'st
     return entry === undefined ? `${model} · ${t('modelStale')}` : `${entry.name} (${model})`
   }
   return (
-    <div className="cc-overrideBlock">
-      <div className="cc-row">
-        <div className="cc-rowText">
-          <div className="cc-rowTitleLine">
-            <span className="cc-rowTitle">{t('modelNamesTitle')}</span>
-            {rows.length > 0 ? <Tag tone="neutral">{rows.length}</Tag> : null}
-          </div>
-        </div>
-        <div className="cc-rowControl">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="cc-press"
-            icon={<IconPlusOutlineRegular size={13} />}
-            disabled={disabled || available.length === 0}
-            onClick={addRow}
-          >
-            {t('modelNamesAdd')}
-          </Button>
-        </div>
-      </div>
-      {state.catalogFailed ? <p className="cc-groupDesc">{t('modelNamesNoCatalog')}</p> : null}
+    <div className="cc-block cc-list">
+      <ModelListHead
+        title={t('modelNamesTitle')}
+        count={rows.length}
+        addLabel={t('modelNamesAdd')}
+        addDisabled={disabled || available.length === 0}
+        onAdd={addRow}
+        t={t}
+      />
+      {state.catalogFailed ? (
+        <p className="cc-listHint">{t('modelNamesNoCatalog')}</p>
+      ) : rows.length === 0 ? (
+        <p className="cc-listHint">{t('modelNamesEmpty')}</p>
+      ) : null}
       {rows.length > 0 ? (
-        <div className="cc-overrideList">
-          <div className="cc-overrideCols cc-overrideColsName">
-            <span>{t('modelNamesModel')}</span>
-            <span>{t('modelNamesValue')}</span>
+        <>
+          <div className="cc-overrideCols">
+            <span className="cc-listColName">{t('modelNamesModel')}</span>
+            <span className="cc-listColValue cc-listColValueStart">{t('modelNamesValue')}</span>
             <span aria-hidden="true" />
           </div>
-          {rows.map((row) => (
-            <div className="cc-modelEntry cc-modelEntryName" key={row.model}>
-              <span className="cc-contextSelect">
-                <select
-                  className="cc-fieldInput cc-contextModel"
-                  value={row.model}
-                  aria-label={t('modelNamesModel')}
+          <div className="cc-listRows">
+            {rows.map((row) => (
+              <div className="cc-modelEntry" key={row.model}>
+                <span className="cc-contextSelect">
+                  <select
+                    className="cc-fieldInput cc-contextModel"
+                    value={row.model}
+                    aria-label={t('modelNamesModel')}
+                    disabled={disabled}
+                    onChange={(event) => setModel(row.model, event.target.value)}
+                  >
+                    <option value={row.model}>{labelOf(row.model)}</option>
+                    {available.map((model) => (
+                      <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
+                    ))}
+                  </select>
+                  <IconChevronDownOutlineRegular size={12} className="cc-contextCaret" />
+                </span>
+                <input
+                  className="cc-fieldInput"
+                  type="text"
+                  aria-label={t('modelNamesValue')}
+                  value={row.text}
                   disabled={disabled}
-                  onChange={(event) => setModel(row.model, event.target.value)}
+                  onChange={(event) => setText(row.model, event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="cc-iconButton cc-iconButtonDanger"
+                  aria-label={t('modelNamesRemove')}
+                  disabled={disabled}
+                  onClick={() => removeRow(row.model)}
                 >
-                  <option value={row.model}>{labelOf(row.model)}</option>
-                  {available.map((model) => (
-                    <option key={model.id} value={model.id}>{labelOf(model.id)}</option>
-                  ))}
-                </select>
-                <IconChevronDownOutlineRegular size={12} className="cc-contextCaret" />
-              </span>
-              <input
-                className="cc-fieldInput"
-                type="text"
-                aria-label={t('modelNamesValue')}
-                value={row.text}
-                disabled={disabled}
-                onChange={(event) => setText(row.model, event.target.value)}
-              />
-              <button
-                type="button"
-                className="cc-iconButton cc-iconButtonDanger"
-                aria-label={t('modelNamesRemove')}
-                disabled={disabled}
-                onClick={() => removeRow(row.model)}
-              >
-                <IconTrashOutlineRegular size={14} />
-              </button>
-            </div>
-          ))}
-        </div>
+                  <IconTrashOutlineRegular size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
       ) : null}
     </div>
   )
@@ -1610,10 +1712,6 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
               </Tag>
             ) : null}
           </span>
-          <IconChevronDownOutlineRegular
-            size={14}
-            className={expanded ? 'cc-accountChevron cc-chevronOpen' : 'cc-accountChevron'}
-          />
         </button>
         {/* Unpinning is a settings write, so it stays reachable even for a
             composition account the page cannot rename or remove. It reads as
@@ -1630,6 +1728,22 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
             {t('accountActionUnpin')}
           </Button>
         ) : null}
+        {/* The chevron closes the head as an icon pair with the ⋯ menu, so the
+            card that carries the unpin action keeps it in the SAME column as a
+            card without one — before this, the text button pushed the chevron
+            left and the two cards' headers no longer lined up (2026-11-15).
+            The name toggle owns the disclosure semantics (aria-expanded /
+            aria-controls); this duplicate stays out of the a11y tree and the
+            tab order and only serves the pointer. */}
+        <button
+          type="button"
+          className="cc-iconButton"
+          aria-hidden="true"
+          tabIndex={-1}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <IconChevronDownOutlineRegular size={14} className={expanded ? 'cc-chevronOpen' : undefined} />
+        </button>
         {items.length > 0 ? (
           <Menu
             open={menuOpen}
@@ -2038,6 +2152,7 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
       title={t('accountsTitle')}
       expanded={expanded}
       onToggle={onToggle}
+      bodyClassName="cc-accountGroupBody"
       badges={
         <>
           <GroupSummary
