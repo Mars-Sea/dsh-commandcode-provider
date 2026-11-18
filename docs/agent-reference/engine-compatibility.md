@@ -2,6 +2,8 @@
 
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
+- **2026-11-18 准入 `0.2.2-rc.3` 与 `0.2.2-rc.4`（同通道，无运行代码改动）。** npm `next` 从 rc.2 连发两版（`latest` 仍 `0.2.2-rc.1`、`alpha` 仍 `0.2.2-alpha.3`）：rc.3 于 `2026-11-13T07:56:55Z`、rc.4 于 `2026-11-17T17:53:41Z`，GitHub prerelease 齐备。合并采集 `rc.2` `ddac9676` → `rc.4` `3f321d32` 为 **530 个变更路径、380 份包清单、退出码 0、错误为空**，两条版本再用 GitHub compare 分开归属（各 300 个文件，绝大多数是逐包版本号）。**运行代码零改动**：插件导入的 16 个宿主包里只有 `dsh-llm` 变了源码——`packages/llm/llm/src/error.ts` 给 `LLM_FAILURE_CODES` 增加 `CONTENT_REFUSED`（DeepSeek 拒答不再报 `MALFORMED_RESPONSE`，且抛出前先发 `usage`；配套升级指南随 rc.4 落库），插件既不构造也不匹配该码；其余导入包源码零改动。宿主准入、`packages/client/web/src/{seed,platform}.ts`（sha256 相同）与六个在用插槽的声明逐字未变，新增的 `sidebar.session.action`（`hoc`）、`workspace.picker` Factory 与 `IconUploadOutline` 均为加性。补入 `dshReleases['0.2.2-rc.3'|'0.2.2-rc.4']='compatible'`，记录与矩阵为十条；`verify-engine-load --version` 两版各退出码 0，完整十引擎矩阵与隔离安装各 **10/10**（pnpm `10.34.5`），本地 `typecheck` 0、`npm test` **1252/1252**、构建与发布入口检查（18 文件、0.18.1）退出码 0，见[对接说明](../对接说明.md#四验证证据与边界)。兼容范围、peer、开发依赖、vendor 配对、Node 下界与插件版本均不变；锁文件未序列化 `dsh` 记录，未重解依赖。**未采纳**：`deepseek-chat-import` 实验插件、`sidebar.session.action` 与 `workspace.picker` 两个新插槽、`IconUploadOutline` 图标（插件当前无对应界面需求）。未做浏览器与真实提供商验证。不提交、不发布。
+
 - **2026-11-12 补齐 `0.2.2-rc.2` 目标验证并登记兼容。** npm `next` 已更新到 rc.2（`latest` 仍 rc.1、`alpha` 仍 alpha.3），本机 `web` 引擎包也已为 rc.2。直接以 `--engine /Users/mars-sea/.nvm/versions/node/v24.22.3/lib/node_modules/@deepseek-ai/dsh` 检查实际安装树，退出码 0，新增三协议错误事实及原有全部引擎契约通过；目标单版本隔离安装退出码 0。全套 rc.2 依赖的隔离 `tsc --noEmit` 首次发现 6 处类型错误（此前只核对错误码变化，未覆盖整个目标类型图）：图标插槽补充声明缺少 `owner: { size: number; active: boolean }`、辅助请求用途默认注册表在纯适配器类型环境中为空。现已把插槽补充声明与官方形状对齐，适配器用 `Omit<GenerateOptions, 'purpose'> & { purpose?: string }` 转发调用用途，标题夹具按适配器入参类型校验；旧 `0.2.1-rc.3` 开发依赖与全套 rc.2 依赖类型检查均退出码 0。这两项是完整目标类型检查暴露的既有假设，不是本轮新增运行时分支。补入 `dshReleases['0.2.2-rc.2']='compatible'`，记录与矩阵为八条；本地完整测试 **1239/1239**、构建、完整八引擎矩阵和隔离安装均退出码 0，矩阵各 **8/8**，见[对接说明](../对接说明.md#四验证证据与边界)。兼容范围、peer、开发依赖、vendor 配对、Node 下界与插件版本不变；锁文件未序列化 `dsh` 记录且依赖声明未变，无需重解依赖。源差异仍为下条记录的 rc.1 `66491b05` → rc.2 `ddac9676`。核对安装版迁移指南后，附件错误、Session 批量追加、DeepSeek 搜索计费与桌面拖动区域无需额外插件迁移；`BundleInfo.updatable` 改为 `update` 属宿主接口，插件不读取该字段，文档口径已补充。未接入搜索元数据、凭据掩码、新代码块插槽等可选能力；尚未做浏览器、macOS Desktop 浮层交互或真实提供商生成验证。不提交、不发布。
 
 - **2026-11-11 预适配 `0.2.2-rc.2`（历史阶段；次日补齐验证见上）。** 官方 GitHub prerelease 于北京时间 19:33 发布：基线 `dsh-v0.2.2-rc.1`（`66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db`）→ `dsh-v0.2.2-rc.2`（`ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c`），采集退出码 0，4,769 个路径／395 份清单，错误为空。rc.2 的 `LlmError` 构造参数收窄为内置错误码，新增 `fromFailure()` 承载服务商自定义码；插件新增 `src/llm-error.ts` 按方法存在性分派，覆盖共享错误分类、流响应请求号补全、模型目录错误与账号池的 `THROTTLED` 分支，保持所有原错误码、重试预算及持久化失败事实。设置源码、Web 选择易变字段、费用投影运行契约、六类既用插槽和 Web seed 表未发现必改；Menu 删除 `getAnchorRect`，插件未使用，CSS anchor 定位尚待浏览器验证。`addition-only` 工具投影修复由宿主完成，插件仍发送完整声明，不宣告 `in-history`。Cordis `4.1.0`／Schemastery `3.19.0` 未变，现有区间已准入 rc.2，**无需改 peer、开发依赖、锁文件或 Node 下界**。本地 `typecheck` 0，1236 项测试全通过；源码提取的错误类型隔离对照为修改前 8 处失败、修改后 0（不是完整目标类型检查）。构建退出码 0；新增的 `test:engine` 三协议错误事实探针在原七引擎各通过，完整引擎矩阵与隔离安装均退出码 0、**7/7**，见[对接说明](../对接说明.md#四验证证据与边界)。**当时验证缺口（已于 2026-11-12 补齐）**：官方 npm 的 `latest`／`next` 仍为 rc.1，rc.2 安装返回 `ETARGET`／`E404`，故 `dshReleases` 仍为七条，不能把本轮称为 rc.2 已验证兼容。`title`／`description` 搜索提供方元数据、`masked` 预览、新代码块插槽均不在本次兼容适配范围。未做真实账号生成、浏览器和目标隔离安装；证据在 `/tmp/dsh-release-audit-20261111-rc2/`，不随发布包分发。
@@ -159,8 +161,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   单分支时期的形态，作为历史证据保留。
   `dsh.compatibility.dshReleases` 在 2026-10-24 轮次保留**三条实测记录**
   `{"0.2.1-rc.2", "0.2.1-rc.3", "0.2.1-rc.4"}`，此后随每轮核验增补：`0.2.1-rc.5`（2026-10-30）、
-  `0.2.2-alpha.2`（2026-10-28 放开 `0.2.2` 通道）、`0.2.2-alpha.3`（2026-11-03）与
-  `0.2.2-rc.1`（2026-11-05）与 `0.2.2-rc.2`（2026-11-12），**现为八条**。
+  `0.2.2-alpha.2`（2026-10-28 放开 `0.2.2` 通道）、`0.2.2-alpha.3`（2026-11-03）、
+  `0.2.2-rc.1`（2026-11-05）、`0.2.2-rc.2`（2026-11-12）、`0.2.2-rc.3` 与 `0.2.2-rc.4`
+  （2026-11-18），**现为十条**。
   准入由区间负责，记录只列跑过完整引擎矩阵的版本，并充当 `test:engine`／`test:install` 的矩阵来源。
   **alpha 通道与 `0.2.0-rc.2` 都不保留**：前者自 `0.2.1-alpha.5` 之后没有新版本，后者已退出
   npm `latest` 并落在区间下界之下；`0.2.1-rc.1`、`0.2.1-alpha.*` 与 `0.2.0-rc.*` 的配置需升级引擎。
@@ -170,7 +173,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `engines.dsh` 及锁文件同批同步。
   `tests/package.test.ts` 约束区间形状（逐分支校验 `>=<RC> <下一 patch>-0`）、下界、
   「每条记录都落在某分支内且不早于该分支下界」，并逐字钉住记录清单（2026-10-24 时为两条；
-  2026-10-28 起改为逐分支校验，现为八条）；它不联网判断哪个版本最新，该事实由升级审计核对。
+  2026-10-28 起改为逐分支校验，现为十条）；它不联网判断哪个版本最新，该事实由升级审计核对。
   两个配套的 Cordis、Schemastery 范围按已登记引擎的配对写成析取（稳定配对用 `~`、预发布配对用精确值）
   `~4.0.5 || 4.0.6-alpha.1 || 4.0.6-alpha.2 || ~4.1.0` / `~3.18.5 || 3.18.6-alpha.1 || 3.18.6-alpha.2 || ~3.19.0`
   （2026-10-24 单分支 `~4.0.5` / `~3.18.5` 只覆盖当时的 RC 配对；2026-11-05 补入 rc.1 的 `~4.1.0`／`~3.19.0`，见上一条）。

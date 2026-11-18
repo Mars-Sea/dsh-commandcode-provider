@@ -5,7 +5,7 @@ description: Audit and upgrade this plugin against an official DeepSeek Harness 
 
 # DSH release upgrade audit
 
-Use this skill for an **official DeepSeek Harness release**, not for the Command Code provider's own CLI/catalog. The target is usually a GitHub tag such as `dsh-v0.2.2-alpha.3`; the baseline is the newest verified record this repository still declares — currently `dsh.compatibility.dshReleases` holds seven records: `0.2.1-rc.2`, `0.2.1-rc.3`, `0.2.1-rc.4`, `0.2.1-rc.5`, `0.2.2-alpha.2`, `0.2.2-alpha.3` and `0.2.2-rc.1`, so the baseline depends on the target's channel (`0.2.1-rc.5` for the `0.2.1` RC line, `0.2.2-rc.1` for the `0.2.2` prerelease line) — read out of this repository's `package.json`.
+Use this skill for an **official DeepSeek Harness release**, not for the Command Code provider's own CLI/catalog. The target is usually a GitHub tag such as `dsh-v0.2.2-rc.4`; the baseline is the newest verified record this repository still declares — currently `dsh.compatibility.dshReleases` holds ten records: `0.2.1-rc.2`, `0.2.1-rc.3`, `0.2.1-rc.4`, `0.2.1-rc.5`, `0.2.2-alpha.2`, `0.2.2-alpha.3`, `0.2.2-rc.1`, `0.2.2-rc.2`, `0.2.2-rc.3` and `0.2.2-rc.4`, so the baseline depends on the target's channel (`0.2.1-rc.5` for the `0.2.1` RC line, `0.2.2-rc.4` for the `0.2.2` prerelease line) — read out of this repository's `package.json`.
 
 ## Scope and safety
 
