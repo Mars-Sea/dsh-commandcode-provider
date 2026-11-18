@@ -25,6 +25,12 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 
 import type { SettingsCommandCodeKey } from '../src/client/locales.ts'
+// The rendered page receives a `t` that echoes keys, so copy is asserted against
+// the locale tables themselves.
+const { zh: zhCopy, en: enCopy } = await import('../src/client/locales.ts') as {
+  zh: Record<string, string>
+  en: Record<string, string>
+}
 import { PAGE_CSS } from '../src/client/page-styles.ts'
 import type { SettingsPageState, StagedField } from '../src/client/settings.ts'
 import { USAGE_AUTO_RETRY_LIMIT, USAGE_AUTO_RETRY_MS, type UsagePageState } from '../src/client/usage.ts'
@@ -58,6 +64,7 @@ function makeState(overrides: Partial<SettingsPageState> = {}): SettingsPageStat
     offloadSeenImagesForCache: stagedField(),
     filterModelsByPlan: stagedField(),
     webSearch: stagedField(),
+    webFetch: stagedField(),
     showSidebarQuota: stagedField(),
     zdr: stagedField(),
     sidebarQuota: false,
@@ -401,6 +408,46 @@ test('方案 A 设置页直接复用 SettingsValueField、SegmentedControl 与�
   state = makeState({ dirty: true })
   act(() => { root.update(createElement(CommandCodeSettingsPage, pageProps)) })
   assert.equal(root.root.findAll((node) => node.props.className === 'cc-saveFooter').length, 1)
+
+  act(() => { root.unmount() })
+})
+
+/**
+ * 「网页获取」开关（2026-11-16 用户要求）：与「联网搜索」并排、文案结构一致。
+ *
+ * 这条用例钉住的是「设置页真的渲染了这个开关」——`settings.ts` 的
+ * `SECTION_FIELDS` 是白名单，漏加字段不会报错，只会让开关静默消失。
+ */
+test('集成分组渲染「网页获取」开关，与「联网搜索」并排且默认开启', () => {
+  let state = makeState()
+  const pageProps = makePageProps(() => state)
+  let root!: ReactTestRenderer
+  act(() => { root = create(createElement(CommandCodeSettingsPage, pageProps)) })
+
+  const ids = [...new Set(root.root
+    .findAll((node) => typeof node.props.id === 'string' && /^cc-(web-search|web-fetch)$/.test(node.props.id))
+    .map((node) => node.props.id as string))]
+  assert.deepEqual(ids, ['cc-web-search', 'cc-web-fetch'], '两个开关并排出现，搜索在前')
+
+  // 未暂存时按默认值（开启）渲染：分组角标给出「开启」文案而不是空。
+  const text = JSON.stringify(root.toJSON())
+  assert.match(text, /webSearchSummaryOn/)
+  assert.match(text, /webFetchSummaryOn/)
+
+  // 提示文案（2026-11-16 用户拍板）：保留「无法访问内网和本机地址」这条能力边界，
+  // 但不提费用 —— 内置提供方的描述同样不谈钱。这里渲染用 key 代替文案，所以断言
+  // 落在 locale 表本身。
+  const zhHint = zhCopy['webFetchHint'] ?? ''
+  const enHint = enCopy['webFetchHint'] ?? ''
+  assert.match(zhHint, /无法访问内网和本机地址/, '中文提示保留内网说明')
+  assert.match(enHint, /Cannot reach intranet or local addresses/, '英文提示保留内网说明')
+  assert.doesNotMatch(`${zhHint} ${enHint}`, /费用|收费|计费|charge|cost|bill/i, '提示里不出现费用字样')
+
+  // 草稿置为关闭：角标随之翻成关闭文案。
+  state = makeState({ webFetch: { ...stagedField(), text: 'false', overridden: true } })
+  act(() => { root.update(createElement(CommandCodeSettingsPage, pageProps)) })
+  const flipped = JSON.stringify(root.toJSON())
+  assert.match(flipped, /webFetchSummaryOff/)
 
   act(() => { root.unmount() })
 })

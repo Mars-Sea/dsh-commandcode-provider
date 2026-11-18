@@ -57,7 +57,8 @@ import { AccountEnrollmentManager, type EnrollmentSettings } from './enrollment.
 import type { EnrollmentRecord } from './enrollment-wire.ts'
 import { pickCommandLocale, type LocaleId } from './command-locales.ts'
 import { CommandCodeSearchProvider, createCommandCodeSearchSelection } from './web-search.ts'
-import type { WebSearchSelectionHandle, WebSelectionLogger, WebSelectionSettings } from './web-search.ts'
+import { CommandCodeFetchProvider, createCommandCodeFetchSelection } from './web-fetch.ts'
+import type { WebSelectionHandle, WebSelectionLogger, WebSelectionSettings } from './web-selection.ts'
 import { applyCommandCodeTuiSettings } from './tui-settings.ts'
 import {
   DEFAULT_TRANSPORT_MAX_RETRIES,
@@ -156,9 +157,41 @@ export type {
 } from './login.ts'
 export { CommandCodeAccountPool, accountUsable, selectActiveAccount, matchModelRule, selectAccountForModel } from './accounts.ts'
 export type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeAccountState, CommandCodeModelAccountRule } from './accounts.ts'
-export { CommandCodeSearchProvider, COMMANDCODE_SEARCH_PROVIDER_ID, DEFAULT_WEB_SEARCH_PROVIDER_ID, WEB_SELECTION_NAMESPACE, createCommandCodeSearchSelection, commandCodeSearchSelection } from './web-search.ts'
-export type { CommandCodeSearchSelection, WebSearchSelectionHandle, WebSelectionSettings, WebSelectionLogger } from './web-search.ts'
-export type { CommandCodeSearchProviderDeps } from './web-search.ts'
+export {
+  CommandCodeSearchProvider,
+  COMMANDCODE_SEARCH_PROVIDER_ID,
+  DEFAULT_WEB_SEARCH_PROVIDER_ID,
+  WEB_SELECTION_NAMESPACE,
+  commandCodeSearchSelection,
+  createCommandCodeSearchSelection,
+} from './web-search.ts'
+export type {
+  CommandCodeSearchSelection,
+  WebSearchSelectionHandle,
+  WebSearchSelectionDeps,
+} from './web-search.ts'
+export type {
+  CommandCodeSelection,
+  WebSelectionDeps,
+  WebSelectionField,
+  WebSelectionHandle,
+  WebSelectionLogger,
+  WebSelectionOptions,
+  WebSelectionSettings,
+} from './web-selection.ts'
+export { createCommandCodeSelection } from './web-selection.ts'
+export {
+  CommandCodeFetchProvider,
+  COMMANDCODE_FETCH_PROVIDER_ID,
+  FETCH_ROUTE,
+  FETCH_CONTENT_WINDOW,
+  WEB_FETCH_SELECTION_FIELD,
+  fetchUrlGuard,
+  createCommandCodeFetchSelection,
+} from './web-fetch.ts'
+export type { CommandCodeFetchProviderDeps, FetchUrlVerdict } from './web-fetch.ts'
+export { WEB_REQUEST_MAX_ATTEMPTS, webRetryDelayMs, webRetryWait } from './web-request.ts'
+export type { WebProviderDeps } from './web-request.ts'
 export { ACTIVE_ACCOUNT_AUTO, LANG_AUTO, applyCommandCodeTuiSettings, buildCommandCodeTuiSection } from './tui-settings.ts'
 export type {
   CommandCodeTuiSettingsDeps,
@@ -315,6 +348,29 @@ export interface Config {
    */
   webSearch?: boolean
   /**
+   * Whether to use Command Code as the backend for dsh's model-facing
+   * `web_fetch` tool. Enabled registers a `commandcode` FETCH provider on
+   * `ctx.web` AND selects it over the shipped local `http` provider, reusing
+   * the SAME key and apiBase as chat and as `webSearch`. Selection is the `web`
+   * profile entry's volatile `fetchProvider`, written through the host settings
+   * service and read by `WebRuntime.fetch()` on the next call, so a toggle
+   * change lands without a restart or a remount. Disabling gives the field back
+   * to the deployment's composed value (the shipped `http`), so a profile that
+   * never wanted the remote fetch keeps working — EXCEPT when the user layer
+   * already carries someone else's explicit pin (the shipped web-search
+   * settings page writes `deepseek-fetch-api`): that choice is never displaced,
+   * and the provider stays registered but unselected. Defaults true, matching
+   * {@link webSearch}; the two toggles are INDEPENDENT, so search and fetch can
+   * name different backends.
+   *
+   * Named `webFetch` rather than after its endpoint so the pair reads as
+   * `webSearch` / `webFetch`, mirroring dsh's own two tool names.
+   *
+   * Unlike the shipped local `http` provider, this one runs on Command Code's
+   * servers and refuses private targets. Turn it off to keep fetches local.
+   */
+  webFetch?: boolean
+  /**
    * Whether the Web sidebar shows the plans & quota card
    * (`sidebar.footer.action`). Defaults to false, so an unset document mounts
    * no sidebar quota surface and no background usage poll for it; the
@@ -389,6 +445,10 @@ export const Config: z<Config> = z.object(markVolatileFields({
   // 两者都不得超过网关总上限——用户填得更大也只会被网关拒绝。
   maxOutputTokens: z.number().min(OMIT_OUTPUT_TOKENS).max(MAX_OUTPUT_TOKEN_LIMIT).step(1),
   webSearch: z.boolean().default(true),
+  // Independent of `webSearch` on purpose: search and fetch are separate seam
+  // capabilities with separate provider registries, and a profile may well want
+  // the remote search but the free local fetch.
+  webFetch: z.boolean().default(true),
   showSidebarQuota: z.boolean().default(false),
   accounts: z.array(z.object({
     label: z.string(),
@@ -887,24 +947,33 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => enrollment.dispose(), 'dsh-commandcode-provider: account enrollment')
   applyUsageRemote(ctx, { adapter, reports: usageReports, login: loginFlow, enrollment, listModels: catalogForEditors, analytics: createAnalyticsReader(ctx, adapter), probe: () => probeCommandCode({ apiBase: options().apiBase }) })
 
-  // Web search over the Command Code Provider API, exposed through the web
-  // capability seam (`ctx.web`). Rides the optional `web` service: a child
-  // fiber injects it, so the provider registers whenever the profile mounts
-  // the web stack and the fiber never activates when it does not. It reuses
-  // the SAME credential chain and apiBase as the model adapter, so DSH's
-  // model-facing web_search tool needs no separate key or endpoint config.
+  // Web search AND web fetch over the Command Code Provider API, exposed through
+  // the web capability seam (`ctx.web`). Rides the optional `web` service: a
+  // child fiber injects it, so both providers register whenever the profile
+  // mounts the web stack and the fiber never activates when it does not. They
+  // reuse the SAME credential chain and apiBase as the model adapter, so DSH's
+  // model-facing `web_search` / `web_fetch` tools need no separate key or
+  // endpoint config.
   //
-  // Whether `commandcode` WINS over the shipped `deepseek-official` (or a
-  // sibling search plugin's pin, e.g. modsearch) is `Config.webSearch`. On
-  // 0.2.1-rc.2 that choice lives in the `web` profile entry's volatile
-  // `searchProvider`, so the seam writes it through `ctx.settings` — the same
-  // path the shipped web-search settings page uses — and keeps the whole
-  // policy (who is allowed to take over, what to give back, how to degrade) in
-  // `src/web-search.ts`. Two properties matter at this call site:
+  // The two capabilities are INDEPENDENT everywhere: separate registries
+  // (`registerSearchProvider` / `registerFetchProvider`, each with its own
+  // duplicate-id check), separate selection fields (`searchProvider` /
+  // `fetchProvider`), and separate toggles (`webSearch` /
+  // `webFetch`). Search pairs with the shipped `deepseek-official`,
+  // fetch with the shipped local `http` provider — the latter is free and
+  // reaches intranet addresses, so a profile may well keep it.
+  //
+  // Whether `commandcode` WINS over the composed default (or a sibling
+  // plugin's pin) is `Config.webSearch` / `Config.webFetch`. On
+  // 0.2.1-rc.2 those choices live in the `web` profile entry's volatile fields,
+  // so the seam writes them through `ctx.settings` — the same path the shipped
+  // web-search settings page uses — and keeps the whole policy (who is allowed
+  // to take over, what to give back, how to degrade) in `src/web-selection.ts`.
+  // Two properties matter at this call site:
   //
   // - `settings` is resolved LAZILY, because it may activate after `web` (the
   //   seam would otherwise capture `undefined` at boot and lose the disk write).
-  //   The settings inject below re-applies the selection for the opposite order.
+  //   The settings inject below re-applies both selections for the opposite order.
   // - Nothing here awaits: `apply()` only records the intent, and the seam's
   //   own serialized writer performs the async write. A failure is logged, so
   //   boot never depends on the settings document being writable.
@@ -912,41 +981,59 @@ export function apply(ctx: Context, config: Config): void {
     warn: (message) => { ctx.logger.warn(message) },
     info: (message) => { ctx.logger.info(message) },
   }
-  let searchSelection: WebSearchSelectionHandle | undefined
-  const applySearchSelection = (enabled: boolean): void => {
-    searchSelection?.apply(enabled)
+  /** One key resolver, shared by both providers, bound to the captured gateway. */
+  const resolveWebKey = async (apiBase: string | undefined): Promise<string | undefined> => {
+    const connection = options()
+    if (apiBase !== undefined) connection.apiBase = apiBase
+    const resolved = await scopedPool(connection).resolveKey()
+    return resolved === undefined ? undefined : resolved.key
+  }
+  let searchSelection: WebSelectionHandle | undefined
+  let fetchSelection: WebSelectionHandle | undefined
+  const applyWebSelections = (): void => {
+    const config = current()
+    searchSelection?.apply(config.webSearch ?? true)
+    fetchSelection?.apply(config.webFetch ?? true)
   }
   ctx.inject(['web'], (webCtx) => {
+    // One deps object per capability: the seam is stateful, so the two
+    // selections must never share a handle.
     searchSelection = createCommandCodeSearchSelection({
       web: webCtx.web,
       settings: () => ctx.get('settings') as unknown as WebSelectionSettings | undefined,
       logger: selectionLogger,
     })
+    fetchSelection = createCommandCodeFetchSelection({
+      web: webCtx.web,
+      settings: () => ctx.get('settings') as unknown as WebSelectionSettings | undefined,
+      logger: selectionLogger,
+    })
     webCtx.web.registerSearchProvider(new CommandCodeSearchProvider({
-      resolveKey: async (apiBase) => {
-        const connection = options()
-        if (apiBase !== undefined) connection.apiBase = apiBase
-        const resolved = await scopedPool(connection).resolveKey()
-        return resolved === undefined ? undefined : resolved.key
-      },
+      resolveKey: resolveWebKey,
       apiBase: () => options().apiBase,
     }))
-    // Apply the selection at boot too, so a profile WITHOUT the manual
-    // `searchProvider: commandcode` cordis patch still routes web search to
-    // Command Code once this plugin loads (default `webSearch` on).
-    applySearchSelection(current().webSearch ?? true)
-    // The fiber's disposer releases the selection the same way the toggle-off
+    webCtx.web.registerFetchProvider(new CommandCodeFetchProvider({
+      resolveKey: resolveWebKey,
+      apiBase: () => options().apiBase,
+    }))
+    // Apply both selections at boot too, so a profile WITHOUT the manual
+    // `searchProvider` / `fetchProvider` cordis patch still routes web search
+    // and fetch to Command Code once this plugin loads (both toggles default on).
+    applyWebSelections()
+    // The fiber's disposer releases the selections the same way the toggle-off
     // path does (`webCtx.effect` registers the inner function as the fiber's
     // teardown; a bare `return` from the inject callback would not). `release()`
     // deliberately writes NO profile: unloading and shutdown must not race the
     // config editor's active-fiber and HMR-lock requirements. It hands the
     // RUNNING reference back instead, so the window where `commandcode` is
-    // selected but its provider is already unregistered — every search failing
-    // with WEB_PROVIDER_CONFIGURED_MISSING — stays closed.
+    // selected but its provider is already unregistered — every search or fetch
+    // failing with WEB_PROVIDER_CONFIGURED_MISSING — stays closed.
     webCtx.effect(() => () => {
       searchSelection?.release()
       searchSelection = undefined
-    }, 'dsh-commandcode-provider: web search selection')
+      fetchSelection?.release()
+      fetchSelection = undefined
+    }, 'dsh-commandcode-provider: web provider selections')
   })
 
   // The dsh-TUI settings page: without it a TUI-only user has no way to enter
@@ -1001,28 +1088,29 @@ export function apply(ctx: Context, config: Config): void {
         dispose()
       }
     }, 'dsh-commandcode-provider: settings auto-form policy')
-    // The selection needs settings and `web`, and the two injects settle in
+    // The selections need settings and `web`, and the two injects settle in
     // either order: when `settings` wins the race, the `web` inject's own call
     // ran with no settings row to read, so re-align once here. The seam
     // coalesces the duplicate intent, so this costs one extra read at most.
-    applySearchSelection(current().webSearch ?? true)
+    applyWebSelections()
   })
 
   // The loader commits volatile config IN PLACE — no remount — and notifies the
   // OWNING fiber (`loader/volatile-update`, every value already committed
   // before dispatch). That event is scoped to `llm-commandcode`'s OWN fiber, so
-  // it reports this entry's own `webSearch` flips and NOT a write to the `web`
-  // entry: this listener is the only place that learns the toggle moved, and it
-  // is why the selection re-applies here. The other fact that is not re-derived
-  // from `current()` per use is the TUI section (its option lists are frozen
-  // into the declaration). Typed structurally because the event is declared by
-  // `cordis-plugin-loader`, which is not a peer of this bundle.
+  // it reports this entry's own `webSearch` / `webFetch` flips and
+  // NOT a write to the `web` entry: this listener is the only place that learns
+  // a toggle moved, and it is why the selections re-apply here. The other fact
+  // that is not re-derived from `current()` per use is the TUI section (its
+  // option lists are frozen into the declaration). Typed structurally because
+  // the event is declared by `cordis-plugin-loader`, which is not a peer of this
+  // bundle.
   const loaderEvents = ctx as unknown as {
     on(event: 'loader/volatile-update', listener: () => void): unknown
   }
   ctx.effect(() => {
     const off = loaderEvents.on('loader/volatile-update', () => {
-      applySearchSelection(current().webSearch ?? true)
+      applyWebSelections()
       refreshTuiSettings?.()
     })
     return () => {

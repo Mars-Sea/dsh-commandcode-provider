@@ -119,9 +119,21 @@ function abort(message) {
   process.exit(2)
 }
 
-/** Run a child command, or throw with its output. */
+/**
+ * Run a child command, or throw with its output.
+ *
+ * `npm.cmd` is a batch script, and Node refuses to spawn one without a shell
+ * (`spawnSync npm.cmd EINVAL`) since the CVE-2024-27980 fix — so on Windows this
+ * needs `shell: true`. The deprecation that warns about unescaped arguments does
+ * not apply here: the ONLY Windows caller (below) passes a single argument, and
+ * every part of it is either a literal or an npm version spec this script
+ * validated, never text from the environment. POSIX spawns npm directly.
+ */
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', env: process.env })
+  const result = spawnSync(command, args, {
+    cwd, encoding: 'utf8', env: process.env,
+    ...process.platform === 'win32' ? { shell: true } : {},
+  })
   if (result.error !== undefined) throw result.error
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed with exit ${result.status}\n${result.stdout ?? ''}${result.stderr ?? ''}`)

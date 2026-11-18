@@ -37,7 +37,7 @@
 - **套餐与配额面板**：可选的侧边栏卡片，显示当前服务账号的套餐、5 小时 / 每周两个配额窗口、余额与重置时间。
 - **会话费用估算**：在输入框下方的 token 计数旁显示估算金额（`≈`），按持久化历史逐次请求计价。
 - **模型分析**：按最近会话或日期查看词元、估算成本、响应速度与失败/重试。[统计口径](docs/模型成本与性能分析.md)。
-- **联网搜索**：dsh 的 `web_search` 工具由 Command Code 承载（`/alpha/web-search`），复用聊天同一个 key 与端点。
+- **联网搜索与网页获取**：dsh 的两个联网工具都由 Command Code 承载（`/alpha/web-search` 与 `/alpha/web-fetch`），复用聊天同一个 key 与端点；搜索与获取的后端分别独立选择。
 - **零数据保留**：可选的 ZDR 路由（`x-cmd-zdr: 1`），默认关闭。
 - **上下文与输出上限**：可全局或按模型覆盖宿主计量的上下文窗口，也可限制或省略单轮 `max_tokens`。
 - **推理强度与图片**：支持推理强度的模型在选择器中可选档位；Vision 模型支持发送图片。
@@ -203,6 +203,8 @@ llm-commandcode:
   # offloadSeenImagesForCache: true     # 可选：模型回复后不再重发旧图片
   showSidebarQuota: true                 # 可选：侧边栏套餐与配额卡片（默认关闭）
   zdr: true                              # 可选：只经由零数据保留上游（默认关闭）
+  # webSearch: false                     # 可选：web_search 保持原后端（默认开启）
+  # webFetch: false                      # 可选：web_fetch 保持免费的本地后端（默认开启）
   # contextWindow: 131072                # 可选：对所有模型的自定义上下文长度
   # contextWindowOverrides:              # 可选：按模型的上下文长度；优先于 contextWindow
   #   deepseek/deepseek-v4-pro: 65536
@@ -219,15 +221,17 @@ llm-commandcode:
 | `offloadSeenImagesForCache` | 在 CLI 传输上，即使此前所有请求消息逐字节一致，新图片也可能让服务端报告的缓存命中量退回第一张历史图片处。开启后，同一模型看过图片并回复后，旧图会被替换成稳定文字占位，后续文本更容易保持缓存。它只能缓解费用上涨，未修复 Command Code 服务端的多模态缓存行为；模型如需重新查看已 offload 的图片，必须重新读取原文件。默认关闭。[实测证据](docs/issue-64-cache-review.md)。 |
 | `modelNames` | 可选，「目录模型 id → 自定义显示名」的映射；只改选择器显示名 `LlmModelInfo.name`，用于让**按模型显示名字符串匹配**的外部插件（峰谷提醒、缓存计价）重新匹配上——本插件默认加的 ` (CC)` 后缀与上游目录 `raw.name` 自带的 ` (latest)` 后缀正是它们匹配不上的原因。**默认未设置／空表时名称与现状完全一致**：`${catalogName} (CC)`（上游 ` (latest)` 保留）；未知目录模型仍显示裸 id。模型 id、请求体、计价与峰谷标注、费率、价格表、`commandcode/prices` wire、Remote 描述符数量一律不变；`compareByPlan()` 仍按目录原名排序，改名不改变模型选择器顺序。仅 Web 设置页可配置，终端设置页暂未接入。 |
 
-## 联网搜索
+## 联网搜索与网页获取
 
-当你的 dsh 部署加载了 web 能力（`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`）时，模型所用的 `web_search` 工具会由本插件的 `commandcode` 搜索 provider 承载 —— 它用**与聊天相同的 API key 与 base URL** 调用 Command Code Provider API 的 `/alpha/web-search` 端点，无需另外配置搜索 key、端点或模型。
+当你的 dsh 部署加载了 web 能力（`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`）时，模型所用的 `web_search` 工具会由本插件的 `commandcode` 搜索 provider 承载 —— 它用**与聊天相同的 API key 与 base URL** 调用 Command Code Provider API 的 `/alpha/web-search` 端点，无需另外配置搜索 key、端点或模型。`web_fetch` 同理走 `/alpha/web-fetch`，与 dsh 自带的本地 `http` provider 并存。
 
-**默认开启。** 插件的 **设置 → Command Code** 页里有一个「用 Command Code 承载联网搜索」开关（`webSearch`），开启时插件会自动把 `commandcode` 选为当前搜索后端；关闭则把选择权交还给之前的后端（比如 modsearch 等其他搜索插件可继续工作 —— 不会被强制回退到 dsh 自带的 DeepSeek 搜索）。该开关在**下一次搜索时生效**，无需重启。
+**默认开启。** 插件的 **设置 → Command Code** 页里有一个「用 Command Code 承载联网搜索」开关（`webSearch`），开启时插件会自动把 `commandcode` 选为当前搜索后端；关闭则把选择权交还给之前的后端（比如 modsearch 等其他搜索插件可继续工作 —— 不会被强制回退到 dsh 自带的 DeepSeek 搜索）。该开关在**下一次搜索时生效**，无需重启。网页获取的开关（`webFetch`）同理，且与它相互独立：两者是独立注册表、独立设置字段，可以分别关闭。
 
 - 该 provider 仅在 web 服务存在时以 `commandcode` 注册进 `ctx.web`；没有它，本插件仍是纯聊天插件。
-- 若官方「网页搜索」设置里已显式选择其他后端，那个显式选择优先：插件让 `commandcode` 保持已注册但未被选中，并把这一状态报出来，而不是覆盖对方。只有在没人 pin 该字段时才接管，并记住被顶掉的后端，在关闭开关或卸载插件时恢复。若想更稳妥地固定，可设置 `searchProvider: commandcode`（或 `$DSH_WEB_SEARCH_PROVIDER=commandcode`）。
+- 若官方「网页搜索」设置里已显式选择其他后端，那个显式选择优先：插件让 `commandcode` 保持已注册但未被选中，并把这一状态报出来，而不是覆盖对方。只有在没人 pin 该字段时才接管，并记住被顶掉的后端，在关闭开关或卸载插件时恢复。若想更稳妥地固定，可设置 `searchProvider: commandcode`（或 `$DSH_WEB_SEARCH_PROVIDER=commandcode`）；获取侧对应 `fetchProvider` / `$DSH_WEB_FETCH_PROVIDER`。
 - dsh 工具的 `numResults` 会被收敛到 Command Code 的取值范围（1–10，默认 5）；结果映射为 dsh 的 `WebSearchSource` 结构（`url`/`title`/`snippet`）。
+- 网页获取以 Markdown 返回页面。目标站点的非 2xx 状态是「结果」而不是异常，模型能看到真实状态码；2xx 却是空正文则报失败。
+- 网页获取由 Command Code 的服务器执行，所以**读不到内网和本机地址**（本地 `http` provider 可以）。请求发出前会先挡掉不可能成功的 URL：非 http(s) 协议、URL 里带账号密码、内网/回环/链路本地地址、以及不写域名的单段主机名；`http` 会先升级成 `https`。
 
 > 这里直接使用 Command Code Provider API（与官方 CLI 内置的 `web_search` 相同），因此与 DeepSeek 原生搜索后端不同。
 

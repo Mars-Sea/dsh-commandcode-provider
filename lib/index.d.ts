@@ -2,7 +2,7 @@ import { GenerateOptions, LlmAdapter, LlmError, LlmImageRequestPricing, LlmModel
 import z from "@deepseek-ai/schemastery";
 import { CredentialRef } from "@deepseek-ai/dsh-credentials";
 import { TypertRemoteService, TypertSchema } from "@deepseek-ai/dsh-typert-protocol";
-import { WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
+import { WebError, WebFetchProvider, WebFetchRequest, WebFetchResult, WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
 import { Context } from "@deepseek-ai/cordis";
 import { AttachmentStore, ImageAttachmentRef, ImageRequestTarget } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
@@ -2135,24 +2135,74 @@ declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = C
  */
 declare function applyUsageRemote<C extends CommandCodeConnectionOptions>(ctx: Context, deps: CommandCodeUsageDeps<C>): void;
 //#endregion
-//#region src/web-search.d.ts
-/** Stable id this provider registers under in `ctx.web`. */
-declare const COMMANDCODE_SEARCH_PROVIDER_ID = "commandcode";
+//#region src/web-request.d.ts
 /**
- * The factory-declared search provider id dsh ships by default (from
- * `dsh-base`'s cordis patch `web.config.searchProvider`). A documented
- * reference only: disabling this plugin's `webSearch` toggle restores the
- * PREVIOUSLY selected backend, never this default (issue #26).
+ * Attempts per request: the first try plus two retries.
+ *
+ * dsh fans a multi-query SEARCH call out concurrently and aborts the siblings of
+ * the first failure, so retrying here is what keeps one connection blip from
+ * discarding a four-query research step (issue #117). A FETCH is a single
+ * request, but the same budget still applies: one blip should not cost the whole
+ * page. Two retries cover the common transient cases. The budget deliberately
+ * brushes the web tool's default 30 s cooperative deadline, so a slow
+ * connect-timeout failure can hit that deadline mid-retry and surface as the
+ * abort code instead of the terminal diagnosis; the full arithmetic and the
+ * rejected alternatives live in docs/agent-reference/accounts-and-retry.md.
  */
-declare const DEFAULT_WEB_SEARCH_PROVIDER_ID = "deepseek-official";
+declare const WEB_REQUEST_MAX_ATTEMPTS = 3;
 /**
- * Profile entry id whose volatile `searchProvider` selects the search backend.
+ * Wait before the next attempt, doubling from 500 ms with ±20% jitter.
+ *
+ * The jitter matters more for search than for fetch: a four-query fan-out that
+ * shares one network hiccup would otherwise reconnect all four at the same
+ * instant. Exported so the cadence is pinned without waiting on real timers.
+ *
+ * @param attempt - the failed attempt number, starting at 1.
+ * @returns the delay in milliseconds.
+ */
+declare function webRetryDelayMs(attempt: number): number;
+/**
+ * The connection facts and test seams both providers need. Kept structural so a
+ * provider class stays cordis-free and drivable from a plain node test.
+ */
+interface WebProviderDeps {
+  /**
+   * 使用本次调用已捕获的网关解析账号，探测不能在等待后转到另一个网关。
+   */
+  resolveKey(apiBase?: string): Promise<string | undefined>;
+  /** The API base host (defaults to `https://api.commandcode.ai`). */
+  apiBase(): string;
+  /** Injectable fetch for tests; defaults to the global fetch. */
+  fetchImpl?: typeof fetch;
+  /** Injectable retry wait for tests; defaults to the module's abortable retry wait. */
+  retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+}
+/**
+ * Sleep before a retry, resolving early only by rejecting with the caller's
+ * cancellation. A plain `setTimeout` would let an aborted tool call sit out a
+ * wait it no longer needs; this keeps the abort responsive and preserves the
+ * provider's abort taxonomy.
+ *
+ * Exported so the cancellation behavior is pinned without waiting out a real
+ * 500 ms timer: tests can either await this helper directly or wrap it to learn
+ * when the wait started.
+ */
+declare function webRetryWait(delayMs: number, signal?: AbortSignal): Promise<void>;
+//#endregion
+//#region src/web-selection.d.ts
+/**
+ * The `web` profile-entry field one selection owns. Each value is also the
+ * `WebRuntimeConfig` member of the same name.
+ */
+type WebSelectionField = 'searchProvider' | 'fetchProvider';
+/**
+ * Profile entry id whose volatile provider fields select the backends.
  *
  * The hosting profile declares it in `dsh-base`'s cordis patch as
  * `- id: web` / `name: '@deepseek-ai/dsh-web'`, and the shipped web-search
  * settings page addresses the very same namespace — that page and this plugin
- * are therefore two writers of ONE field (see
- * {@link createCommandCodeSearchSelection} for how they avoid fighting).
+ * are therefore two writers of ONE field per capability (see
+ * {@link createCommandCodeSelection} for how they avoid fighting).
  */
 declare const WEB_SELECTION_NAMESPACE = "web";
 /**
@@ -2177,38 +2227,36 @@ interface WebSelectionLogger {
   info(message: string): void;
 }
 /**
- * Tracked web-search selection state.
+ * Tracked selection state for one capability.
  *
  * `owner` is true while this plugin is the one asserting the selection: it
  * wrote the value, or found it already equal to ours AND attributed it to a
  * user-layer pin. Disabling only ever gives back what `owner` covers.
  *
  * `preexisting` marks the one case where the value is NOT ours to give back:
- * the field already read `commandcode` while the USER LAYER held nothing, so
- * the value came from the deployment's composed config or
- * `$DSH_WEB_SEARCH_PROVIDER`. Restoring there would write over a pin this
- * plugin never took.
+ * the field already read our id while the USER LAYER held nothing, so the value
+ * came from the deployment's composed config or the environment variable of the
+ * same name. Restoring there would write over a pin this plugin never took.
  *
- * `foreign` is a non-`commandcode` pin found in the user layer — the shipped
- * web-search settings page writes `deepseek-search-api`, and any sibling plugin
- * may pin its own id. A foreign pin is never displaced; `foreign` keeps the
- * value so the state (and the log line) can name who owns the backend.
+ * `foreign` is a non-our pin found in the user layer — the shipped web-search
+ * settings page writes `deepseek-search-api` / `deepseek-fetch-api`, and any
+ * sibling plugin may pin its own id. A foreign pin is never displaced;
+ * `foreign` keeps the value so the state (and the log line) can name who owns
+ * the backend.
  *
  * `displaced` is the config value at takeover time. It is what the DEGRADED
  * (memory-only) restore writes back; the persisted path restores the composed
  * base instead, because a copy of it in the user layer would outlive a later
  * deployment change.
  */
-interface CommandCodeSearchSelection {
+interface CommandCodeSelection {
   owner: boolean;
   preexisting: boolean;
   foreign: string | undefined;
   displaced: string | undefined;
 }
-/** Fresh selection state: the plugin starts out not owning the selection. */
-declare function commandCodeSearchSelection(): CommandCodeSearchSelection;
-/** Dependencies {@link createCommandCodeSearchSelection} resolves per call. */
-interface WebSearchSelectionDeps {
+/** Dependencies {@link createCommandCodeSelection} resolves per call. */
+interface WebSelectionDeps {
   /** The running `web` service whose selection field backs the degraded write. */
   web: WebRuntime;
   /** Host settings service, resolved per use because it may activate after `web`. */
@@ -2216,11 +2264,20 @@ interface WebSearchSelectionDeps {
   /** Failure and visibility sink. */
   logger: WebSelectionLogger;
 }
+/** One capability's concrete selection configuration. */
+interface WebSelectionOptions {
+  /** The `web` config field this selection reads and writes. */
+  field: WebSelectionField;
+  /** The provider id this selection asserts, and the id a foreign pin is measured against. */
+  providerId: string;
+  /** What the user-facing log lines call the capability (`web search` / `web fetch`). */
+  subject: string;
+}
 /** The handle `src/index.ts` drives; every member is synchronous and non-throwing. */
-interface WebSearchSelectionHandle {
+interface WebSelectionHandle {
   /** Live state, for callers that surface who currently owns the backend. */
-  readonly state: CommandCodeSearchSelection;
-  /** Align the selection with one end of the `webSearch` toggle. Never throws. */
+  readonly state: CommandCodeSelection;
+  /** Align the selection with one end of its toggle. Never throws. */
   apply(enable: boolean): void;
   /** Resolve once every queued write has settled. */
   settled(): Promise<void>;
@@ -2228,16 +2285,16 @@ interface WebSearchSelectionHandle {
   release(): void;
 }
 /**
- * The selection seam over `ctx.web`.
+ * The selection seam over one `ctx.web` provider field.
  *
  * ## Why settings rather than the runtime instance
  *
- * 0.2.1-rc.2's `WebRuntime` reads `this.config.searchProvider.get()` on EVERY
- * search and fetch, and the loader commits a settings write into that same
- * reference in place (`Entry._commitVolatile`) without remounting the entry.
- * Writing the reference directly therefore works, but leaves the value out of
- * the profile: the next commit for that entry — including one caused by an
- * unrelated field such as `fetchProvider` — re-resolves the raw config and
+ * 0.2.1-rc.2's `WebRuntime` reads `this.config.<field>.get()` on EVERY search and
+ * fetch, and the loader commits a settings write into that same reference in
+ * place (`Entry._commitVolatile`) without remounting the entry. Writing the
+ * reference directly therefore works, but leaves the value out of the profile:
+ * the next commit for that entry — including one caused by an unrelated field
+ * such as the OTHER capability's provider — re-resolves the raw config and
  * overwrites it. `ctx.settings.update()` / `replace()` is the documented path
  * and the one the shipped web-search settings page uses, so this plugin takes
  * it first and falls back to the reference only when settings is unavailable or
@@ -2245,32 +2302,58 @@ interface WebSearchSelectionHandle {
  *
  * ## Two writers, one field
  *
- * The shipped web-search settings page writes `web.searchProvider` too
- * (`deepseek-search-api` / `deepseek-official`). This seam never displaces a
- * pin it did not write: a non-`commandcode` value in the USER LAYER stops the
- * takeover, the value is recorded on {@link CommandCodeSearchSelection.foreign}
+ * The shipped web-search settings page writes these fields too. This seam never
+ * displaces a pin it did not write: a non-our-own value in the USER LAYER stops
+ * the takeover, the value is recorded on {@link CommandCodeSelection.foreign}
  * and named in one `info` line, and the provider stays registered but
  * unselected. A value the user layer does not carry is the deployment's own
- * default, and taking it over is the toggle's whole purpose. A user-layer
- * `commandcode` is treated as ours: nothing else writes that id, so it can only
- * be a previous run of this plugin or a deliberate manual pin, and turning the
- * toggle off restores the composed default in both cases.
+ * default, and taking it over is the toggle's whole purpose. A user-layer value
+ * equal to our own id is treated as ours: nothing else writes that id, so it can
+ * only be a previous run of this plugin or a deliberate manual pin, and turning
+ * the toggle off restores the composed default in both cases.
+ *
+ * @param deps - the running `web` service, a settings resolver, and a log sink.
+ * @param options - which field and id this selection owns.
+ * @returns a synchronous handle; failures are logged, never thrown.
+ */
+declare function createCommandCodeSelection(deps: WebSelectionDeps, options: WebSelectionOptions): WebSelectionHandle;
+//#endregion
+//#region src/web-search.d.ts
+/** Selection state for the search capability, kept under the module's historical name. */
+type CommandCodeSearchSelection = CommandCodeSelection;
+/** The search selection handle, kept under the module's historical name. */
+type WebSearchSelectionHandle = WebSelectionHandle;
+/** Search-selection dependencies, kept under the module's historical name. */
+type WebSearchSelectionDeps = WebSelectionDeps;
+/**
+ * Fresh, unowned selection state.
+ *
+ * Kept as a named wrapper (rather than only the generic
+ * {@link commandCodeSelection}) because this module is where the search half has
+ * always published it.
+ *
+ * @returns zeroed search-selection state.
+ */
+declare function commandCodeSearchSelection(): CommandCodeSearchSelection;
+/**
+ * The factory-declared search provider id dsh ships by default (from
+ * `dsh-base`'s cordis patch `web.config.searchProvider`). A documented
+ * reference only: disabling this plugin's `webSearch` toggle restores the
+ * PREVIOUSLY selected backend, never this default (issue #26).
+ */
+declare const DEFAULT_WEB_SEARCH_PROVIDER_ID = "deepseek-official";
+/**
+ * Align `web.searchProvider` with one end of the `webSearch` toggle.
+ *
+ * A thin, named wrapper over {@link createCommandCodeSelection}: the search
+ * half keeps its own factory so no call site has to know the field name.
  *
  * @param deps - the running `web` service, a settings resolver, and a log sink.
  * @returns a synchronous handle; failures are logged, never thrown.
  */
-declare function createCommandCodeSearchSelection(deps: WebSearchSelectionDeps): WebSearchSelectionHandle;
+declare function createCommandCodeSearchSelection(deps: WebSelectionDeps): WebSelectionHandle;
 /** Per-request facts the provider needs, all injected so the class stays cordis-free and testable. */
-interface CommandCodeSearchProviderDeps {
-  /** 使用搜索已捕获的网关解析账号，探测不能在等待后转到另一个网关。 */
-  resolveKey(apiBase?: string): Promise<string | undefined>;
-  /** The API base host (defaults to `https://api.commandcode.ai`). */
-  apiBase(): string;
-  /** Injectable fetch for tests; defaults to the global fetch. */
-  fetchImpl?: typeof fetch;
-  /** Injectable retry wait for tests; defaults to the module's abortable retry wait. */
-  retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
-}
+type CommandCodeSearchProviderDeps = WebProviderDeps;
 /**
  * A `ctx.web` search provider backed by the Command Code Provider API, reusing
  * the plugin's credential chain and `apiBase` so the model-facing `web_search`
@@ -2285,6 +2368,90 @@ declare class CommandCodeSearchProvider implements WebSearchProvider {
   /** Cheap local check; must not make network calls. Presence of a parseable base is enough. */
   available(): boolean;
   search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>;
+  private resolveKey;
+}
+/** Stable id this provider registers under in `ctx.web`. */
+declare const COMMANDCODE_SEARCH_PROVIDER_ID = "commandcode";
+//#endregion
+//#region src/web-fetch.d.ts
+/** Stable id this provider registers under in `ctx.web`'s FETCH registry. */
+declare const COMMANDCODE_FETCH_PROVIDER_ID = "commandcode";
+/** The endpoint the fetch POST goes to; `{apiBase}` is prepended. */
+declare const FETCH_ROUTE = "/alpha/web-fetch";
+/**
+ * Characters of page content the gateway serves per request. The CLI windows a
+ * page at 100,000 chars and continues with `startIndex`; the seam cannot, so a
+ * response at or beyond this boundary is reported as truncated for the tool's
+ * own notice.
+ */
+declare const FETCH_CONTENT_WINDOW = 100000;
+/** The URL a fetch will actually request, or the reason it is refused. */
+type FetchUrlVerdict = {
+  readonly ok: true;
+  readonly url: string;
+} | {
+  readonly ok: false;
+  readonly code: string;
+  readonly reason: string;
+};
+/**
+ * Validate a fetch target before any billable request is made.
+ *
+ * This mirrors the CLI's client-side guard, which it runs before its own
+ * request: a URL that the gateway would refuse anyway must not cost a round
+ * trip, and a URL pointing at the operator's own network must never be handed
+ * to a remote service. The gateway repeats these checks; this is defense in
+ * depth, not a replacement.
+ *
+ * @param raw - the URL from the fetch request.
+ * @returns the upgraded URL, or the refusal.
+ */
+declare function fetchUrlGuard(raw: string): FetchUrlVerdict;
+/** The `web` config field the fetch selection reads and writes. */
+declare const WEB_FETCH_SELECTION_FIELD: WebSelectionField;
+/**
+ * Align `web.fetchProvider` with one end of the `webFetch` toggle.
+ *
+ * A thin, named wrapper over {@link createCommandCodeSelection}: the fetch half
+ * keeps its own factory so no call site has to know the field name, exactly as
+ * the search half does.
+ *
+ * @param deps - the running `web` service, a settings resolver, and a log sink.
+ * @returns a synchronous handle; failures are logged, never thrown.
+ */
+declare function createCommandCodeFetchSelection(deps: WebSelectionDeps): WebSelectionHandle;
+/** Per-request facts the provider needs, all injected so the class stays cordis-free and testable. */
+type CommandCodeFetchProviderDeps = WebProviderDeps;
+/**
+ * A `ctx.web` fetch provider backed by the Command Code Provider API, reusing
+ * the plugin's credential chain and `apiBase` so the model-facing `web_fetch`
+ * tool needs no separate configuration. Selection between multiple fetch
+ * providers is the web seam's job (the plugin pins `fetchProvider:
+ * commandcode` through {@link import('./web-selection.ts').createCommandCodeSelection}).
+ */
+declare class CommandCodeFetchProvider implements WebFetchProvider {
+  private readonly deps;
+  readonly id = "commandcode";
+  /**
+   * Picker description: what this provider suits and what it cannot do.
+   *
+   * Deliberately says nothing about cost. The shipped local provider's own
+   * description is "free, can reach intranet and local addresses, no
+   * JavaScript/sign-in pages or PDFs", and the seam's guidance is to state what
+   * a provider SUITS and what it CANNOT do — billing belongs to the account
+   * page, not to a picker line. What this one adds over the local provider is
+   * that the page is fetched by Command Code's servers, so it reaches
+   * JavaScript-rendered pages; what it gives up is the intranet.
+   * `en` is required by `LocalizedText`.
+   */
+  readonly description: {
+    en: string;
+    zh: string;
+  };
+  constructor(deps: CommandCodeFetchProviderDeps);
+  /** Cheap local check; must not make network calls. Presence of a parseable base is enough. */
+  available(): boolean;
+  fetch(request: WebFetchRequest, signal?: AbortSignal): Promise<WebFetchResult>;
   private resolveKey;
 }
 //#endregion
@@ -2585,6 +2752,29 @@ interface Config {
    */
   webSearch?: boolean;
   /**
+   * Whether to use Command Code as the backend for dsh's model-facing
+   * `web_fetch` tool. Enabled registers a `commandcode` FETCH provider on
+   * `ctx.web` AND selects it over the shipped local `http` provider, reusing
+   * the SAME key and apiBase as chat and as `webSearch`. Selection is the `web`
+   * profile entry's volatile `fetchProvider`, written through the host settings
+   * service and read by `WebRuntime.fetch()` on the next call, so a toggle
+   * change lands without a restart or a remount. Disabling gives the field back
+   * to the deployment's composed value (the shipped `http`), so a profile that
+   * never wanted the remote fetch keeps working — EXCEPT when the user layer
+   * already carries someone else's explicit pin (the shipped web-search
+   * settings page writes `deepseek-fetch-api`): that choice is never displaced,
+   * and the provider stays registered but unselected. Defaults true, matching
+   * {@link webSearch}; the two toggles are INDEPENDENT, so search and fetch can
+   * name different backends.
+   *
+   * Named `webFetch` rather than after its endpoint so the pair reads as
+   * `webSearch` / `webFetch`, mirroring dsh's own two tool names.
+   *
+   * Unlike the shipped local `http` provider, this one runs on Command Code's
+   * servers and refuses private targets. Turn it off to keep fetches local.
+   */
+  webFetch?: boolean;
+  /**
    * Whether the Web sidebar shows the plans & quota card
    * (`sidebar.footer.action`). Defaults to false, so an unset document mounts
    * no sidebar quota surface and no background usage poll for it; the
@@ -2641,5 +2831,5 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, WEB_SELECTION_NAMESPACE, type WebSearchSelectionHandle, type WebSelectionLogger, type WebSelectionSettings, accountUsable, apply, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, createCommandCodeSearchSelection, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey };
+export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_FETCH_PROVIDER_ID, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, CommandCodeFetchProvider, type CommandCodeFetchProviderDeps, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchSelection, type CommandCodeSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, FETCH_CONTENT_WINDOW, FETCH_ROUTE, type FetchUrlVerdict, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, WEB_FETCH_SELECTION_FIELD, WEB_REQUEST_MAX_ATTEMPTS, WEB_SELECTION_NAMESPACE, type WebProviderDeps, type WebSearchSelectionDeps, type WebSearchSelectionHandle, type WebSelectionDeps, type WebSelectionField, type WebSelectionHandle, type WebSelectionLogger, type WebSelectionOptions, type WebSelectionSettings, accountUsable, apply, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, createCommandCodeFetchSelection, createCommandCodeSearchSelection, createCommandCodeSelection, dealLabel, fetchUrlGuard, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey, webRetryDelayMs, webRetryWait };
 //# sourceMappingURL=index.d.ts.map
