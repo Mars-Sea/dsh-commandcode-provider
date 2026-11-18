@@ -6614,6 +6614,21 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.ok(!KNOWN_EFFORTS['tencent/hy3-paid'])
   assert.deepEqual(KNOWN_EFFORTS['meta/muse-spark-1.2-contributor'], ['low', 'medium', 'high', 'xhigh'])
   assert.deepEqual(KNOWN_EFFORTS['tencent/hy4-preview'], ['low', 'medium', 'high'])
+  // 2026-11-16 (catalog-only sync): the two new Open Source Go-tier rows are
+  // now named in the 1.89.2 artifact (field-for-field with `?view=client`, which
+  // was the authority when they first entered). The Qwen flagship has four
+  // levels including `off`; Hy4 Flash has only `off/high`.
+  assert.deepEqual(KNOWN_EFFORTS['Qwen/Qwen4-Max'], ['off', 'low', 'high', 'xhigh'])
+  assert.deepEqual(KNOWN_EFFORTS['tencent/hy4-flash'], ['off', 'high'])
+  // 2026-11-18 (catalog + 1.89.3 artifact sync): the paid Hy4 flagship serves
+  // the Preview trio's three levels; the OpenAI 6.2 pair serves the five-level
+  // set of its `gpt-6.1-*` predecessors on `?view=client` alone.
+  assert.deepEqual(KNOWN_EFFORTS['tencent/hy4'], ['low', 'medium', 'high'])
+  assert.deepEqual(KNOWN_EFFORTS['gpt-6.2-astra'], ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(KNOWN_EFFORTS['gpt-6.2-sol'], ['low', 'medium', 'high', 'xhigh', 'max'])
+  // 2026-11-17: Flint thinks automatically with no selectable levels — the
+  // catalog's `efforts: null` and the 1.89.2 registry row both agree.
+  assert.ok(!KNOWN_EFFORTS['recursive/flint-v1.0:free'])
   assert.deepEqual(KNOWN_EFFORTS['MiniMaxAI/MiniMax-M3'], ['low', 'medium', 'high'])
   assert.ok(!KNOWN_EFFORTS['inclusionai/ling-3.0-flash-sante:free'])
   assert.deepEqual(KNOWN_EFFORTS['moonshotai/Kimi-K3'], ['low', 'high', 'max'])
@@ -6645,6 +6660,15 @@ test('known efforts snapshot covers the models the catalog advertises', () => {
   assert.equal(KNOWN_PLANS['deepseek/deepseek-v4.1-flash-ultrafast'], 'goat')
   assert.ok(KNOWN_IMAGE_MODELS.has('deepseek/deepseek-v4.1-flash-ultrafast'))
   assert.equal(KNOWN_NON_ZDR_MODELS.has('deepseek/deepseek-v4.1-flash-ultrafast'), false)
+  // 2026-11-16 (catalog-only sync): the catalog marks Hy4 Flash `zdr:false`;
+  // the new Qwen flagship is `zdr:true` and must stay outside the exception set.
+  // 2026-11-18 reverses the Hy4 half: the Preview exception (since 1.86.1) and
+  // the Flash row both flip to `zdr:true` in the catalog and leave the 1.89.3
+  // artifact's negated set, so neither is an exception any more.
+  assert.equal(KNOWN_NON_ZDR_MODELS.has('tencent/hy4-flash'), false)
+  assert.equal(KNOWN_NON_ZDR_MODELS.has('tencent/hy4-preview'), false)
+  assert.equal(KNOWN_NON_ZDR_MODELS.has('tencent/hy4'), false)
+  assert.equal(KNOWN_NON_ZDR_MODELS.has('Qwen/Qwen4-Max'), false)
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-flash'], ['off', 'high', 'max'])
   assert.deepEqual(KNOWN_EFFORTS['deepseek/deepseek-v4-pro'], ['off', 'high', 'max'])
   assert.ok(!KNOWN_THINKING_MODELS.has('claude-sonnet-5-5'))
@@ -6718,6 +6742,10 @@ test('known thinking snapshot covers reasoning models without effort levels', ()
   assert.equal(KNOWN_THINKING_MODELS.has('thinkingmachines/inkling-2-small:free'), false)
   assert.equal(KNOWN_EFFORTS['thinkingmachines/inkling'], undefined)
   assert.equal(KNOWN_EFFORTS['thinkingmachines/inkling-small'], undefined)
+  // 2026-11-17 (1.89.2 sync): Flint is the automatic-reasoning mirror of the
+  // selectable-effort free rows above — `reasoning: true` with no efforts.
+  assert.equal(KNOWN_THINKING_MODELS.has('recursive/flint-v1.0:free'), true)
+  assert.equal(KNOWN_EFFORTS['recursive/flint-v1.0:free'], undefined)
   // Crouton Alpha's five-level set left with its 2026-11-13 retirement.
   assert.equal(KNOWN_EFFORTS['stealth/crouton-alpha'], undefined)
   assert.ok(!KNOWN_THINKING_MODELS.has('meta/muse-spark-1.3'))
@@ -6842,6 +6870,15 @@ test('known image models snapshot has stable anchor entries', () => {
   // 2026-10-27: inputModalities ["text","image"] in the live catalog; the
   // pricing page (`caps.vision: true`) and the models docs page agree.
   assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6.1-terra'))
+  // 2026-11-16 (catalog-only sync): text + image modalities on both new rows.
+  assert.ok(KNOWN_IMAGE_MODELS.has('Qwen/Qwen4-Max'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('tencent/hy4-flash'))
+  // 2026-11-18: the paid Hy4 flagship takes image input (catalog, 1.89.3
+  // registry row, pricing `caps.vision` and the docs page all agree), and the
+  // OpenAI 6.2 pair is Vision per `?view=client` and both public pages.
+  assert.ok(KNOWN_IMAGE_MODELS.has('tencent/hy4'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6.2-astra'))
+  assert.ok(KNOWN_IMAGE_MODELS.has('gpt-6.2-sol'))
 })
 
 test('known plan snapshot tiers models by the official plan pages', () => {
@@ -6968,6 +7005,25 @@ test('known plan snapshot tiers models by the official plan pages', () => {
   // the live catalog, go / go-v1 / goat false and Pro and above true.
   assert.equal(KNOWN_PLANS['gpt-6.1-terra'], 'pro')
   assert.equal(planLabel('gpt-6.1-terra'), 'Pro')
+  // 2026-11-16 (catalog-only sync): Go on the pricing page and on both official
+  // model pages ("Go and above"), with every lower tier available too.
+  assert.equal(KNOWN_PLANS['Qwen/Qwen4-Max'], 'go')
+  assert.equal(planLabel('Qwen/Qwen4-Max'), 'Go')
+  assert.equal(KNOWN_PLANS['tencent/hy4-flash'], 'go')
+  assert.equal(planLabel('tencent/hy4-flash'), 'Go')
+  // 2026-11-17 (1.89.2 sync): Flint is Go on the pricing page and both model
+  // pages ("Go and above"), and leads the picker as a free row.
+  assert.equal(KNOWN_PLANS['recursive/flint-v1.0:free'], 'go')
+  assert.equal(planLabel('recursive/flint-v1.0:free'), 'Go')
+  // 2026-11-18 (1.89.3 sync): Hy4 is Go on catalog, artifact registry row and
+  // pricing availability alike; the OpenAI 6.2 pair splits the tiers its
+  // predecessors held — Sol at Pro, Astra at Provider.
+  assert.equal(KNOWN_PLANS['tencent/hy4'], 'go')
+  assert.equal(planLabel('tencent/hy4'), 'Go')
+  assert.equal(KNOWN_PLANS['gpt-6.2-sol'], 'pro')
+  assert.equal(planLabel('gpt-6.2-sol'), 'Pro')
+  assert.equal(KNOWN_PLANS['gpt-6.2-astra'], 'provider')
+  assert.equal(planLabel('gpt-6.2-astra'), 'Provider')
   // Labels match the official tier names.
   assert.equal(planLabel('MiniMaxAI/MiniMax-M3'), 'Go')
   assert.equal(planLabel('claude-sonnet-5'), 'Pro')
@@ -7035,6 +7091,12 @@ test('known deals snapshot has anchors and expiry-aware labels', () => {
   assert.equal(KNOWN_DEALS['thinkingmachines/inkling-2-small:free']?.free, true)
   assert.equal(KNOWN_DEALS['thinkingmachines/inkling-2-small:free']?.expiresAt, undefined)
   assert.equal(isFreeModel('thinkingmachines/inkling-2-small:free'), true)
+  // 2026-11-17 (1.89.2 sync): Flint carries the same undated 100%-off FREE
+  // terms ("while the free tier lasts", 1,000 requests/day), no end instant.
+  assert.equal(KNOWN_DEALS['recursive/flint-v1.0:free']?.label, 'FREE')
+  assert.equal(KNOWN_DEALS['recursive/flint-v1.0:free']?.free, true)
+  assert.equal(KNOWN_DEALS['recursive/flint-v1.0:free']?.expiresAt, undefined)
+  assert.equal(isFreeModel('recursive/flint-v1.0:free'), true)
   assert.equal(KNOWN_DEALS['stealth/crouton-alpha'], undefined)
   assert.equal(isFreeModel('stealth/crouton-alpha'), false)
   // command-code@1.79.0; the free Glyph Cluster preview carries the same
@@ -7277,7 +7339,7 @@ test('CLI version and API base constants are stable', () => {
   // record — what each upstream version added and what was re-verified unchanged — lives
   // in CHANGELOG.md (whose newest published entry may lag the pinned constant); this
   // assertion pins the constant only.
-  assert.equal(COMMAND_CODE_CLI_VERSION, '1.89.1')
+  assert.equal(COMMAND_CODE_CLI_VERSION, '1.89.3')
   assert.equal(DEFAULT_API_BASE, 'https://api.commandcode.ai')
 })
 
@@ -9279,6 +9341,19 @@ test('every new-arrival model carries an output ceiling or is left to runtime le
   // two-provider unanimous vote (openrouter and opencode both file 131 072).
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('google/gemini-4-carbon'), 32_768)
   assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('thinkingmachines/inkling-2-small:free'), 131_072)
+  // 2026-11-17 (1.89.2 sync): models.dev now files single unanimous rows for
+  // Qwen 4 Max (262144) and the free Flint row (235929), so both got a ceiling
+  // on this run; Hy4 Flash still has only conflicting values and stays out.
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('Qwen/Qwen4-Max'), 262_144)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('recursive/flint-v1.0:free'), 235_929)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('tencent/hy4-flash'), undefined)
+  // 2026-11-18 (1.89.3 sync): the OpenAI 6.2 pair resolves on OpenAI's own row
+  // at 128 000 — the same ceiling models.dev files for every `gpt-6*`/`gpt-6.1*`
+  // row — while the paid Hy4 flagship files only conflicting values, so it
+  // joins its Hy4 siblings on the runtime-learning path.
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('gpt-6.2-astra'), 128_000)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('gpt-6.2-sol'), 128_000)
+  assert.equal(MODEL_OUTPUT_TOKEN_LIMITS.get('tencent/hy4'), undefined)
   // Crouton Alpha's 943 718 row did NOT survive the 2026-11-10 check: models.dev
   // renamed its entries to `crouton-alpha-free` and files 270 000, so the
   // generator found neither a vendor row nor a unanimous one and left the id to

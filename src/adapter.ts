@@ -128,7 +128,25 @@ type GenerateOptions = Omit<HarnessGenerateOptions, 'purpose'> & { purpose?: str
 // `reflection/beam:free` and `stealth/crouton-alpha` `hidden: true`, the
 // verdict the catalog already gave those two rows before this snapshot retired
 // them. `catalogVersion` stays `709028a9…`, so no capability table moves.
-export const COMMAND_CODE_CLI_VERSION = '1.89.1'
+//
+// The 2026-11-17 move to 1.89.2 is a header sync: the artifact now names both
+// 11-16 catalog-first rows (Qwen 4 Max, Hy4 Flash) field-for-field with the
+// snapshot, so the audit's two "absent from CLI registry" errors are gone, and
+// it adds the free Flint row (`recursive/flint-v1.0:free`, text-only Go-tier
+// automatic reasoning, `zdr:false`, 262,144 context) that the live catalog and
+// pricing page already served. No route, header or chat wire body changes.
+//
+// The 2026-11-18 move to 1.89.3 is the smallest yet, and it is user-interface
+// only: the release adds the `vice` theme (a Miami-dusk palette picked from
+// `/theme`) and one registry row, the paid `tencent/hy4`. Static comparison
+// finds no new or removed route literal, custom header, `api.commandcode.ai`
+// endpoint, `promptCache`/`reasoning_effort`/`max_tokens`/`cache_control` count
+// or ZDR anchor; `x-command-code-version` and `x-cmd-zdr` are unchanged, so the
+// header bump is bookkeeping. The same artifact drops `tencent/hy4-flash` and
+// `tencent/hy4-preview` from its negated ZDR set, matching the catalog's flip to
+// `zdr:true`; that pair is the only snapshot movement on the wire side and is
+// recorded in `./capabilities.ts`.
+export const COMMAND_CODE_CLI_VERSION = '1.89.3'
 export const DEFAULT_API_BASE = 'https://api.commandcode.ai'
 
 /**

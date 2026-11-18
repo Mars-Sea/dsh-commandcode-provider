@@ -79,8 +79,40 @@
  * `zdr:false` rows exactly (21 == 21). It also marks the retired
  * `reflection/beam:free` and `stealth/crouton-alpha` `hidden`, matching the
  * catalog verdict this file already followed. The only generated-table change
- * is `MODEL_OUTPUT_TOKEN_LIMITS` (84 -> 87 rows; see the entry below). Keeping
- * the snapshot in its own module
+ * is `MODEL_OUTPUT_TOKEN_LIMITS` (84 -> 89 rows; see the entry below). A later
+ * check the same day sees the catalog move again (`catalogVersion` `846b2b17…`,
+ * 100 default / 116 `?view=client` rows): the two new Open Source Go-tier rows
+ * `Qwen/Qwen4-Max` and `tencent/hy4-flash` enter on `?view=client` evidence
+ * while the 1.89.1 artifact still names neither — the same catalog-first path
+ * earlier rows took, so the audit stays `incomplete` for those two ids only.
+ * The former selects `off/low/high/xhigh`, the latter `off/high` and
+ * `zdr:false`, taking the ZDR union to 22; no CLI constant or runtime behavior
+ * changes.
+ * The 2026-11-17 check moves the constant to 1.89.2: the artifact now registers
+ * both 11-16 rows (Qwen 4 Max, Hy4 Flash) field-for-field, so the audit's two
+ * "absent from CLI registry" errors drop to zero, and adds the free Flint row
+ * (`recursive/flint-v1.0:free`) on catalog + artifact + pricing evidence —
+ * text-only Go-tier automatic reasoning (no efforts), `zdr:false`, 262,144
+ * context, 100% off "while the free tier lasts" (1,000 requests/day, no end
+ * date). It enters `KNOWN_PLANS`, `KNOWN_THINKING_MODELS`,
+ * `KNOWN_NON_ZDR_MODELS` and `KNOWN_DEALS`; the explicit pricing alias
+ * `flint-v1.0:free` is reviewed and stored outside the repo.
+ * The 2026-11-18 check is a CLI bump with almost no artifact change — 1.89.2 ->
+ * 1.89.3 is the `vice` theme plus one registry row, with no new path, header or
+ * endpoint string — while the catalog advances `747dde90…` -> `6ff9af82…`
+ * (101 -> 104 default, 117 -> 120 `?view=client`). Three rows enter: the OpenAI
+ * 6.2 pair — Provider-tier `gpt-6.2-astra` (`$8/$40`, cache write `$10`) and
+ * Pro-tier `gpt-6.2-sol` (`$2/$10`, cache write `$2.5`), both 1,050,000
+ * context, text + image, the five-level effort set and `zdr:true`, each with a
+ * 272k single-fee step — and Tencent Hy4 (`tencent/hy4`, Go, 1,024,000 context,
+ * text + image, `low/medium/high`, `zdr:true`, `$0.834/$2.501`). Hy4 is the one
+ * the artifact also registers; the two GPT rows are catalog-first, which is why
+ * the audit's only two errors are their missing registry rows. The same check
+ * flips the Hy4 family's ZDR verdict: `tencent/hy4-flash` and
+ * `tencent/hy4-preview` are now `zdr:true` in `?view=client` AND were dropped
+ * from the artifact's negated set, so the union goes 23 -> 21 on two agreeing
+ * sources. Keeping the
+ * snapshot in its own module
  * confines those frequent sync diffs here: src/adapter.ts holds only the stable
  * wire/runtime logic. The read helpers live here too, for the same reason.
  *
@@ -125,6 +157,11 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // same three selectable levels. It is also the only model the 1.82.2 -> 1.82.4
   // train added to the artifact's own effort table.
   'Qwen/Qwen3.8-Max-Prime': ['low', 'medium', 'xhigh'],
+  // 2026-11-16 (catalog-only sync): `?view=client` serves a new four-level set
+  // for the Qwen 4 Max launch, including `off` (the DeepSeek "do not think"
+  // level). The 1.89.1 artifact names neither new id, so the catalog is the
+  // artifact-side source — the same path earlier catalog-first rows took.
+  'Qwen/Qwen4-Max': ['off', 'low', 'high', 'xhigh'],
   // 2026-11-10 (catalog-only sync; the 1.89.0 artifact finally names it): the
   // Fable family's newest and most capable member serves the same five
   // selectable levels as 5.1 and 5. It entered on `?view=client` alone; the
@@ -201,7 +238,15 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // command-code@1.60.0; same three-level set as its Step 3.x Flash siblings,
   // which still reason automatically with no levels and stay out of this map.
   'stepfun/Step-5-Preview': ['low', 'medium', 'high'],
+  // 2026-11-18 (catalog + 1.89.3 artifact sync): the paid Hy4 flagship serves
+  // the same three selectable levels as its Preview sibling, and is the family's
+  // first member the artifact registers in the same release that launches it.
+  'tencent/hy4': ['low', 'medium', 'high'],
   'tencent/hy4-preview': ['low', 'medium', 'high'],
+  // 2026-11-16 (catalog-only sync): the cheap Hy4 sibling serves `off/high`
+  // only — no `low`/`medium`/`xhigh` — and `zdr:false` (see
+  // KNOWN_NON_ZDR_MODELS). The 1.89.1 artifact has no registry row for it yet.
+  'tencent/hy4-flash': ['off', 'high'],
   'xai/grok-4.5': ['low', 'medium', 'high'],
   'xai/grok-4.6': ['low', 'medium', 'high', 'xhigh'],
   // command-code@1.59.0; same four-level set as Grok 4.6. 1.61.0 put it on a
@@ -279,6 +324,12 @@ export const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>> = {
   // `gpt-6.1-sol` predecessor; do not inherit future levels without
   // re-checking the catalog.
   'gpt-6.1-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
+  // 2026-11-18 (catalog-only sync): the OpenAI 6.2 pair carries the same
+  // five-level set as its `gpt-6.1-*` predecessors. `?view=client` is the only
+  // source: the 1.89.3 artifact's registry has no row for either id yet, so the
+  // audit reports them as "absent from CLI registry" rather than comparing.
+  'gpt-6.2-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-6.2-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
   // command-code@1.82.2. The paid graduation of the `ling-3.1-flash:free`
   // promo this table used to carry: that row is retired in the same release
   // (the CLI ships it `hidden`, it lost its effort list, and it is gone from
@@ -363,6 +414,16 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // command-code@1.82.4; inputModalities:["text","image"] in both the artifact's
   // embedded catalog and the live `?view=client` catalog.
   'Qwen/Qwen3.8-Max-Prime',
+  // 2026-11-16 (catalog-only sync): inputModalities:["text","image"] on both
+  // new Open Source rows in `?view=client`, with `caps.vision:true` on the
+  // pricing page; neither id is in the 1.89.1 artifact yet.
+  'Qwen/Qwen4-Max',
+  'tencent/hy4-flash',
+  // 2026-11-18 (catalog + 1.89.3 artifact sync): the paid Hy4 flagship takes
+  // image input — `inputModalities:["text","image"]` in `?view=client` AND in
+  // the artifact's registry row, `caps.vision: true` on the pricing page, and
+  // the models docs page labels it "Text input, Vision, Reasoning".
+  'tencent/hy4',
   // 2026-11-10 (catalog-only sync): inputModalities:["text","image"] in the live
   // `?view=client` catalog, and `caps.vision: true` on the pricing page.
   'claude-fable-5-2',
@@ -424,6 +485,11 @@ export const KNOWN_IMAGE_MODELS: ReadonlySet<string> = new Set([
   // `?view=client` catalog; the pricing page (`caps.vision: true`) and the
   // models docs page both mark the row Vision.
   'gpt-6.1-terra',
+  // 2026-11-18 (catalog-only sync): inputModalities:["text","image"] in
+  // `?view=client`; the pricing page (`caps.vision: true`) and the models docs
+  // page both mark both rows Vision. No 1.89.3 registry row for either id yet.
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
   // command-code@1.44.0 added Muse Spark 1.3 and its Contributor sibling; both
   // are Vision per the official registry and inputModalities.
   'meta/muse-spark-1.1',
@@ -659,15 +725,24 @@ export const KNOWN_NON_ZDR_MODELS: ReadonlySet<string> = new Set([
   'stealth/crouton-alpha',
   'stepfun/Step-3.7-Flash',
   'stepfun/Step-5-Preview',
-  // 2026-10-21 (command-code@1.86.1 sync). New to the exclusion set: the catalog
-  // serves `zdr:false` and the 1.86.1 artifact agrees.
-  'tencent/hy4-preview',
+  // The Hy4 family LEFT this set on 2026-11-18, both ids in one release:
+  // `?view=client` now serves `zdr:true` for `tencent/hy4-preview` (an exception
+  // here since 1.86.1) and for `tencent/hy4-flash` (admitted catalog-first on
+  // 2026-11-16), AND the 1.89.3 artifact dropped both from its negated set in
+  // the same release. That is a coverage change backed by two agreeing sources,
+  // not a membership that merely vanished from one artifact — the distinction
+  // decision record chapter 7 asks for. The newly launched paid `tencent/hy4` is
+  // `zdr:true` too and joins neither.
   // 2026-11-13 (catalog-only sync; the 1.89.0 artifact names it now): the free
   // Inkling 2 Small launch row. `?view=client` served `zdr:false` while the
   // 1.88.5 artifact named it nowhere, so the union admitted the catalog verdict
   // alone — and the pricing page states it in prose too ("Not routed under
   // ZDR"). Same shape as `claude-fable-5-2`, and both are now artifact-confirmed.
   'thinkingmachines/inkling-2-small:free',
+  // 2026-11-17 (catalog + 1.89.2 artifact sync): the free Flint row. Both the
+  // CLI's negated set and `?view=client` serve `zdr:false`, and the pricing page
+  // states it outright ("Not routed under ZDR"); the union is unambiguous.
+  'recursive/flint-v1.0:free',
   'xiaomi/mimo-v2.6-pro-ultraspeed',
   'z-ai/glm-5.3-flashx',
 ])
@@ -732,6 +807,11 @@ export const KNOWN_THINKING_MODELS: ReadonlySet<string> = new Set([
   // `:free` twin — the same capability under a dated promo id — left this map on
   // 2026-10-23 when that promo lapsed and the row went hidden.
   'ornith/ornith-1.5-122b',
+  // 2026-11-17 (catalog + 1.89.2 artifact sync): the free Flint row carries
+  // `reasoning: true` with no `reasoningEfforts` in both sources, so it thinks
+  // automatically and gets no selector. Its open-weight MoE is `caps.reasoning`
+  // on the pricing page; the 1.89.2 registry row agrees.
+  'recursive/flint-v1.0:free',
 ])
 
 /**
@@ -839,8 +919,8 @@ export function pinsTemperature(modelId: string): boolean {
  * **Generated — do not hand-edit.** `scripts/sync-output-limits.mjs` rewrites
  * this literal from models.dev; run it after a catalog sync, and use its
  * `--check` in CI. Command Code resells these models through their VENDOR's own
- * API, so the vendor's published ceiling is the value recorded: 87 of the 98
- * ids in `KNOWN_PLANS` as of 2026-11-16. Each row carries a comment naming the
+ * API, so the vendor's published ceiling is the value recorded: 91 of the 104
+ * ids in `KNOWN_PLANS` as of 2026-11-18. Each row carries a comment naming the
  * entry it came from. The table follows that map, so a row retired from it —
  * `poolside/laguna-s-2.1-free` (32768) on 2026-11-06 — leaves this literal
  * too; a stale session asking for it falls back to the learned ceiling (one
@@ -849,7 +929,18 @@ export function pinsTemperature(modelId: string): boolean {
  * `Qwen/Qwen3.8-Max-Prime` (131072) now have a single unanimous provider vote,
  * `stealth/glyph-cluster:free` (256000) gained one, and the provenance counts on
  * `meituan/LongCat-2.0` and `mistral/mistral-large-4` move 1 -> 2 and 8 -> 9
- * with their values unchanged.
+ * with their values unchanged. The later same-day catalog advance adds
+ * `Qwen/Qwen4-Max` and `tencent/hy4-flash` to `KNOWN_PLANS`, but neither id is
+ * in models.dev yet, so both join the runtime-learning path below rather than
+ * getting a guessed ceiling and the table stays at 87 rows. The 2026-11-17
+ * generator run folds in the two rows models.dev now publishes: `Qwen/Qwen4-Max`
+ * (262144) and the free `recursive/flint-v1.0:free` (235929, a single unanimous
+ * provider vote), taking the table to 89 rows; `tencent/hy4-flash` still has only
+ * conflicting provider values, so it stays on the runtime-learning path. The
+ * 2026-11-18 run moves it 89 -> 91: the OpenAI 6.2 pair resolves from OpenAI's
+ * own row at 128000, the same ceiling as its `gpt-6.1-*` predecessors, and the
+ * new paid `tencent/hy4` carries only conflicting provider values like its Hy4
+ * siblings, so it joins the runtime-learning path below.
  *
  * No row needs a hand-recorded pin as of 2026-10-16: the one that did
  * (`inclusionai/ling-3.0-flash-sante:free`, pinned at 32768 because it had lost
@@ -861,7 +952,7 @@ export function pinsTemperature(modelId: string): boolean {
  * correctable — a stricter gateway costs one refused request, and
  * `streamRequest()` remembers what the endpoint said.
  *
- * The 11 unlisted models are ones no vendor publishes and the aggregators
+ * The 13 unlisted models are ones no vendor publishes and the aggregators
  * disagree about. They are NOT a gap: a refusal states the ceiling in full, and
  * `streamRequest()` reads it off, retries once and remembers it for the model
  * (issue #71). A vendor figure the gateway turns out to be stricter than costs
@@ -946,6 +1037,10 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['gpt-6.1-sol', 128000],
   // openai
   ['gpt-6.1-terra', 128000],
+  // openai
+  ['gpt-6.2-astra', 128000],
+  // openai
+  ['gpt-6.2-sol', 128000],
   // 2 provider(s), unanimous
   ['inclusionai/ling-3.1-flash-1019', 262144],
   // 2 provider(s), unanimous
@@ -1006,6 +1101,10 @@ export const MODEL_OUTPUT_TOKEN_LIMITS: ReadonlyMap<string, number> = new Map([
   ['Qwen/Qwen3.8-Max-Prime', 131072],
   // alibaba
   ['Qwen/Qwen3.8-Omni-Flash', 131072],
+  // 1 provider(s), unanimous
+  ['Qwen/Qwen4-Max', 262144],
+  // 1 provider(s), unanimous
+  ['recursive/flint-v1.0:free', 235929],
   // sakana
   ['sakana/fugu-ultra', 1000000],
   // 1 provider(s), unanimous
@@ -1107,7 +1206,7 @@ export const DEFAULT_MESSAGES_MAX_TOKENS = 64_000
  * dsh-commandcode-upstream skill).
  */
 export const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  // --- Go (55 paid + 3 free) ---
+  // --- Go (57 paid + 3 free) ---
   'MiniMaxAI/MiniMax-M2.5': 'go',
   'MiniMaxAI/MiniMax-M2.7': 'go',
   'MiniMaxAI/MiniMax-M3': 'go',
@@ -1119,6 +1218,9 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'Qwen/Qwen3.8-27B': 'go',
   'Qwen/Qwen3.8-Flash': 'go',
   'Qwen/Qwen3.8-Max': 'go',
+  // 2026-11-16 (catalog-only sync): individual-go through teams-pro are all
+  // true on the pricing page; the official model page says "Go and above".
+  'Qwen/Qwen4-Max': 'go',
   // command-code@1.41.0; listed on the Go plan page.
   'Qwen/Qwen3.8-Max-0902': 'go',
   // command-code@1.82.4; individual-go is false and individual-goat true — the
@@ -1239,7 +1341,20 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // the picker.
   'stealth/glyph-cluster:free': 'go',
   'tencent/hy3-paid': 'go',
+  // 2026-11-18 (catalog + 1.89.3 artifact sync): Go on `?view=client`, in the
+  // artifact's registry row (`minimumPlan: "individual-go"`) and on the pricing
+  // page's embedded availability (every tier true). Unlike the Preview row it
+  // takes image input; see `KNOWN_IMAGE_MODELS`.
+  'tencent/hy4': 'go',
   'tencent/hy4-preview': 'go',
+  // 2026-11-16 (catalog-only sync): same all-tiers availability shape as the
+  // other Open Source Go rows; "Go and above" on the official model page.
+  'tencent/hy4-flash': 'go',
+  // 2026-11-17 (catalog + 1.89.2 artifact sync): the free Flint row is Go on
+  // every source — `minimumPlan: "individual-go"` in `?view=client` and every
+  // tier true in the pricing page's embedded availability; the model page says
+  // "Available on Go and above".
+  'recursive/flint-v1.0:free': 'go',
   'thinkingmachines/inkling': 'go',
   'thinkingmachines/inkling-small': 'go',
   'xai/grok-4.5': 'go',
@@ -1312,6 +1427,10 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   // `?view=client` catalog; the pricing page's embedded availability sets
   // individual-go / go-v1 / goat false and Pro and above true.
   'gpt-6.1-terra': 'pro',
+  // 2026-11-18 (catalog-only sync): `minimumPlan: "individual-pro"` in
+  // `?view=client`; the pricing page's embedded availability sets go / go-v1 /
+  // goat false and Pro and above true. Absent from the 1.89.3 registry.
+  'gpt-6.2-sol': 'pro',
   'meta/muse-spark-1.1': 'pro',
   // --- Provider (8) ---
   // 2026-11-10 (catalog-only sync): the Fable 5.2 flagship is Provider/Max like
@@ -1335,6 +1454,11 @@ export const KNOWN_PLANS: Readonly<Record<string, string>> = {
   'claude-opus-5': 'provider',
   // command-code@1.49.0; on Max.
   'gpt-6-astra': 'provider',
+  // 2026-11-18 (catalog-only sync): the 6.2 refresh of the Provider flagship at
+  // the same `minimumPlan: "individual-provider"` — and CHEAPER than its
+  // predecessor ($8/$40 vs `gpt-6-astra`'s $10/$50, cache write $10 vs $12.5).
+  // No 1.89.3 registry row yet; the 272k step doubles the row's rates.
+  'gpt-6.2-astra': 'provider',
   'sakana/fugu-ultra': 'provider',
   // --- Max (2) ---
   // command-code@1.71.0; the FIRST Max-only model in this catalog and the only
@@ -1519,6 +1643,12 @@ export const KNOWN_DEALS: Readonly<Record<string, KnownDeal>> = {
   // zero, which `modelPriceTable()` serves from this deal, so it gets no row in
   // the vendored price table either.
   'thinkingmachines/inkling-2-small:free': { label: 'FREE', free: true },
+  // 2026-11-17 (catalog + 1.89.2 artifact sync): the free Flint row is 100% off
+  // "while the free tier lasts", capped at 1,000 requests a day, with no
+  // published end instant — the same undated shape as Inkling / Glyph, so it
+  // carries no `expiresAt` and needs no row in the vendored price table (the
+  // pricing page publishes literal zeros, served from this deal).
+  'recursive/flint-v1.0:free': { label: 'FREE', free: true },
   // `stealth/crouton-alpha` (the 2026-11-04 free stealth preview, 1000 requests
   // a day) left this map on 2026-11-13: the row went `hidden` in
   // `?view=client`, left the default catalog view, and the pricing page (its

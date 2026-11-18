@@ -391,6 +391,108 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   generator `--check`s exit 0; no authenticated, paid-generation, protocol or browser-render check.
   Evidence in `/tmp/commandcode-check-20261116/`.
 
+  **Catalog advance the same day (2026-11-16, CLI still 1.89.1):** a fresh public check after the
+  1.89.1 sync sees the catalog move from `catalogVersion 709028a9…` to `846b2b17…`: the default view
+  goes 98 -> 100 ids and `?view=client` 114 -> 116, with the same sixteen `hidden` rows. Two new
+  Open Source Go-tier models enter on `?view=client` alone — Qwen 4 Max (`Qwen/Qwen4-Max`, 1,000,000
+  context, text + image, efforts `off/low/high/xhigh`, `zdr:true`, `$1.50/$4.50/$0.075` plus cache
+  write `$1.875`) and Tencent Hy4 Flash (`tencent/hy4-flash`, 1,024,000 context, text + image,
+  efforts `off/high`, `zdr:false`, `$0.07/$0.281/$0.003`). Both are absent from the 1.89.1
+  artifact's registry, so the audit stays `incomplete` for exactly those two ids — the same
+  catalog-first path earlier rows took before a later CLI version named them. The official pricing
+  page and model profile pages confirm the identities (`/models/qwen4-max`, `/models/hy4-flash`,
+  released 2026-11-15 / 2026-11-16); `Qwen/Qwen4-Max` needs the explicit alias `qwen-4-max` because
+  the pricing page uses its short slug, while `tencent/hy4-flash` maps exactly.
+
+  Snapshot changes: efforts 72 -> 74, plans 98 -> 100 (both Go), image 78 -> 80, ZDR exceptions
+  21 -> 22 (`hy4-flash` only; Qwen 4 Max is `zdr:true`). Thinking (15), deals (3), peak windows (5),
+  subscriptions (9) and `COMMAND_CODE_CLI_VERSION` are unchanged. `MODEL_OUTPUT_TOKEN_LIMITS` stays
+  at 87 rows: models.dev carries neither new id, so both defer to the endpoint's own refusal rather
+  than getting a guessed ceiling. The vendored price table goes 98 -> 100 rows from the official
+  pricing page (`qwen-4-max` and `tencent/hy4-flash`, each with the three published allowance
+  brackets). Audit: 14 sources HTTP 200, 2 errors (both "absent from CLI registry"),
+  `status=incomplete`, `readyToApply=false`, protocol `not-verified`; with the explicit alias the
+  mappings resolve to `explicit-alias` / `exact-id`. Verification: `typecheck` 0, `npm test`
+  1252/1252, `build` once, both generator `--check`s exit 0; no authenticated, paid-generation,
+  protocol or browser-render check. Evidence in `/tmp/commandcode-check-20261116-a/` with alias
+  `/tmp/commandcode-aliases-20261116.json`.
+
+  **Follow-up check (2026-11-17, CLI 1.89.1 → 1.89.2):** npm `latest` reaches `1.89.2`
+  (`2026-11-16T23:09Z`), so this is a header sync plus one model. The artifact now
+  names both 11-16 catalog-first rows field-for-field (`Qwen/Qwen4-Max`,
+  `tencent/hy4-flash`), so the audit's two "absent from CLI registry" errors drop
+  to zero. The live catalog moves `catalogVersion` `846b2b17…` → `747dde90…`:
+  default view 100 → 101 and `?view=client` 116 → 117 with one new row, free
+  Flint (`recursive/flint-v1.0:free`) — 262,144 context, text-only, automatic
+  reasoning (no effort levels), Go tier, `zdr:false` (the pricing page's own tip
+  says "Not routed under ZDR"), 100% off "while the free tier lasts" capped at
+  1,000 requests a day with no end date. It is catalog-first and also named in
+  the 1.89.2 registry and on the official model page
+  (`/models/flint-v1-0-free`, released 2026-11-16); the pricing slug
+  `flint-v1.0:free` is a reviewed explicit alias. Snapshot sync: `KNOWN_PLANS`
+  100 → 101, `KNOWN_THINKING_MODELS` 15 → 16, `KNOWN_NON_ZDR_MODELS` 22 → 23
+  and `KNOWN_DEALS` 3 → 4 (the undated FREE entry, so no vendored price row).
+  The generator also writes two output-limit rows models.dev now publishes:
+  `Qwen/Qwen4-Max` 262,144 and `recursive/flint-v1.0:free` 235,929 (both single
+  unanimous votes), taking `MODEL_OUTPUT_TOKEN_LIMITS` 87 → 89 rows; Hy4 Flash
+  still has only conflicting values and stays on the runtime-learning path.
+  The 16 hidden rows, the three deals, the five peak windows, subscriptions (9),
+  efforts (74), image (80), the vendored price table (100) and the protocol
+  literals are unchanged; the website changelog still tops out at 1.89.0, so the
+  CLI-side narrative comes from the artifact diff. Audit with the explicit alias:
+  16 sources HTTP 200, 0 errors, `status=review-required`, `readyToApply=false`,
+  protocol `not-verified`. Verification: `typecheck` 0, `npm test` green,
+  `build` once, both generator `--check`s exit 0; no authenticated,
+  paid-generation, protocol or browser-render check. Evidence in
+  `/private/var/folders/1d/vlh4j8yx4271cq8_w2d4fgnw0000gn/T/opencode/commandcode-check-20261117-2128/`
+  with alias `commandcode-aliases-20261117.json` in the same temp area.
+
+  **Follow-up check (2026-11-18, CLI 1.89.2 → 1.89.3):** npm `latest` reaches `1.89.3`. The
+  website `/changelog` again lists CLI releases (1.89.0 – 1.89.3 alongside the Desktop and IDE
+  Extension lines), so the earlier "the website changelog covers only the Desktop line" note no
+  longer holds; 1.89.3 carries exactly one entry — a new `vice` theme (Miami-dusk palette, picked
+  from `/theme`) — while 1.89.2's two fixes and 1.89.1's startup announcements are the items already
+  recorded. The artifact diff is the smallest yet: one registry row (paid `tencent/hy4`), the `vice`
+  theme (a standalone token 0 → 14 times), and two ids dropped from the negated ZDR set. No route
+  literal, custom header or `api.commandcode.ai` endpoint was added or removed, so
+  `COMMAND_CODE_CLI_VERSION` is a request-header sync with no runtime behavior change.
+
+  The catalog moves `747dde90…` → `6ff9af82…`: default view 101 → 104, `?view=client` 117 → 120,
+  exactly three new rows. OpenAI's 6.2 refresh lands as `gpt-6.2-astra` (Provider, 1,050,000,
+  text + image, the five-level effort set, `zdr:true`, `$8/$40`, cache read `$0.40`, cache write
+  `$10`, doubling past a 272k single-fee step) and `gpt-6.2-sol` (Pro, same envelope,
+  `$2/$10/$0.10/$2.5`); Astra is CHEAPER than its `gpt-6-astra` predecessor ($10/$50, `$12.5` cache
+  write) at the same tier, and both are `exact-id` pricing mappings. Tencent's Hy4 flagship enters
+  as `tencent/hy4` (Go, 1,024,000, text + image, `low/medium/high`, `zdr:true`,
+  `$0.834/$2.501/$0.042`) — the only one of the three the artifact registers, so the audit's two
+  "absent from CLI registry" errors are the GPT rows alone. The pricing page, the models docs page
+  (`caps` text/vision/reasoning for all three; Hy4 Preview stays vision-false) and the catalog agree
+  field for field.
+
+  The Hy4 family's ZDR verdict flips, and it is the first REMOVAL from the exception set since the
+  1.86.1 prune: `tencent/hy4-preview` (an exception since 1.86.1) and `tencent/hy4-flash` (admitted
+  catalog-first on 2026-11-16) are now `zdr:true` in `?view=client` AND were dropped from the
+  artifact's negated set in the same release — two agreeing sources, so it is coverage, not a
+  membership that merely vanished from one artifact.
+
+  Snapshot changes: `KNOWN_PLANS` 101 → 104 (Go / Pro / Provider), `KNOWN_EFFORTS` 74 → 77,
+  `KNOWN_IMAGE_MODELS` 80 → 83, `KNOWN_NON_ZDR_MODELS` 23 → 21; thinking (16), deals (4), peak
+  windows (5) and subscriptions (9) are unchanged. The vendored price table goes 100 → 103 rows with
+  no existing rate moving, and `MODEL_OUTPUT_TOKEN_LIMITS` 89 → 91: the GPT-6.2 pair resolves from
+  OpenAI's own row at 128,000 (the same ceiling every `gpt-6*`/`gpt-6.1*` row carries), while
+  `tencent/hy4` files only conflicting values and joins its Hy4 siblings on the runtime-learning
+  path (13 unlisted ids). Audit: 17 sources HTTP 200, 2 errors (both catalog-only GPT rows),
+  `status=incomplete`, `readyToApply=false`, protocol `not-verified`. The helper's changelog
+  extractor returned "No changelog entries extracted; page format may have changed" for a page whose
+  entries ARE present in the Next.js payload, so the CLI narrative above was read by hand — the
+  parser is a follow-up candidate. The only `candidateDiffs` entries left after the sync are the
+  two GPT rows' `KNOWN_EFFORTS` values reported as removals — the helper skips every capability
+  field for a row whose registry entry is missing, so that reads as local-only data, not as catalog
+  evidence (`?view=client` serves five levels for both); every other map diffs empty.
+  Verification: `typecheck` 0, `npm test` 1252/1252, `build` once,
+  both generator `--check`s exit 0; no authenticated, paid-generation, protocol or browser-render
+  check. Evidence in `/tmp/cc-check-20261118-082743/`.
+
   - `KNOWN_EFFORTS` — model → selectable reasoning-effort levels. Authoritative source is the live
     `?view=client` catalog's `reasoningEfforts` (since command-code@1.82.4 the CLI no longer keeps this map
     bundled — `getSupportedEfforts()` resolves it through the catalog, whose embedded bootstrap snapshot

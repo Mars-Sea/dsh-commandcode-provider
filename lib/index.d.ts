@@ -64,7 +64,7 @@ declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 type GenerateOptions$1 = Omit<GenerateOptions, 'purpose'> & {
   purpose?: string;
 };
-declare const COMMAND_CODE_CLI_VERSION = "1.89.1";
+declare const COMMAND_CODE_CLI_VERSION = "1.89.3";
 declare const DEFAULT_API_BASE = "https://api.commandcode.ai";
 /**
  * The output budget this bundle asks for, and the ceiling it will never exceed.

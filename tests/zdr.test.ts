@@ -17,7 +17,7 @@ import {
   supportsZeroDataRetention,
 } from '../src/capabilities.ts'
 
-test('the ZDR exception list is the live catalog zdr verdict (command-code@1.89.1)', () => {
+test('the ZDR exception list is the live catalog zdr verdict (command-code@1.89.3)', () => {
   // command-code@1.82.4 moved the authority for this verdict out of the CLI
   // artifact: `knownModelSupportsZdr` no longer negates a bundled Set, it reads
   // `resolveKnownCatalogModel({model,catalog})?.zdr ?? false`. So this list is
@@ -95,6 +95,26 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.89.
   // catalog-only evidence above. Every id below is served `zdr:false` by both
   // sources; the retired rows (Beam, Laguna, Crouton, the free MiniMax twin)
   // keep their membership on the same rule.
+  //
+  // The later 2026-11-16 catalog advance (`catalogVersion 846b2b17…`) adds
+  // `tencent/hy4-flash` on `?view=client` alone — the 1.89.1 artifact still has
+  // no registry row for it — taking this list to 22 by the same union rule that
+  // admitted Fable 5.2 and Inkling 2 Small before the artifact caught up. The
+  // other new row, `Qwen/Qwen4-Max`, is served `zdr:true` and stays off this list.
+  //
+  // 2026-11-17 (command-code@1.89.2 sync) adds `recursive/flint-v1.0:free`
+  // (22 -> 23): the 1.89.2 artifact's `modelSupportsZdr` set and `?view=client`
+  // both serve `zdr:false`, and the pricing page names it in prose ("Not routed
+  // under ZDR"). The same release registers the two 11-16 catalog-first rows in
+  // the artifact, so this list is now artifact-confirmed end to end.
+  //
+  // 2026-11-18 (command-code@1.89.3 sync) takes the set 23 -> 21, the first
+  // REMOVAL since the 1.86.1 prune: `tencent/hy4-preview` (an exception since
+  // 1.86.1) and `tencent/hy4-flash` (admitted catalog-first on 2026-11-16) both
+  // flip to `zdr:true` in `?view=client` AND leave the artifact's negated set in
+  // the same release. Two agreeing sources, so this is coverage, not a verdict
+  // that merely vanished from one artifact. The newly launched paid
+  // `tencent/hy4` is `zdr:true` too and joins nothing.
   assert.deepEqual([...KNOWN_NON_ZDR_MODELS].sort(), [
     'MiniMaxAI/MiniMax-M3',
     'Qwen/Qwen3.8-Max-0902',
@@ -107,13 +127,13 @@ test('the ZDR exception list is the live catalog zdr verdict (command-code@1.89.
     'meta/muse-spark-1.3-contributor',
     'minimax/minimax-m3-free',
     'poolside/laguna-s-2.1-free',
+    'recursive/flint-v1.0:free',
     'reflection/beam:free',
     'sakana/fugu-ultra',
     'stealth/crouton-alpha',
     'stealth/glyph-cluster:free',
     'stepfun/Step-3.7-Flash',
     'stepfun/Step-5-Preview',
-    'tencent/hy4-preview',
     'thinkingmachines/inkling-2-small:free',
     'xiaomi/mimo-v2.6-pro-ultraspeed',
     'z-ai/glm-5.3-flashx',
@@ -156,6 +176,12 @@ test('supportsZeroDataRetention answers false for every listed model and true ot
     'xai/grok-4.6',
     'xiaomi/mimo-v2.6-flash',
     'xiaomi/mimo-v2.6-pro',
+    // 2026-11-18 (1.89.3 sync): the whole Hy4 family is ZDR-covered now — the
+    // Preview row that had been an exception since 1.86.1, the Flash row that
+    // spent two days on the list, and the paid flagship joining on launch.
+    'tencent/hy4',
+    'tencent/hy4-flash',
+    'tencent/hy4-preview',
     'MiniMaxAI/MiniMax-M2.5',
     'a-model-from-the-future',
   ]) {
