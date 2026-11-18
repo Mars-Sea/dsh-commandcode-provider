@@ -1,7 +1,7 @@
 /**
  * Settings-page fold state tests (node:test, zero deps). Run with `npm test`.
  *
- * The page remembers which of its five groups are open in one localStorage key
+ * The page remembers which of its four groups are open in one localStorage key
  * (决策记录第十章第4条). These cases pin the defaults, the tolerant parse that
  * lets a partial or foreign record degrade group by group, and the storage
  * adapter's promise that a broken storage never breaks the page.
@@ -34,7 +34,7 @@ function memoryStorage(initial: Record<string, string> = {}, failing = false): S
 
 test('first visit: only Accounts is open', () => {
   assert.deepEqual(parseFoldState(null), {
-    accounts: true, models: false, privacy: false, integrations: false, advanced: false,
+    accounts: true, models: false, context: false, advanced: false,
   })
 })
 
@@ -45,10 +45,10 @@ test('unusable records fall back to the defaults', () => {
 })
 
 test('a partial record keeps the groups it knows and defaults the rest', () => {
-  const state = parseFoldState(JSON.stringify({ models: true, accounts: false, privacy: 'yes', removed: true }))
+  const state = parseFoldState(JSON.stringify({ models: true, accounts: false, context: 'yes', removed: true }))
   assert.equal(state.models, true)
   assert.equal(state.accounts, false)
-  assert.equal(state.privacy, false, 'a non-boolean flag is ignored')
+  assert.equal(state.context, false, 'a non-boolean flag is ignored')
   assert.equal(state.advanced, false)
   assert.equal('removed' in state, false, 'unknown groups are dropped')
 })
@@ -64,7 +64,7 @@ test('expandGroups opens only the named groups and keeps the rest', () => {
 test('the store round-trips through one key', () => {
   const storage = memoryStorage()
   const store = localStorageFoldStore(storage)
-  const state = { ...DEFAULT_FOLD_STATE, integrations: true }
+  const state = { ...DEFAULT_FOLD_STATE, context: true }
   store.write(state)
   assert.deepEqual(JSON.parse(storage.getItem(FOLD_STATE_KEY) ?? ''), state)
   assert.deepEqual(store.read(), state)

@@ -313,11 +313,16 @@ async function boot(
 
 test('设置页可直接打开模型分析，未打开时不扫描历史，钩子传递查询结果', async () => {
   const { registered, selectedPanels, commandCodeCalls } = await boot({ immediateUsageMount: false })
-  const settings = registered.get('commandcode')![0]!.inject!() as { openAnalytics(): void }
+  const settings = registered.get('commandcode')![0]!.inject!() as { openAnalytics(): boolean }
   const panel = registered.get('commandcode-panel')!.find(entry => entry.name === 'main')!.inject!() as import('../src/client/panel-view.tsx').PanelInjected
   assert.equal(commandCodeCalls.analytics, 0)
   assert.equal(panel.hooks.commandCodeSettings.getSnapshot().sidebarQuota, false)
-  settings.openAnalytics()
+  // The status pill's two inputs are wired: the injected face carries the Host
+  // probe, and an older Host whose namespace lacks `probe` degrades instead of throwing.
+  assert.equal(typeof panel.probeService, 'function')
+  const probe = await panel.probeService!()
+  assert.equal(typeof probe.ok, 'boolean')
+  assert.equal(settings.openAnalytics(), true)
   assert.equal(selectedPanels.at(-1), 'commandcode-panel')
   assert.equal(panel.hooks.commandCodePanelMode!.getSnapshot(), 'analysis')
   panel.refreshAnalytics!({ mode: 'recent', limit: 3 })

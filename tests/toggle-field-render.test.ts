@@ -27,6 +27,15 @@ const { ToggleField } = await import('../src/client/section.tsx')
 
 const t = ((key: string) => key) as unknown as Translate<SettingsCommandCodeKey>
 
+function textOf(node: unknown): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  if (node !== null && typeof node === 'object' && 'props' in node) {
+    return textOf((node as { props: { children?: unknown } }).props.children)
+  }
+  return ''
+}
+
 function staged(text: string): StagedField {
   return { text, clear: false, overridden: text !== '', invalid: false, invalidReason: undefined }
 }
@@ -77,4 +86,17 @@ test('ToggleField stages the flipped boolean as text, and a locked switch stays 
   assert.deepEqual(edits, ['false', 'true'])
   const locked = renderField('', true, [], true)
   assert.equal(locked.root.find((node) => node.props.role === 'switch').props.disabled, true)
+})
+
+test('ToggleField explains its hint in a toast, not as inline copy', () => {
+  const renderer = renderField('', false, [])
+  assert.equal(renderer.root.findAll((node) => node.props.className === 'cc-rowDesc').length, 0, 'no inline help region')
+
+  const help = renderer.root.find((node) => node.type === 'button' && node.props.className === 'cc-helpButton')
+  assert.equal(help.props['aria-label'], 'helpShowFor', 'the name names the help action, not only the setting')
+  assert.equal(help.props['aria-expanded'], undefined, 'the help no longer owns an expandable region')
+
+  act(() => { help.props.onClick() })
+  const toast = renderer.root.find((node) => node.props['data-cc-toast'] === true)
+  assert.equal(textOf(toast.props.children), '说明')
 })

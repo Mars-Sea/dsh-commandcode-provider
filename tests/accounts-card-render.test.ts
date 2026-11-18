@@ -276,6 +276,54 @@ for (const mode of ['writable', 'read-only', 'busy'] as const) {
   })
 }
 
+test('当前使用账户在用量报告到达后默认展开，用户折叠后不再自动弹开', () => {
+  const props = makeProps([])
+  props.usage = usageIdle
+  let root!: ReactTestRenderer
+  act(() => { root = create(createElement(AccountsCard, props)) })
+  const details = () => root.root.find((node) => node.props.id === 'cc-account-default-details')
+  assert.equal(details().props.hidden, true, '报告未到之前没有「当前账户」可展开')
+
+  act(() => {
+    root.update(createElement(AccountsCard, {
+      ...props,
+      usage: { status: 'ready', report: makeReport(), error: undefined, fetchedAt: 1 },
+    }))
+  })
+  assert.equal(details().props.hidden, false, '报告说明 default 正在服务时必须自动展开')
+
+  act(() => { root.root.findAll((node) => node.props.className === 'cc-accountToggle')[0]!.props.onClick() })
+  assert.equal(details().props.hidden, true, '用户主动折叠后立即收起')
+  act(() => {
+    root.update(createElement(AccountsCard, {
+      ...props,
+      usage: { status: 'ready', report: makeReport(), error: undefined, fetchedAt: 2 },
+    }))
+  })
+  assert.equal(details().props.hidden, true, '报告刷新不能把用户折叠的面板重新弹开')
+  act(() => { root.unmount() })
+})
+
+test('固定但未服务的账户不与正在服务的账户同时默认展开', () => {
+  const props = makeProps([])
+  props.state = makeState({
+    activeAccount: 'work',
+    accounts: [{ id: 'work', ref: 'credential:work', label: '工作', configured: true, credentialKnown: true, writable: true }],
+  })
+  props.usage = {
+    status: 'ready', error: undefined, fetchedAt: 1,
+    report: { accounts: [
+      { ...makeReport().accounts[0]!, active: true },
+      { id: 'work', label: '工作', configured: true, active: false, mark: 'rate-limit', cooldownUntil: 1, report: { failures: [] } },
+    ] },
+  }
+  let root!: ReactTestRenderer
+  act(() => { root = create(createElement(AccountsCard, props)) })
+  assert.equal(root.root.find((node) => node.props.id === 'cc-account-default-details').props.hidden, false)
+  assert.equal(root.root.find((node) => node.props.id === 'cc-account-work-details').props.hidden, true)
+  act(() => { root.unmount() })
+})
+
 test('账户头部右侧固定为「快速操作 → 折叠箭头 → ⋯」，箭头仍然能折叠', () => {
   // 2026-11-15 用户反馈：带「恢复自动切换」的卡片把箭头挤到左边，两张卡的头
   // 对不齐（第一张是 箭头⋯，第二张是 箭头恢复自动切换⋯）。现在箭头永远紧挨
@@ -315,11 +363,12 @@ test('账户头部右侧固定为「快速操作 → 折叠箭头 → ⋯」，�
   const chevron = heads[1]!.findAllByType('button').find((button) => button.props['aria-hidden'] === 'true')
   assert.ok(chevron, '折叠箭头必须留在头部')
   assert.equal(chevron.props.tabIndex, -1, '重复的折叠入口不进 Tab 序')
-  assert.equal(details(selected).length, 0, '默认折叠')
+  assert.equal(details(selected).length, 1)
+  assert.equal(details(selected)[0]!.props.hidden, false, '进入插件时，当前使用账户的详情默认展开')
   act(() => { chevron.props.onClick({}) })
-  assert.equal(details(selected).length, 1, '点箭头必须真的展开详情')
+  assert.equal(details(selected)[0]!.props.hidden, true, '点箭头必须真的折叠详情')
   const rotated = root.root.findAll((node) => typeof node.type === 'string' && node.props.className === 'cc-chevronOpen')
-  assert.equal(rotated.length, 1, '展开后箭头要转过来，折叠态才和展开态分得开')
+  assert.equal(rotated.length, 0, '折叠后箭头要转回来')
 
   act(() => { root.unmount() })
 })
@@ -342,7 +391,6 @@ function makePageProps(current: () => SettingsPageState): ComponentProps<typeof 
     beginLogin: () => {},
     cancelLogin: () => {},
     createEnrollment: () => ({ ...enrollment, reset: () => {} } as unknown as AccountEnrollmentController),
-    probeService: async () => ({ ok: true as const, value: { outcome: 'ok' as const, status: 401, latencyMs: 120, checkedAt: 1 } }),
     renameAccount: async () => true,
     removeAccount: async () => true,
     retryCredentialCleanup: async () => true,
@@ -357,43 +405,75 @@ function makePageProps(current: () => SettingsPageState): ComponentProps<typeof 
   }
 }
 
-test('方案 A 设置页直接复用 SettingsValueField、SegmentedControl 与按需底栏，不挂载顶部重复仪表盘', () => {
+test('设置页只在成功打开用量分析后关闭宿主设置弹窗', () => {
+  const calls: string[] = []
+  let selected = false
+  const props = {
+    ...makePageProps(() => makeState()),
+    openAnalytics: () => { calls.push('select'); return selected },
+    close: () => { calls.push('close') },
+  }
+  let root!: ReactTestRenderer
+  act(() => { root = create(createElement(CommandCodeSettingsPage, props)) })
+  const action = root.root.findAllByType('button').find(node => textOf(node.props.children) === 'openAnalytics')
+  assert.ok(action)
+  act(() => { action.props.onClick() })
+  assert.deepEqual(calls, ['select'])
+  selected = true
+  act(() => { action.props.onClick() })
+  assert.deepEqual(calls, ['select', 'select', 'close'])
+  act(() => { root.unmount() })
+})
+
+test('方案 A 设置页直接复用原生分组与按需底栏，不挂载顶部重复仪表盘', () => {
   let state = makeState()
   const pageProps = makePageProps(() => state)
   let root!: ReactTestRenderer
   act(() => { root = create(createElement(CommandCodeSettingsPage, pageProps)) })
 
-  // 集成／高级两组的暂存文本字段仍由宿主的 SettingsValueField 原语承载。
+  // 连接参数已从表单里撤下：设置页不再挂载宿主的 SettingsValueField 文本字段。
   const fieldIds = root.root
     .findAll((node) => typeof node.props['data-cc-settings-field'] === 'string')
     .map((node) => node.props['data-cc-settings-field'] as string)
-  // 两个模型默认值（上下文长度、输出上限）改走行式 `SettingsRowField`，
-  // 宿主原语只剩集成与高级两组里的四个文本字段。
-  assert.deepEqual(fieldIds, [
-    'cc-api-base',
-    'cc-request-timeout',
-    'cc-stream-idle-timeout',
-    'cc-transport-max-retries',
-  ])
+  assert.deepEqual(fieldIds, [])
 
-  // 账户分组体铺满整栏（2026-11-15 用户反馈）：只放宽账户这一组，
-  // 其余分组继续缩进在分组标题的 22px 栏内。
+  // 四个分组按页面顺序渲染：账户 → 模型显示配置 → 上下文配置 → 高级设置。
   const bodies = root.root
     .findAll((node) => typeof node.props.id === 'string' && /^cc-group-.+-body$/.test(node.props.id))
     .map((node) => ({ id: node.props.id as string, className: String(node.props.className) }))
-  assert.ok(bodies.length >= 4, '四个分组各自渲染一个分组体')
+  assert.deepEqual(
+    bodies.map((body) => body.id),
+    ['cc-group-accounts-body', 'cc-group-models-body', 'cc-group-context-body', 'cc-group-advanced-body'],
+  )
   assert.deepEqual(
     bodies.filter((body) => body.className.includes('cc-accountGroupBody')).map((body) => body.id),
     ['cc-group-accounts-body'],
-    '只有账户分组体去掉缩进，模型、集成、高级三组保持原样',
+    '只有账户分组体去掉缩进，其余三组保持原样',
   )
+
+  // 连接参数不再渲染（行为仍由配置层保留）：四个旧输入 id 一个都不在树里。
+  const removedIds = ['cc-api-base', 'cc-request-timeout', 'cc-stream-idle-timeout', 'cc-transport-max-retries']
+  assert.equal(
+    root.root.findAll((node) => removedIds.includes(String(node.props.id))).length,
+    0,
+    'API 地址与三个网络参数只撤下 UI，不应再挂控件',
+  )
+
+  // 高级设置只保留四个开关，顺序与需求一致：ZDR → 联网搜索 → 侧边栏额度 → 图片缓存。
+  const advancedBody = root.root.find((node) => node.props.id === 'cc-group-advanced-body')
+  assert.deepEqual(
+    advancedBody.findAll((node) => node.type === 'button' && node.props.role === 'switch').map((node) => node.props['aria-label']),
+    ['zdr', 'webSearch', 'showSidebarQuota', 'offloadSeenImagesForCache'],
+  )
+  assert.equal(advancedBody.findAll((node) => node.type === 'input').length, 0, '高级设置里不应再有文本/数字输入')
 
   // 无未保存改动时不渲染底部保存栏，也没有旧版顶部 StatusStrip。
   assert.equal(root.root.findAll((node) => node.props.className === 'cc-saveFooter').length, 0)
   assert.equal(root.root.findAll((node) => node.props.className === 'cc-statusStrip').length, 0)
 
   // 点击添加账户按钮后，方式切换由宿主的 SegmentedControl (role="tablist") 承载。
-  const addBtn = root.root.find((node) => node.type === 'button' && node.props.className === 'cc-addButton')
+  const addBtn = root.root.findAllByType('button').find((node) => textOf(node.props.children).includes('accountAdd'))
+  assert.ok(addBtn, '账户分组必须有添加账户文本按钮')
   act(() => { addBtn.props.onClick() })
   assert.equal(root.root.findAll((node) => node.props.role === 'tablist').length, 1)
 
@@ -426,12 +506,12 @@ test('账户分组体铺满整栏，并与上方卡片保持同一 8px 间距', 
 })
 
 /**
- * 模型与上下文分组的排版（2026-11-15 画板 ModelsSection.dc.html 落地）：
- *   1. 三块：可见性行 → 默认预算字段 → 两张每模型表，块间靠 `.cc-block` 的 24px；
- *   2. 每张表一行表头：标题 + 条目数 + 右端「添加模型」；空列表下面是说明，不是只剩标题；
- *   3. 行内的「重置」落在控制列（紧挨被重置的开关），标签行不再挂「已自定义」胶囊。
+ * 模型显示配置 / 上下文配置的排版：
+ *   1. 两个分组分开：显示范围与显示名称在前，上下文长度与单轮输出在后；
+ *   2. 上下文组内顺序：自定义上下文长度 → 专属上下文长度 → 单轮输出上限；
+ *   3. 每张表一行表头：标题 + 条目数 + 右端「添加」；空列表下面是说明。
  */
-test('模型分组的排版：三块结构、表头带条目数与添加、行内重置落在控制列', () => {
+test('模型显示与上下文分组的顺序、表头与行内重置', () => {
   const overridden = { text: 'false', clear: false, overridden: true, invalid: false, invalidReason: undefined }
   const state = makeState({ filterModelsByPlan: overridden })
   let root!: ReactTestRenderer
@@ -440,7 +520,11 @@ test('模型分组的排版：三块结构、表头带条目数与添加、行�
   const blocks = root.root
     .findAll((node) => typeof node.props.className === 'string' && node.props.className.startsWith('cc-block'))
     .map((node) => node.props.className as string)
-  assert.deepEqual(blocks, ['cc-block cc-blockRows', 'cc-block cc-list', 'cc-block cc-list'], '三块按渲染顺序出现')
+  assert.deepEqual(
+    blocks,
+    ['cc-block cc-list', 'cc-block cc-blockRows', 'cc-block cc-list', 'cc-block cc-blockRows'],
+    '显示名称表在前；上下文组依次是长度字段、专属列表、输出上限',
+  )
 
   // 默认预算的两个字段是真正的行：标签和输入框在同一行、输入框走行式宽度。
   const rowInputs = root.root.findAll((node) => node.type === 'input' && String(node.props.className).includes('cc-fieldRowInput'))
@@ -452,12 +536,13 @@ test('模型分组的排版：三块结构、表头带条目数与添加、行�
     assert.equal(row.findAll((child) => child.type === 'label' && child.props.htmlFor === input.props.id).length, 1)
   }
 
+  // 页面顺序先模型名称表、后上下文表；两张表都带条目数与「添加」。
   const heads = root.root.findAll((node) => node.props.className === 'cc-listHead')
   assert.equal(heads.length, 2, '两张每模型表各有一个表头行')
-  assert.match(textOf(heads[0]!.props.children), /contextOverridesTitle.*listCountMany.*contextOverrideAdd/)
-  assert.match(textOf(heads[1]!.props.children), /modelNamesTitle.*listCountMany.*modelNamesAdd/)
+  assert.match(textOf(heads[0]!.props.children), /modelNamesTitle.*listCountMany.*modelNamesAdd/)
+  assert.match(textOf(heads[1]!.props.children), /contextOverridesTitle.*listCountMany.*contextOverrideAdd/)
   const hints = root.root.findAll((node) => node.props.className === 'cc-listHint').map((node) => textOf(node.props.children))
-  assert.deepEqual(hints, ['contextOverrideEmpty', 'modelNamesEmpty'], '空列表要说清「空＝跟随默认」')
+  assert.deepEqual(hints, ['modelNamesEmpty', 'contextOverrideEmpty'], '空列表要说清「空＝跟随默认」')
 
   const controlRows = root.root.findAll((node) => node.props.className === 'cc-rowControl')
   const filterRow = controlRows.find((row) =>

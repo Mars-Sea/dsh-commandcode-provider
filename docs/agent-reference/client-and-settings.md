@@ -3,9 +3,27 @@
 Task-specific reference moved from the former root `AGENTS.md`. All source and test paths are relative to the repository root. Consult the relevant source and tests before changing behavior.
 
 - **v0.17.7 原生组件改造（2026-11-12）**：设置页采用账户、模型、集成、高级四个平铺折叠分组，数值／文本字段由 `SettingsValueField` 承载，配套 `Button`、`Input`、`SegmentedControl`、`Tag`、`StateDot` 与 `Modal`；普通设置仍经原控制器暂存与保存，账号操作即时确认。移除顶部重复状态区，保存底栏只在有状态提示或待保存内容时挂载。账户卡片沿用宿主表面与深色模式；组合配置中的凭据只读账户也保留取消固定入口，写入权限与账号忙碌状态控制按钮禁用，不把凭据可管理性当作清除 `activeAccount` 的前提。`tests/accounts-card-render.test.ts` 覆盖原生字段接线、分段选项、按需底栏及组合账户取消固定的可写／只读／忙碌状态；后文较早样式记录作为历史保留，当前实现以源码为准。设计源稿见 `designs/commandcode-settings-dsh/project/`；编辑器日志与历史缓存不纳入提交。
-- **账户分组正文铺满整栏（2026-11-15）**：分组体默认的 `22px` 左内边距是给文本行的（14px 折叠箭头 + 8px 间距），而账户区是实体卡片这种「面」，缩进后读起来像嵌在分组里的一个盒子，比上方的分组行窄一圈。`FoldableGroup` 因此多一个可选 `bodyClassName`，账户组传 `cc-accountGroupBody`：`padding-left:0` 取到分组头部同宽，`gap:8px` 让「添加账户／用量分析」那行不再贴着最后一张卡片（与两张卡片之间的间距同一个值，也是设计源稿里该容器本来就有的间距）。**只有账户组放宽**，模型、集成、高级三组保持缩进；规则必须留在 `.cc-groupBody` 之后，同特异性靠顺序取胜。`tests/accounts-card-render.test.ts` 同时钉住组件挂类、四个分组里只有一个放宽、以及规则中的 `padding-left:0`／`gap:8px` 与声明顺序。
+- **2026-11-18 设置界面重排（当前实现）**：设置页现在是四个分组，顺序为账户 → 模型显示配置
+  → 上下文配置 → 高级设置。`模型与上下文` 已拆分：`隐藏套餐外模型`、`自定义显示范围`
+  （原「模型白名单」，仍由 `VisibleModelsRow` + `ModelMultiSelect` 承载）、`自定义显示名称`
+  （原「模型名称」）进入模型显示配置；`自定义上下文长度`、`专属上下文长度`（原「按模型覆盖」，
+  紧跟全局长度字段）、`单轮输出上限`（最后）进入上下文配置。两个列表的添加按钮都只写「添加」。
+  `集成与显示` 分组整体移除；ZDR、Command Code 联网搜索、侧边栏额度卡片按此顺序移到高级设置
+  开头，后接「已看过的图片不再重复发送」。API 地址、请求超时、流空闲超时、网络失败重试次数
+  不再渲染，但存储值仍按原配置语义生效——删掉的是 UI 行，不是字段。
+  账户组默认展开当前使用账户的详情；「添加账户」和「用量分析」改为 ghost 文本按钮，
+  「模型绑定」（原「专用模型」）带信息图标，说明文案固定为「当使用所选模型时自动切换到当前账户」。
+  所有本插件的可点击信息图标都改为点击弹 `Toast`，不再在行内展开说明；`SettingsRowField` /
+  `ToggleField` 共用 `HelpToastButton`，信息按钮的可访问名是「查看{label}说明」。
+  服务状态不再是设置页的一行，而是套餐/配额面板标题「Command Code」后的四字胶囊
+  （`ServiceStatusPill`）；官方与本机两半都正常为绿，
+  一半异常为橙，两半都异常为红，检查中或某一半未知时保持中性，点击打开官方/本机明细与状态页按钮。
+  保存栏用 `.cc-section{margin-bottom:-24px}` + `.cc-saveFooter{bottom:-24px}`：宿主的 24px 底部内边距
+  在滚动容器内容边之外，只有负的 sticky 偏移能把保存栏压到设置面板底边（已在真实宿主壳内量过）。
+- **用量分析空白页**：DSH 0.2.2-rc.4 的 Web 预置 primitives 模块没有 `useAnchoredPosition`，服务状态胶囊调用它时会让宿主错误边界卸下整张面板。胶囊在浏览器内按触发按钮定位。面板自身捕获渲染错误，并提供独立的「返回会话」按钮。设置入口在成功选中主面板后调用 `settings.section` 的宿主 `close` 属性，避免设置弹窗遮挡面板。
+- **账户分组正文铺满整栏（2026-11-15）**：分组体默认的 `22px` 左内边距是给文本行的（14px 折叠箭头 + 8px 间距），而账户区是实体卡片这种「面」，缩进后读起来像嵌在分组里的一个盒子，比上方的分组行窄一圈。`FoldableGroup` 因此多一个可选 `bodyClassName`，账户组传 `cc-accountGroupBody`：`padding-left:0` 取到分组头部同宽，`gap:8px` 让「添加账户／用量分析」那行不再贴着最后一张卡片（与两张卡片之间的间距同一个值，也是设计源稿里该容器本来就有的间距）。**只有账户组放宽**，其余三组保持缩进；规则必须留在 `.cc-groupBody` 之后，同特异性靠顺序取胜。（此段的组名是 2026-11-15 的当时状态；2026-11-18 起为模型显示配置、上下文配置、高级设置。）`tests/accounts-card-render.test.ts` 同时钉住组件挂类、四个分组里只有一个放宽、以及规则中的 `padding-left:0`／`gap:8px` 与声明顺序。
 - **账户头右端固定为「快速操作 → 折叠箭头 → ⋯」（2026-11-15）**：箭头原本在名称按钮内部用 `margin-left:auto` 钉在右端，被「恢复自动切换」这种快速操作一插，就把箭头挤到文字左边——于是同一列表里「有快速操作的卡片」和「没有的卡片」头部对不齐。现在箭头从名称按钮里移出来，作为 `cc-iconButton` 排在快速操作之后、`⋯` 菜单之前，任何卡片都以同一组「箭头 + 菜单」收尾；`.cc-accountChevron`（含 `margin-left:auto`）随之删除。**语义不变**：`aria-expanded`／`aria-controls` 仍只由名称按钮承载，箭头是给指针用户的重复入口，故 `aria-hidden` + `tabIndex={-1}` 不进无障碍树与 Tab 序；旋转挂在内部图标上（`cc-chevronOpen`），避免与 `.cc-iconButton:active` 的 `transform:scale` 抢同一个 `transform` 属性。`tests/accounts-card-render.test.ts` 钉住两种卡片头部的按钮顺序、箭头的 `tabIndex`、点击可展开，以及展开后图标带旋转类。
-- **模型与上下文分组的三块排版（2026-11-15）**：设计源稿是画板 `designs/commandcode-settings-dsh/project/ModelsSection.dc.html`（canvas 上另有一条备注说明偏差）。分组正文改成**三块**：可见性行 → 默认预算字段 → 两张每模型表；块之间只靠 `.cc-block` 的 `24px` 抬升，块内不加分隔线也不加小标题——之前所有行都是 12px 等距，一眼分不出段。**每模型表**统一成一行表头（标题 + `N 项` + 右端「添加模型」）、统一列 `minmax(0,1fr) 160px 28px`（原先两张表各用 `1.35fr/136px` 与 `1.2fr/1fr` 两套列宽），列头只在有条目时出现，空列表挂一句说明（`contextOverrideEmpty`／`modelNamesEmpty`），不再只剩一个像标题的行。**行内状态**：`OverrideTag` 只留安静的「重置」按钮并移进控制列（`ToggleField` 的 `control`，紧挨开关），删掉每行的 `已自定义` 胶囊——胶囊曾在每一行中间塞进一个可变宽度的元素、把控件孤零零留在最右边；状态由「按钮只在被覆盖时出现」表达，分组摘要照旧给出计数。白名单行的触发器改读 `已选 {count} / {total} 个模型`（`visibleModelsCountOf`；目录未就绪或计数超过总数时回落旧文案）。**两个数字字段（上下文长度、输出上限）改走行式**：宿主 `SettingsValueField` 的形态是「标签在上、输入在下」，这两行因此成了全组最重的两块半屏宽输入框，首轮落地时也是唯一看起来「没变」的地方；现在由 `SettingsRowField` 复用 `SettingRow` 的行骨架（`<label for>`、ⓘ 帮助区、`aria-invalid`、`aria-describedby`、`inputMode="numeric"`、行内 `重置` 全部保留，输入框 `140×32`）。**代价与边界**：这两个字段不再由宿主原语承载，原语只剩集成／高级两组里的四个文本字段（渲染测试的 `data-cc-settings-field` 期望从 6 个改为 4 个）；`SettingRow` 为此多了一个可选 `errorId`，让输入框能指向自己的错误行。`tests/accounts-card-render.test.ts` 的「模型分组的排版」用例钉住三块顺序、两个表头、空状态文案，以及「重置落在控制列、标签行没有胶囊」。
+- **模型与上下文分组的三块排版（2026-11-15；现行分组已拆分，见 2026-11-18 条）**：设计源稿是画板 `designs/commandcode-settings-dsh/project/ModelsSection.dc.html`（canvas 上另有一条备注说明偏差）。分组正文改成**三块**：可见性行 → 默认预算字段 → 两张每模型表；块之间只靠 `.cc-block` 的 `24px` 抬升，块内不加分隔线也不加小标题——之前所有行都是 12px 等距，一眼分不出段。**每模型表**统一成一行表头（标题 + `N 项` + 右端「添加模型」）、统一列 `minmax(0,1fr) 160px 28px`（原先两张表各用 `1.35fr/136px` 与 `1.2fr/1fr` 两套列宽），列头只在有条目时出现，空列表挂一句说明（`contextOverrideEmpty`／`modelNamesEmpty`），不再只剩一个像标题的行。**行内状态**：`OverrideTag` 只留安静的「重置」按钮并移进控制列（`ToggleField` 的 `control`，紧挨开关），删掉每行的 `已自定义` 胶囊——胶囊曾在每一行中间塞进一个可变宽度的元素、把控件孤零零留在最右边；状态由「按钮只在被覆盖时出现」表达，分组摘要照旧给出计数。白名单行的触发器改读 `已选 {count} / {total} 个模型`（`visibleModelsCountOf`；目录未就绪或计数超过总数时回落旧文案）。**两个数字字段（上下文长度、输出上限）改走行式**：宿主 `SettingsValueField` 的形态是「标签在上、输入在下」，这两行因此成了全组最重的两块半屏宽输入框，首轮落地时也是唯一看起来「没变」的地方；现在由 `SettingsRowField` 复用 `SettingRow` 的行骨架（`<label for>`、ⓘ 帮助区、`aria-invalid`、`aria-describedby`、`inputMode="numeric"`、行内 `重置` 全部保留，输入框 `140×32`）。**代价与边界**：这两个字段不再由宿主原语承载，原语只剩集成／高级两组里的四个文本字段（渲染测试的 `data-cc-settings-field` 期望从 6 个改为 4 个；2026-11-18 起四个文本字段也已全部撤下 UI）；`SettingRow` 为此多了一个可选 `errorId`，让输入框能指向自己的错误行。`tests/accounts-card-render.test.ts` 的「模型分组的排版」用例钉住三块顺序、两个表头、空状态文案，以及「重置落在控制列、标签行没有胶囊」。
 - **账号开通**：两种新增方式统一使用 `src/enrollment.ts`；`src/client/enrollment.ts` 由每次设置页挂载持有，`AddAccountPanel` 只负责输入和意图。面板按设计稿：「网页登录／粘贴密钥」分段切换 → 备注名 →（粘贴模式）密钥框 → 右侧「取消」+「开始登录／添加」；进行中只剩「取消开通」，命名失败为「取消／接受已有名称／重试保存名称」，判定在导出纯函数 `addAccountPanelView`（`tests/section.test.ts`）。切回网页登录会清空已填密钥。离开设置页取消未完成过程，已登录待命名则接受已有名称；命名失败保留账号，清理失败保留恢复记录并提供手动重试。默认或已有账号的 `login*` 契约继续使用原控制器。
 - **自动打开授权页**：新增、默认和已有账号登录均在首次收到宿主授权地址后通过 `src/client/login-page.ts` 打开新页面，不预先打开空白页；同一尝试的轮询不重复打开，已取消尝试或已卸载的新增账号面板不会因迟到地址打开页面。浏览器可能拦截异步打开，界面始终保留授权链接及手动打开提示；打开失败不取消宿主登录。使用 `noopener,noreferrer` 隔离来源页，不能根据返回 `null` 判断是否拦截。
 - **页面生命期**：`enrollmentWatch({ pageId })` 是持续远端流，先确认就绪再允许 `enrollmentBegin`。所有过程调用带页面身份；宿主将它与实际调用对端共同绑定。单次调用完成不结束过程；页面卸载主动取消并释放流，刷新或关闭由网关流取消信号触发收尾。DSH 的 `OperatorPeer` 是宿主共享作用域，不能用它冒充单个浏览器连接。载体断开不会自动重建原过程。
@@ -164,8 +182,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   merge would fail once a peer ships it). On dsh builds without the slot the
   declaration never exists and `slots.inject` never fires — the registration
   silently does not happen; do not "harden" that into an error.
-- **Service status row (`settings.section` → Integrations & display)**
-  (`src/client/service-status.ts`): reads the two public files the official
+- **Service status pill (`main` panel header)**
+  (`src/client/service-status.ts` + `./service-status-copy.ts` + `./use-service-status.ts` +
+  `./service-status-pill.tsx`): reads the two public files the official
   status page (status.commandcode.ai, an Upptime deployment) itself reads —
   `history/summary.json` for the verdict plus 7/30-day uptime and 7-day average
   response time, and `history/command-code.yml` for the monitor's own
@@ -175,11 +194,13 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   registry check. The snapshot is cached in `localStorage` for five minutes;
   every failure keeps the last good snapshot marked `stale` and paints it with a
   "last known result" notice, while a cold cache degrades to "status unknown".
-  `checkServiceStatus` never throws and the row writes no setting, so a network
-  failure cannot block Save. The dot reuses the framework's `StateDot`
-  (done/warning/error/idle) instead of a local colour token, and all copy rides
-  the `settings.commandcode` namespace (zh is the source of truth).
-  The row pairs that published record with a live probe: `commandcode/probe`
+  `checkServiceStatus` never throws and the pill writes no setting, so a network
+  failure cannot block Save. The pill paints the COMBINED health (official + local): both normal
+  green, one abnormal orange, both abnormal red, neutral while either half is still checking or
+  unknown (an older Host without a probe shows neutral, not a permanent orange), so a page load
+  never flashes a failure it did not measure. Its popover keeps the official/local lines, the local retry and the
+  status-page link; the dot colours are local to the pill. Copy lives in `service-status-copy.ts`
+  and is spread into `panel.commandcode` only. The pill pairs that published record with a live probe: `commandcode/probe`
   (`src/service-probe.ts` + `src/service-probe-wire.ts`) runs HOST-side against
   the configured API base, because `api.commandcode.ai` sends no CORS header and
   on a remote-Host setup the browser machine is not the one serving requests.
@@ -192,28 +213,27 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   credential-less GET of that endpoint IS supposed to be answered 401; 403
   covers gateway-level rejections), everything else is `http-error`, with
   distinct `timeout` and `unreachable` outcomes. It never throws and never
-  claims more than "this Host reached the endpoint just now"; the row renders
+  claims more than "this Host reached the endpoint just now"; the popover renders
   its own dot and line. A failed attempt is retried once
-  (`runServiceProbeWithRetry`, 500 ms apart) before the row reports it, and a
-  failure renders as a neutral "probe did not succeed (…)" warning with a
-  "Probe again" button — never as a red service error, and never in place of
-  the published verdict in the group heading (`badge` is always official).
+  (`runServiceProbeWithRetry`, 500 ms apart) before the popover reports it; a
+  failure is a neutral "probe did not succeed (…)" line with a "Probe again"
+  button, never a red service error, and never a replacement for the official
+  verdict.
   **Deliberate limits**: the monitor probes only `https://api.commandcode.ai`'s
   root (HTTP 200), so "operational" does not prove inference works; Upptime's
   `lastUpdated` is the last PUBLISH time, not the last check — the state file is
   only rewritten when the status changes or when the daily `response-time`
   workflow forces a commit, and GitHub throttles the five-minute cron into runs
   every few hours (observed stalls of several days when the summary/response
-  workflows fail). The row therefore says "official data updated N ago" (never
+  workflows fail). The popover therefore says "official data updated N ago" (never
   "last check"), adds a publication-lag note past two hours
   (`SERVICE_STATUS_LAG_WARN_MS`), and leaves real-time answers to the Host
   probe. Past a day (`SERVICE_STATUS_STALE_MS`) the verdict stops being shown
-  as live at all: the row line becomes "data stops at YYYY-MM-DD" (monitor-side
-  UTC) in a neutral tone, the heading gets a short "N days stale" badge, and
-  only the 7-day uptime stays on that line — the 30-day window and the average
-  response ride the date's tooltip (`hiddenDetail`) so the row still fits two
-  compact lines. Past incidents are GitHub issues, not data files, and are left to the
-  page itself (the row links to it). Pinned by `tests/service-status.test.ts`,
+  as live at all: the official line becomes "data stops at YYYY-MM-DD" (monitor-side
+  UTC) in a neutral tone, and only the 7-day uptime stays on that line — the 30-day
+  window and the average response ride the date's tooltip (`hiddenDetail`). Past
+  incidents are GitHub issues, not data files, and are left to the page itself (the
+  popover links to it). Pinned by `tests/service-status.test.ts`,
   `tests/service-probe.test.ts` and the probe codec cases there.
 - **Browser login (`commandcode/loginBegin|loginStatus|loginCancel`)**: the
   settings page's key field can start the official `command-code login` flow
@@ -305,18 +325,18 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   be reconciled; unaccepted drafts remain. Successful saves clear only the captured draft versions,
   including a frozen visible-model selection. Account lists are rebuilt from raw stored entries so
   literal-key or unknown entries the page cannot name survive unrelated account edits.
-- **设置页折叠（决策记录第十章第4条，取代 issue #94 的单组折叠）**：五个顶级分组共用 `FoldableGroup`
+- **设置页折叠（决策记录第十章第4条，取代 issue #94 的单组折叠）**：四个顶级分组共用 `FoldableGroup`
   （`src/client/section.tsx`）——`h3` 包一个整行按钮，箭头在标题左侧，「刷新」这类分组动作放在按钮外。
   默认只展开「账户」（页头的「全部展开／全部收起」已按用户要求删除）；展开状态存在浏览器本地一个键
   `@mars-sea/dsh-commandcode-provider/settings-fold`（`src/client/group-fold.ts`，缺失、损坏或存储被禁用时回落
   默认，不进配置文档、不随 profile 同步）。收起的正文以 `hidden` 保留挂载（有意不加动画：分组折叠发生得
   太频繁），`aria-controls` 始终有效。
-  标题旁摘要徽标展开收起都显示（账户数与异常数、白名单数量、已自定义项数、ZDR／联网搜索开关、服务状态）；
+  标题旁摘要徽标展开收起都显示（账户数与异常数、显示范围数量、模型名称/上下文覆盖的自定义项数）；
   组内有未填好的数字时，**收起状态**下额外挂错误徽标（`groupInvalid`）。保存按钮在校验失败时仍禁用，保存条
   多一个「定位」按钮：展开出错分组（`invalidGroups`）并聚焦第一个 `aria-invalid` 控件。折叠是**纯呈现层**：
   各字段的暂存、校验与整批提交路径不变。摘要与定位的判定都是导出纯函数，由 `tests/section.test.ts`、
   `tests/group-fold.test.ts` 固定。
-- **设置页卡片化重设计（2026-10-29，用户确认设计稿后实施）**：五个分组由扁平分隔改为 16px 圆角卡片
+- **设置页卡片化重设计（2026-10-29，用户确认设计稿后实施；当时为五个分组）**：五个分组由扁平分隔改为 16px 圆角卡片
   （`src/client/page-styles.ts`，`divided` 道具随分隔线一并删除）；页头新增状态总览条（账户健康、月额度剩余、
   服务状态、模型范围，`StatusStrip`），文案全部复用分组已有的摘要与余额字符串，不新增词条。版式：页标题
   22/28、组标题 15/22（600）、组头 52px，卡片行间 .5px 细线。卡片首屏以 `@starting-style` + 40ms stagger
@@ -338,10 +358,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   兜底是否删除取决于支持范围，仍支持 `0.2.1` 或 `0.2.2-alpha.2` 时必须保留，不能仅因开发依赖升级而删除。
 
 - **自定义上下文长度（issue #86）**：`Config.contextWindow`（全局值）与 `Config.contextWindowOverrides`
-  （按模型，键为目录 id）覆盖宣告给宿主的上下文窗口，解析顺序为按模型 → 全局 → 目录。页面上是
-  「模型与上下文」分组内平铺的两段内容（`ContextCard` 渲染，直接排在「隐藏套餐外模型」开关与可见模型
-  白名单之后，与其它行同属该分组，无独立标题与分隔线——中间版本曾用 `SettingsSubGroup` 给出次级标题与
-  细分隔线，已在用户实机查看后删除该组件与 locale 键 `contextTitle`；不再是独立顶级分组，也不再是子节）：
+  （按模型，键为目录 id）覆盖宣告给宿主的上下文窗口，解析顺序为按模型 → 全局 → 目录。页面上位于
+  「上下文配置」分组（`ContextSettingsCard` 渲染）：全局自定义长度在分组开头，专属上下文长度表紧跟其后，
+  单轮输出上限放在最后。`contextTitle` 是该分组的标题键（中间版本曾删除，2026-11-18 恢复为独立分组）：
   全局值是 staged 字段，spec 为
   `tokenCountField`——在 `numberField` 之上只加简写后缀一层：`32K`/`1M` 按**二进制**换算
   （×1024 / ×1024²，32K = 32 768、1M = 1 048 576），换算后仍走同一对
@@ -366,7 +385,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   请求体 `model`、计价与峰谷标注、费率、价格表、`commandcode/prices` wire 与 Remote 描述符数量。
   **默认值是未设置／空表**：名称与现状逐字一致，即 `${catalogName} (CC)`（上游 ` (latest)` 保留）；
   未知目录模型（无条目）仍显示裸 id。用途是让外部「峰谷提醒」「缓存计价」插件按显示名字符串重新
-  匹配上，与本插件自身的计价、峰谷、价格表、wire 无关。页面上是「模型与上下文」分组内一张按模型
+  匹配上，与本插件自身的计价、峰谷、价格表、wire 无关。页面上是「模型显示配置」分组内一张按模型
   的名称覆盖表（模型下拉 + 名称输入 + 移除 + 添加），复用 `cc-context*` 表格样式；下拉沿用
   `allowlistedModels`（与同分组的上下文覆盖表一致，默认「显示全部」时即整个目录），已存但目录里
   已不存在的 id 仍保留在表里并标注「已下架」；不进
@@ -408,8 +427,8 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `cc-resetInline`；只清空存储值的草稿只显示按钮）——同日先后试过「每行末尾留 28px 复位空位」与「卡片、分组头
   再右缩 36px 对齐空位」，用户分别反馈右侧不齐、整体不协调，均已撤回（`cc-resetSlot`、`cc-rowFluid` 已删）。
   防折行靠设置行文字列下限 200px（`.cc-rowText` 的 `flex:1 1 200px`）：最宽的两行（API 地址 280px 输入框、
-  白名单按钮 + 200px 下拉）在约 520px 内容区内仍与标题同行，窄时让说明文字多折行。服务状态行的
-  「打开状态页」在标题行右侧（不占控件列），官方行各段（`detailParts` 与更新时间）不可断开、整段换行。
+  显示范围按钮 + 200px 下拉）在约 520px 内容区内仍与标题同行，窄时让说明文字多折行。该版本的服务状态行
+  与 API 地址行已在 2026-11-18 重排中撤下；服务状态改由套餐/配额面板标题后的胶囊承载。
 - **设置页尺寸以设计画布为准（2026-10-21，用户要求「完全按效果图」，取代下面两条中与之冲突的尺寸）**：
   尺寸逐项取自设计画布的 `cc-kit.css`，颜色映射到 dsw 别名。按钮不再用宿主 `Button` 原语，改为本页自绘的
   `PageButton`（`cc-btn`：md 32px／14px 字／14px 图标，sm 28px／12px 字，lg 36px 仅保存条；`outline` 即设计稿

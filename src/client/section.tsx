@@ -5,20 +5,18 @@
  * the same typography, flat `0.5px` group dividers, `20px` entity cards and
  * `16px` inline module panels as DSH's own `ModelsSection` and
  * `PluginInventorySettingsTab`. Standard UI atoms — `Button`, `Switch`, `Tag`,
- * `StateDot`, `SegmentedControl`, `SettingsValueField`, `Input`, `Menu`,
- * `Modal`, and the `Icon*Outline*` glyph set — come directly from the seeded
+ * `StateDot`, `SegmentedControl`, `Input`, `Menu`, `Modal`, `Toast`, and the
+ * `Icon*Outline*` glyph set — come directly from the seeded
  * `@deepseek-ai/dsh-client-ui-primitives` package rather than local copies.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   Button,
   IconCheckCircleOutlineRegular,
   IconChevronDownOutlineRegular,
   IconEllipsisOutlineRegular,
-  IconGaugeOutlineRegular,
   IconInfoOutlineRegular,
-  IconPlusOutlineMedium,
   IconPlusOutlineRegular,
   IconRefreshOutlineRegular,
   IconRightUpOutlineRegular,
@@ -31,10 +29,10 @@ import {
   Menu,
   Modal,
   SegmentedControl,
-  SettingsValueField,
   StateDot,
   Switch,
   Tag,
+  Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry, StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
@@ -69,16 +67,6 @@ import {
 } from '../display-format.ts'
 import { PLUGIN_RELEASES_URL, PLUGIN_VERSION } from './version.ts'
 import { checkForUpdate, localStorageUpdateStore } from './update.ts'
-import {
-  STATUS_PAGE_URL,
-  checkServiceStatus,
-  localStorageServiceStatusStore,
-  readCachedServiceStatus,
-  runServiceProbeWithRetry,
-  serviceStatusView,
-} from './service-status.ts'
-import type { ServiceProbe, ServiceStatusSnapshot, ServiceStatusView, ServiceTone } from './service-status.ts'
-import type { CommandCodeProbeResult } from '../service-probe-wire.ts'
 import { expandGroups, localStorageFoldStore, type FoldGroup, type FoldState } from './group-fold.ts'
 
 type NoticeTone = 'neutral' | 'success' | 'warn' | 'error'
@@ -131,9 +119,10 @@ function Notice({ tone = 'neutral', icon, title, actions, role = 'status', label
   )
 }
 
-/** Props composed by the slot registration: locale seat + injected face. */
+/** Props composed by the slot registration: owner, locale seat, and injected face. */
 export interface CommandCodeSettingsProps {
   t: Translate<SettingsCommandCodeKey>
+  close?(): void
   useCommandCodeSettings<T>(selector: (state: SettingsPageState) => T): T
   useCommandCodeUsage<T>(selector: (state: UsagePageState) => T): T
   useCommandCodeLogin<T>(selector: (state: LoginPageState) => T): T
@@ -143,15 +132,11 @@ export interface CommandCodeSettingsProps {
   discard(): void
   refreshUsage(): void
   refreshUsageAuto(): void
-  openAnalytics?(): void
+  openAnalytics?(): boolean
   refreshCredentials(): void
   beginLogin(targetRef?: string): void
   cancelLogin(): void
   createEnrollment(): AccountEnrollmentController
-  probeService(): Promise<
-    | { ok: true; value: CommandCodeProbeResult }
-    | { ok: false; error: { message: string } }
-  >
   renameAccount(ref: string, label: string): Promise<boolean>
   removeAccount(ref: string): Promise<boolean>
   retryCredentialCleanup(ref: string): Promise<boolean>
@@ -165,47 +150,39 @@ export interface CommandCodeSettingsProps {
   editModelNames(next: Record<string, string>): void
 }
 
-/** Host-side defaults shown as placeholders when a field is empty. */
-export const FIELD_DEFAULTS = {
-  apiBase: 'https://api.commandcode.ai',
-  requestTimeoutSeconds: '300',
-  streamIdleTimeoutSeconds: '300',
-  transportMaxRetries: '5',
-} as const
-
-type AdvancedField = 'apiBase' | 'requestTimeoutMs' | 'streamIdleTimeoutMs' | 'transportMaxRetries' | 'offloadSeenImagesForCache'
+type AdvancedField = 'zdr' | 'webSearch' | 'showSidebarQuota' | 'offloadSeenImagesForCache'
 const ADVANCED_FIELDS: readonly AdvancedField[] = [
-  'apiBase',
-  'requestTimeoutMs',
-  'streamIdleTimeoutMs',
-  'transportMaxRetries',
+  'zdr',
+  'webSearch',
+  'showSidebarQuota',
   'offloadSeenImagesForCache',
 ]
 
-type ModelsField = 'filterModelsByPlan' | 'contextWindow' | 'maxOutputTokens'
-const MODELS_FIELDS: readonly ModelsField[] = ['filterModelsByPlan', 'contextWindow', 'maxOutputTokens']
+type ModelsField = 'filterModelsByPlan'
+const MODELS_FIELDS: readonly ModelsField[] = ['filterModelsByPlan']
 
-export function advancedGroupInvalid(state: Pick<SettingsPageState, AdvancedField>): boolean {
-  return ADVANCED_FIELDS.some((field) => state[field].invalid)
-}
+type ContextField = 'contextWindow' | 'maxOutputTokens'
+const CONTEXT_FIELDS: readonly ContextField[] = ['contextWindow', 'maxOutputTokens']
 
-export function modelsGroupInvalid(
-  state: Pick<SettingsPageState, ModelsField | 'contextWindowOverrides'>,
+export function contextGroupInvalid(
+  state: Pick<SettingsPageState, ContextField | 'contextWindowOverrides'>,
 ): boolean {
-  return MODELS_FIELDS.some((field) => state[field].invalid)
+  return CONTEXT_FIELDS.some((field) => state[field].invalid)
     || state.contextWindowOverrides.some((row) => row.invalid)
 }
 
-export function invalidGroups(state: Pick<SettingsPageState, AdvancedField | ModelsField | 'contextWindowOverrides'>): FoldGroup[] {
-  const groups: FoldGroup[] = []
-  if (modelsGroupInvalid(state)) groups.push('models')
-  if (advancedGroupInvalid(state)) groups.push('advanced')
-  return groups
+export function invalidGroups(state: Pick<SettingsPageState, ContextField | 'contextWindowOverrides'>): FoldGroup[] {
+  return contextGroupInvalid(state) ? ['context'] : []
 }
 
-export function modelsOverriddenCount(state: Pick<SettingsPageState, ModelsField | 'contextWindowOverrides' | 'modelNames'>): number {
+export function modelsOverriddenCount(state: Pick<SettingsPageState, ModelsField | 'modelNames'>): number {
   return MODELS_FIELDS.filter((field) => state[field].overridden).length
-    + state.contextWindowOverrides.length + state.modelNames.length
+    + state.modelNames.length
+}
+
+export function contextOverriddenCount(state: Pick<SettingsPageState, ContextField | 'contextWindowOverrides'>): number {
+  return CONTEXT_FIELDS.filter((field) => state[field].overridden).length
+    + state.contextWindowOverrides.length
 }
 
 export function advancedOverriddenCount(state: Pick<SettingsPageState, AdvancedField>): number {
@@ -291,6 +268,35 @@ function OverrideTag({ label, state, disabled, t, onReset }: {
   )
 }
 
+/**
+ * Info glyph that explains a setting in a transient toast instead of expanding
+ * a block of copy inside the row. The accessible name names the help action and
+ * the setting it belongs to; the visible copy stays four glyphs wide.
+ */
+function HelpToastButton({ help, helpLabel }: { help: string; helpLabel: string }) {
+  const [shown, setShown] = useState(0)
+  const helpId = useId()
+  return (
+    <>
+      <button
+        type="button"
+        className="cc-helpButton"
+        aria-label={helpLabel}
+        aria-describedby={helpId}
+        title={helpLabel}
+        onClick={() => setShown((count) => count + 1)}
+      >
+        <IconInfoOutlineRegular size={12} />
+      </button>
+      {/* Keeps the explanation reachable in browse mode after the toast fades. */}
+      <span id={helpId} className="cc-visuallyHidden">{help}</span>
+      {shown > 0 ? (
+        <Toast key={shown} text={help} holdMs={7000} onDone={() => setShown(0)} />
+      ) : null}
+    </>
+  )
+}
+
 function invalidCopy(
   reason: StagedField['invalidReason'],
   t: Translate<SettingsCommandCodeKey>,
@@ -338,8 +344,6 @@ export function ToggleField({
   onReset(): void
   t: Translate<SettingsCommandCodeKey>
 }) {
-  const [helpOpen, setHelpOpen] = useState(false)
-  const helpId = `${id}-help`
   const checked = state.text === '' ? defaultChecked : state.text === 'true'
   return (
     <SettingRow
@@ -347,19 +351,9 @@ export function ToggleField({
       titleId={id}
       tag={
         hint !== undefined && hint !== '' ? (
-          <button
-            type="button"
-            className="cc-helpButton"
-            aria-label={label}
-            aria-expanded={helpOpen}
-            aria-controls={helpId}
-            onClick={() => setHelpOpen((open) => !open)}
-          >
-            <IconInfoOutlineRegular size={12} />
-          </button>
+          <HelpToastButton help={hint} helpLabel={t('helpShowFor', { label })} />
         ) : undefined
       }
-      description={helpOpen && hint !== undefined && hint !== '' ? <p id={helpId}>{hint}</p> : undefined}
       control={
         <>
           {/* The reset sits in the control column, immediately beside the
@@ -809,11 +803,10 @@ export interface FoldProps {
   onToggle(): void
 }
 
-/** Models & context group: switches, allowlist, 2-col `SettingsValueField`s, and `ModelsSection.modelEntry` overrides. */
-function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, onOverrides, onNames, expanded, onToggle }: FormCardProps & FoldProps & {
+/** 模型显示配置: the plan filter, the custom visible range and the custom display names. */
+function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, onNames, expanded, onToggle }: FormCardProps & FoldProps & {
   onSelect(ids: string[]): void
   onClear(): void
-  onOverrides(next: Record<string, string>): void
   onNames(next: Record<string, string>): void
 }) {
   return (
@@ -830,7 +823,6 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, on
               overriddenText(modelsOverriddenCount(state), t),
             ]}
           />
-          <InvalidBadge show={!expanded && modelsGroupInvalid(state)} t={t} />
         </>
       }
     >
@@ -847,14 +839,6 @@ function ModelsCard({ state, disabled, t, onEdit, onReset, onSelect, onClear, on
         />
         <VisibleModelsRow t={t} state={state} disabled={disabled} onSelect={onSelect} onClear={onClear} />
       </div>
-      <ContextCard
-        state={state}
-        disabled={disabled}
-        t={t}
-        onEdit={onEdit}
-        onReset={onReset}
-        onOverrides={onOverrides}
-      />
       <ModelNamesCard state={state} disabled={disabled} t={t} onNames={onNames} />
     </FoldableGroup>
   )
@@ -900,10 +884,10 @@ function ModelListHead({ title, count, addLabel, addDisabled, onAdd, t }: {
  * boxes for values like `200K`), and it was the one part of the models redesign
  * that did not land. These two rows borrow the switch row's anatomy instead, so
  * every row in the group ends on the same control edge. Everything the
- * primitive gave us is kept: `<label for>`, the ⓘ help region, `aria-invalid`,
+ * primitive gave us is kept: `<label for>`, the ⓘ toast help, `aria-invalid`,
  * `aria-describedby`, the reset, `inputMode="numeric"`.
  */
-function SettingsRowField({ id, label, hint, text, overridden, invalid, invalidLabel, resetLabel, placeholder, disabled, numeric, onEdit, onReset }: {
+function SettingsRowField({ id, label, hint, text, overridden, invalid, invalidLabel, resetLabel, placeholder, disabled, numeric, t, onEdit, onReset }: {
   id: string
   label: string
   hint?: string | undefined
@@ -915,30 +899,19 @@ function SettingsRowField({ id, label, hint, text, overridden, invalid, invalidL
   placeholder?: string | undefined
   disabled: boolean
   numeric?: boolean
+  t: Translate<SettingsCommandCodeKey>
   onEdit(text: string): void
   onReset(): void
 }) {
-  const [helpOpen, setHelpOpen] = useState(false)
-  const helpId = `${id}-help`
   const messageId = `${id}-message`
-  const describedBy = [invalid ? messageId : undefined, helpOpen ? helpId : undefined].filter(Boolean).join(' ')
+  const describedBy = invalid ? messageId : undefined
   return (
     <SettingRow
       title={label}
       titleFor={id}
       tag={hint === undefined || hint === '' ? undefined : (
-        <button
-          type="button"
-          className="cc-helpButton"
-          aria-label={label}
-          aria-expanded={helpOpen}
-          aria-controls={helpId}
-          onClick={() => setHelpOpen((open) => !open)}
-        >
-          <IconInfoOutlineRegular size={12} />
-        </button>
+        <HelpToastButton help={hint} helpLabel={t('helpShowFor', { label })} />
       )}
-      description={helpOpen && hint !== undefined && hint !== '' ? <p id={helpId}>{hint}</p> : undefined}
       error={invalid ? invalidLabel : undefined}
       errorId={invalid ? messageId : undefined}
       control={
@@ -954,7 +927,7 @@ function SettingsRowField({ id, label, hint, text, overridden, invalid, invalidL
             type="text"
             inputMode={numeric === true ? 'numeric' : undefined}
             aria-invalid={invalid || undefined}
-            aria-describedby={describedBy === '' ? undefined : describedBy}
+            aria-describedby={describedBy}
             placeholder={placeholder ?? ''}
             value={text}
             disabled={disabled}
@@ -967,10 +940,14 @@ function SettingsRowField({ id, label, hint, text, overridden, invalid, invalidL
 }
 
 /**
- * Global context & output fields (reusing `SettingsValueField` in a 2-column
- * `SubagentLimitsFields` grid) plus concentric `R14 → R10` per-model rows.
+ * 上下文配置: the global window first, then the dedicated per-model windows
+ * directly below it, and the single-turn output ceiling last. The two per-model
+ * tables keep the shared column tracks, so the context group reads as one
+ * table even though the output field sits below it.
  */
-function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormCardProps & {
+function ContextSettingsCard({
+  state, disabled, t, onEdit, onReset, onOverrides, expanded, onToggle,
+}: FormCardProps & FoldProps & {
   onOverrides(next: Record<string, string>): void
 }) {
   const rows = state.contextWindowOverrides
@@ -1000,8 +977,18 @@ function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormC
     return entry === undefined ? `${model} · ${t('modelStale')}` : `${entry.name} (${model})`
   }
   return (
-    <>
-      {/* 默认预算：两个短值走行式，和上面的开关行同一条控制边。 */}
+    <FoldableGroup
+      id="context"
+      title={t('contextTitle')}
+      expanded={expanded}
+      onToggle={onToggle}
+      badges={
+        <>
+          <GroupSummary parts={[overriddenText(contextOverriddenCount(state), t)]} />
+          <InvalidBadge show={!expanded && contextGroupInvalid(state)} t={t} />
+        </>
+      }
+    >
       <div className="cc-block cc-blockRows">
         <SettingsRowField
           id="cc-context-window"
@@ -1012,22 +999,10 @@ function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormC
           invalidLabel={invalidCopy(state.contextWindow.invalidReason, t, 'context')}
           disabled={disabled}
           numeric
+          t={t}
           {...state.contextWindow}
           onEdit={(text) => onEdit('contextWindow', text)}
           onReset={() => onReset('contextWindow')}
-        />
-        <SettingsRowField
-          id="cc-max-output-tokens"
-          label={t('maxOutputTokens')}
-          hint={t('maxOutputTokensHint')}
-          placeholder={t('placeholderAuto')}
-          resetLabel={t('reset')}
-          invalidLabel={invalidCopy(state.maxOutputTokens.invalidReason, t, 'output')}
-          disabled={disabled}
-          numeric
-          {...state.maxOutputTokens}
-          onEdit={(text) => onEdit('maxOutputTokens', text)}
-          onReset={() => onReset('maxOutputTokens')}
         />
       </div>
 
@@ -1096,7 +1071,24 @@ function ContextCard({ state, disabled, t, onEdit, onReset, onOverrides }: FormC
           </>
         ) : null}
       </div>
-    </>
+
+      <div className="cc-block cc-blockRows">
+        <SettingsRowField
+          id="cc-max-output-tokens"
+          label={t('maxOutputTokens')}
+          hint={t('maxOutputTokensHint')}
+          placeholder={t('placeholderAuto')}
+          resetLabel={t('reset')}
+          invalidLabel={invalidCopy(state.maxOutputTokens.invalidReason, t, 'output')}
+          disabled={disabled}
+          numeric
+          t={t}
+          {...state.maxOutputTokens}
+          onEdit={(text) => onEdit('maxOutputTokens', text)}
+          onReset={() => onReset('maxOutputTokens')}
+        />
+      </div>
+    </FoldableGroup>
   )
 }
 
@@ -1196,117 +1188,22 @@ function ModelNamesCard({ state, disabled, t, onNames }: Pick<FormCardProps, 'st
   )
 }
 
-/** Service status row: official Upptime record + live Host probe. */
-function ServiceStatusRow({ view, t, onRetry }: {
-  view: ServiceStatusView
-  t: Translate<SettingsCommandCodeKey>
-  onRetry: () => void
-}) {
-  return (
-    <SettingRow
-      title={t('serviceStatusTitle')}
-      tag={
-        <a className="cc-statusLink cc-statusTitleLink" href={STATUS_PAGE_URL} target="_blank" rel="noreferrer">
-          {view.linkLabel}
-          <IconRightUpOutlineRegular size={12} />
-        </a>
-      }
-      description={
-        <>
-          <div className="cc-statusLines">
-            <span className="cc-statusKey">{t('serviceStatusOfficial')}</span>
-            <span className="cc-statusValue">
-              <StateDot state={toneDot(view.officialTone)} size={8} />
-              <span className="cc-statusVerdict" title={view.hiddenDetail}>{view.label}</span>
-              {view.detailParts.length > 0 || view.updated !== undefined ? (
-                <span className="cc-statusMeta">
-                  {[...view.detailParts, ...(view.updated !== undefined ? [view.updated] : [])].map((part, index, parts) => {
-                    const last = index === parts.length - 1
-                    const isAge = view.updated !== undefined && last
-                    return (
-                      <span key={index}>
-                        <span className="cc-statusPart" title={isAge ? view.lag ?? view.hint : undefined}>
-                          {last ? part : `${part}\u00a0·`}
-                        </span>
-                        {last ? null : ' '}
-                      </span>
-                    )
-                  })}
-                </span>
-              ) : null}
-            </span>
-            <span className="cc-statusKey">{t('serviceStatusLocal')}</span>
-            <span className="cc-statusValue">
-              <StateDot state={localDotState(view)} size={8} />
-              <span className={view.localTone === 'warn' ? 'cc-statusVerdict cc-statusBad' : 'cc-statusVerdict'}>{view.local}</span>
-              {view.localTone === 'warn' ? (
-                <button type="button" className="cc-statusRetry" onClick={onRetry}>
-                  <IconRefreshOutlineRegular size={12} />
-                  {t('serviceStatusLocalRetry')}
-                </button>
-              ) : null}
-            </span>
-          </div>
-          {view.notice !== undefined ? <p className="cc-statusNotice">{view.notice}</p> : null}
-        </>
-      }
-    />
-  )
-}
-
-function ServiceStatusBadge({ view }: { view: ServiceStatusView }) {
-  return (
-    <span className="cc-statusBadge" title={view.hint}>
-      <StateDot state={toneDot(view.badge.tone)} />
-      <span className={view.badge.tone === 'warn' || view.badge.tone === 'error' ? 'cc-statusLabel cc-statusBad' : 'cc-statusLabel'}>{view.badge.label}</span>
-    </span>
-  )
-}
-
-function toneDot(tone: ServiceTone): StateDotState {
-  return tone === 'ok' ? 'done'
-    : tone === 'warn' ? 'warning'
-      : tone === 'error' ? 'error'
-        : tone === 'checking' ? 'ongoing'
-          : 'idle'
-}
-
-function localDotState(view: ServiceStatusView): StateDotState {
-  if (view.localTone === 'ok') return 'done'
-  if (view.localTone === 'warn') return 'warning'
-  return view.localChecking ? 'ongoing' : 'idle'
-}
-
 /**
- * Features, privacy & status (Variant A unified group): Service status + ZDR +
- * Web search + Sidebar quota card in one cohesive flat section.
+ * 高级设置: the privacy, web-search and display switches that used to live in
+ * the removed 集成与显示 group, followed by the image-cache switch. The API
+ * base and the three network limits are deliberately not rendered here; the
+ * stored values keep working.
  */
-function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onToggle, status, probe, onRetryProbe }: FormCardProps & FoldProps & {
-  status: ServiceStatusSnapshot | undefined
-  probe: ServiceProbe
-  onRetryProbe: () => void
-}) {
-  const view = serviceStatusView(status, probe, t, Date.now())
+function AdvancedSection({ state, disabled, t, onEdit, onReset, expanded, onToggle }: FormCardProps & FoldProps) {
   return (
     <FoldableGroup
-      id="integrations"
-      title={t('integrationsTitle')}
+      id="advanced"
+      title={t('advancedSettings')}
       expanded={expanded}
       onToggle={onToggle}
-      badges={
-        <>
-          <ServiceStatusBadge view={view} />
-          <GroupSummary
-            parts={[
-              stagedSwitch(state.zdr, false) ? t('zdrSummaryOn') : t('zdrSummaryOff'),
-              stagedSwitch(state.webSearch, true) ? t('webSearchSummaryOn') : t('webSearchSummaryOff'),
-            ]}
-          />
-        </>
-      }
+      badges={<GroupSummary parts={[overriddenText(advancedOverriddenCount(state), t)]} />}
     >
       <div className="cc-rows">
-        <ServiceStatusRow view={view} t={t} onRetry={onRetryProbe} />
         <ToggleField
           id="cc-zdr"
           label={t('zdr')}
@@ -1339,92 +1236,6 @@ function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onTog
           onReset={() => onReset('showSidebarQuota')}
           t={t}
         />
-      </div>
-    </FoldableGroup>
-  )
-}
-
-/**
- * Advanced group: full-width monospace `apiBase` `SettingsValueField` (never
- * truncates reverse-proxy URLs) over a 3-column `tabular-nums` limits row.
- */
-function AdvancedSection({ state, disabled, t, onEdit, onReset, expanded, onToggle }: FormCardProps & FoldProps) {
-  return (
-    <FoldableGroup
-      id="advanced"
-      title={t('advancedSettings')}
-      expanded={expanded}
-      onToggle={onToggle}
-      badges={
-        <>
-          <GroupSummary parts={[overriddenText(advancedOverriddenCount(state), t)]} />
-          <InvalidBadge show={!expanded && advancedGroupInvalid(state)} t={t} />
-        </>
-      }
-    >
-      <div className="cc-monoField">
-        <SettingsValueField
-          id="cc-api-base"
-          label={t('apiBase')}
-          overriddenLabel={t('overridden')}
-          resetLabel={t('reset')}
-          invalidLabel={t('invalidNumber')}
-          disabled={disabled}
-          placeholder={FIELD_DEFAULTS.apiBase}
-          {...state.apiBase}
-          onEdit={(text) => onEdit('apiBase', text)}
-          onReset={() => onReset('apiBase')}
-        />
-      </div>
-      <div className="cc-fieldGrid3">
-        <div className="cc-fieldCell cc-numField">
-          <SettingsValueField
-            id="cc-request-timeout"
-            label={`${t('requestTimeoutMs')} (${t('unitSeconds')})`}
-            help={{ label: t('requestTimeoutMs'), content: <p>{t('requestTimeoutMsHint')}</p> }}
-            overriddenLabel={t('overridden')}
-            resetLabel={t('reset')}
-            invalidLabel={invalidCopy(state.requestTimeoutMs.invalidReason, t, 'duration')}
-            disabled={disabled}
-            placeholder={FIELD_DEFAULTS.requestTimeoutSeconds}
-            {...state.requestTimeoutMs}
-            onEdit={(text) => onEdit('requestTimeoutMs', text)}
-            onReset={() => onReset('requestTimeoutMs')}
-          />
-        </div>
-        <div className="cc-fieldCell cc-numField">
-          <SettingsValueField
-            id="cc-stream-idle-timeout"
-            label={`${t('streamIdleTimeoutMs')} (${t('unitSeconds')})`}
-            help={{ label: t('streamIdleTimeoutMs'), content: <p>{t('streamIdleTimeoutMsHint')}</p> }}
-            overriddenLabel={t('overridden')}
-            resetLabel={t('reset')}
-            invalidLabel={invalidCopy(state.streamIdleTimeoutMs.invalidReason, t, 'duration')}
-            disabled={disabled}
-            placeholder={FIELD_DEFAULTS.streamIdleTimeoutSeconds}
-            {...state.streamIdleTimeoutMs}
-            onEdit={(text) => onEdit('streamIdleTimeoutMs', text)}
-            onReset={() => onReset('streamIdleTimeoutMs')}
-          />
-        </div>
-        <div className="cc-fieldCell cc-numField">
-          <SettingsValueField
-            id="cc-transport-max-retries"
-            label={`${t('transportMaxRetries')} (${t('unitRetries')})`}
-            help={{ label: t('transportMaxRetries'), content: <p>{t('transportMaxRetriesHint')}</p> }}
-            overriddenLabel={t('overridden')}
-            resetLabel={t('reset')}
-            invalidLabel={invalidCopy(state.transportMaxRetries.invalidReason, t, 'number')}
-            numeric
-            disabled={disabled}
-            placeholder={FIELD_DEFAULTS.transportMaxRetries}
-            {...state.transportMaxRetries}
-            onEdit={(text) => onEdit('transportMaxRetries', text)}
-            onReset={() => onReset('transportMaxRetries')}
-          />
-        </div>
-      </div>
-      <div className="cc-rows">
         <ToggleField
           id="cc-offload-seen-images-for-cache"
           label={t('offloadSeenImagesForCache')}
@@ -1613,10 +1424,21 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
   t: Translate<SettingsCommandCodeKey>
   actions: AccountActions
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const entry = row.usage
+  // The serving account is the one to open; a pinned account that is cooling
+  // down must not open a second panel beside the account actually serving.
+  const inUse = entry?.active === true || (pinned && !rows.some((candidate) => candidate.usage?.active === true))
+  const [expanded, setExpanded] = useState(inUse)
   const [menuOpen, setMenuOpen] = useState(false)
   const [mode, setMode] = useState<RowMode>(undefined)
-  const entry = row.usage
+  const userToggled = useRef(false)
+  useEffect(() => {
+    if (!userToggled.current && inUse) setExpanded(true)
+  }, [inUse])
+  const toggleExpanded = () => {
+    userToggled.current = true
+    setExpanded((value) => !value)
+  }
   const report = entry?.report
   const accountName = report?.account === undefined ? '' : report.account.userName || report.account.name
   const planName = report?.plan?.name ?? ''
@@ -1689,7 +1511,7 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
           className="cc-accountToggle"
           aria-expanded={expanded}
           aria-controls={`cc-account-${row.id}-details`}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={toggleExpanded}
         >
           {dot !== undefined ? (
             <span title={statusDotTitle(row, t)} style={{ display: 'inline-flex' }}>
@@ -1740,7 +1562,7 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
           className="cc-iconButton"
           aria-hidden="true"
           tabIndex={-1}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={toggleExpanded}
         >
           <IconChevronDownOutlineRegular size={14} className={expanded ? 'cc-chevronOpen' : undefined} />
         </button>
@@ -1892,35 +1714,41 @@ function AccountItem({ row, rows, state, usage, login, disabled, pinned, t, acti
         }
       />
 
-      {expanded ? (
-        <div id={`cc-account-${row.id}-details`} className="cc-accountDetails">
-          {entry !== undefined ? (
-            <AccountReport entry={entry} fetchedAt={usage.fetchedAt} t={t} headless />
-          ) : (
-            <p className="cc-usageHint">{usage.status === 'loading' ? t('usageLoading') : t('usageUnconfigured')}</p>
-          )}
-          {multi && row.managed ? (
-            <SettingRow
-              className="cc-rowFlush"
-              title={t('accountModels')}
-              titleFor={`cc-account-${row.id}-models`}
-              error={state.catalogFailed ? t('modelCatalogFailed') : undefined}
-              control={
-                <ModelMultiSelect
-                  id={`cc-account-${row.id}-models`}
-                  selected={models}
-                  catalog={state.catalogModels}
-                  disabled={disabled || state.accountBusy}
-                  deferCommit
-                  ownerOf={ownerOf}
-                  t={t}
-                  onSelect={(ids) => void actions.setModels(row.id, ids)}
-                />
-              }
-            />
-          ) : null}
-        </div>
-      ) : null}
+      {/* The region stays mounted (hidden while collapsed) so the toggle's
+          `aria-controls` never points at a missing id; its content is deferred. */}
+      <div id={`cc-account-${row.id}-details`} className="cc-accountDetails" hidden={!expanded}>
+        {expanded && entry !== undefined ? (
+          <AccountReport entry={entry} fetchedAt={usage.fetchedAt} t={t} headless />
+        ) : expanded ? (
+          <p className="cc-usageHint">{usage.status === 'loading' ? t('usageLoading') : t('usageUnconfigured')}</p>
+        ) : null}
+        {expanded && multi && row.managed ? (
+          <SettingRow
+            className="cc-rowFlush"
+            title={t('accountModels')}
+            titleFor={`cc-account-${row.id}-models`}
+            tag={
+              <HelpToastButton
+                help={t('accountModelsHint')}
+                helpLabel={t('helpShowFor', { label: t('accountModels') })}
+              />
+            }
+            error={state.catalogFailed ? t('modelCatalogFailed') : undefined}
+            control={
+              <ModelMultiSelect
+                id={`cc-account-${row.id}-models`}
+                selected={models}
+                catalog={state.catalogModels}
+                disabled={disabled || state.accountBusy}
+                deferCommit
+                ownerOf={ownerOf}
+                t={t}
+                onSelect={(ids) => void actions.setModels(row.id, ids)}
+              />
+            }
+          />
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -2284,26 +2112,20 @@ export function AccountsCard({ t, state, usage, login, disabled, actions, onRefr
       {!adding || openAnalytics ? (
         <div className="cc-accountActions">
           {!adding ? (
-            <button
-              type="button"
-              className="cc-addButton"
+            <Button
+              variant="ghost"
+              size="md"
+              className="cc-press"
               disabled={disabled}
               onClick={() => { enrollment.reset(); setAdding(true) }}
             >
-              <IconPlusOutlineMedium size={14} />
-              <span>{t('accountAdd')}</span>
-            </button>
-          ) : <span className="cc-spacer" />}
+              {t('accountAdd')}
+            </Button>
+          ) : null}
+          <span className="cc-spacer" />
           {openAnalytics ? (
-            <Button
-              variant="outline"
-              size="md"
-              className="cc-press cc-analyticsEntry"
-              icon={<IconGaugeOutlineRegular size={15} />}
-              onClick={openAnalytics}
-            >
-              <span className="cc-analyticsEntryText">{t('openAnalytics')}</span>
-              <IconRightUpOutlineRegular size={13} />
+            <Button variant="ghost" size="md" className="cc-press" onClick={openAnalytics}>
+              {t('openAnalytics')}
             </Button>
           ) : null}
         </div>
@@ -2341,43 +2163,6 @@ function usePluginUpdate(): string | undefined {
     }
   }, [])
   return available
-}
-
-function useServiceStatus(probeService: CommandCodeSettingsProps['probeService']): {
-  snapshot: ServiceStatusSnapshot | undefined
-  probe: ServiceProbe
-  retry: () => void
-} {
-  const [snapshot, setSnapshot] = useState<ServiceStatusSnapshot | undefined>(
-    () => readCachedServiceStatus(localStorageServiceStatusStore()),
-  )
-  const [probe, setProbe] = useState<ServiceProbe>({ kind: 'checking' })
-  const probeRef = useRef(probeService)
-  probeRef.current = probeService
-  const cancelled = useRef(false)
-  const runProbe = useCallback(() => {
-    setProbe({ kind: 'checking' })
-    void runServiceProbeWithRetry(() => probeRef.current()).then((next) => {
-      if (!cancelled.current) setProbe(next)
-    })
-  }, [])
-  useEffect(() => {
-    cancelled.current = false
-    runProbe()
-    return () => {
-      cancelled.current = true
-    }
-  }, [runProbe])
-  useEffect(() => {
-    let cancelledSnapshot = false
-    void checkServiceStatus({ store: localStorageServiceStatusStore() }).then((next) => {
-      if (!cancelledSnapshot) setSnapshot(next)
-    }, () => {})
-    return () => {
-      cancelledSnapshot = true
-    }
-  }, [])
-  return { snapshot, probe, retry: runProbe }
 }
 
 function useGroupFold(): [FoldState, (next: FoldState) => void] {
@@ -2498,7 +2283,6 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
   }), [renameAccount, removeAccount, retryCredentialCleanup, setAccountKey, clearAccountKey, setActiveAccount, setAccountModels, beginLogin, cancelLogin, refreshCredentials])
   const bar = saveBarView(state, savedVisible, t)
   const form = { state, disabled, t, onEdit: props.edit, onReset: props.resetField }
-  const status = useServiceStatus(props.probeService)
   const [fold, setFold] = useGroupFold()
   const foldProps = (group: FoldGroup) => ({ expanded: fold[group], onToggle: () => setFold({ ...fold, [group]: !fold[group] }) })
   const sectionRef = useRef<HTMLElement>(null)
@@ -2544,7 +2328,9 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         actions={actions}
         onRefresh={props.refreshUsage}
         onRefreshAuto={props.refreshUsageAuto}
-        openAnalytics={props.openAnalytics}
+        openAnalytics={props.openAnalytics === undefined ? undefined : () => {
+          if (props.openAnalytics?.()) props.close?.()
+        }}
         createEnrollment={props.createEnrollment}
         {...foldProps('accounts')}
       />
@@ -2553,10 +2339,13 @@ export function CommandCodeSettingsPage(props: CommandCodeSettingsProps) {
         {...foldProps('models')}
         onSelect={props.editVisibleModels}
         onClear={props.clearVisibleModels}
-        onOverrides={props.editContextWindowOverrides}
         onNames={props.editModelNames}
       />
-      <IntegrationsCard {...form} {...foldProps('integrations')} status={status.snapshot} probe={status.probe} onRetryProbe={status.retry} />
+      <ContextSettingsCard
+        {...form}
+        {...foldProps('context')}
+        onOverrides={props.editContextWindowOverrides}
+      />
       <AdvancedSection {...form} {...foldProps('advanced')} />
       <SaveFooter view={bar} state={state} t={t} onDiscard={props.discard} onSave={props.save} onLocate={locate} />
     </section>

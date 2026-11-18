@@ -1,11 +1,11 @@
 /**
- * Which of the settings page's five top-level groups are expanded, and where
+ * Which of the settings page's four top-level groups are expanded, and where
  * that is remembered (决策记录第十章第4条).
  *
- * Accounts opens by default and the other four start folded, so the page's
- * first screen is the account list plus four one-line summaries. Whatever the
+ * Accounts opens by default and the other three start folded, so the page's
+ * first screen is the account list plus three one-line summaries. Whatever the
  * user then opens or folds is kept per browser profile in ONE `localStorage`
- * key holding all five flags: a group added or renamed later simply falls back
+ * key holding all four flags: a group added or renamed later simply falls back
  * to its default, so no migration is ever needed. This is view state only — it
  * never enters the settings document and is not synced through the profile.
  *
@@ -16,8 +16,8 @@
  */
 
 /** The page's foldable groups, in page order. */
-export type FoldGroup = 'accounts' | 'models' | 'privacy' | 'integrations' | 'advanced'
-export const FOLD_GROUPS: readonly FoldGroup[] = ['accounts', 'models', 'privacy', 'integrations', 'advanced']
+export type FoldGroup = 'accounts' | 'models' | 'context' | 'advanced'
+export const FOLD_GROUPS: readonly FoldGroup[] = ['accounts', 'models', 'context', 'advanced']
 
 /** Expanded flag per group. */
 export type FoldState = Readonly<Record<FoldGroup, boolean>>
@@ -26,8 +26,7 @@ export type FoldState = Readonly<Record<FoldGroup, boolean>>
 export const DEFAULT_FOLD_STATE: FoldState = {
   accounts: true,
   models: false,
-  privacy: false,
-  integrations: false,
+  context: false,
   advanced: false,
 }
 

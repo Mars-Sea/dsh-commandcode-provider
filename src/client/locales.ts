@@ -48,10 +48,6 @@ export type SettingsCommandCodeKey =
   | 'accountsSummaryIssues'
   | 'visibleModelsSummary'
   | 'visibleModelsSummaryAll'
-  | 'zdrSummaryOn'
-  | 'zdrSummaryOff'
-  | 'webSearchSummaryOn'
-  | 'webSearchSummaryOff'
   | 'filterModelsByPlan'
   | 'filterModelsByPlanHint'
   | 'webSearch'
@@ -104,6 +100,7 @@ export type SettingsCommandCodeKey =
   | 'maxOutputTokensTooLarge'
   | 'maxOutputTokensInvalid'
   | 'overridden'
+  | 'helpShowFor'
   | 'reset'
   | 'unitSeconds'
   | 'unitTokens'
@@ -247,44 +244,13 @@ export type SettingsCommandCodeKey =
   | 'modelAllowanceTitle'
   | 'modelCatalogFailed'
   | 'modelsTitle'
+  | 'contextTitle'
   | 'privacyTitle'
-  | 'integrationsTitle'
-  // 服务状态行：官方状态页的公开探测数据，见 `./service-status.ts`。
-  | 'serviceStatusTitle'
-  | 'serviceStatusHint'
-  | 'serviceStatusChecking'
-  | 'serviceStatusUp'
-  | 'serviceStatusDegraded'
-  | 'serviceStatusDown'
-  | 'serviceStatusUnknown'
-  | 'serviceStatusOfficial'
-  | 'serviceStatusLocal'
-  | 'serviceStatusUptime'
-  | 'serviceStatusUptimeWeek'
-  | 'serviceStatusUptimeMonth'
-  | 'serviceStatusResponseWeek'
-  | 'serviceStatusStaleAt'
-  | 'serviceStatusBadgeStale'
-  | 'serviceStatusUpdatedJustNow'
-  | 'serviceStatusUpdatedMinutes'
-  | 'serviceStatusUpdatedHours'
-  | 'serviceStatusUpdatedUnknown'
-  | 'serviceStatusLag'
-  | 'serviceStatusLocalChecking'
-  | 'serviceStatusLocalOk'
-  | 'serviceStatusLocalHttp'
-  | 'serviceStatusLocalTimeout'
-  | 'serviceStatusLocalUnreachable'
-  | 'serviceStatusLocalUnavailable'
-  | 'serviceStatusLocalRetry'
-  | 'serviceStatusStale'
-  | 'serviceStatusUnavailable'
-  | 'serviceStatusOpen'
   // 账号开通状态的语义键：宿主与浏览器侧控制器共同产出，见 `EnrollmentMessageKey`。
   | EnrollmentMessageKey
 
 export const zh: Record<SettingsCommandCodeKey, string> = {
-  openAnalytics: '查看模型用量、成本与性能分析',
+  openAnalytics: '用量分析',
   nav: 'Command Code',
   title: 'Command Code',
   intro: '账户操作立即生效；其余改动点底部「保存」。密钥仅存于本机凭据服务，不回显。',
@@ -303,7 +269,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   offloadSeenImagesForCache: '已看过的图片不再重复发送',
   offloadSeenImagesForCacheHint: '仅 CLI 传输。模型回复过的旧图片改用文字占位，减少新增图片时的缓存回退；重看需重新读取或附加。',
   advancedSettings: '高级设置',
-  advancedSettingsHint: 'API 地址和网络参数，一般无需修改。',
+  advancedSettingsHint: '隐私、联网与显示选项。',
   groupOverriddenOne: '已自定义 1 项',
   groupOverriddenMany: '已自定义 {count} 项',
   // 分组头的摘要徽标：收起时不展开也能看出该组现状（决策记录第十章第4条）。
@@ -312,12 +278,8 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   accountsSummaryOne: '1 个账户',
   accountsSummaryMany: '{count} 个账户',
   accountsSummaryIssues: '{count} 个异常',
-  visibleModelsSummary: '白名单 {count} 个',
+  visibleModelsSummary: '显示范围 {count} 个',
   visibleModelsSummaryAll: '显示全部模型',
-  zdrSummaryOn: 'ZDR 开启',
-  zdrSummaryOff: 'ZDR 关闭',
-  webSearchSummaryOn: '联网搜索开启',
-  webSearchSummaryOff: '联网搜索关闭',
   filterModelsByPlan: '隐藏套餐外模型',
   filterModelsByPlanHint: '只显示套餐内模型；按需余额账户仍显示全部。',
   webSearch: '用 Command Code 承载联网搜索',
@@ -335,7 +297,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   modelStale: '已下架',
   modelAllowance: '${amount}/月',
   modelAllowanceTitle: '该模型每月可用的额度（美元）。套餐内所有模型共用同一个月度额度池，这不是额外赠送的额度。',
-  visibleModelsTitle: '模型白名单',
+  visibleModelsTitle: '自定义显示范围',
   visibleModelsHint: '只列出勾选的模型，都不勾选＝显示全部。网页与终端共用。',
   visibleModelsPick: '选择要保留的模型…',
   visibleModelsCount: '已选 {count} 个模型',
@@ -345,21 +307,21 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   visibleModelsCleanStale: '清理失效（{count}）',
   contextWindow: '自定义上下文长度',
   contextWindowHint: '覆盖目录公布的上下文窗口，影响上下文计量与自动压缩；留空跟随目录，支持 32K、1M。',
-  contextOverridesTitle: '按模型覆盖',
-  contextOverridesHint: '为单个模型设置上下文长度，优先于上面的全局值；只能选白名单中的模型。',
-  contextOverrideAdd: '添加模型',
+  contextOverridesTitle: '专属上下文长度',
+  contextOverridesHint: '为单个模型设置上下文长度，优先于上面的全局值；只能选自定义显示范围内的模型。',
+  contextOverrideAdd: '添加',
   contextOverrideRemove: '移除该模型的上下文覆盖',
   contextOverrideModel: '模型',
   contextOverrideValue: '上下文长度',
-  contextOverrideNoCatalog: '模型目录尚未加载，暂时无法添加按模型覆盖。',
+  contextOverrideNoCatalog: '模型目录尚未加载，暂时无法添加专属上下文长度。',
   contextOverrideEmpty: '暂无覆盖 · 所有模型跟随目录默认',
-  modelNamesTitle: '模型名称',
+  modelNamesTitle: '自定义显示名称',
   modelNamesHint: '为单个模型指定选择器里显示的名称，便于按名称判断条件的插件匹配；留空沿用目录名。',
-  modelNamesAdd: '添加模型',
+  modelNamesAdd: '添加',
   modelNamesRemove: '移除该模型的名称',
   modelNamesModel: '模型',
   modelNamesValue: '显示名称',
-  modelNamesNoCatalog: '模型目录尚未加载，暂时无法添加模型名称。',
+  modelNamesNoCatalog: '模型目录尚未加载，暂时无法添加自定义显示名称。',
   modelNamesEmpty: '暂无重命名 · 列表使用目录给出的名称',
   listCountOne: '1 项',
   listCountMany: '{count} 项',
@@ -372,6 +334,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   maxOutputTokensTooLarge: '输出上限不能大于 131072（网关上限）',
   maxOutputTokensInvalid: '请输入 0 或有效的整数 token 数',
   overridden: '已自定义',
+  helpShowFor: '查看{label}说明',
   reset: '重置',
   // 数字输入框右侧的单位后缀；标签里不再重复单位。
   unitSeconds: '秒',
@@ -440,7 +403,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   usageServiceUnavailable: 'Command Code 服务暂时不可用',
   usageServiceUnavailableHint: '服务端返回了错误（5xx），稍后点击刷新重试。',
   usageNetworkError: '无法连接 Command Code 服务',
-  usageNetworkHint: '所有请求都没有到达服务端。请检查网络连接或 API 地址设置。',
+  usageNetworkHint: '所有请求都没有到达服务端。请检查网络连接或插件配置中的服务地址。',
   usageInvalidResponse: 'Command Code 响应无法读取',
   usageInvalidResponseHint: '已收到响应，但正文读取或解析失败。下方详情可区分读取超时、中断与格式异常；可先点击刷新重试。',
   usageUpdated: '更新于',
@@ -483,7 +446,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   accountActionRename: '重命名',
   accountActionClearKey: '删除密钥',
   accountActionRemove: '移除账户',
-  accountRemoveConfirm: '移除「{name}」？它保存的密钥和专用模型设置会一起删除。',
+  accountRemoveConfirm: '移除「{name}」？它保存的密钥和模型绑定设置会一起删除。',
   accountClearKeyConfirm: '删除默认账户保存的密钥？之后会回退到环境变量或官方 CLI 的登录信息。',
   accountConfirmRemove: '移除',
   accountConfirmClear: '删除',
@@ -508,46 +471,15 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
   accountCleanupRetry: '重试清理密钥',
   accountEnrollmentCleanupRetry: '重试清理',
   accountRefSeparator: '：',
-  accountModels: '专用模型',
-  accountModelsHint: '选中即专属：优先此账户处理，不可用时自动切换',
+  accountModels: '模型绑定',
+  accountModelsHint: '当使用所选模型时自动切换到当前账户',
   accountModelOwner: '属于 {name}',
   modelPick: '选择模型…',
   modelCount: '已选 {count} 个模型',
   modelCatalogFailed: '模型目录获取失败，暂时无法选择模型；已保存的设置仍会生效。',
-  modelsTitle: '模型与上下文',
+  modelsTitle: '模型显示配置',
+  contextTitle: '上下文配置',
   privacyTitle: '隐私与安全',
-  integrationsTitle: '集成与显示',
-  serviceStatusTitle: '服务状态',
-  serviceStatusHint: '官方数据来自状态页的公开记录，仅在状态变化或每日汇总时发布；超过一天未更新会标记为已过期。本机连通由宿主刚探测，失败可重试。',
-  serviceStatusChecking: '正在检查…',
-  serviceStatusUp: '服务正常',
-  serviceStatusDegraded: '部分降级',
-  serviceStatusDown: '服务中断',
-  serviceStatusUnknown: '状态未知',
-  // 服务状态行分「官方」「本机」两行；分组头徽标只报官方判定，本机探测失败不抢占。
-  serviceStatusOfficial: '官方',
-  serviceStatusLocal: '本机',
-  serviceStatusUptime: '可用率 {value}',
-  serviceStatusUptimeWeek: '7 天 {value}',
-  serviceStatusUptimeMonth: '30 天 {value}',
-  serviceStatusResponseWeek: '平均响应 {value}',
-  serviceStatusStaleAt: '数据停在 {date}',
-  serviceStatusBadgeStale: '数据过期 {count} 天',
-  serviceStatusUpdatedJustNow: '刚刚更新',
-  serviceStatusUpdatedMinutes: '{count} 分钟前更新',
-  serviceStatusUpdatedHours: '{count} 小时前更新',
-  serviceStatusUpdatedUnknown: '更新时间未知',
-  serviceStatusLag: '官方数据仅在状态变化或每日汇总时发布，可能滞后数小时。',
-  serviceStatusLocalChecking: '正在探测…',
-  serviceStatusLocalOk: '连通正常 · {latency} ms',
-  serviceStatusLocalHttp: '本次探测未成功（HTTP {status}）',
-  serviceStatusLocalTimeout: '本次探测未成功（超时）',
-  serviceStatusLocalUnreachable: '本次探测未成功（无法连接）',
-  serviceStatusLocalUnavailable: '未知（宿主未提供探测）',
-  serviceStatusLocalRetry: '重新探测',
-  serviceStatusStale: '无法获取状态数据，以下为上次成功获取的结果。',
-  serviceStatusUnavailable: '无法获取状态数据。',
-  serviceStatusOpen: '打开状态页',
   enrollmentCreating: '正在创建账号',
   enrollmentWaiting: '等待浏览器登录',
   enrollmentWriting: '正在保存凭据',
@@ -573,7 +505,7 @@ export const zh: Record<SettingsCommandCodeKey, string> = {
 }
 
 export const en: Record<SettingsCommandCodeKey, string> = {
-  openAnalytics: 'View model usage, cost and performance',
+  openAnalytics: 'Usage analysis',
   nav: 'Command Code',
   title: 'Command Code',
   intro: 'Account actions apply immediately; other changes need Save below. The key stays in the local credential service and is never echoed.',
@@ -593,7 +525,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   offloadSeenImagesForCache: 'Stop replaying images already seen',
   offloadSeenImagesForCacheHint: 'CLI transport only. Images the model already answered become text placeholders, so a new image no longer rolls back the cache; to see one again, reread or reattach it.',
   advancedSettings: 'Advanced',
-  advancedSettingsHint: 'API base URL and network limits; usually leave as-is.',
+  advancedSettingsHint: 'Privacy, web search and display options.',
   groupOverriddenOne: '1 customized',
   groupOverriddenMany: '{count} customized',
   groupInvalid: 'Needs a fix',
@@ -601,12 +533,8 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   accountsSummaryOne: '1 account',
   accountsSummaryMany: '{count} accounts',
   accountsSummaryIssues: '{count} need attention',
-  visibleModelsSummary: '{count} allowlisted',
+  visibleModelsSummary: '{count} in display range',
   visibleModelsSummaryAll: 'All models shown',
-  zdrSummaryOn: 'ZDR on',
-  zdrSummaryOff: 'ZDR off',
-  webSearchSummaryOn: 'Web search on',
-  webSearchSummaryOff: 'Web search off',
   filterModelsByPlan: 'Hide out-of-plan models',
   filterModelsByPlanHint: 'Show only models in your plan; on-demand credit accounts still see the full catalog.',
   webSearch: 'Serve dsh web search with Command Code',
@@ -624,7 +552,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   modelStale: 'Retired',
   modelAllowance: '${amount}/mo',
   modelAllowanceTitle: 'Monthly usage this model can draw, in USD. Every model shares one monthly pool — this is not extra credit on top of the plan.',
-  visibleModelsTitle: 'Model allowlist',
+  visibleModelsTitle: 'Custom display range',
   visibleModelsHint: 'Only checked models are listed; none checked shows all. Web and terminal share this.',
   visibleModelsPick: 'Select models to keep…',
   visibleModelsCount: '{count} model(s) selected',
@@ -635,21 +563,21 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   visibleModelsCleanStale: 'Clean stale ({count})',
   contextWindow: 'Custom context length',
   contextWindowHint: 'Overrides the catalog’s context window; the context meter and auto-compaction follow it. Empty follows the catalog; 32K or 1M accepted.',
-  contextOverridesTitle: 'Per-model overrides',
-  contextOverridesHint: 'Set one model’s context length; it wins over the global value above. Only allowlisted models can be picked.',
-  contextOverrideAdd: 'Add model',
+  contextOverridesTitle: 'Dedicated context length',
+  contextOverridesHint: 'Set one model’s context length; it wins over the global value above. Only models in the custom display range can be picked.',
+  contextOverrideAdd: 'Add',
   contextOverrideRemove: 'Remove this model’s context override',
   contextOverrideModel: 'Model',
   contextOverrideValue: 'Context length',
-  contextOverrideNoCatalog: 'The model catalog has not loaded yet; per-model overrides cannot be added right now.',
+  contextOverrideNoCatalog: 'The model catalog has not loaded yet; dedicated context lengths cannot be added right now.',
   contextOverrideEmpty: 'No overrides yet · every model follows the catalog default',
-  modelNamesTitle: 'Model names',
+  modelNamesTitle: 'Custom display names',
   modelNamesHint: 'Set the name a model shows in the picker so plugins that match on the name can identify it. Leave empty to use the catalog name.',
-  modelNamesAdd: 'Add model',
+  modelNamesAdd: 'Add',
   modelNamesRemove: 'Remove this model’s name',
   modelNamesModel: 'Model',
   modelNamesValue: 'Display name',
-  modelNamesNoCatalog: 'The model catalog has not loaded yet; custom names cannot be added right now.',
+  modelNamesNoCatalog: 'The model catalog has not loaded yet; custom display names cannot be added right now.',
   modelNamesEmpty: 'No custom names yet · the list uses catalog names',
   listCountOne: '1 item',
   listCountMany: '{count} items',
@@ -662,6 +590,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   maxOutputTokensTooLarge: 'Output limit must not exceed 131,072 (the gateway cap)',
   maxOutputTokensInvalid: 'Enter 0 or a valid whole-token count',
   overridden: 'Customized',
+  helpShowFor: 'Show help for {label}',
   reset: 'Reset',
   unitSeconds: 's',
   unitTokens: 'tokens',
@@ -728,7 +657,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   usageServiceUnavailable: 'The Command Code service is temporarily unavailable',
   usageServiceUnavailableHint: 'The server returned errors (5xx); try Refresh again later.',
   usageNetworkError: 'Could not reach the Command Code service',
-  usageNetworkHint: 'No request reached the server. Check your network connection or the API base setting.',
+  usageNetworkHint: 'No request reached the server. Check your network connection or the service address in the plugin configuration.',
   usageInvalidResponse: 'Could not read the Command Code response',
   usageInvalidResponseHint: 'Responses arrived, but reading or parsing their bodies failed. Details below distinguish timeouts, interrupted reads, and invalid formats. Try Refresh again.',
   usageUpdated: 'Updated',
@@ -771,7 +700,7 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   accountActionRename: 'Rename',
   accountActionClearKey: 'Delete key',
   accountActionRemove: 'Remove account',
-  accountRemoveConfirm: 'Remove "{name}"? Its stored key and dedicated models are deleted with it.',
+  accountRemoveConfirm: 'Remove "{name}"? Its stored key and model-binding settings are deleted with it.',
   accountClearKeyConfirm: 'Delete the default account\'s stored key? The provider then falls back to the environment or the official CLI sign-in.',
   accountConfirmRemove: 'Remove',
   accountConfirmClear: 'Delete',
@@ -796,45 +725,15 @@ export const en: Record<SettingsCommandCodeKey, string> = {
   accountCleanupRetry: 'Retry credential cleanup',
   accountEnrollmentCleanupRetry: 'Retry cleanup',
   accountRefSeparator: ': ',
-  accountModels: 'Dedicated models',
-  accountModelsHint: 'Selected models are dedicated to this account and still switch when unavailable',
+  accountModels: 'Model binding',
+  accountModelsHint: 'Automatically switches to this account when one of those models is used',
   accountModelOwner: 'on {name}',
   modelPick: 'Choose models…',
   modelCount: '{count} models selected',
   modelCatalogFailed: 'The model catalog could not be loaded; saved settings still apply.',
-  modelsTitle: 'Models & context',
+  modelsTitle: 'Model display',
+  contextTitle: 'Context',
   privacyTitle: 'Privacy & security',
-  integrationsTitle: 'Integrations & display',
-  serviceStatusTitle: 'Service status',
-  serviceStatusHint: 'Published data comes from the official status page and is only written on a status change or the daily summary; anything older than a day is flagged as expired. Local connectivity is probed by the host just now and can be retried.',
-  serviceStatusChecking: 'Checking…',
-  serviceStatusUp: 'Operational',
-  serviceStatusDegraded: 'Degraded performance',
-  serviceStatusDown: 'Service outage',
-  serviceStatusUnknown: 'Status unknown',
-  serviceStatusOfficial: 'Official',
-  serviceStatusLocal: 'This device',
-  serviceStatusUptime: 'uptime {value}',
-  serviceStatusUptimeWeek: '7d {value}',
-  serviceStatusUptimeMonth: '30d {value}',
-  serviceStatusResponseWeek: 'avg {value}',
-  serviceStatusStaleAt: 'Data stops at {date}',
-  serviceStatusBadgeStale: 'Stale {count} days',
-  serviceStatusUpdatedJustNow: 'updated just now',
-  serviceStatusUpdatedMinutes: 'updated {count} min ago',
-  serviceStatusUpdatedHours: 'updated {count} h ago',
-  serviceStatusUpdatedUnknown: 'update time unknown',
-  serviceStatusLag: 'Official data is only published on a status change or the daily summary, so it may lag by hours.',
-  serviceStatusLocalChecking: 'Probing…',
-  serviceStatusLocalOk: 'Reachable · {latency} ms',
-  serviceStatusLocalHttp: 'Probe failed (HTTP {status})',
-  serviceStatusLocalTimeout: 'Probe failed (timed out)',
-  serviceStatusLocalUnreachable: 'Probe failed (unreachable)',
-  serviceStatusLocalUnavailable: 'Unknown (host provides no probe)',
-  serviceStatusLocalRetry: 'Probe again',
-  serviceStatusStale: 'Status data unavailable; showing the last known result.',
-  serviceStatusUnavailable: 'Status data unavailable.',
-  serviceStatusOpen: 'Open status page',
   enrollmentCreating: 'Creating the account',
   enrollmentWaiting: 'Waiting for the browser sign-in',
   enrollmentWriting: 'Saving the credential',

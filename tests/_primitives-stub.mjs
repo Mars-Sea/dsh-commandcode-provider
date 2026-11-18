@@ -127,6 +127,23 @@ export function SettingsValueField(props) {
   )
 }
 
+/** Render the toast's text and actions so a rendered tree can assert them. */
+export function Toast({ text, actions = [], onDone }) {
+  return createElement(
+    'div',
+    { role: 'alert', 'data-cc-toast': true },
+    createElement('span', null, text),
+    actions.map((action) =>
+      createElement(
+        'button',
+        { key: action.label, type: 'button', onClick: action.onClick },
+        action.prefix ?? '',
+        action.label,
+      )),
+    createElement('button', { type: 'button', 'data-cc-toast-done': true, onClick: onDone }),
+  )
+}
+
 /** Render a minimal dialog when open. */
 export function Modal({ open, onClose, title, closeLabel, description, children, footer, className }) {
   if (!open) return null

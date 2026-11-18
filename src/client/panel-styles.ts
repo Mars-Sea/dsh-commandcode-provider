@@ -83,8 +83,42 @@ export const PANEL_CSS = `
 .ccp-main{background:var(--dsw-alias-bg-layer-1);width:100%;height:100%;overflow:auto;display:block}
 .ccp-mainInner{max-width:760px;margin:0 auto;padding:24px 20px 40px;flex-direction:column;gap:14px;display:flex;color:var(--dsw-alias-label-primary)}
 .ccp-header{align-items:center;gap:10px;display:flex;flex-wrap:wrap}
-.ccp-headerText{flex-direction:column;gap:2px;display:flex;min-width:0}
-.ccp-title{margin:0;font-size:18px;font-weight:600;line-height:1.4}
+.ccp-headerText{flex:1;flex-direction:column;gap:2px;min-width:0;display:flex}
+.ccp-title{min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:18px;font-weight:600;line-height:1.4}
+.ccp-titleRow{align-items:center;gap:8px;min-width:0;flex-wrap:nowrap;display:flex}
+/* Four-character service pill: the whole health verdict is one colour, and the
+   click opens the official/local detail without giving the header a second
+   row. The dot inherits the pill colour, so text and dot always agree. */
+.ccp-statusWrap{flex:none;min-width:0;display:inline-flex}
+.ccp-statusPill{box-sizing:border-box;align-items:center;gap:5px;height:20px;padding:0 7px;border:1px solid transparent;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer;display:inline-flex}
+.ccp-statusPillOk{background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 30%,transparent);color:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusPillWarn{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d97706) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d97706) 30%,transparent);color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d97706) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusPillError{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 30%,transparent);color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusPillIdle{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
+.ccp-statusPill:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:2px}
+.ccp-statusDot{flex:none;width:6px;height:6px;border-radius:50%;background:currentColor;color:var(--dsw-alias-label-tertiary);display:inline-block}
+.ccp-statusDotOk{color:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusDotWarn{color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d97706) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusDotError{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusDotChecking{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusDotIdle,.ccp-statusDotMuted{color:var(--dsw-alias-label-secondary)}
+.ccp-statusPill .ccp-statusDot{color:inherit;background:currentColor}
+.ccp-statusGlyph{flex:none}
+.ccp-statusPop[hidden]{display:none}
+.ccp-statusPop{position:fixed;z-index:20;box-sizing:border-box;overflow:auto;width:300px;max-width:calc(100vw - 24px);padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;flex-direction:column;gap:6px;display:flex}
+.ccp-statusBody{grid-template-columns:max-content minmax(0,1fr);column-gap:8px;row-gap:6px;align-items:baseline;display:grid}
+.ccp-statusRow{min-width:0;display:contents}
+.ccp-statusKey{color:var(--dsw-alias-label-secondary);white-space:nowrap}
+.ccp-statusValue{flex-wrap:wrap;align-items:center;gap:5px;min-width:0;font-variant-numeric:tabular-nums;display:flex}
+.ccp-statusVerdict{color:var(--dsw-alias-label-primary)}
+.ccp-statusWarn{color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d97706) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusMeta{grid-column:2;margin:0;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.ccp-statusNotice{grid-column:2;margin:0;color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d97706) 58%,var(--dsw-alias-label-primary,#111827))}
+.ccp-statusActions{justify-content:flex-end;align-items:center;gap:10px;margin-top:2px;display:flex}
+.ccp-statusAction{align-items:center;gap:3px;padding:0;border:0;background:0 0;color:color-mix(in srgb,var(--dsw-alias-link,var(--dsw-alias-state-business-primary)) 82%,var(--dsw-alias-label-primary,#111827));font:inherit;font-size:12px;line-height:18px;text-decoration:none;white-space:nowrap;cursor:pointer;display:inline-flex}
+.ccp-statusAction:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:2px;border-radius:4px}
+.ccp-statusOpen{align-items:center;gap:3px;height:28px;padding:0 9px;border:1px solid var(--dsw-alias-border-l4);border-radius:8px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;text-decoration:none;white-space:nowrap;display:inline-flex}
+.ccp-statusOpen:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:2px}
 .ccp-subtitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
 .ccp-spacer{flex:1}
 .ccp-meta{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
@@ -142,6 +176,10 @@ export const PANEL_CSS = `
 .ccp-tab:hover:not(.ccp-tabActive){color:var(--dsw-alias-label-primary)}
 .ccp-tabActive{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-brand-primary)}
 
+@media (hover:hover) and (pointer:fine){
+.ccp-statusOpen:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ccp-statusAction:hover{text-decoration:underline;text-underline-position:under}
+}
 @media (prefers-reduced-motion:reduce){.ccp-footFill,.ccp-barFill{transition:none}}
 /* 分析页继承设置页和宿主控件的语义变量；独立选择器不影响账号额度页面。 */
 .ccp-mainInnerAnalysis{max-width:1040px;box-sizing:border-box}

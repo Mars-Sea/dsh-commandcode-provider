@@ -17,7 +17,7 @@ import {
   type AutoRefreshTimer,
 } from '../src/client/panel.ts'
 import type { UsagePageState } from '../src/client/usage.ts'
-import { PANEL_COPY_EN, PANEL_COPY_ZH, PANEL_KEYS } from '../src/client/panel-copy.ts'
+import { PANEL_COPY_EN, PANEL_COPY_ZH, PANEL_KEYS, panelTextEN } from '../src/client/panel-copy.ts'
 import type { CommandCodeAccountUsage } from '../src/usage-wire.ts'
 import type { CommandCodeUsageReport } from '../src/adapter.ts'
 
@@ -96,6 +96,14 @@ test('the panel follows the injected translator, so it reads in the harness lang
   }
   assert.equal(buildPanelView(cooling).status, 'Cooling down')
   assert.equal(buildPanelView({ ...cooling, t: (key) => PANEL_COPY_ZH[key] }).status, '限额冷却中')
+})
+
+test('the English fallback interpolates the status pill name params', () => {
+  assert.equal(
+    panelTextEN('serviceStatusPillLabel', { official: 'Operational', local: 'Reachable · 42 ms' }),
+    'Service status: Operational. This device: Reachable · 42 ms',
+  )
+  assert.equal(PANEL_COPY_ZH.serviceStatusPillLabel, '服务状态：{official}。本机：{local}')
 })
 
 test('the zh and en panel dictionaries carry exactly the same keys', () => {

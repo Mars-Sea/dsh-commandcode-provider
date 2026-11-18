@@ -25,20 +25,17 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import type { SettingsPageState, StagedField } from '../src/client/settings.ts'
-import { DEFAULT_API_BASE, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from '../src/adapter.ts'
-import { DEFAULT_TRANSPORT_MAX_RETRIES } from '../src/transport-retry.ts'
 import type { CommandCodeUsageReport } from '../src/adapter.ts'
 import { zh } from '../src/client/locales.ts'
 
 const {
   accountIssues,
   addAccountPanelView,
-  advancedGroupInvalid,
   advancedOverriddenCount,
   balanceLabelText,
-  FIELD_DEFAULTS,
+  contextGroupInvalid,
+  contextOverriddenCount,
   invalidGroups,
-  modelsGroupInvalid,
   modelsOverriddenCount,
   stagedSwitch,
 } = await import('../src/client/section.tsx')
@@ -54,21 +51,29 @@ function staged(invalid: boolean): StagedField {
   }
 }
 
-/** The Models & context group's own state: the plan switch, two numbers, the override rows. */
-function modelsState(over: {
+/** 模型显示配置: the plan switch plus the custom display-name rows. */
+function displayState(over: {
   filterModelsByPlan?: boolean
+  names?: number
+}): Pick<SettingsPageState, 'filterModelsByPlan' | 'modelNames'> {
+  return {
+    filterModelsByPlan: staged(over.filterModelsByPlan ?? false),
+    modelNames: Array.from({ length: over.names ?? 0 }, (_, index) => ({
+      model: `vendor/model-${index}`,
+      text: `Name ${index}`,
+    })),
+  }
+}
+
+/** 上下文配置: the two numeric drafts plus the dedicated per-model rows. */
+function contextState(over: {
   contextWindow?: boolean
   maxOutputTokens?: boolean
   rows?: readonly boolean[]
-}): Pick<
-  SettingsPageState,
-  'filterModelsByPlan' | 'contextWindow' | 'maxOutputTokens' | 'contextWindowOverrides' | 'modelNames'
-> {
+}): Pick<SettingsPageState, 'contextWindow' | 'maxOutputTokens' | 'contextWindowOverrides'> {
   return {
-    filterModelsByPlan: staged(over.filterModelsByPlan ?? false),
     contextWindow: staged(over.contextWindow ?? false),
     maxOutputTokens: staged(over.maxOutputTokens ?? false),
-    modelNames: [],
     contextWindowOverrides: (over.rows ?? []).map((invalid, index) => ({
       model: `vendor/model-${index}`,
       text: '256K',
@@ -80,57 +85,29 @@ function modelsState(over: {
 
 /** A fully valid Advanced card; each case flips exactly one draft. */
 const VALID_ADVANCED = {
-  apiBase: staged(false),
-  requestTimeoutMs: staged(false),
-  streamIdleTimeoutMs: staged(false),
-  transportMaxRetries: staged(false),
+  zdr: staged(false),
+  webSearch: staged(false),
+  showSidebarQuota: staged(false),
   offloadSeenImagesForCache: staged(false),
 }
-const ADVANCED_KEYS = [
-  'apiBase',
-  'requestTimeoutMs',
-  'streamIdleTimeoutMs',
-  'transportMaxRetries',
-  'offloadSeenImagesForCache',
-] as const
 
-test('modelsGroupInvalid: nothing staged → no heading warning', () => {
-  assert.equal(modelsGroupInvalid(modelsState({})), false)
+test('contextGroupInvalid: nothing staged → no heading warning', () => {
+  assert.equal(contextGroupInvalid(contextState({ rows: [false, false] })), false)
 })
 
-test('modelsGroupInvalid: every draft valid → no heading warning', () => {
-  assert.equal(modelsGroupInvalid(modelsState({ rows: [false, false] })), false)
+test('contextGroupInvalid: a bad custom context length warns', () => {
+  assert.equal(contextGroupInvalid(contextState({ contextWindow: true })), true)
 })
 
-test('modelsGroupInvalid: a bad custom context length warns', () => {
-  assert.equal(modelsGroupInvalid(modelsState({ contextWindow: true })), true)
+test('contextGroupInvalid: a bad output limit warns', () => {
+  assert.equal(contextGroupInvalid(contextState({ maxOutputTokens: true })), true)
 })
 
-test('modelsGroupInvalid: a bad output limit warns', () => {
-  assert.equal(modelsGroupInvalid(modelsState({ maxOutputTokens: true })), true)
-})
-
-test('modelsGroupInvalid: a bad plan-filter draft warns', () => {
-  // The rendered switch cannot produce this draft, but the save guard walks the
-  // same staged plan — the heading must not be able to contradict it.
-  assert.equal(modelsGroupInvalid(modelsState({ filterModelsByPlan: true })), true)
-})
-
-test('modelsGroupInvalid: one bad per-model context row warns', () => {
+test('contextGroupInvalid: one bad dedicated context row warns', () => {
   // The rows are the group's third owner and the easiest one to forget: their
   // drafts are validated per row, not through a StagedField on the page state.
-  assert.equal(modelsGroupInvalid(modelsState({ rows: [false, true, false] })), true)
+  assert.equal(contextGroupInvalid(contextState({ rows: [false, true, false] })), true)
 })
-
-test('advancedGroupInvalid: nothing customized → no heading warning', () => {
-  assert.equal(advancedGroupInvalid(VALID_ADVANCED), false)
-})
-
-for (const key of ADVANCED_KEYS) {
-  test(`advancedGroupInvalid: a bad ${key} warns`, () => {
-    assert.equal(advancedGroupInvalid({ ...VALID_ADVANCED, [key]: staged(true) }), true)
-  })
-}
 
 // ---- Heading summaries and the save bar's locate target (决策记录第十章第4条) ----
 
@@ -140,22 +117,39 @@ function draft(over: Partial<StagedField>): StagedField {
 }
 
 test('invalidGroups: nothing invalid → nothing to open', () => {
-  assert.deepEqual(invalidGroups({ ...modelsState({}), ...VALID_ADVANCED }), [])
+  assert.deepEqual(
+    invalidGroups({ ...displayState({}), ...contextState({}), ...VALID_ADVANCED }),
+    [],
+  )
 })
 
-test('invalidGroups: lists the groups holding a bad draft, in page order', () => {
-  const state = { ...modelsState({ rows: [true] }), ...VALID_ADVANCED, requestTimeoutMs: staged(true) }
-  assert.deepEqual(invalidGroups(state), ['models', 'advanced'])
+test('invalidGroups: only the context group can hold a bad numeric draft', () => {
+  const state = {
+    ...displayState({ filterModelsByPlan: true }),
+    ...contextState({ rows: [true] }),
+    ...VALID_ADVANCED,
+    zdr: staged(true),
+  }
+  assert.deepEqual(invalidGroups(state), ['context'])
 })
 
-test('modelsOverriddenCount: customized fields plus one per override row', () => {
-  const state = { ...modelsState({ rows: [false, false] }), maxOutputTokens: draft({ overridden: true }) }
+test('modelsOverriddenCount: customized display fields plus one per name row', () => {
+  const state = { ...displayState({ names: 2 }), filterModelsByPlan: draft({ overridden: true }) }
   assert.equal(modelsOverriddenCount(state), 3)
+})
+
+test('contextOverriddenCount: customized numeric fields plus one per dedicated row', () => {
+  const state = {
+    ...contextState({ rows: [false, false] }),
+    contextWindow: draft({ overridden: true }),
+    maxOutputTokens: draft({ overridden: true }),
+  }
+  assert.equal(contextOverriddenCount(state), 4)
 })
 
 test('advancedOverriddenCount: counts only the customized drafts', () => {
   assert.equal(advancedOverriddenCount(VALID_ADVANCED), 0)
-  assert.equal(advancedOverriddenCount({ ...VALID_ADVANCED, apiBase: draft({ overridden: true }) }), 1)
+  assert.equal(advancedOverriddenCount({ ...VALID_ADVANCED, zdr: draft({ overridden: true }) }), 1)
 })
 
 test('stagedSwitch: an unset draft reads as the default, otherwise the staged text', () => {
@@ -171,14 +165,6 @@ test('accountIssues: matches the row dots — a rejected key is severe, a cooldo
   assert.deepEqual(accountIssues([{ mark: 'invalid-credential', cooldownUntil: 0 }, { mark: '', cooldownUntil: 0 }]), { count: 1, severe: true })
 })
 
-test('FIELD_DEFAULTS: the empty-field placeholders mirror the Host defaults', () => {
-  // The client cannot import the adapter, so the placeholders are literals;
-  // this pins each to the constant it stands for.
-  assert.equal(FIELD_DEFAULTS.apiBase, DEFAULT_API_BASE)
-  assert.equal(FIELD_DEFAULTS.requestTimeoutSeconds, String(DEFAULT_REQUEST_TIMEOUT_MS / 1000))
-  assert.equal(FIELD_DEFAULTS.streamIdleTimeoutSeconds, String(DEFAULT_STREAM_IDLE_TIMEOUT_MS / 1000))
-  assert.equal(FIELD_DEFAULTS.transportMaxRetries, String(DEFAULT_TRANSPORT_MAX_RETRIES))
-})
 
 // ---- Add-account panel action row ----
 
@@ -249,4 +235,20 @@ test('balance label carries the billing period once, falling back to the plan en
   assert.equal(balanceLabelText({ plan, usage }, t), `官方账期用量 ${range}`)
   assert.equal(balanceLabelText({ plan }, t), `账期截止 ${endDate}`)
   assert.equal(balanceLabelText({}, t), '')
+})
+
+test('requested Chinese labels stay pinned to the settings redesign', () => {
+  assert.equal(zh.openAnalytics, '用量分析')
+  assert.equal(zh.accountAdd, '添加账户')
+  assert.equal(zh.accountModels, '模型绑定')
+  assert.equal(zh.accountModelsHint, '当使用所选模型时自动切换到当前账户')
+  assert.equal(zh.modelsTitle, '模型显示配置')
+  assert.equal(zh.contextTitle, '上下文配置')
+  assert.equal(zh.visibleModelsTitle, '自定义显示范围')
+  assert.equal(zh.modelNamesTitle, '自定义显示名称')
+  assert.equal(zh.contextOverridesTitle, '专属上下文长度')
+  assert.equal(zh.contextOverrideAdd, '添加')
+  assert.equal(zh.modelNamesAdd, '添加')
+  assert.equal(zh.advancedSettings, '高级设置')
+  assert.equal('integrationsTitle' in zh, false, '集成与显示 group is gone, not just hidden')
 })

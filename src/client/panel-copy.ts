@@ -15,6 +15,8 @@
  */
 
 import { ANALYTICS_COPY_ZH, ANALYTICS_COPY_EN, type AnalyticsKey } from './analytics-copy.ts'
+import { SERVICE_STATUS_EN, SERVICE_STATUS_ZH } from './service-status-copy.ts'
+import type { ServiceStatusCopyKey } from './service-status-copy.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -30,6 +32,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  */
 export type PanelKey =
   | AnalyticsKey
+  | ServiceStatusCopyKey
   /** Footer card title and panel heading. */
   | 'nav'
   /** Panel sub-heading under the title. */
@@ -40,6 +43,7 @@ export type PanelKey =
   /** Dashboard exit: the button's accessible name and its tooltip. */
   | 'close'
   | 'closeHint'
+  | 'panelRenderFailed'
   /** First-paint fetch. */
   | 'loading'
   /** No credential at all: how to get one. */
@@ -109,12 +113,14 @@ export type PanelTranslator = (key: PanelKey) => string
 /** The panel's Simplified Chinese string table (the key-set source of truth). */
 export const PANEL_COPY_ZH: Record<PanelKey, string> = {
   ...ANALYTICS_COPY_ZH,
+  ...SERVICE_STATUS_ZH,
   nav: 'Command Code',
   subtitle: '套餐、额度与配额窗口',
   refresh: '刷新',
   refreshing: '刷新中…',
   close: '关闭',
   closeHint: '返回会话',
+  panelRenderFailed: 'Command Code 用量面板无法显示。',
   loading: '正在获取账户用量…',
   noKey: '尚未配置 API 密钥',
   noKeyHint: '在 设置 → Command Code 中粘贴密钥或登录后，点击刷新。',
@@ -159,7 +165,7 @@ export const PANEL_COPY_ZH: Record<PanelKey, string> = {
   errorServiceUnavailable: 'Command Code 服务暂时不可用',
   errorServiceUnavailableHint: '服务端返回错误（5xx），请稍后点击刷新重试。',
   errorNetwork: '无法连接 Command Code 服务',
-  errorNetworkHint: '所有请求都没有到达服务端。请检查网络连接或 API 地址设置。',
+  errorNetworkHint: '所有请求都没有到达服务端。请检查网络连接或插件配置中的服务地址。',
   errorInvalidResponse: 'Command Code 响应无法读取',
   errorInvalidResponseHint: '已收到响应，但正文读取或解析失败。下方详情可区分读取超时、中断与格式异常；可先点击刷新重试。',
   errorGeneric: '用量获取失败',
@@ -168,12 +174,14 @@ export const PANEL_COPY_ZH: Record<PanelKey, string> = {
 /** The panel's English string table (must mirror {@link PANEL_COPY_ZH}). */
 export const PANEL_COPY_EN: Record<PanelKey, string> = {
   ...ANALYTICS_COPY_EN,
+  ...SERVICE_STATUS_EN,
   nav: 'Command Code',
   subtitle: 'Plans, credits and quota windows',
   refresh: 'Refresh',
   refreshing: 'Refreshing…',
   close: 'Close',
   closeHint: 'Back to the conversation',
+  panelRenderFailed: 'The Command Code usage panel could not be displayed.',
   loading: 'Loading account usage…',
   noKey: 'No API key configured',
   noKeyHint: 'Paste a key — or sign in — under Settings → Command Code, then refresh.',
@@ -232,6 +240,10 @@ export const PANEL_KEYS: readonly PanelKey[] = Object.keys(PANEL_COPY_EN) as Pan
  * available (a defensive path: every supported engine supplies one) and as the
  * default in tests that only assert the projection's figures.
  */
-export function panelTextEN(key: PanelKey): string {
-  return PANEL_COPY_EN[key] ?? key
+export function panelTextEN(key: PanelKey, params: Record<string, unknown> = {}): string {
+  const template = PANEL_COPY_EN[key] ?? key
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => {
+    const value = params[name]
+    return value === undefined ? match : String(value)
+  })
 }

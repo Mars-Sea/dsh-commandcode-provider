@@ -333,10 +333,17 @@ function applyClientSurfaces(
   analyticsController.subscribe(() => analyticsStore.set(analyticsController!.state()))
   ctx.effect(() => () => analyticsController?.dispose(), 'commandcode analytics controller')
   const panelMode = createSnapshotStore<'quota' | 'analysis'>('quota')
-  const openAnalytics = () => {
-    panelMode.set('analysis')
+  const openAnalytics = (): boolean => {
     const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
-    layout?.selectPanel(PANEL_ID)
+    if (typeof layout?.selectPanel !== 'function') return false
+    try {
+      layout.selectPanel(PANEL_ID)
+      panelMode.set('analysis')
+      return true
+    } catch (error: unknown) {
+      console.error('[dsh-commandcode-provider] could not open the usage analysis panel:', error)
+      return false
+    }
   }
 
   // The login panel: same namespace, three endpoints. The key NEVER crosses to
@@ -383,17 +390,17 @@ function applyClientSurfaces(
     if (ok || outcome?.config === 'confirmed' || outcome?.credential === 'confirmed') void usageController.refresh()
     return ok
   }
+  // One live probe of the configured API base, run Host-side. A Host older
+  // than the probe endpoint mounts no such method, so the status pill renders
+  // "unknown" rather than throw (see panel-view.tsx).
+  const probeService = () => {
+    const namespace = usageNamespace
+    if (typeof namespace?.probe !== 'function') {
+      return Promise.resolve({ ok: false as const, error: { message: '宿主未提供连通性探测' } })
+    }
+    return namespace.probe()
+  }
   const injected = () => ({
-    // The status row's live half: one probe of the configured API base, run
-    // Host-side. A Host older than the probe endpoint mounts no such method, so
-    // the row must render "unknown" rather than throw (see section.tsx).
-    probeService: () => {
-      const namespace = usageNamespace
-      if (typeof namespace?.probe !== 'function') {
-        return Promise.resolve({ ok: false as const, error: { message: '宿主未提供连通性探测' } })
-      }
-      return namespace.probe()
-    },
     createEnrollment: () => new AccountEnrollmentController(() => {
       if (!usageNamespace?.enrollmentBegin) throw new Error('宿主不支持账号开通，请更新插件')
       return usageNamespace as EnrollmentRemote
@@ -556,6 +563,7 @@ function applyClientSurfaces(
   //     screen must at least be loud in the console.
   const panelFace = (): PanelInjected => ({
     hooks: { commandCodeUsage: usageStore, commandCodeSettings: store, commandCodeAnalytics: analyticsStore, commandCodePanelMode: panelMode },
+    probeService,
     selectPanelMode: (mode) => panelMode.set(mode),
     refreshAnalytics: (query?: AnalyticsQuery) => analyticsController?.refresh(query),
     refresh: () => { pricesController?.ensure(); void usageController.refresh() },

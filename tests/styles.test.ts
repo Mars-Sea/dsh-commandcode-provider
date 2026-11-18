@@ -341,6 +341,20 @@ test('PAGE_CSS: every :hover rule sits in the fine-pointer hover block, so a tap
   assert.deepEqual(offenders, [])
 })
 
+test('PAGE_CSS: the save bar uses the measured negative sticky offset to reach the panel edge', () => {
+  // Headless-Chrome measurement against the real host shell: padding on the
+  // section does NOT move a sticky box past the scrollport, so the working
+  // recipe is a negative section margin plus a negative sticky bottom offset.
+  const section = /\.cc-section\{([^}]*)\}/.exec(PAGE_CSS)
+  assert.ok(section, 'the settings section must carry its own rule')
+  assert.match(section[1]!, /(?:^|;)margin-bottom:-24px(?:;|$)/)
+  assert.doesNotMatch(section[1]!, /(?:^|;)padding-bottom:24px(?:;|$)/)
+  const footer = /\.cc-saveFooter\{([^}]*)\}/.exec(PAGE_CSS)
+  assert.ok(footer, 'the save footer must stay sticky')
+  assert.match(footer[1]!, /(?:^|;)position:sticky(?:;|$)/)
+  assert.match(footer[1]!, /(?:^|;)bottom:-24px(?:;|$)/)
+})
+
 test('PAGE_CSS: press feedback stays outside the hover block and every scale is undone under reduced motion', () => {
   const pressed = PAGE_RULES.filter((rule) => rule.selector.includes(':active') && /transform:scale\(/.test(rule.body))
   assert.ok(pressed.length >= 4, 'buttons, segments, icon and reset buttons each scale on press')

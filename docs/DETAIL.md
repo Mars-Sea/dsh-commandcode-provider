@@ -1,11 +1,9 @@
-An unofficial [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) LLM provider plugin that adds **Command Code** as a `commandcode` route, with the live model catalog.
-
 ## What it adds
 
 - **Live model catalog** — plan tier, deal / `FREE` badge, peak and off-peak windows, image support and context window in the model picker; free models first.
 - **Multi-account rotation** — an exhausted account hands over to the next one; pin a preferred account or route models to dedicated ones.
-- **Settings page** — accounts (keys, browser sign-in, live quota, dedicated models), model visibility, privacy switches and connection options.
-- **Plans & quota panel** — optional sidebar card with the serving account's plan, 5-hour and weekly windows, balances and reset times.
+- **Settings page** — accounts (keys, browser sign-in, live quota, model binding), model display, context settings and advanced options.
+- **Plans & quota panel** — optional sidebar card with the serving account's plan, 5-hour and weekly windows, balances and reset times, plus a service-status pill in the header with official and local probe results.
 - **Session cost estimate and model analysis** — an estimate (`≈`) beside the composer token counter, and a per-account usage report from `/commandcode`.
 - **Web search and zero data retention** — the `web_search` tool is served by Command Code; optional ZDR routing (`x-cmd-zdr: 1`), off by default.
 

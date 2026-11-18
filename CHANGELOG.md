@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] - 2026-11-18
+
+### Fixed
+
+- 修复 DSH Web 中「用量分析」打开空白且无法返回。服务状态浮层直接按触发按钮定位，兼容 DSH 0.2.2-rc.4 的浏览器模块。设置页只在成功打开分析后关闭；如果面板渲染失败，仍显示提示和「返回会话」按钮。
+
+### Changed
+
+- 重组设置页为账户、模型显示配置、上下文配置和高级设置。正在使用的账户默认展开。说明可通过信息按钮查看。
+- 服务状态移到额度和用量分析面板的标题旁，点击可分别查看官方服务状态和当前宿主的连通性。账户卡显示 API Key 可读取的官方账期汇总、余额和滚动额度。
+- 同步 Command Code CLI `1.89.3` 的请求标识与模型目录，新增 GPT-6.2 Astra、GPT-6.2 Sol、Tencent Hy4，更新 Hy4 Flash 和 Hy4 Preview 的 ZDR 覆盖记录。
+- 验证 DSH `0.2.2-rc.3` 和 `0.2.2-rc.4`，加入兼容记录。
+
 ## [0.18.1] - 2026-11-16
 
 ### Changed

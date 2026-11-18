@@ -7,8 +7,8 @@
  *
  * Variant A (native DSH alignment): controls come directly from
  * `@deepseek-ai/dsh-client-ui-primitives` (`Button`, `Switch`, `Tag`,
- * `StateDot`, `SegmentedControl`, `SettingsValueField`, `Input`, `Menu`,
- * `Modal`, product icons), so this sheet owns only layout, concentric surfaces
+ * `StateDot`, `SegmentedControl`, `Input`, `Menu`, `Modal`, `Toast`, product
+ * icons), so this sheet owns only layout, concentric surfaces
  * (`R20` entity cards with `12px` inset → `R10` quota surface; `R14` override
  * entries with `4px` inset → `R10` inputs), and tactile micro-interactions
  * (`--cc-ease-out: cubic-bezier(.23,1,.32,1)`). Every selector is scoped under
@@ -20,12 +20,17 @@
 export const PAGE_CSS_ID = '@mars-sea/dsh-commandcode-provider/CommandCodeSettingsPage.module.css'
 
 export const PAGE_CSS = `
-.cc-section{max-width:720px;color:var(--dsw-alias-label-primary);flex-direction:column;gap:14px;display:flex;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;--cc-ease-out:cubic-bezier(.23,1,.32,1)}
+/* The host's .options column has 24px bottom padding and renders exactly
+ * one active section. The negative section margin plus the footer's negative
+ * sticky offset is the measured recipe that lands the bar on the panel edge;
+ * padding on this section does NOT move a sticky box past the scrollport. */
+.cc-section{max-width:720px;margin-bottom:-24px;color:var(--dsw-alias-label-primary);flex-direction:column;gap:14px;display:flex;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;--cc-ease-out:cubic-bezier(.23,1,.32,1)}
 .cc-header{padding-top:2px;display:flex}
 .cc-titleRow{flex:1;justify-content:space-between;align-items:center;gap:8px;display:flex}
 .cc-title{margin:0;color:var(--dsw-alias-label-primary);font-size:16px;font-weight:500;line-height:24px;letter-spacing:-.01em}
 .cc-versionLink{text-decoration:none;display:inline-flex}
 .cc-spacer{flex:1}
+.cc-visuallyHidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* Native flat groups (aligned with PluginInventorySettingsTab & GeneralSection):
  * separated by a .5px border-l2 hairline, never wrapped in heavy outer cards.
  * The chevron hangs in its own gutter and the body is indented by exactly that
@@ -57,9 +62,8 @@ export const PAGE_CSS = `
 .cc-rowText{flex:1 1 auto;flex-direction:column;gap:2px;min-width:0;display:flex}
 .cc-rowTitleLine{align-items:center;gap:4px;min-width:0;display:flex}
 .cc-rowTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:20px}
-.cc-helpButton{justify-content:center;align-items:center;flex:none;width:20px;height:20px;padding:0;border:0;border-radius:var(--dsw-radius-xs,4px);background:0 0;color:var(--dsw-alias-label-tertiary);cursor:pointer;display:inline-flex;transition:transform .15s var(--cc-ease-out),background-color .15s ease,color .15s ease}
+.cc-helpButton{justify-content:center;align-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-xs,4px);background:0 0;color:var(--dsw-alias-label-tertiary);cursor:pointer;display:inline-flex;transition:transform .15s var(--cc-ease-out),background-color .15s ease,color .15s ease}
 .cc-helpButton:active:not(:disabled){transform:scale(.95)}
-.cc-helpButton[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .cc-helpButton:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}
 .cc-rowDesc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .cc-rowDesc p{margin:0}
@@ -73,13 +77,6 @@ export const PAGE_CSS = `
 .cc-resetLink:active:not(:disabled){transform:scale(.95)}
 .cc-resetLink:disabled{cursor:default;opacity:.4}
 .cc-resetLink:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:4px}
-/* Multi-column SettingsValueField grids (SubagentLimitsFields pattern).
- * No padding of their own: each field already brings the shared 12px rhythm. */
-.cc-fieldGrid3{grid-template-columns:repeat(3,minmax(0,1fr));gap:0 12px;display:grid}
-.cc-fieldCell{min-width:0}
-.cc-monoField input{font-family:var(--ds-font-family-code)}
-.cc-numField input{font-variant-numeric:tabular-nums}
-@media (max-width:560px){.cc-fieldGrid3{grid-template-columns:minmax(0,1fr);gap:0}}
 /* Press feedback added onto primitive Buttons & action controls. */
 .cc-press{transition:transform .15s var(--cc-ease-out),background-color .15s ease,color .15s ease,border-color .15s ease}
 .cc-press:active:not(:disabled){transform:scale(.97)}
@@ -113,6 +110,7 @@ export const PAGE_CSS = `
  * 12px of the 24px rhythm. Keeps every gap in the group at the same 24px. */
 .cc-blockRows{margin-top:0}
 .cc-blockRows+.cc-block{margin-top:12px}
+.cc-list+.cc-blockRows{margin-top:12px}
 /* One per-model list: title + count + add on ONE line, then the shared columns.
  * Both tables use the same tracks, so 上下文长度 and 显示名称 line up as a
  * table instead of each table inventing its own widths. */
@@ -182,6 +180,7 @@ export const PAGE_CSS = `
 /* The balance has no track: label left, amount right, same two edges. */
 .cc-miniMeterPlain{flex-direction:row;justify-content:space-between;align-items:center;gap:8px;min-width:0;font-size:12px;line-height:18px;display:flex}
 .cc-accountDetails{container-type:inline-size;flex-direction:column;gap:10px;display:flex}
+.cc-accountDetails[hidden]{display:none}
 .cc-accountReport{flex-direction:column;gap:10px;display:flex}
 .cc-usageHead{align-items:center;gap:8px;display:flex}
 .cc-usageTitle{flex:1;margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:22px}
@@ -216,14 +215,8 @@ export const PAGE_CSS = `
 .cc-usageStatValue{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:20px;font-variant-numeric:tabular-nums}
 .cc-usageStatSub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
 .cc-usagePartial{margin:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}
-/* Add-account dashed button & inline module panel (ModelsSection.addButton / addCard). */
+/* Text actions under the account cards: one quiet weight, no button chrome. */
 .cc-accountActions{flex-wrap:wrap;align-items:center;gap:8px;display:flex}
-.cc-addButton{box-sizing:border-box;flex:1 1 180px;justify-content:center;align-items:center;gap:6px;height:38px;padding:0 14px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md,12px);background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;display:inline-flex;transition:transform .15s var(--cc-ease-out),background-color .15s ease,border-color .15s ease}
-.cc-addButton:active:not(:disabled){transform:scale(.98)}
-.cc-addButton:disabled{cursor:default;opacity:.4}
-.cc-addButton:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
-.cc-analyticsEntry{max-width:100%;min-width:0}
-.cc-analyticsEntryText{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cc-panel{border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-module-platform);flex-direction:column;gap:12px;padding:14px 16px;display:flex}
 .cc-panelHead{justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;display:flex}
 .cc-panelTitle{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:22px}
@@ -248,23 +241,9 @@ export const PAGE_CSS = `
 .cc-noticeWarn>.cc-noticeIcon,.cc-noticeWarn .cc-noticeTitle{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-state-warn-primary,#b45309))}
 .cc-noticeError{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent)}
 .cc-noticeError>.cc-noticeIcon,.cc-noticeError .cc-noticeTitle{color:var(--dsw-alias-state-error-primary)}
-/* Service status lines. */
-.cc-statusBadge{align-items:center;gap:6px;white-space:nowrap;display:inline-flex}
-.cc-statusLabel{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
-.cc-statusBad{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-state-warn-primary,#b45309))}
-.cc-statusNotice{margin:0;color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-tertiary));font-size:12px;line-height:18px}
-.cc-statusLines{grid-template-columns:auto minmax(0,1fr);align-items:baseline;gap:3px 12px;margin:2px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;display:grid}
-.cc-statusKey{color:var(--dsw-alias-label-tertiary);white-space:nowrap}
-.cc-statusValue{flex-wrap:wrap;align-items:center;gap:2px 8px;min-width:0;font-variant-numeric:tabular-nums;display:flex}
-.cc-statusVerdict{color:var(--dsw-alias-label-primary)}
-.cc-statusMeta{flex:1 1 200px;min-width:0}
-.cc-statusPart{white-space:nowrap}
-.cc-statusTitleLink{align-items:center;gap:3px;margin-left:auto;display:inline-flex}
-.cc-statusLink{color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));text-decoration:none;font-size:12px;line-height:18px;white-space:nowrap}
-.cc-statusRetry{align-items:center;gap:4px;padding:0;border:0;background:0 0;color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer;display:inline-flex}
-.cc-statusRetry:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:4px}
 /* Native SettingsForm-aligned sticky footer bar (replaces custom capsule floating pill). */
-.cc-saveFooter{position:sticky;bottom:0;z-index:2;justify-content:space-between;align-items:center;gap:12px;padding:12px 0 4px;border-top:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);display:flex;transition:opacity .18s var(--cc-ease-out),transform .18s var(--cc-ease-out)}
+.cc-fieldInput,.cc-selector,.cc-switch,.cc-resetLink,.cc-helpButton,.cc-iconButton,.cc-press,.cc-accountToggle{scroll-margin-bottom:64px}
+.cc-saveFooter{position:sticky;bottom:-24px;z-index:2;justify-content:space-between;align-items:center;gap:12px;padding:12px 0 8px;border-top:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);display:flex;transition:opacity .18s var(--cc-ease-out),transform .18s var(--cc-ease-out)}
 @starting-style{.cc-saveFooter{opacity:0;transform:translateY(6px)}}
 .cc-saveStatus{align-items:center;gap:8px;min-width:0;display:inline-flex}
 .cc-saveText{min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
@@ -297,17 +276,16 @@ export const PAGE_CSS = `
 .cc-iconButton:hover:not(:disabled),.cc-helpButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .cc-iconButtonDanger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
 .cc-dangerButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}
-.cc-addButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-label-tertiary)}
 .cc-resetLink:hover:not(:disabled),.cc-reset:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
 .cc-disclosure:hover .cc-foldChevron,.cc-accountToggle:hover .cc-foldChevron{color:var(--dsw-alias-label-primary)}
-.cc-loginLink:hover,.cc-statusLink:hover,.cc-statusRetry:hover{text-decoration:underline;text-underline-position:under}
+.cc-loginLink:hover{text-decoration:underline;text-underline-position:under}
 }
 /* Reduced motion neutralises movement and press scale while keeping fades and colours. */
 @media (prefers-reduced-motion:reduce){
 .cc-foldChevron,.cc-rowControl>.cc-switch>span,.cc-usageBarFill,.cc-miniMeterFill{transition:none}
-.cc-press,.cc-iconButton,.cc-helpButton,.cc-resetLink,.cc-addButton,.cc-selector{transition:background-color .15s ease,color .15s ease,border-color .15s ease}
+.cc-press,.cc-iconButton,.cc-helpButton,.cc-resetLink,.cc-selector{transition:background-color .15s ease,color .15s ease,border-color .15s ease}
 .cc-rowControl>.cc-switch{transition:background-color .15s ease}
-.cc-press:active:not(:disabled),.cc-iconButton:active:not(:disabled),.cc-helpButton:active:not(:disabled),.cc-resetLink:active:not(:disabled),.cc-addButton:active:not(:disabled),.cc-selector:active:not(:disabled),.cc-switch:active:not(:disabled){transform:none}
+.cc-press:active:not(:disabled),.cc-iconButton:active:not(:disabled),.cc-helpButton:active:not(:disabled),.cc-resetLink:active:not(:disabled),.cc-selector:active:not(:disabled),.cc-switch:active:not(:disabled){transform:none}
 .cc-notice,.cc-saveFooter{transition:opacity .18s ease;transform:none}
 }
 `

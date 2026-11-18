@@ -17,7 +17,7 @@
  * @module dsh-commandcode-provider/client/panel-view
  */
 
-import { useEffect, useState } from 'react'
+import { Component, useEffect, useState, type ReactNode } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from './snapshot-store.ts'
@@ -27,6 +27,8 @@ import { buildPanelView } from './panel.ts'
 import type { PanelAccountView, PanelView, PanelWindowView } from './panel.ts'
 import { panelTextEN } from './panel-copy.ts'
 import type { PanelKey } from './panel-copy.ts'
+import { ServiceStatusPill } from './service-status-pill.tsx'
+import type { ServiceProbeMethod } from './use-service-status.ts'
 // SlotMap merge for `main` / `sidebar.footer.action` (load-bearing: the slots
 // this file's components register into are typed only by that augmentation).
 import './panel-slots.ts'
@@ -65,6 +67,8 @@ export interface PanelInjected {
     commandCodeAnalytics?: SnapshotStore<AnalyticsState>
     commandCodePanelMode?: SnapshotStore<'quota' | 'analysis'>
   }
+  /** Live Host probe of the configured API base, for the header status pill. */
+  probeService?: ServiceProbeMethod
   /** Fetch the report now (the dashboard's Refresh action). */
   refresh(): void
   /**
@@ -96,6 +100,8 @@ export interface PanelComponentProps {
   selectPanelMode?(mode: 'quota' | 'analysis'): void
   useCommandCodeUsage<T>(selector: (state: UsagePageState) => T): T
   useCommandCodeSettings<T>(selector: (state: SettingsPageState) => T): T
+  /** Live Host probe injected for the header status pill (older Hosts omit it). */
+  probeService?: ServiceProbeMethod
   /**
    * Locale seat for the `panel.commandcode` namespace, bound by the
    * registration's own `locale` declaration. Optional so a missing locale face
@@ -312,13 +318,56 @@ function AccountCard({ account, view }: { account: PanelAccountView; view: Panel
   )
 }
 
-/**
- * The center-column dashboard, registered into the layout's keyed `main` slot
- * under the same id the footer card selects, so the two are one navigation
- * entry: the card shows the plan, the monthly bar and the quota window; the
- * panel shows everything, including the per-account breakdown.
- */
+function ClosePanelButton({ text, close }: { text: (key: PanelKey) => string; close: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="ccp-close"
+      aria-label={text('close')}
+      title={text('closeHint')}
+      onClick={close}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+    </Button>
+  )
+}
+
+/** Keep a usable exit before a render error reaches the host's slot boundary. */
+class PanelBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  override render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+/** The selected `main` slot retains a return action even if the panel crashes. */
 export function CommandCodePanel(props: PanelComponentProps) {
+  const text = (key: PanelKey) => props.t?.(key) ?? panelTextEN(key)
+  return (
+    <PanelBoundary fallback={
+      <div className="ccp-main" role="region" aria-label={text('nav')}>
+        <div className="ccp-mainInner">
+          <header className="ccp-header">
+            <h2 className="ccp-title">{text('nav')}</h2>
+            <span className="ccp-spacer" />
+            <ClosePanelButton text={text} close={props.close} />
+          </header>
+          <div className="ccp-notice ccp-noticeError" role="alert">{text('panelRenderFailed')}</div>
+        </div>
+      </div>
+    }>
+      <CommandCodePanelContent {...props} />
+    </PanelBoundary>
+  )
+}
+
+function CommandCodePanelContent(props: PanelComponentProps) {
   const view = usePanelView(props)
   const [fallbackMode, setFallbackMode] = useState<'quota' | 'analysis'>('quota')
   const mode = props.useCommandCodePanelMode?.(s => s) ?? fallbackMode
@@ -340,7 +389,10 @@ export function CommandCodePanel(props: PanelComponentProps) {
       <div className={`ccp-mainInner${mode === 'analysis' ? ' ccp-mainInnerAnalysis' : ''}`}>
         <header className="ccp-header">
           <div className="ccp-headerText">
-            <h2 className="ccp-title">{mode === 'analysis' ? `Command Code · ${text('analyticsNav')}` : text('nav')}</h2>
+            <div className="ccp-titleRow">
+              <h2 className="ccp-title">{mode === 'analysis' ? `Command Code · ${text('analyticsNav')}` : text('nav')}</h2>
+              <ServiceStatusPill probeService={props.probeService} t={props.t} />
+            </div>
             <p className="ccp-subtitle">{text(mode === 'quota' ? 'subtitle' : 'analysisIntro')}</p>
           </div>
           <span className="ccp-spacer" />
@@ -353,21 +405,7 @@ export function CommandCodePanel(props: PanelComponentProps) {
           >
             {mode === 'quota' && view.loading ? text('refreshing') : text('refresh')}
           </Button>
-          {/* The dashboard REPLACES the conversation in the center column and
-              this panel is the only surface that selects it, so without an exit
-              the user cannot get back to the session at all (issue #41): the
-              sidebar card only re-selects this same panel. The glyph is the
-              button's whole content, so the name and tooltip carry the words. */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ccp-close"
-            aria-label={text('close')}
-            title={text('closeHint')}
-            onClick={() => props.close()}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
-          </Button>
+          <ClosePanelButton text={text} close={props.close} />
         </header>
 
         <nav className="ccp-tabs" aria-label={text('nav')}>
