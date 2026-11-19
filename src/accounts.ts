@@ -564,7 +564,7 @@ export class CommandCodeAccountPool {
    * One account's key: literal → credential seam → auth file (default slot).
    *
    * Every source is normalized here, at the single point where a slot's key
-   * enters the pool. The adapter sends the key through
+   * enters the pool. The adapter sends the key through the plugin's own
    * `assertUsableApiKey()`, which trims it, and reports that trimmed form back
    * to {@link markRejected}: returning the raw value would file every 429/401
    * mark under a key no later lookup can find — rotation would re-offer the same
@@ -828,7 +828,7 @@ function allAccountsUnusable(accounts: readonly ResolvedAccount[]): LlmError {
  * Normalize one resolved credential to the form every consumer sees. Trim
  * only: a blank-after-trim value means "no key" (the slot is omitted and the
  * caller reports `MISSING_CREDENTIAL`), while characters an HTTP header cannot
- * carry are left for `assertUsableApiKey()` to reject with its own message.
+ * carry are left for the plugin's `assertUsableApiKey()` to reject with its own message.
  */
 function normalizeResolvedKey(value: string): string | undefined {
   const trimmed = value.trim()

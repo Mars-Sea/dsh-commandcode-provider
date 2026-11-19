@@ -37,7 +37,6 @@ import { ownedResponseStream, settleStreamResponse, responseIdentifiers, failure
 import type { AttachmentStore, ImageAttachmentRef, ImageRequestTarget, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 
 import {
-  assertUsableApiKey,
   attributionHeaders,
   LlmAdapter,
   LlmError,
@@ -64,6 +63,7 @@ import {
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { RETRY_MAX_DELAY_MS } from './accounts.ts'
+import { assertUsableApiKey } from './api-key.ts'
 import { requestImageTarget } from './image-request.ts'
 import { commandCodeImageTokens } from './image-tokens.ts'
 import { allowanceTierForWeight } from './model-prices.ts'
@@ -2973,7 +2973,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
   /**
    * Resolve and validate the key one account-endpoint call will use.
    *
-   * Every account endpoint runs the chat path's own `assertUsableApiKey` check,
+   * Every account endpoint runs the chat path's own plugin-local API-key check,
    * or a key carrying a character no HTTP header can hold throws inside `fetch`
    * BEFORE any I/O — once per endpoint — and the report reads as "the network is
    * down". The credential reference is read structurally: it belongs to the
@@ -3318,7 +3318,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * so rather than let {@link classifyTotalFailure} blame the connection: a
    * key that no HTTP header can carry (a stray newline from a paste, a
    * full-width character) makes `fetch` throw a `TypeError` before any I/O,
-   * for every endpoint at once, so this path runs `assertUsableApiKey` too and
+   * for every endpoint at once, so this path runs the same local check too and
    * answers `blocked: 'invalid-key'`; and the four endpoints get the SAME
    * per-request budget as a chat call (`connection.requestTimeoutMs`, default
    * 60 s), not the catalog's 10 s probe budget, because on a slow link a 10 s
