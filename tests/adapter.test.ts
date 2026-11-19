@@ -8617,7 +8617,7 @@ test('getUsage() reports a key no HTTP header can carry as an invalid key, not a
   // a TypeError BEFORE any I/O — for every endpoint at once — so the
   // all-transport-failure classifier used to report a connection problem while the
   // connection was fine and the real problem was the credential. The chat path
-  // already refuses such a key through `assertUsableApiKey`; the account path now
+  // already refuses such a key through the shared compatibility check; the account path now
   // does too, and the report carries the credential verdict.
   let fetches = 0
   const adapter = makeAdapter({

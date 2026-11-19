@@ -155,6 +155,20 @@ test('DSH compatibility records every verified release of the admitted channel r
   )
 })
 
+test('the published Host bundle owns its cross-engine API key check', () => {
+  const bundle = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.doesNotMatch(
+    bundle,
+    /import\s*\{[^}]*\bassertUsableApiKey\b[^}]*\}\s*from\s*["']@deepseek-ai\/dsh-llm["']/s,
+    'newer DSH engines removed assertUsableApiKey from dsh-llm',
+  )
+  assert.doesNotMatch(
+    bundle,
+    /import\s*\{[^}]*\bnormalizeApiKey\b[^}]*\}\s*from\s*["']@deepseek-ai\/dsh-credentials["']/s,
+    'older supported DSH engines do not export normalizeApiKey from dsh-credentials',
+  )
+})
+
 test('the manifest declares the same engine range it supports', () => {
   // 三处必须逐字相同。**`engines.dsh` 不是装饰**：自 dsh `0.2.1-alpha.4` 起，
   // 宿主 `evaluatePluginCompatibility` 在包自带 `engines.dsh` 时**只**看它，
