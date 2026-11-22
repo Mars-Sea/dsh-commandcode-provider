@@ -180,6 +180,8 @@ cmd login                               # 写入 ~/.commandcode/auth.json
 
 ## 配置
 
+**提供商路由 ID。** 本插件注册 `commandcode` 模型路由。如果你还在 profile 的 `cordis.patch.yml` 中通过 `llm-pi-ai.config.providers` 接入 Command Code，请为手写条目使用不同的键，例如 `commandcode-pi`。同名的 `commandcode` 可能导致 pi-ai 无法注册整批提供商，「添加模型提供商」按钮也会变灰。恢复时请重命名 pi-ai 条目，更新引用该条目的模型选择，然后重载 profile 或重启 DSH。见 [Issue #129](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/129)。
+
 **设置 → Command Code** 把选项分为：**账户**（密钥、网页登录、实时额度、固定账户、专用模型）、**模型与上下文**（隐藏套餐外模型、可见模型、上下文长度、输出上限）、**隐私与安全**（零数据保留）、**集成与显示**（联网搜索、侧边栏额度卡片）、**高级设置**（API 地址、超时、传输重试、图片卸载）。同一组选项也位于 `$DSH_HOME/settings.yaml`，修改即刻生效，无需重启：
 
 ```yaml
