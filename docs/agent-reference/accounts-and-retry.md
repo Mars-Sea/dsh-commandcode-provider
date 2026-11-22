@@ -146,7 +146,7 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   status, and that one word covered five unrelated causes — a real outage, the account endpoints' own
   timeout, a key no HTTP header can carry (a paste artifact: `fetch` throws a `TypeError` BEFORE any I/O,
   once per endpoint), and an unparseable `apiBase` — so the card told users to check a connection that was
-  fine. Three rules keep it honest: (1) the account path runs the harness's `assertUsableApiKey` in
+  fine. Three rules keep it honest: (1) the account path runs the shared local API-key compatibility check in
   `accountHeaders()`, exactly like chat, and `getUsage()` answers `blocked: 'invalid-key'` with the
   credential message instead of four phantom transport failures (a MISSING credential still propagates); (2)
   the four endpoints get `connection.requestTimeoutMs` (the SAME budget as a chat call, default 300 s) rather
