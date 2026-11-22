@@ -343,19 +343,9 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   淡入并上移 8px（过渡而非关键帧，重渲染不重播）；`prefers-reduced-motion` 下只剩淡入。行间细线是有意
   推翻 2026-10-21「行间不画线」的决定：卡片内无分界时行与行会粘在一起。动效与悬停策略统一见
   「设置页动效与悬停（2026-10-29）」条目。
-- **设置页导航图标（2026-11-03）**：`commandcode` 这一行在设置导航里的图标分两层。宿主声明
-  `settings.section.icon`（`0.2.2-alpha.3` 起；list 插槽、按 section id 过滤、props `size`／`active`）时，
-  `src/client/settings-nav-glyph.tsx` 按 id `commandcode` 注册品牌标记（16px、单色线性、`stroke=currentColor`、
-  1.3px，图形与 `icon.svg` 同一个 command 符号）；未声明的旧宿主没有这个座位，`src/client/settings-nav-icon.ts`
-  在设置弹窗（`[data-shortcut-modal="settings"]` → `nav`）里按本地化标签找到本站那一行，把宿主齿轮
-  `display:none` 并在标签前插入同形 SVG。`MutationObserver` 只监听 body 的 `childList`（不用 `subtree`，
-  流式正文不会唤醒它）以感知弹窗开合；React 重渲染扔掉注入节点会自愈，行节点被替换会重新装饰，销毁时移除
-  节点并还原齿轮，官方注册生效时兜底自动拆除——任何宿主上都只画一个图形。判据：`tests/settings-nav-icon.test.ts`
-  （按标签识别而非位置、两种宿主行形状、弹窗开合、自愈、行替换、复原）与 `tests/client-boot.test.ts`
-  （宿主声明／不声明两条注册分支）。`src/client/settings-nav-slot.ts` 是供旧开发类型使用的 SlotMap 补充声明；
-  2026-11-12 已补齐 `owner: { size: number; active: boolean }`，与 rc.2 官方声明结构一致，旧 `0.2.1-rc.3`
-  和全套 rc.2 类型检查均通过。开发依赖不再需要补充时可删除该类型文件；运行时 `settings-nav-icon.ts` 的
-  兜底是否删除取决于支持范围，仍支持 `0.2.1` 或 `0.2.2-alpha.2` 时必须保留，不能仅因开发依赖升级而删除。
+- **设置页导航图标（2026-11-22）**。保留的宿主均声明 `settings.section.icon`。
+  `src/client/settings-nav-glyph.tsx` 使用宿主提供的尺寸，按 section id `commandcode` 注册原有品牌标记。
+  插槽类型来自 `@deepseek-ai/dsh-client-ui-settings/client`，注册由 `tests/client-boot.test.ts` 覆盖。
 
 - **自定义上下文长度（issue #86）**：`Config.contextWindow`（全局值）与 `Config.contextWindowOverrides`
   （按模型，键为目录 id）覆盖宣告给宿主的上下文窗口，解析顺序为按模型 → 全局 → 目录。页面上位于

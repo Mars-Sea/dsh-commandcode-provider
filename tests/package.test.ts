@@ -27,11 +27,8 @@ const pkg = JSON.parse(
 const BARE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 
 /**
- * 支持范围是「同通道区间」而不是裸版本析取（用户 2026-10-24 拍板）：每个分支锁定一条
- * major.minor.patch 版本线，下界是该线上已验证的最新预发布，上界写成**同一 major.minor 的
- * 下一个 patch** 的 `-0` 预发布号。自 2026-10-28 起有两个并列分支（用户拍板「放开整个
- * 0.2.2 通道」）：`0.2.1` 的 `-rc.N` 线与 `0.2.2` 的 `-alpha.N` 线。两条线的预发布序列
- * 不相交，一个区间写不出来，所以用 ` || ` 并列而不是把上界推到 0.3.0-0。
+ * 支持范围按版本线声明。每个分支以下界版本起步，上界写成同一 major.minor 的下一个
+ * patch 的 `-0` 预发布号。目前并列准入 `0.2.2` 的 RC 与 `0.2.3` 的 alpha.2 及后续版本。
  *
  * 为什么上界必须是 `<X.Y.(Z+1)-0`：按 semver 优先级 `0.2.2-rc.1 < 0.2.2`，所以写成
  * `<0.2.2` 会把下一条线的 RC 放进来；`~0.2.1-rc.2` 更糟（等价于 `>=0.2.1-rc.2 <0.3.0`，
@@ -81,10 +78,7 @@ test('every Harness peer and development package shares one supported release ra
       `peer range branch ${JSON.stringify(branch)} must be ">=<verified prerelease> <next patch>-0"`,
     )
     const [, major, minor, patch, prerelease, upperMajor, upperMinor, upperPatch] = admitted
-    // 上界是「同一个 major.minor 的下一个 patch 的 `-0`」，也就是给这一条版本线封口：
-    // 下界 0.2.1-rc.2 → 上界 0.2.2-0（0.2.1 的预发布与正式版全准入，0.2.2 及以后全排除），
-    // 下界 0.2.2-alpha.2 → 上界 0.2.3-0。写成 0.3.0-0 会把 0.2.2 之后整段 0.2.x 也放进来，
-    // 写成 0.2.1-0 又会把下界自己排除在外。
+    // 上界是同一个 major.minor 的下一个 patch 的 `-0`。
     assert.equal(upperMajor, major, `branch ${JSON.stringify(branch)} upper bound must keep the lower bound's major`)
     assert.equal(upperMinor, minor, `branch ${JSON.stringify(branch)} upper bound must keep the lower bound's minor`)
     assert.equal(
@@ -103,8 +97,7 @@ test('every Harness peer and development package shares one supported release ra
   )
 
   // 记录是「实测过哪些版本」，区间是「放行哪些版本」：方向相反但必须相容——
-  // 每条记录都要落在某个分支的通道内，且不得早于该分支已验证的下界
-  // （`0.2.1-rc.1` 及更早、`0.2.2-alpha.1` 从未验证过）。
+  // 每条记录都要落在某个分支的通道内，且不得早于该分支已验证的下界。
   const declared = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
   for (const version of declared) {
     assert.match(version, BARE_VERSION, `${version} must be a bare version`)
@@ -136,22 +129,11 @@ test('per-release DSH compatibility lists only verified releases', () => {
 })
 
 test('DSH compatibility records every verified release of the admitted channel range', () => {
-  // 用户 2026-10-24 拍板：准入由 `engines.dsh` 的区间负责（同通道已验证下界及以上自动放行），
-  // 本记录只列**实际跑过完整引擎矩阵**的版本 —— 0.2.1 通道的 rc.2、rc.3、rc.4、
-  // rc.5（2026-10-30 补入，npm `latest`／`next`），2026-10-28 用户拍板放开
-  // 0.2.2 通道后补入的 alpha.2 与 alpha.3（npm `alpha`），以及 2026-11-05 补入的
-  // rc.1（`0.2.2` 首个 RC，npm `next`；alpha.3 到 rc.1 的源码 delta 只有 package.json，
-  // 但补记录后仍须逐版本跑 `test:engine` 与 `test:install`），以及 2026-11-12
-  // 通过真实目标引擎、全套依赖类型检查与隔离安装后补入的 0.2.2-rc.2，
-  // 和 2026-11-18 在 rc.3／rc.4 上通过目标单版本检查、完整矩阵与隔离安装后补入的这两条。
-  // 未来同通道新版本无需改声明即可准入，但只有补上记录才算已验证；
-  // 这份记录同时是 `test:engine` 与 `test:install` 的矩阵来源，加记录就必须先跑通它们。
+  // 两份引擎矩阵使用这些已验证版本。2026-11-22 淘汰了 0.2.1 和 0.2.2 的 alpha。
   const declared = Object.keys(pkg.dsh?.compatibility?.dshReleases ?? {})
-  assert.equal(declared.length, 10, 'keep exactly the verified engine releases')
   assert.deepEqual(
     [...declared].sort(),
-    ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2', '0.2.2-alpha.3', '0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', '0.2.2-rc.4'],
-    'one record per channel: the 0.2.1 RC line plus the verified 0.2.2 prereleases',
+    ['0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5', '0.2.3-alpha.2'],
   )
 })
 
@@ -179,10 +161,7 @@ test('the manifest declares the same engine range it supports', () => {
   const supported = pkg.peerDependencies?.['@deepseek-ai/dsh-llm']
   assert.equal(pkg.dsh?.compatibility?.dsh, supported)
   assert.equal(pkg.engines?.dsh, supported)
-  // Node 下界随 0.2.2 通道升到 24.9：`@deepseek-ai/dsh@0.2.2-alpha.2` 自己声明
-  // `engines.node >=24.9.0`，而本插件同时准入它，所以整个包的 Node 门槛必须跟着抬到
-  // 同一水位 —— 否则会出现「插件声称支持某引擎，但那个引擎在这台机器的 Node 上起不来」。
-  // 代价是 Node 22/23 用户失去支持，升级说明写在两份 README 与 CHANGELOG。
+  // 两条受支持版本线都要求 Node 24.9。
   assert.equal(pkg.engines?.node, '>=24.9')
 })
 

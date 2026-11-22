@@ -1,7 +1,7 @@
 /** Preserve provider-specific failure codes across the old and new DSH error APIs. */
 import { LlmError, type LlmErrorOptions, type LlmFailure } from '@deepseek-ai/dsh-llm'
 
-// Older retained engines do not declare or implement the rc.2 factory.
+// DSH 0.2.2-rc.1 uses the open-string constructor. The factory starts in rc.2.
 type FailureFactory = (failure: LlmFailure, options?: ErrorOptions) => LlmError
 
 /** Construct an open-code provider failure without changing its retry classification or facts. */

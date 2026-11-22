@@ -4,9 +4,8 @@ import { CredentialRef } from "@deepseek-ai/dsh-credentials";
 import { TypertRemoteService, TypertSchema } from "@deepseek-ai/dsh-typert-protocol";
 import { WebRuntime, WebSearchProvider, WebSearchRequest, WebSearchResult } from "@deepseek-ai/dsh-web";
 import { Context } from "@deepseek-ai/cordis";
-import { AttachmentStore, ImageAttachmentRef, ImageRequestTarget } from "@deepseek-ai/dsh-attachment";
+import { AttachmentStore, ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { CommandDefinition } from "@deepseek-ai/dsh-commands";
-//#region src/provider-errors.d.ts
 /**
  * Why a pre-stream rejection rotates to another account. `rate-limit` (a usage
  * window the provider NAMED), `throttled` (a 429 that named no window) and
@@ -20,8 +19,6 @@ import { CommandDefinition } from "@deepseek-ai/dsh-commands";
  * {@link classifyAccountRejection}.
  */
 type AccountRotationReason = 'rate-limit' | 'throttled' | 'invalid-credential' | 'unavailable';
-//#endregion
-//#region src/request-timing.d.ts
 type Phase = 'credentials' | 'images' | 'body' | 'serialization' | 'headers';
 type Outcome = 'finished' | 'error' | 'aborted' | 'cancelled';
 interface RequestTimingSummary {
@@ -42,8 +39,6 @@ interface RequestTimingSummary {
   }>;
 }
 type RequestTimingSink = (summary: RequestTimingSummary) => void | Promise<void>;
-//#endregion
-//#region src/stream-response.d.ts
 /**
  * Endpoint protocol selected for one generate call.
  *
@@ -56,11 +51,7 @@ type RequestTimingSink = (summary: RequestTimingSummary) => void | Promise<void>
  * Provider API access) and as the `upgrade_required` fallback.
  */
 type CommandCodeProtocol = 'cli' | 'openai' | 'messages';
-//#endregion
-//#region src/gateway-facts.d.ts
 declare const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
-//#endregion
-//#region src/adapter.d.ts
 type GenerateOptions$1 = Omit<GenerateOptions, 'purpose'> & {
   purpose?: string;
 };
@@ -497,7 +488,13 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
    * @param image - normalized attachment whose request projection is resolved.
    * @returns the same target `readImageRequest` encodes to, before base64 expansion.
    */
-  imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget;
+  imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): {
+    maxBytes: number;
+    maxImageBytes: number;
+    imageTargetBytes: number;
+    width: number;
+    height: number;
+  };
   /**
    * List the models the picker (or a settings-page editor) may offer.
    *
@@ -724,8 +721,6 @@ declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Comman
   private streamRequest;
   private streamAttempt;
 }
-//#endregion
-//#region src/accounts.d.ts
 /** One extra account's raw configuration (composition config or settings). */
 interface CommandCodeAccountConfig {
   /** Display label shown in the usage dashboard and settings page. */
@@ -1076,8 +1071,6 @@ declare class CommandCodeAccountPool {
   /** Hand out the chosen account's key. */
   private pick;
 }
-//#endregion
-//#region src/enrollment-wire.d.ts
 interface EnrollmentInput {
   id: string;
   pageId: string;
@@ -1127,12 +1120,8 @@ interface EnrollmentAction extends EnrollmentPage {
   id: string;
   name?: string;
 }
-//#endregion
-//#region src/plan-tiers.d.ts
 declare const PLAN_LABELS: Readonly<Record<string, string>>;
 declare const PLAN_ORDER: Readonly<Record<string, number>>;
-//#endregion
-//#region src/capabilities.d.ts
 declare const KNOWN_EFFORTS: Readonly<Record<string, readonly string[]>>;
 /**
  * Models whose Capabilities include Vision, per the official Command Code
@@ -1469,8 +1458,6 @@ declare function formatContext(contextWindow: number | undefined): string | unde
  * only" adds nothing the picker needs to show.
  */
 declare function capabilityDescription(modelId: string, contextWindow?: number, now?: number): string;
-//#endregion
-//#region src/usage-wire.d.ts
 /** One account's usage entry in the multi-account report. */
 interface CommandCodeAccountUsage {
   /** Stable slot id (`default`, `account-2`, …). */
@@ -1596,8 +1583,6 @@ interface CommandCodePriceTable {
    */
   peakHours: Array<[number, number]>;
 }
-//#endregion
-//#region src/command-locales.d.ts
 /**
  * zh/en copy for the Host-side `/commandcode` usage command, as plain
  * constants: the command runs on the Host and has no access to the client's
@@ -1610,8 +1595,6 @@ interface CommandCodePriceTable {
  */
 /** Active locale id for the `/commandcode` command. */
 type LocaleId = 'zh' | 'en';
-//#endregion
-//#region src/commands.d.ts
 /** Everything the command needs beyond the adapter itself. */
 interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> {
   /** The registered adapter (for getUsage / listModels). */
@@ -1633,8 +1616,6 @@ interface CommandCodeCommandDeps<C extends CommandCodeConnectionOptions = Comman
 declare function commandDefinition<C extends CommandCodeConnectionOptions>(deps: CommandCodeCommandDeps<C>): CommandDefinition;
 /** Register the command on `ctx.commands` (called from the plugin entry). */
 declare function applyCommands<C extends CommandCodeConnectionOptions>(ctx: Context, deps: CommandCodeCommandDeps<C>): void;
-//#endregion
-//#region src/login-wire.d.ts
 /** Why a login attempt ended in `failed` (stable across versions for copy). */
 type CommandCodeLoginFailureReason =
 /** The Studio page reported the authorization was denied by the user. */
@@ -1682,8 +1663,6 @@ declare const LOGIN_CANCEL_ENDPOINT = "commandcode/loginCancel";
 declare function parseLoginStatus(value: unknown): CommandCodeLoginStatus;
 /** The strict result codec shared by all three login endpoints. */
 declare const loginStatusSchema: TypertSchema<CommandCodeLoginStatus>;
-//#endregion
-//#region src/login.d.ts
 /** 登录总期限包含浏览器回调、密钥验证与存储，不能在收到回调后撤掉保护。 */
 declare const LOGIN_TIMEOUT_MS = 120000;
 /** First local port the flow tries (mirrors the CLI). */
@@ -1852,8 +1831,6 @@ declare class CommandCodeLoginFlow {
   /** 结束整个尝试，同时中止验证请求，迟到结果由所有权检查拦截。 */
   private teardown;
 }
-//#endregion
-//#region src/enrollment.d.ts
 interface Account {
   label?: string;
   apiKeyEnv?: string;
@@ -1932,16 +1909,12 @@ declare class AccountEnrollmentManager {
   private prune;
   private recovered;
 }
-//#endregion
-//#region src/cost-facts.d.ts
 interface CostTokens {
   uncachedInputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
 }
-//#endregion
-//#region src/analytics-wire.d.ts
 type AnalyticsQuery = {
   mode: 'recent';
   limit: number;
@@ -2000,8 +1973,6 @@ interface AnalyticsReport {
   scenarios: AnalyticsScenario[];
   monthlyEstimate: number | null;
 }
-//#endregion
-//#region src/service-probe-wire.d.ts
 /** How the probe ended; the browser maps each value to localized copy. */
 type ProbeOutcome = 'ok' | 'http-error' | 'timeout' | 'unreachable';
 /** The probe facts the Host returns; the browser owns every string. */
@@ -2014,8 +1985,6 @@ interface CommandCodeProbeResult {
   /** When the Host finished the probe (epoch ms, Host clock). */
   checkedAt: number;
 }
-//#endregion
-//#region src/usage-remote.d.ts
 /**
  * The browser-login face the usage service exposes (`commandcode/login*`).
  * Backed by the Host-half {@link !CommandCodeLoginFlow} when the plugin entry
@@ -2134,8 +2103,6 @@ declare class CommandCodeUsageService<C extends CommandCodeConnectionOptions = C
  * `register()` effect would otherwise outlive the plugin.
  */
 declare function applyUsageRemote<C extends CommandCodeConnectionOptions>(ctx: Context, deps: CommandCodeUsageDeps<C>): void;
-//#endregion
-//#region src/web-search.d.ts
 /** Stable id this provider registers under in `ctx.web`. */
 declare const COMMANDCODE_SEARCH_PROVIDER_ID = "commandcode";
 /**
@@ -2287,8 +2254,6 @@ declare class CommandCodeSearchProvider implements WebSearchProvider {
   search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>;
   private resolveKey;
 }
-//#endregion
-//#region src/tui-settings.d.ts
 /** Provider-owned translations for one title, label, or hint. */
 interface TuiLocalizedText {
   readonly zh?: string;
@@ -2443,8 +2408,6 @@ declare function buildCommandCodeTuiSection(deps: CommandCodeTuiSettingsDeps): T
  *   unusable. The returned function is inert after the fiber is torn down.
  */
 declare function applyCommandCodeTuiSettings(ctx: Context, deps: CommandCodeTuiSettingsDeps): (() => void) | undefined;
-//#endregion
-//#region src/index.d.ts
 declare const name = "llm-commandcode";
 declare const inject: string[];
 /** The single provider route this plugin owns. */
@@ -2640,6 +2603,5 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
  */
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;
-//#endregion
 export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, WEB_SELECTION_NAMESPACE, type WebSearchSelectionHandle, type WebSelectionLogger, type WebSelectionSettings, accountUsable, apply, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, createCommandCodeSearchSelection, dealLabel, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey };
 //# sourceMappingURL=index.d.ts.map

@@ -2024,6 +2024,8 @@ test('stream() sends the request version of an image at the documented target (C
     width: 1568,
     height: 980,
     maxBytes: 1024 * 1024,
+    maxImageBytes: 1024 * 1024,
+    imageTargetBytes: 1024 * 1024,
   }])
   const wire = (capturedBody!.params as { messages: Record<string, unknown>[] }).messages
   const part = (wire.find((m) => m.role === 'user')!.content as Record<string, unknown>[])[1]!
@@ -2120,6 +2122,8 @@ test('imageRequestTarget() reports the request target, not the normalized origin
   assert.equal(target.width, 1568)
   assert.equal(target.height, 980)
   assert.equal(target.maxBytes, 1024 * 1024)
+  assert.equal(target.maxImageBytes, 1024 * 1024)
+  assert.equal(target.imageTargetBytes, 1024 * 1024)
 })
 
 test('imageRequestPricing() prices an offloaded occurrence as its placeholder (C3)', () => {
@@ -4551,6 +4555,49 @@ test('the CLI and OpenAI transports keep their own cache handling', async () => 
     } else {
       assert.equal(raw.includes('cache_control'), false, 'OpenAI route must send no cache_control')
     }
+  }
+})
+
+test('three transports keep DSH system updates and their replacement notices in order', async () => {
+  const previous = 'Use the previous project setting.'
+  const notice = 'Replace the previous project setting with the following instructions.'
+  const current = 'Use the current project setting.'
+  const updateSource = {
+    kind: 'system-prompt' as const,
+    sections: [{ name: 'project', state: 'active' as const, order: 0, contentIndex: 1, noticeIndex: [0] }],
+  }
+  const messages: Message[] = [
+    { id: messageId(), role: 'system', source: { kind: 'system-prompt' }, content: [{ type: 'text', text: previous }] },
+    userMessage('Start the task.'),
+    { id: messageId(), role: 'system', source: updateSource, content: [
+      { type: 'text', text: notice },
+      { type: 'text', text: current },
+    ] },
+    userMessage('Continue.'),
+  ]
+  const system = `${previous}\n\n${notice}\n${current}`
+  for (const protocol of ['cli', 'openai', 'messages'] as const) {
+    let body: {
+      params?: { system: { text: string }[] }
+      system?: { text: string }[]
+      messages?: { role: string; content: string }[]
+    } | undefined
+    const adapter = makeAdapter({
+      options: () => ({ ...OPENAI_OPTIONS(), protocol: protocol === 'messages' ? 'auto' : protocol }),
+      fetchImpl: (async (_input, init) => {
+        if (init?.body === undefined) return Response.json({ data: [] })
+        body = JSON.parse(String(init?.body))
+        return protocol === 'messages' ? messagesStream('ok') : okStream(protocol)
+      }) as typeof fetch,
+    })
+    await collect(adapter.stream({
+      provider: 'commandcode',
+      model: protocol === 'messages' ? 'claude-opus-4-8' : 'deepseek/deepseek-v4.1-flash',
+      messages,
+    }))
+    const wireSystem = protocol === 'cli' ? body?.params?.system[0]?.text
+      : protocol === 'openai' ? body?.messages?.find(message => message.role === 'system')?.content : body?.system?.[0]?.text
+    assert.equal(wireSystem, system, protocol)
   }
 })
 

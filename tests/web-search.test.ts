@@ -560,7 +560,7 @@ function userPatch(id: string, name: string, config: Record<string, unknown>): s
 }
 
 /**
- * 起一个真实 0.2.1-rc.2 选择沙箱。
+ * 使用当前开发引擎搭建真实的网页搜索选择沙箱。
  *
  * 组成：真实 `boot()` + 真实 Loader（根 Include 上叠一层伪 bundle 补丁）+
  * 真实 `@deepseek-ai/dsh-config-editor` + 真实 `@deepseek-ai/dsh-settings` +
@@ -600,12 +600,12 @@ async function selectionSandbox(
 
   const profileContext = {
     name: 'probe', dir, patchPath, installAnchor: join(root, 'package.json'), cwd: root, home,
-    startedBundles: ['probe-base'], overlays: [], telemetryDisabledEnv: undefined,
+    startedBundles: ['probe-base'], overlayPaths: [], overlays: [], telemetryDisabledEnv: undefined,
   }
-  const ctx = await boot('probe', configPath, readProfilePatches('probe', profileContext as never), (inner: Context) => {
+  const ctx = await boot('probe', configPath, readProfilePatches('probe', profileContext), (inner: Context) => {
     inner.loader.builtins.web = WebRuntime
   })
-  ctx.provide('profileContext', profileContext as never)
+  ctx.provide('profileContext', profileContext)
   // 插件声明 inject = ['llm']；这里只提供它 boot 期真正调用的两个入口。
   ctx.provide('llm', { registerConfigurableProviders: () => {}, registerAdapter: () => {} } as never)
   await ctx.plugin(ConfigEditor)

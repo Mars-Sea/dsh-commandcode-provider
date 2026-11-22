@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-11-22
+
+### Changed
+
+- 适配 DSH `0.2.3-alpha.2`，验证 `0.2.2-rc.5`。继续支持 `0.2.2-rc.1` 至 `rc.5`，移除 `0.2.1` 全线和 `0.2.2` alpha 的支持。
+- 适配新版附件服务的图片编码参数，覆盖三种请求协议。设置导航图标使用 DSH 的 `settings.section.icon`，修正账号登录和历史用量的前端类型。
+
 ## [0.18.3] - 2026-11-22
 
 ### Fixed

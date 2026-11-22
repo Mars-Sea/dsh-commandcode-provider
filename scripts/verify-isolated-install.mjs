@@ -30,8 +30,8 @@ const requiredHarnessPeers = Object.keys(manifest.peerDependencies ?? {})
  * 已验证引擎版本集合：取自 `dsh.compatibility.dshReleases`。
  *
  * 准入范围（`engines.dsh`）是「同通道区间」，会自动放行未来的同通道版本；但隔离安装矩阵
- * 必须逐版本真实装一遍，所以这里的矩阵来源是**记录**而不是范围。区间自 2026-10-28 起有两个
- * 并列分支（`0.2.1` 的 `-rc.N` 与 `0.2.2` 的 `-alpha.N`），解析见下方 `CHANNEL_BRANCH`。
+ * 必须逐版本真实装一遍，所以这里的矩阵来源是记录。两个并列分支是 `0.2.2` 的 RC
+ * 与 `0.2.3` 的 alpha.2 起，解析见下方 `CHANNEL_BRANCH`。
  * 断言锚点选 `@deepseek-ai/dsh-llm`：它是适配器的宿主底座，任何 fresh generation 都必须
  * 解析到它。`dsh-invariants` 曾承担这个角色，但上游在 0.2.1-alpha.1 删除了整个包
  * （npm 上从未发布该版本），因此插件不再声明它。
@@ -60,9 +60,7 @@ function releaseRank(version, channel) {
   return order * 1000 + Number(serial)
 }
 
-// 自 2026-10-28 起准入范围有两个并列分支（用户拍板「放开整个 0.2.2 通道」）：
-// `0.2.1` 的 `-rc.N` 通道与 `0.2.2` 的 `-alpha.N` 通道。这里逐个分支解析，
-// 再要求每条记录落在某个分支的通道内、且不早于该分支已验证的下界。
+// 每条记录须落在某个分支的版本线内，且不早于该分支已验证的下界。
 const branches = declaredPeerRange.split(' || ').map((branch) => {
   const admitted = CHANNEL_BRANCH.exec(branch)
   if (admitted === null) {

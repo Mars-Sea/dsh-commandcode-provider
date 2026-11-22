@@ -34,7 +34,7 @@ import { bilingual, MAX_TRUSTED_RESET_MS, parseProviderError, generateHttpError,
 export type { AccountRotationReason } from './provider-errors.ts'
 import { ownedResponseStream, settleStreamResponse, responseIdentifiers, failureWithRequestId, type CommandCodeProtocol, type ResponseMetadata } from './stream-response.ts'
 
-import type { AttachmentStore, ImageAttachmentRef, ImageRequestTarget, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore, ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 
 import {
   attributionHeaders,
@@ -2777,7 +2777,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
    * @param image - normalized attachment whose request projection is resolved.
    * @returns the same target `readImageRequest` encodes to, before base64 expansion.
    */
-  override imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget {
+  override imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef) {
     return requestImageTarget(image)
   }
 

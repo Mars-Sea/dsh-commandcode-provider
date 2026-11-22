@@ -1,7 +1,9 @@
 /** 手动读取历史，旧宿主可降级；查询切换和卸载后不接受过期结果。 */
 import { parseAnalyticsQuery, parseAnalyticsReport, type AnalyticsQuery, type AnalyticsReport } from '../analytics-wire.ts'
-import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
-export interface AnalyticsRemote { analytics?(query: AnalyticsQuery): Promise<RemoteResult<AnalyticsReport>> }
+type AnalyticsResult =
+  | { readonly ok: true; readonly value: AnalyticsReport }
+  | { readonly ok: false; readonly error: { readonly message: string } }
+export interface AnalyticsRemote { analytics?(query: AnalyticsQuery): Promise<AnalyticsResult> }
 export interface AnalyticsState { status: 'idle' | 'loading' | 'ready' | 'error'; report?: AnalyticsReport; error?: string }
 export class AnalyticsController {
   private current: AnalyticsState = { status: 'idle' }

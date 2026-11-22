@@ -56,7 +56,7 @@
  *   node scripts/verify-engine-load.mjs                     # matrix: install + check every declared release
  *   node scripts/verify-engine-load.mjs --engine /path/to/dsh-install
  *   node scripts/verify-engine-load.mjs --engine ~/.dsh/profiles/web
- *   node scripts/verify-engine-load.mjs --version 0.2.1-rc.2
+ *   node scripts/verify-engine-load.mjs --version 0.2.3-alpha.2
  *
  * Exit codes: 0 the bundle loads on the engine; 1 a check failed; 2 the engine
  * could not be resolved or installed, so "could not run" never reads as
@@ -387,6 +387,12 @@ async function checkEngineAdmission(engineRoot, version) {
   let issue
   try {
     issue = evaluate(manifest, undefined, version)
+    for (const unsupported of ['0.2.1-rc.5', '0.2.2-alpha.3', '0.2.3-alpha.1', '0.2.4-alpha.1']) {
+      const refusal = evaluate(manifest, undefined, unsupported)
+      if (refusal?.requirements?.['engines.dsh'] !== manifest.engines.dsh || refusal.exempted) {
+        fail(`host compatibility preflight did not reject unsupported dsh ${unsupported}`)
+      }
+    }
   } catch (error) {
     // 清单读不出来宿主会直接拒绝该包，所以这是失败而不是警告。
     fail(`the host compatibility preflight cannot read this plugin's manifest on dsh ${version}: ${error.message}`)
@@ -472,6 +478,33 @@ async function checkImagePricing(staged) {
   const [priced] = textOnly.priceImages([{ type: 'image', attachment: ref }])
   if (priced.visualTokens !== 0 || priced.text === '') {
     fail('a text-only route must price every occurrence as placeholder text')
+  }
+}
+
+/** Use the actual attachment encoder to catch budget keys that a pricing-only probe cannot see. */
+async function checkImageEncoding(staged, engineModules) {
+  if (staged === undefined) return
+  const require = createRequire(join(dirname(engineModules), 'image-probe.cjs'))
+  const load = (name) => import(pathToFileURL(require.resolve(name)).href)
+  const home = mkdtempSync(join(tmpdir(), 'dsh-engine-request-image-'))
+  try {
+    const [{ Context }, { LocalAttachmentStore }, { default: sharp }, { CommandCodeAdapter }] = await Promise.all([
+      load(`${SCOPE}/cordis`), load(`${SCOPE}/dsh-attachment-local`), load('sharp'),
+      import(pathToFileURL(join(staged, 'lib', 'index.js')).href),
+    ])
+    const store = new LocalAttachmentStore(new Context(), { dshHome: home })
+    const data = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: '#123456' } }).png().toBuffer()
+    const ref = await store.saveImage({ data, mediaType: 'image/png' })
+    const adapter = new CommandCodeAdapter({ options: () => ({}), resolveApiKey: async () => 'synthetic-key' })
+    const target = adapter.imageRequestTarget('commandcode', 'claude-sonnet-5', ref)
+    const encoded = await store.readImageRequest(ref, target)
+    assert.deepEqual([encoded.width, encoded.height], [1568, 784])
+    assert.ok(encoded.bytes > 0 && encoded.bytes <= 1024 * 1024)
+    process.stdout.write('request-image target checked with the real attachment encoder\n')
+  } catch (error) {
+    fail(`request-image target rejected by the engine encoder: ${error.message}`)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
   }
 }
 
@@ -724,7 +757,7 @@ async function checkToolHistory(staged, engineModules) {
 async function engineOwnerPeer(ctx, load) {
   try {
     const { Peer } = await load(`${SCOPE}/dsh-client-connection`)
-    return typeof Peer === 'function' ? new Peer(ctx.root, { principal: { kind: 'owner' } }) : undefined
+    return typeof Peer === 'function' ? new Peer(ctx, { principal: { kind: 'owner' } }) : undefined
   } catch { return undefined }
 }
 
@@ -834,8 +867,9 @@ async function checkAnalyticsHistory(staged, engineModules) {
   if (staged === undefined) return
   const require = createRequire(join(dirname(engineModules), 'analytics-probe.cjs'))
   const load = async name => import(pathToFileURL(require.resolve(name)).href)
-  const [{ Context, Service }, { default: SessionStore }, { default: SessionQuery }, { TypertRegistry }, { TypertGatewayService }, plugin] = await Promise.all([
+  const [{ Context, Service }, { default: SessionStore }, { default: SessionQuery }, { TypertRegistry }, { TypertGatewayService }, { default: SessionProjectionRegistry }, plugin] = await Promise.all([
     load(`${SCOPE}/cordis`), load(`${SCOPE}/dsh-session`), load(`${SCOPE}/dsh-session-query`), load(`${SCOPE}/dsh-typert-registry`), load(`${SCOPE}/dsh-api-gateway`),
+    load(`${SCOPE}/dsh-session-projection`),
     import(pathToFileURL(join(staged, 'lib', 'index.js')).href),
   ])
   const ctx = new Context(), savedFetch = globalThis.fetch, stored = new Map()
@@ -866,6 +900,7 @@ async function checkAnalyticsHistory(staged, engineModules) {
     new ReadStorage(ctx)
     await pluginEngineRemoteAccess(ctx, load)
     await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SessionQuery)
     await ctx.plugin(TypertRegistry)
     await ctx.plugin(TypertGatewayService, {})
@@ -1332,6 +1367,7 @@ async function verify(options) {
     await checkEngineAdmission(engine.modules, engine.version)
     checkClientRequires(engine.modules)
     await checkImagePricing(staged)
+    await checkImageEncoding(staged, engine.modules)
     await checkVolatileConfig(staged)
     await checkProviderFailures(staged, engine.modules)
     await checkToolHistory(staged, engine.modules)

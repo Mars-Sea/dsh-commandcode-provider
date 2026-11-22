@@ -18,7 +18,7 @@
 
 | | |
 |---|---|
-| 已验证引擎 | dsh `0.2.1-rc.2`、`0.2.1-rc.3`、`0.2.1-rc.4`、`0.2.1-rc.5`、`0.2.2-alpha.2`、`0.2.2-alpha.3`、`0.2.2-rc.1`、`0.2.2-rc.2` |
+| 已验证引擎 | dsh `0.2.2-rc.1` 至 `0.2.2-rc.5`，以及 `0.2.3-alpha.2` |
 | Node.js | **`>=24.9`** —— 0.16.0 起从 22 提高，见[需要 Node.js 24.9 或更高版本](#需要-nodejs-249-或更高版本) |
 | 安装 —— 网页端 | `dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest` |
 | 安装 —— 终端端 | `dsh plugin --profile dsh-tui add @mars-sea/dsh-commandcode-provider@latest` |
@@ -63,19 +63,13 @@
 dsh plugin --profile web add @mars-sea/dsh-commandcode-provider@latest
 ```
 
-本构建准入 **dsh `>=0.2.1-rc.2 <0.2.2-0`** —— `0.2.1` 通道中 `0.2.1-rc.2` 及以后的每个 RC —— **以及 `>=0.2.2-alpha.2 <0.2.3-0`**，即 `0.2.2` 通道从当前 alpha 起的每个版本。截至 2026-11-18 核查，npm `latest` 指向 `0.2.2-rc.1`，`next` 指向 `0.2.2-rc.4`，`alpha` 指向 `0.2.2-alpha.3`；这十个已验证版本均由完整引擎矩阵覆盖（`npm run test:engine`、`npm run test:install`）。两个通道中更晚的版本无需更新插件即可准入，但在 `dsh.compatibility.dshReleases` 补上记录之前不算已验证。`0.2.3` 及以后被刻意排除 —— 两个区间上界分别写成 `<0.2.2-0` 与 `<0.2.3-0` 正是为了这一点。使用 `0.2.0-rc.2`、`0.2.1-alpha.5` 或更早版本的配置需先升级引擎，再安装本构建。兼容性细节 —— `engines.dsh` 准入规则、按引擎配对的包版本、验证证据 —— 见[引擎兼容](docs/agent-reference/engine-compatibility.md)。
-
-**DSH `0.2.2-rc.2` 兼容（纳入 v0.17.7）**：本机实际安装的目标引擎、隔离安装和 rc.2 全套依赖类型检查均已通过。服务商错误保留原错误码与重试信息，辅助请求用途和设置图标类型同时兼容新旧引擎。现有兼容范围不变，rc.2 已写入 `dshReleases`。这些检查不包含浏览器渲染与真实提供商行为，证据及验证边界见[对接说明](docs/对接说明.md)。
+插件 `0.19.0` 准入 DSH **`>=0.2.2-rc.1 <0.2.3-0`** 和 **`>=0.2.3-alpha.2 <0.2.4-0`**。使用受支持的 `0.2.1` 或 `0.2.2` Alpha 时可继续使用插件 `0.18.3`。使用 `0.2.3-alpha.1` 时请先更新到 `0.2.3-alpha.2`。六个实测版本记录在 `dsh.compatibility.dshReleases`。[引擎兼容与验证](docs/agent-reference/engine-compatibility.md)
 
 ### 需要 Node.js 24.9 或更高版本
 
 **Node.js 下界已在 0.16.0 从 22 提到 24.9。如果你在用 Node 22 或 23，请先升级 Node，再更新本插件。**
 
-dsh `0.2.2-alpha.2` 自己声明 `engines.node >=24.9.0`，而本插件准入这个引擎，所以整包的 Node 下界必须跟着抬到同一水位：一个声称支持某引擎的插件，不该能被装到一个那个引擎根本起不来的 Node 上。实际影响：
-
-- 在 Node 22/23 上安装或更新本插件时，`npm` 会报 `EBADENGINE`。这是警告而非硬失败 —— 除非你的 npm 设了 `engine-strict=true`。
-- `0.2.2` 的引擎在 Node 22/23 上确实跑不起来，被准入却启动失败正是这条下界要挡的情况。
-- `0.2.1` 的 RC 引擎仍能在 Node 22 上运行，但 `engines.node` 是整包唯一的下界，所以对它们同样生效。这是在一个构建里同时准入两个通道的代价。
+受支持的 DSH 版本线均要求 Node.js 24.9 或更高版本。
 
 执行 `nvm install 24 && nvm use 24`（或换用任意 Node 24.9+ 发行版）即可解决。Node 24 是当前 LTS 线。
 

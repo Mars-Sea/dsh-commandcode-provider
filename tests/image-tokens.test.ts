@@ -137,12 +137,16 @@ test('requestImageTarget() is the projected geometry the encoder is handed', () 
     width: 1568,
     height: 980,
     maxBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
+    maxImageBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
+    imageTargetBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
   })
   // A source already inside the budget is requested unchanged.
   assert.deepEqual(requestImageTarget(refAt(800, 600)), {
     width: 800,
     height: 600,
     maxBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
+    maxImageBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
+    imageTargetBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
   })
   assert.equal(REQUEST_IMAGE_MAX_LONG_EDGE, 1568)
   assert.equal(REQUEST_IMAGE_MAX_ENCODED_BYTES, 1024 * 1024)

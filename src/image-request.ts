@@ -1,7 +1,6 @@
 /**
  * Request-image targets: the shape one provider request asks the attachment
- * service to produce (`{ width, height, maxBytes }`, passed straight to its
- * encoder).
+ * service to produce, passed straight to its encoder.
  *
  * An attachment is stored NORMALIZED, not request-ready — `readImage()` answers
  * the full normalized original, which is what admission accepted. Every request
@@ -31,8 +30,8 @@ export const REQUEST_IMAGE_MAX_LONG_EDGE = 1568
 /**
  * Encoded bytes one request image may keep, before base64 expansion. The same
  * 1 MiB budget the harness's own multi-provider adapter defaults to; the
- * attachment service keeps its smallest quality-ladder output when no quality
- * fits, so this bounds bytes without ever refusing an image.
+ * 0.2.2 attachment service keeps its smallest quality-ladder output when no
+ * quality fits. 0.2.3 can also shrink the image to meet this hard cap.
  */
 export const REQUEST_IMAGE_MAX_ENCODED_BYTES = 1024 * 1024
 
@@ -65,11 +64,14 @@ export function longEdgeDimensions(
  * The request target for one normalized attachment: its aspect ratio under the
  * long-edge budget, plus the encoded-byte budget.
  */
-export function requestImageTarget(ref: ImageAttachmentRef): ImageRequestTarget {
+export function requestImageTarget(ref: ImageAttachmentRef) {
   const projected = longEdgeDimensions(ref.width, ref.height, REQUEST_IMAGE_MAX_LONG_EDGE)
-  return {
-    width: projected.width,
-    height: projected.height,
+  // Each supported attachment store reads the budget fields it declares.
+  const target = {
+    ...projected,
     maxBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
+    maxImageBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
+    imageTargetBytes: REQUEST_IMAGE_MAX_ENCODED_BYTES,
   }
+  return target satisfies ImageRequestTarget
 }

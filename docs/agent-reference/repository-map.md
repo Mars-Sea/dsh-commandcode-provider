@@ -152,15 +152,7 @@ src/client/session-cost-display.ts  DOM injection into the harness's token-usage
                       pill and usage dialog (browser only).
 src/client/session-cost-slots.ts  SlotMap merge for `conversation.composer.dock`.
 src/client/settings-nav-glyph.tsx  The settings-nav glyph rendered through the
-                      host's `settings.section.icon` slot (dsh 0.2.2-alpha.3+),
-                      keyed by the section id (`commandcode`).
-src/client/settings-nav-icon.ts  Fallback glyph injection for hosts that predate
-                      the slot: find the settings nav row by its localized
-                      label, hide the shell's gear, insert the same mark
-                      (browser only; self-healing, restores on disposal).
-src/client/settings-nav-slot.ts  SlotMap merge for `settings.section.icon`,
-                      restated while the dev engine (0.2.1-rc.3) does not
-                      declare the seat; delete once dev types reach alpha.3.
+                      host's `settings.section.icon` slot, keyed by `commandcode`.
 src/cost-facts.ts      JSON-only billing facts shared by the Host projection and
                       the browser readout (groups, peak/hour rule, pricing key).
 src/cost-projection.ts  Durable `commandCodeCost` session projection: folds each
@@ -291,10 +283,6 @@ tests/session-cost-display.test.ts  DOM-injection tests for the pill and the
                       usage dialog, driven through the real class and its
                       `doc`/`observe` seams against a fake DOM (confirmation,
                       self-heal, hide/restore, disposal).
-tests/settings-nav-icon.test.ts  Settings-nav glyph tests: row identified by
-                      label (not position), the same contract on the pre- and
-                      post-alpha.3 row shapes, self-heal after a re-render, and
-                      disposal restoring the shell's gear.
 tests/cost-projection.test.ts  durable cost-fact fold tests against the real
                       projection registry (v1/v2 settlements, retries, history
                       restore, tier boundaries, free/unpriced subtotals).
