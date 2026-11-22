@@ -204,7 +204,7 @@ llm-commandcode:
   showSidebarQuota: true                 # optional: sidebar plans & quota card (default off)
   zdr: true                              # optional: zero-data-retention upstreams only (default off)
   # webSearch: false                     # optional: keep the previous web_search backend (default on)
-  # webFetch: false                      # optional: keep the free local web_fetch backend (default on)
+  # webFetch: true                       # optional: serve web_fetch through Command Code (default off)
   # contextWindow: 131072                # optional: custom context length for every model
   # contextWindowOverrides:              # optional: per-model context lengths; wins over contextWindow
   #   deepseek/deepseek-v4-pro: 65536
@@ -225,7 +225,7 @@ llm-commandcode:
 
 When your deployment mounts the web capability (`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`), the model's `web_search` tool is served by this plugin's `commandcode` search provider — it calls the Command Code Provider API's `/alpha/web-search` endpoint with the **same API key and base URL** as chat, so no separate search key, endpoint or model is needed. The same holds for `web_fetch` through `/alpha/web-fetch`, which pairs with the shipped local `http` provider.
 
-**On by default.** The *"Serve dsh web search with Command Code"* toggle (`webSearch`) selects `commandcode` as the active search backend; turning it off hands the selection back to whichever backend was there before (a sibling search plugin such as modsearch keeps working). The change takes effect on the next search — no restart. The fetch toggle (`webFetch`) works the same way and is independent of it: the two capabilities are separate registries with separate settings fields, so either can be turned off on its own.
+**On by default.** The *"Serve dsh web search with Command Code"* toggle (`webSearch`) selects `commandcode` as the active search backend; turning it off hands the selection back to whichever backend was there before (a sibling search plugin such as modsearch keeps working). The change takes effect on the next search — no restart. The fetch toggle (`webFetch`) is independent of it and **off by default**, because the composed `http` provider is free and can reach intranet and local addresses, so taking it over is opt-in. The two capabilities are separate registries with separate settings fields, so either can be turned on or off on its own.
 
 - The provider registers as `commandcode` on `ctx.web` only when the web service is present; without it this stays a chat-only plugin.
 - When the official **Web search** settings already pin another backend, that explicit choice wins: the plugin keeps `commandcode` registered but unselected and reports that state. It takes over only while nothing else pins the field, remembers the backend it displaced, and restores it when the toggle goes off or the plugin unloads. To pin it durably, set `searchProvider: commandcode` (or `$DSH_WEB_SEARCH_PROVIDER=commandcode`); the fetch side is `fetchProvider` / `$DSH_WEB_FETCH_PROVIDER`.

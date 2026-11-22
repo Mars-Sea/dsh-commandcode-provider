@@ -1126,6 +1126,53 @@ test('host apply()：两个开关互不牵连，各自只动自己的字段', as
   }
 })
 
+test('host apply()：未配置时获取默认关闭，不接管组合的 http', async () => {
+  // 获取侧默认 false 是产品决定：组合里的本地 http 免费且能访问内网/本机，接管会改变
+  // 既有 profile 能抓什么（localhost 失效、URL 外发）。搜索侧相反，默认开启。
+  const sandbox = await selectionSandbox()
+  try {
+    // `webFetch` 必须在挂载时就存在于配置对象里：夹具只为初始存在的字段建立易变
+    // 引用，后加的键不会进入 plain 配置。
+    const { fiber, config } = await mountHost(sandbox, { webSearch: true, webFetch: false })
+    await waitFor(() => runtimeSelection(sandbox.web) === 'commandcode', '搜索应当按默认开启夺取')
+    await quietWindow()
+    assert.equal(runtimeFetchSelection(sandbox.web), 'http', '未配置时获取必须保持组合值')
+    // 写盘会把整段的组合值落进用户层（组合值本来就在文档里），所以断言不是"没有
+    // fetchProvider 键"，而是它没有被改成本插件的 id。
+    assert.doesNotMatch(await sandbox.patch(), /fetchProvider: commandcode/)
+
+    // 显式打开才接管。
+    config.set('webFetch', true)
+    notifyOwnEntry(sandbox.ctx)
+    await waitFor(() => runtimeFetchSelection(sandbox.web) === 'commandcode', '显式开启后没有夺取获取')
+
+    await fiber.dispose()
+  } finally {
+    await sandbox.dispose()
+  }
+})
+
+test('host apply()：先开获取再开搜索，第二个开关仍能接管自己的字段', async () => {
+  // 写盘会把整段的组合值materialize 进用户层；如果按"用户层有值"就当 pin，第二个
+  // 开关会把自己的组合值误判成他人 pin 而拒绝接管。这条用例钉住反序也不出问题。
+  const sandbox = await selectionSandbox()
+  try {
+    const { fiber, config } = await mountHost(sandbox, { webSearch: false, webFetch: true })
+    await waitFor(() => runtimeFetchSelection(sandbox.web) === 'commandcode', '获取应当按显式开启夺取')
+    await quietWindow()
+    assert.equal(runtimeSelection(sandbox.web), 'deepseek-official', '搜索此时仍未接管')
+    assert.match(await sandbox.patch(), /searchProvider: deepseek-official/)
+
+    config.set('webSearch', true)
+    notifyOwnEntry(sandbox.ctx)
+    await waitFor(() => runtimeSelection(sandbox.web) === 'commandcode', '随后开启搜索时没有接管')
+
+    await fiber.dispose()
+  } finally {
+    await sandbox.dispose()
+  }
+})
+
 // ───────────────────────────────────────────────────────────────────────────
 // 加固运行面：没有可写的选择面时，handle 必须退化成「未应用」而不是抛错
 // ───────────────────────────────────────────────────────────────────────────

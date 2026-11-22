@@ -167,6 +167,7 @@ export {
 } from './web-search.ts'
 export type {
   CommandCodeSearchSelection,
+  CommandCodeSearchProviderDeps,
   WebSearchSelectionHandle,
   WebSearchSelectionDeps,
 } from './web-search.ts'
@@ -184,7 +185,6 @@ export {
   CommandCodeFetchProvider,
   COMMANDCODE_FETCH_PROVIDER_ID,
   FETCH_ROUTE,
-  FETCH_CONTENT_WINDOW,
   WEB_FETCH_SELECTION_FIELD,
   fetchUrlGuard,
   createCommandCodeFetchSelection,
@@ -359,15 +359,20 @@ export interface Config {
    * never wanted the remote fetch keeps working — EXCEPT when the user layer
    * already carries someone else's explicit pin (the shipped web-search
    * settings page writes `deepseek-fetch-api`): that choice is never displaced,
-   * and the provider stays registered but unselected. Defaults true, matching
-   * {@link webSearch}; the two toggles are INDEPENDENT, so search and fetch can
-   * name different backends.
+   * and the provider stays registered but unselected. Defaults **false**, unlike
+   * {@link webSearch}: the composed `http` provider is free and can reach
+   * intranet/local addresses, so taking the field over would silently change
+   * what an existing profile can fetch (and start sending every URL to a third
+   * party). The two toggles are INDEPENDENT, so search and fetch can name
+   * different backends.
+   *
+   * Turn it on when you need pages that require JavaScript.
    *
    * Named `webFetch` rather than after its endpoint so the pair reads as
    * `webSearch` / `webFetch`, mirroring dsh's own two tool names.
    *
-   * Unlike the shipped local `http` provider, this one runs on Command Code's
-   * servers and refuses private targets. Turn it off to keep fetches local.
+   * It runs on Command Code's servers, so unlike the local `http` provider it
+   * cannot reach private targets.
    */
   webFetch?: boolean
   /**
@@ -445,10 +450,14 @@ export const Config: z<Config> = z.object(markVolatileFields({
   // 两者都不得超过网关总上限——用户填得更大也只会被网关拒绝。
   maxOutputTokens: z.number().min(OMIT_OUTPUT_TOKENS).max(MAX_OUTPUT_TOKEN_LIMIT).step(1),
   webSearch: z.boolean().default(true),
-  // Independent of `webSearch` on purpose: search and fetch are separate seam
-  // capabilities with separate provider registries, and a profile may well want
-  // the remote search but the free local fetch.
-  webFetch: z.boolean().default(true),
+  // OFF by default, unlike `webSearch`. dsh-base composes `fetchProvider: http`,
+  // a provider that is free and can reach intranet/local addresses, so taking the
+  // field over would change what an existing profile can reach on upgrade: a
+  // `localhost` URL stops working, and every URL — signed query strings included —
+  // starts going to a third party. The search side has no such fallback (with no
+  // DeepSeek key, search does not work at all), which is why only that one is on.
+  // Enable it when you need pages that require JavaScript.
+  webFetch: z.boolean().default(false),
   showSidebarQuota: z.boolean().default(false),
   accounts: z.array(z.object({
     label: z.string(),
@@ -993,7 +1002,7 @@ export function apply(ctx: Context, config: Config): void {
   const applyWebSelections = (): void => {
     const config = current()
     searchSelection?.apply(config.webSearch ?? true)
-    fetchSelection?.apply(config.webFetch ?? true)
+    fetchSelection?.apply(config.webFetch ?? false)
   }
   ctx.inject(['web'], (webCtx) => {
     // One deps object per capability: the seam is stateful, so the two

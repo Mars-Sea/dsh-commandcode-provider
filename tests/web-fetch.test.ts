@@ -27,7 +27,6 @@ import type { WebRuntime } from '@deepseek-ai/dsh-web'
 import {
   COMMANDCODE_FETCH_PROVIDER_ID,
   CommandCodeFetchProvider,
-  FETCH_CONTENT_WINDOW,
   FETCH_ROUTE,
   WEB_FETCH_SELECTION_FIELD,
   createCommandCodeFetchSelection,
@@ -184,19 +183,18 @@ test('a non-2xx upstream status is a RESULT, carrying its status and body', asyn
   assert.deepEqual(result.body, { kind: 'text', content: 'Not Found' })
 })
 
-test('truncated flips at the gateway content window', async () => {
-  const under = makeFetch(() => asResponse(okBody('x'.repeat(FETCH_CONTENT_WINDOW - 1))))
-  const atBoundary = makeFetch(() => asResponse(okBody('x'.repeat(FETCH_CONTENT_WINDOW))))
-  const over = makeFetch(() => asResponse(okBody('x'.repeat(FETCH_CONTENT_WINDOW + 5))))
-
-  assert.equal((await makeProvider({ fetchImpl: under.fetchImpl }).provider.fetch({ url: 'https://a.example/' })).truncated, false)
-  // Exactly at the window means the page may continue past what was served.
-  assert.equal((await makeProvider({ fetchImpl: atBoundary.fetchImpl }).provider.fetch({ url: 'https://a.example/' })).truncated, true)
-
-  const overResult = await makeProvider({ fetchImpl: over.fetchImpl }).provider.fetch({ url: 'https://a.example/' })
-  assert.equal(overResult.truncated, true)
-  // The seam exposes no pagination, so the body is cut to the window it can carry.
-  assert.equal(overResult.body.content.length, FETCH_CONTENT_WINDOW)
+test('a long page is passed through whole, never cut to the CLI window', async () => {
+  // `startIndex` is NOT a wire field: the gateway returns the entire page and the
+  // CLI windows it client-side at 100,000 chars. The seam has no continuation
+  // parameter, so cutting here would destroy content the caller could never
+  // re-read — and it cut below `dsh-tool-web`'s own 200,000-char output cap. The
+  // provider therefore forwards the body untouched and reports no truncation.
+  for (const length of [99_999, 100_000, 100_005, 250_000]) {
+    const stub = makeFetch(() => asResponse(okBody('x'.repeat(length))))
+    const result = await makeProvider({ fetchImpl: stub.fetchImpl }).provider.fetch({ url: 'https://a.example/' })
+    assert.equal(result.body.content.length, length, `${length}-char page must arrive whole`)
+    assert.equal(result.truncated, false, `${length}-char page is not truncated by this provider`)
+  }
 })
 
 test('an empty page for a 2xx already fails instead of looking like a success', async () => {
@@ -306,6 +304,13 @@ test('the provider advertises a bilingual description and NO title', () => {
   // provider picker, and the built-in providers do not mention it either.
   const copy = `${provider.description.en} ${provider.description.zh}`
   assert.doesNotMatch(copy, /charge|cost|bill|费用|收费|计费/i)
+
+  // No JavaScript claim (PR review, 2026-11-22). Upstream's own tool description
+  // says its `web_fetch` handles JS-rendered pages, but a live probe returned
+  // only the page TITLE for two genuine client-rendered apps (excalidraw.com →
+  // 21 chars, app.diagrams.net → 41 chars) while static pages returned thousands.
+  // Until someone can demonstrate otherwise, the picker must not promise it.
+  assert.doesNotMatch(copy, /javascript|js[- ]rendered|js 渲染|渲染的页面/i)
 })
 
 // ───────────────────────────────────────────────────────────────────────────

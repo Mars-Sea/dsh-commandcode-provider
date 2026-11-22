@@ -190,10 +190,20 @@ function readView(deps: WebSelectionDeps, field: WebSelectionField): SelectionVi
     const row = selectionRow(settings)
     if (row !== undefined) {
       const user = member(row, 'user')
+      const userValue = text(member(user, field))
+      const baseValue = text(member(member(row, 'base'), field))
       return {
         configured: text(member(member(row, 'value'), field)),
-        pinned: text(member(user, field)),
-        base: text(member(member(row, 'base'), field)),
+        // A user-layer value that merely REPEATS the composed default is not a
+        // pin. The host materializes the whole section on every write — one
+        // toggle taking its field over also lands the OTHER capability's
+        // composed value in the user layer — so a raw presence test would read
+        // that copy as "someone chose this", and the second toggle could then
+        // never take its own field over. A deliberate pin still differs from the
+        // composed default, because pinning a value equal to the default changes
+        // nothing and so is never what a user means.
+        pinned: userValue !== undefined && userValue !== baseValue ? userValue : undefined,
+        base: baseValue,
         user: typeof user === 'object' && user !== null && !Array.isArray(user)
           ? { ...user as Record<string, unknown> }
           : {},

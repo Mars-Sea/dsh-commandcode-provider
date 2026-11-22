@@ -2378,13 +2378,6 @@ declare const COMMANDCODE_SEARCH_PROVIDER_ID = "commandcode";
 declare const COMMANDCODE_FETCH_PROVIDER_ID = "commandcode";
 /** The endpoint the fetch POST goes to; `{apiBase}` is prepended. */
 declare const FETCH_ROUTE = "/alpha/web-fetch";
-/**
- * Characters of page content the gateway serves per request. The CLI windows a
- * page at 100,000 chars and continues with `startIndex`; the seam cannot, so a
- * response at or beyond this boundary is reported as truncated for the tool's
- * own notice.
- */
-declare const FETCH_CONTENT_WINDOW = 100000;
 /** The URL a fetch will actually request, or the reason it is refused. */
 type FetchUrlVerdict = {
   readonly ok: true;
@@ -2435,13 +2428,18 @@ declare class CommandCodeFetchProvider implements WebFetchProvider {
   /**
    * Picker description: what this provider suits and what it cannot do.
    *
-   * Deliberately says nothing about cost. The shipped local provider's own
-   * description is "free, can reach intranet and local addresses, no
-   * JavaScript/sign-in pages or PDFs", and the seam's guidance is to state what
-   * a provider SUITS and what it CANNOT do — billing belongs to the account
-   * page, not to a picker line. What this one adds over the local provider is
-   * that the page is fetched by Command Code's servers, so it reaches
-   * JavaScript-rendered pages; what it gives up is the intranet.
+   * Deliberately says nothing about cost — the shipped local provider's own line
+   * is "free, can reach intranet and local addresses, no JavaScript/sign-in pages
+   * or PDFs", and billing belongs to the account page, not to a picker.
+   *
+   * It also makes NO JavaScript claim. The CLI's own tool description says its
+   * `web_fetch` "handles JavaScript-rendered pages", but that is upstream's
+   * wording, not something this account was able to demonstrate: two genuinely
+   * client-rendered apps (excalidraw.com, app.diagrams.net) came back as just
+   * their page title — 21 and 41 characters — while static pages returned
+   * thousands. Advertising a capability the evidence contradicts is worse than
+   * saying less, so this line states only what was observed: whose servers run
+   * the fetch, the Markdown result, and the addresses it cannot reach.
    * `en` is required by `LocalizedText`.
    */
   readonly description: {
@@ -2763,15 +2761,20 @@ interface Config {
    * never wanted the remote fetch keeps working — EXCEPT when the user layer
    * already carries someone else's explicit pin (the shipped web-search
    * settings page writes `deepseek-fetch-api`): that choice is never displaced,
-   * and the provider stays registered but unselected. Defaults true, matching
-   * {@link webSearch}; the two toggles are INDEPENDENT, so search and fetch can
-   * name different backends.
+   * and the provider stays registered but unselected. Defaults **false**, unlike
+   * {@link webSearch}: the composed `http` provider is free and can reach
+   * intranet/local addresses, so taking the field over would silently change
+   * what an existing profile can fetch (and start sending every URL to a third
+   * party). The two toggles are INDEPENDENT, so search and fetch can name
+   * different backends.
+   *
+   * Turn it on when you need pages that require JavaScript.
    *
    * Named `webFetch` rather than after its endpoint so the pair reads as
    * `webSearch` / `webFetch`, mirroring dsh's own two tool names.
    *
-   * Unlike the shipped local `http` provider, this one runs on Command Code's
-   * servers and refuses private targets. Turn it off to keep fetches local.
+   * It runs on Command Code's servers, so unlike the local `http` provider it
+   * cannot reach private targets.
    */
   webFetch?: boolean;
   /**
@@ -2831,5 +2834,5 @@ interface ResolvedCommandCodeOptions extends CommandCodeConnectionOptions {
 declare function resolveAdapterOptions(config: Config): ResolvedCommandCodeOptions;
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_FETCH_PROVIDER_ID, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, CommandCodeFetchProvider, type CommandCodeFetchProviderDeps, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchSelection, type CommandCodeSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, FETCH_CONTENT_WINDOW, FETCH_ROUTE, type FetchUrlVerdict, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, WEB_FETCH_SELECTION_FIELD, WEB_REQUEST_MAX_ATTEMPTS, WEB_SELECTION_NAMESPACE, type WebProviderDeps, type WebSearchSelectionDeps, type WebSearchSelectionHandle, type WebSelectionDeps, type WebSelectionField, type WebSelectionHandle, type WebSelectionLogger, type WebSelectionOptions, type WebSelectionSettings, accountUsable, apply, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, createCommandCodeFetchSelection, createCommandCodeSearchSelection, createCommandCodeSelection, dealLabel, fetchUrlGuard, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey, webRetryDelayMs, webRetryWait };
+export { ACTIVE_ACCOUNT_AUTO, type ApiKeyValidation, BILLING_ACCESS_TTL_MS, COMMANDCODE_FETCH_PROVIDER_ID, COMMANDCODE_SEARCH_PROVIDER_ID, COMMAND_CODE_CLI_VERSION, type CommandCodeAccountConfig, CommandCodeAccountPool, type CommandCodeAccountSlot, type CommandCodeAccountState, type CommandCodeAccountUsage, type CommandCodeAccountsReport, CommandCodeAdapter, type CommandCodeAdapterDeps, type CommandCodeBillingAccess, type CommandCodeCommandDeps, type CommandCodeConnectionOptions, CommandCodeFetchProvider, type CommandCodeFetchProviderDeps, type CommandCodeLoginCredentials, type CommandCodeLoginFailureReason, CommandCodeLoginFlow, type CommandCodeLoginFlowDeps, type CommandCodeLoginStatus, type CommandCodeModelAccountRule, CommandCodeSearchProvider, type CommandCodeSearchProviderDeps, type CommandCodeSearchSelection, type CommandCodeSelection, type CommandCodeTuiSettingsDeps, type CommandCodeUsageDeps, type CommandCodeUsageReport, CommandCodeUsageService, Config, DEFAULT_API_BASE, DEFAULT_GENERATE_MAX_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MODELS_CACHE_PATH, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_WEB_SEARCH_PROVIDER_ID, FETCH_ROUTE, type FetchUrlVerdict, KNOWN_DEALS, KNOWN_EFFORTS, KNOWN_IMAGE_MODELS, KNOWN_NON_ZDR_MODELS, KNOWN_PEAK_PRICING, KNOWN_PLANS, KNOWN_SUBSCRIPTION_PLANS, KNOWN_THINKING_MODELS, LANG_AUTO, LOGIN_ALLOWED_ORIGINS, LOGIN_BEGIN_ENDPOINT, LOGIN_BODY_LIMIT_BYTES, LOGIN_CANCEL_ENDPOINT, LOGIN_MAX_PORT_ATTEMPTS, LOGIN_START_PORT, LOGIN_STATUS_ENDPOINT, LOGIN_TIMEOUT_MS, type LoginFlowFacade, PLAN_LABELS, PLAN_ORDER, PROVIDER, type ResolveAttachments, ResolvedCommandCodeOptions, type TuiSettingsField, type TuiSettingsFieldOption, type TuiSettingsFieldWrite, type TuiSettingsGroup, type TuiSettingsSection, type TuiSettingsSectionsService, USAGE_REPORT_ENDPOINT, WEB_FETCH_SELECTION_FIELD, WEB_REQUEST_MAX_ATTEMPTS, WEB_SELECTION_NAMESPACE, type WebProviderDeps, type WebSearchSelectionDeps, type WebSearchSelectionHandle, type WebSelectionDeps, type WebSelectionField, type WebSelectionHandle, type WebSelectionLogger, type WebSelectionOptions, type WebSelectionSettings, accountUsable, apply, applyCommandCodeTuiSettings, applyCommands, applyUsageRemote, buildCommandAuthUrl, buildCommandCodeTuiSection, capabilityDescription, commandCodeSearchSelection, commandDefinition, compareByPlan, createCommandCodeFetchSelection, createCommandCodeSearchSelection, createCommandCodeSelection, dealLabel, fetchUrlGuard, formatContext, inject, loginStatusSchema, matchModelRule, modelVisibleInPlan, name, parseLoginStatus, peakPricingLabel, peakPricingState, planLabel, projectSlugFromPath, resolveAdapterOptions, resolveAuthFileApiKey, selectAccountForModel, selectActiveAccount, studioBaseForApiBase, subscriptionPlanInfo, supportsZeroDataRetention, usageReportSchema, validateCommandApiKey, webRetryDelayMs, webRetryWait };
 //# sourceMappingURL=index.d.ts.map

@@ -15,9 +15,11 @@
  * The CLI tool exposes two more parameters that this provider cannot and must
  * not forward, because dsh's fetch seam does not model them:
  *
- * - `startIndex` — pagination into long pages. `WebFetchRequest` carries only a
- *   URL, and `dsh-tool-web` owns the windowing of a long body (it caps the
- *   output and appends its own truncation notice).
+ * - `startIndex` — pagination into long pages. It is NOT a wire field: the CLI
+ *   slices the `content` it received, client-side. The gateway answers with the
+ *   whole page, and `dsh-tool-web` owns the windowing of a long body (it caps the
+ *   rendered output and appends its own truncation notice), so this provider
+ *   forwards the body untouched rather than re-implementing a window.
  * - `timeout` — a per-call server budget. The caller's `AbortSignal` is the
  *   seam's cancellation contract, and `dsh-tool-web` already applies a
  *   cooperative deadline.
@@ -61,14 +63,6 @@ export const COMMANDCODE_FETCH_PROVIDER_ID = 'commandcode'
 
 /** The endpoint the fetch POST goes to; `{apiBase}` is prepended. */
 export const FETCH_ROUTE = '/alpha/web-fetch'
-
-/**
- * Characters of page content the gateway serves per request. The CLI windows a
- * page at 100,000 chars and continues with `startIndex`; the seam cannot, so a
- * response at or beyond this boundary is reported as truncated for the tool's
- * own notice.
- */
-export const FETCH_CONTENT_WINDOW = 100_000
 
 /** The `format` this provider always requests; see the module comment. */
 const FETCH_FORMAT = 'markdown'
@@ -224,18 +218,23 @@ export class CommandCodeFetchProvider implements WebFetchProvider {
   /**
    * Picker description: what this provider suits and what it cannot do.
    *
-   * Deliberately says nothing about cost. The shipped local provider's own
-   * description is "free, can reach intranet and local addresses, no
-   * JavaScript/sign-in pages or PDFs", and the seam's guidance is to state what
-   * a provider SUITS and what it CANNOT do — billing belongs to the account
-   * page, not to a picker line. What this one adds over the local provider is
-   * that the page is fetched by Command Code's servers, so it reaches
-   * JavaScript-rendered pages; what it gives up is the intranet.
+   * Deliberately says nothing about cost — the shipped local provider's own line
+   * is "free, can reach intranet and local addresses, no JavaScript/sign-in pages
+   * or PDFs", and billing belongs to the account page, not to a picker.
+   *
+   * It also makes NO JavaScript claim. The CLI's own tool description says its
+   * `web_fetch` "handles JavaScript-rendered pages", but that is upstream's
+   * wording, not something this account was able to demonstrate: two genuinely
+   * client-rendered apps (excalidraw.com, app.diagrams.net) came back as just
+   * their page title — 21 and 41 characters — while static pages returned
+   * thousands. Advertising a capability the evidence contradicts is worse than
+   * saying less, so this line states only what was observed: whose servers run
+   * the fetch, the Markdown result, and the addresses it cannot reach.
    * `en` is required by `LocalizedText`.
    */
   readonly description = {
-    en: 'Fetched by Command Code\'s servers, so it handles JavaScript-rendered pages. Cannot reach intranet or local addresses.',
-    zh: '由 Command Code 服务器抓取，能读 JavaScript 渲染的页面。无法访问内网和本机地址。',
+    en: 'Fetched by Command Code\'s servers and returned as Markdown. Cannot reach intranet or local addresses.',
+    zh: '由 Command Code 服务器抓取，返回 Markdown。无法访问内网和本机地址。',
   }
 
   constructor(private readonly deps: CommandCodeFetchProviderDeps) {}
@@ -384,14 +383,19 @@ function toFetchResult(payload: unknown, requestedUrl: string, signal: AbortSign
     )
   }
   if (signal?.aborted === true) throw abortedError(signal, undefined, 'Command Code web fetch aborted')
-  const content = body.content.length > FETCH_CONTENT_WINDOW
-    ? body.content.slice(0, FETCH_CONTENT_WINDOW)
-    : body.content
+  // Pass the body through untouched and report `truncated: false`.
+  //
+  // The gateway returns the WHOLE page: `startIndex` is not a wire field, it is
+  // the CLI's own client-side window over the returned `content`. Cutting here
+  // therefore loses text the caller never had a second chance to read — the seam
+  // has no continuation parameter — and it cut at 100,000 while `dsh-tool-web`
+  // renders up to 200,000. Windowing belongs to that tool, which caps the
+  // rendered output and appends its own truncation notice.
   return {
     url: finalUrl,
     statusCode: status,
-    body: { kind: 'text', content } as WebFetchBody,
-    truncated: content.length !== body.content.length || body.content.length >= FETCH_CONTENT_WINDOW,
+    body: { kind: 'text', content: body.content } as WebFetchBody,
+    truncated: false,
   }
 }
 

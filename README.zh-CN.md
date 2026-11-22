@@ -204,7 +204,7 @@ llm-commandcode:
   showSidebarQuota: true                 # 可选：侧边栏套餐与配额卡片（默认关闭）
   zdr: true                              # 可选：只经由零数据保留上游（默认关闭）
   # webSearch: false                     # 可选：web_search 保持原后端（默认开启）
-  # webFetch: false                      # 可选：web_fetch 保持免费的本地后端（默认开启）
+  # webFetch: true                       # 可选：用 Command Code 承载 web_fetch（默认关闭）
   # contextWindow: 131072                # 可选：对所有模型的自定义上下文长度
   # contextWindowOverrides:              # 可选：按模型的上下文长度；优先于 contextWindow
   #   deepseek/deepseek-v4-pro: 65536
@@ -225,7 +225,7 @@ llm-commandcode:
 
 当你的 dsh 部署加载了 web 能力（`@deepseek-ai/dsh-web` + `@deepseek-ai/dsh-tool-web`）时，模型所用的 `web_search` 工具会由本插件的 `commandcode` 搜索 provider 承载 —— 它用**与聊天相同的 API key 与 base URL** 调用 Command Code Provider API 的 `/alpha/web-search` 端点，无需另外配置搜索 key、端点或模型。`web_fetch` 同理走 `/alpha/web-fetch`，与 dsh 自带的本地 `http` provider 并存。
 
-**默认开启。** 插件的 **设置 → Command Code** 页里有一个「用 Command Code 承载联网搜索」开关（`webSearch`），开启时插件会自动把 `commandcode` 选为当前搜索后端；关闭则把选择权交还给之前的后端（比如 modsearch 等其他搜索插件可继续工作 —— 不会被强制回退到 dsh 自带的 DeepSeek 搜索）。该开关在**下一次搜索时生效**，无需重启。网页获取的开关（`webFetch`）同理，且与它相互独立：两者是独立注册表、独立设置字段，可以分别关闭。
+**默认开启。** 插件的 **设置 → Command Code** 页里有一个「用 Command Code 承载联网搜索」开关（`webSearch`），开启时插件会自动把 `commandcode` 选为当前搜索后端；关闭则把选择权交还给之前的后端（比如 modsearch 等其他搜索插件可继续工作 —— 不会被强制回退到 dsh 自带的 DeepSeek 搜索）。该开关在**下一次搜索时生效**，无需重启。网页获取的开关（`webFetch`）与它相互独立，且**默认关闭** —— 组合里的 `http` provider 免费且能访问内网和本机，接管需要显式开启。两者是独立注册表、独立设置字段，可以分别开关。
 
 - 该 provider 仅在 web 服务存在时以 `commandcode` 注册进 `ctx.web`；没有它，本插件仍是纯聊天插件。
 - 若官方「网页搜索」设置里已显式选择其他后端，那个显式选择优先：插件让 `commandcode` 保持已注册但未被选中，并把这一状态报出来，而不是覆盖对方。只有在没人 pin 该字段时才接管，并记住被顶掉的后端，在关闭开关或卸载插件时恢复。若想更稳妥地固定，可设置 `searchProvider: commandcode`（或 `$DSH_WEB_SEARCH_PROVIDER=commandcode`）；获取侧对应 `fetchProvider` / `$DSH_WEB_FETCH_PROVIDER`。

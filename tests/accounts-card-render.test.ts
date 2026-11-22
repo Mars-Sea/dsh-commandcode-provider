@@ -429,10 +429,11 @@ test('集成分组渲染「网页获取」开关，与「联网搜索」并排�
     .map((node) => node.props.id as string))]
   assert.deepEqual(ids, ['cc-web-search', 'cc-web-fetch'], '两个开关并排出现，搜索在前')
 
-  // 未暂存时按默认值（开启）渲染：分组角标给出「开启」文案而不是空。
+  // 未暂存时按各自默认值渲染：搜索默认开启、获取默认**关闭**（本地 http 免费且能访问
+  // 内网，接管要用户显式选择），角标因此是「开 / 关」。
   const text = JSON.stringify(root.toJSON())
   assert.match(text, /webSearchSummaryOn/)
-  assert.match(text, /webFetchSummaryOn/)
+  assert.match(text, /webFetchSummaryOff/)
 
   // 提示文案（2026-11-16 用户拍板）：保留「无法访问内网和本机地址」这条能力边界，
   // 但不提费用 —— 内置提供方的描述同样不谈钱。这里渲染用 key 代替文案，所以断言
@@ -443,11 +444,11 @@ test('集成分组渲染「网页获取」开关，与「联网搜索」并排�
   assert.match(enHint, /Cannot reach intranet or local addresses/, '英文提示保留内网说明')
   assert.doesNotMatch(`${zhHint} ${enHint}`, /费用|收费|计费|charge|cost|bill/i, '提示里不出现费用字样')
 
-  // 草稿置为关闭：角标随之翻成关闭文案。
-  state = makeState({ webFetch: { ...stagedField(), text: 'false', overridden: true } })
+  // 草稿置为开启：角标随之翻成开启文案。
+  state = makeState({ webFetch: { ...stagedField(), text: 'true', overridden: true } })
   act(() => { root.update(createElement(CommandCodeSettingsPage, pageProps)) })
   const flipped = JSON.stringify(root.toJSON())
-  assert.match(flipped, /webFetchSummaryOff/)
+  assert.match(flipped, /webFetchSummaryOn/)
 
   act(() => { root.unmount() })
 })

@@ -1300,7 +1300,7 @@ function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onTog
             parts={[
               stagedSwitch(state.zdr, false) ? t('zdrSummaryOn') : t('zdrSummaryOff'),
               stagedSwitch(state.webSearch, true) ? t('webSearchSummaryOn') : t('webSearchSummaryOff'),
-              stagedSwitch(state.webFetch, true) ? t('webFetchSummaryOn') : t('webFetchSummaryOff'),
+              stagedSwitch(state.webFetch, false) ? t('webFetchSummaryOn') : t('webFetchSummaryOff'),
             ]}
           />
         </>
@@ -1336,7 +1336,9 @@ function IntegrationsCard({ state, disabled, t, onEdit, onReset, expanded, onTog
           hint={t('webFetchHint')}
           state={state.webFetch}
           disabled={disabled}
-          defaultChecked
+          // Off by default: the shipped local `http` provider is free and can
+          // reach intranet/local addresses, so taking over is opt-in.
+          defaultChecked={false}
           onEdit={(text) => onEdit('webFetch', text)}
           onReset={() => onReset('webFetch')}
           t={t}

@@ -254,16 +254,33 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
   `{ url, format }` and reads `c.url || a.url`, `c.status ?? 0`, `c.content ?? ""`; the official tools
   reference documents the same four user-facing parameters. **Search and fetch are two independent seam
   capabilities**: separate registries (each with its own duplicate-id check), separate volatile fields
-  (`searchProvider` / `fetchProvider`), separate toggles (`Config.webSearch` /
-  `Config.webFetch`, both default on) and separate selection handles — search pairs with the
-  shipped `deepseek-official`, fetch with the shipped local `http` provider, which is free and reaches
-  intranet addresses.
-  - The picker `description` states what the provider CAN and CANNOT do ("fetched by Command Code's servers, so it handles JavaScript-rendered pages; cannot reach intranet or local addresses") and deliberately says NOTHING about cost — the shipped local provider's own copy follows the same shape ("free, can reach intranet and local addresses, does not support JavaScript/sign-in pages or PDFs"), and billing belongs to the account page. `tests/web-fetch.test.ts` pins that no charge/cost wording creeps back in.
+  (`searchProvider` / `fetchProvider`), separate toggles and separate selection handles — search pairs
+  with the shipped `deepseek-official`, fetch with the shipped local `http` provider, which is free and
+  reaches intranet addresses. **`Config.webSearch` defaults to true; `Config.webFetch` defaults to
+  FALSE.** dsh-base composes `fetchProvider: http`, so taking that field over would change what an
+  existing profile can fetch on upgrade — a `localhost` URL stops working, and every URL (signed query
+  strings included) starts going to a third party — and the local path is already usable and free. The
+  search side has no such fallback (with no DeepSeek key, search does not work at all), which is the
+  asymmetry the two defaults encode.
+  - The picker `description` states only what was OBSERVED — "fetched by Command Code's servers and returned
+  as Markdown; cannot reach intranet or local addresses" — and says nothing about cost, because the
+  shipped local provider's own copy follows the same shape ("free, can reach intranet and local
+  addresses, does not support JavaScript/sign-in pages or PDFs") and billing belongs to the account
+  page. **It makes no JavaScript claim.** The CLI's own tool description says its `web_fetch` "handles
+  JavaScript-rendered pages", but this account could not reproduce that: on 2026-11-22 a live probe of
+  two genuinely client-rendered apps returned only their titles (excalidraw.com → 21 chars,
+  app.diagrams.net → 41 chars) while static pages returned thousands (news.ycombinator.com → 11,452,
+  caniuse.com → 3,964). Upstream's wording is not evidence of our account's behaviour. `tests/
+  web-fetch.test.ts` pins both that no charge/cost wording and that no JavaScript claim creeps back in.
   - The provider declares **no `title`**: the shipped web settings page renders a provider as `title ?? id`, and the search provider declares none, so BOTH menus show `commandcode`. A title on only one half would label the same route two different ways in one page. `description` is still declared (bilingual, `en` required) because it is only shown for the selected provider.
   - Both toggles live in **Settings → Command Code → Integrations & display** (`section.tsx`, `cc-web-search` / `cc-web-fetch`), and both surface in that group's summary badge. The settings page renders from the explicit `SECTION_FIELDS` whitelist in `client/settings.ts`, so a field missing there vanishes silently — `tests/accounts-card-render.test.ts` pins that both toggles render.
-  - **`startIndex` and `timeout` are deliberately NOT sent.** `WebFetchRequest` carries only a URL, and
-    `dsh-tool-web` owns both the windowing (a 200,000-char output cap plus its own truncation notice) and
-    the cooperative deadline. Do not "complete" the CLI parity here without a seam change first.
+  - **`startIndex` and `timeout` are deliberately NOT sent.** `startIndex` is not a wire field: the CLI
+    slices the `content` it received, client-side (`formatFetchOutput`, window 100,000 chars), so the
+    gateway answers with the WHOLE page. `WebFetchRequest` carries only a URL, and `dsh-tool-web` owns
+    the windowing (a 200,000-char output cap plus its own truncation notice). **The provider therefore
+    forwards the body untouched and reports `truncated: false`** — cutting locally would have destroyed
+    content the seam has no way to continue reading, and it cut below the tool's own cap. Do not
+    "complete" the CLI parity here without a seam change first.
   - **`format` is fixed to `markdown`**, the CLI default and the only format the tool renders usefully, and
     the body is delivered as `text` so `dsh-tool-web` passes it through verbatim. Requesting `html` would
     hand dsh a body it converts with its own DOM pipeline, which means shipping a second converter for no
@@ -292,6 +309,15 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     `release()` never writing the profile — applies to fetch VERBATIM, because it is literally the same
     code. The shipped settings page's fetch counterpart is `deepseek-fetch-api`, which is the foreign pin
     that stops the takeover.
+  - **A user-layer value that merely REPEATS the composed default is not a pin.** The host materializes
+    the whole `web` section on every write, so one toggle taking its field over also lands the OTHER
+    capability's composed value in the user layer. A raw "does the user layer carry this field" test read
+    that copy as someone else's choice, and the second toggle could then never take its own field over —
+    which broke "either can be enabled independently" as soon as `webFetch` defaulted to off (default on
+    meant both took over at boot, before any write existed). `readView()` therefore reports `pinned` only
+    when the user-layer value DIFFERS from the composed base; a deliberate pin necessarily does, because
+    pinning the default changes nothing. `tests/web-search.test.ts` pins both orders (search-then-fetch,
+    fetch-then-search).
   - **Known risk, deliberately accepted.** The seam auto-selects only when EXACTLY ONE provider is usable;
     with two usable fetch providers and no configured id, both `search()` and `fetch()` raise
     `WEB_PROVIDER_AMBIGUOUS`. Today the composed default pins `fetchProvider: http`, and this plugin pins
@@ -300,21 +326,23 @@ Task-specific reference moved from the former root `AGENTS.md`. All source and t
     one is pinned. That is the same hazard issue #26 records for search; keep both fields pinned when
     changing composition.
   - **Verification.** `tests/web-fetch.test.ts` pins the wire body (`{ format, url }` exactly), the result
-    mapping, the 100,000-char truncation boundary, the URL guard table (with "no request was made"
-    asserted), `WEB_PROVIDER_CREDENTIAL_MISSING` / `WEB_PROVIDER_ERROR` / `WEB_ABORTED`, the retry-and-stop
-    rules, and the fetch selection against the REAL engine. `scripts/verify-web-fetch-live.mjs` is the LIVE
+    mapping, whole-body pass-through at 99,999 / 100,000 / 100,005 / 250,000 chars (no local cut, no false
+    `truncated`), the URL guard table (with "no request was made" asserted), `WEB_PROVIDER_CREDENTIAL_MISSING`
+    / `WEB_PROVIDER_ERROR` / `WEB_ABORTED`, the retry-and-stop rules, and the fetch selection against the
+    REAL engine. `scripts/verify-web-fetch-live.mjs` is the LIVE
     check: it drives this plugin's own provider against the real gateway and reports `PASS`/`FAIL` per case
     (default `VERIFY_DRY_RUN=1` sends nothing). Its credential order is `COMMANDCODE_API_KEY` in the process
     environment → `--credential-ref <name>` resolved from `$DSH_HOME/.credentials.yaml` → `~/.commandcode/
     auth.json`; on a machine whose keys live only in the dsh credential store, the middle path is THE way to
     run it, because a headless `node` process never sees those keys as environment variables. **Live result
     (2026-11-16, credential `COMMANDCODE_API_KEY` from the local store): 12/12 checks passed** — a docs page
-    (37,584 chars), a Wikipedia article (99,505 chars, i.e. just under the window, `truncated: false`), an
-    `http` target upgraded before sending, a 404 returned as a result, every request body exactly
-    `{format,url}`, and all six guard cases refused with zero requests. **Evidence boundary**: that run proves
-    the route, the body shape, the response fields and the non-2xx behavior on THIS account and gateway. It
-    does not prove per-plan availability, billing amounts, ZDR interaction, or whether a 2xx empty page is
-    ever legitimate upstream.
+    (37,584 chars), a Wikipedia article (99,505 chars, delivered whole), an `http` target upgraded before
+    sending, a 404 returned as a result, every request body exactly `{format,url}`, and all six guard cases
+    refused with zero requests. **Evidence boundary**: that run proves the route, the body shape, the response
+    fields and the non-2xx behavior on THIS account and gateway. It does not prove per-plan availability,
+    billing amounts, ZDR interaction, or whether a 2xx empty page is ever legitimate upstream. A separate
+    2026-11-22 probe answered the JavaScript question NEGATIVELY (see the description note above): two
+    client-rendered apps came back as title-only, so no such capability is claimed.
 - **`TRANSPORT` carries its own bounded budget, and the route policy cannot express it**
   (`src/transport-retry.ts` + the `agent/request-error` listener in `src/index.ts`; issue #39's second
   report). `providerRetryPolicy()` is captured once per route, so every code in its whitelist shares one
