@@ -180,6 +180,8 @@ Each account row shows its plan, status and 5-hour/weekly meters; expand it for 
 
 ## Configure
 
+**Provider ID.** This plugin registers the `commandcode` model route. If you also configure Command Code under `llm-pi-ai.config.providers` in your profile's `cordis.patch.yml`, give that entry a distinct key such as `commandcode-pi`. A duplicate `commandcode` key can prevent pi-ai from registering its providers and disable **Add model provider**. To recover, rename the pi-ai entry, update any model selections that reference it, and reload the profile or restart DSH. See [issue #129](https://github.com/Mars-Sea/dsh-commandcode-provider/issues/129).
+
 **Settings → Command Code** groups the options as **Accounts** (keys, sign-in, live quota, pinning, dedicated models), **Models & context** (out-of-plan filter, visible models, context length, output limit), **Privacy & security** (zero data retention), **Integrations & display** (web search, sidebar quota card) and **Advanced** (API base URL, timeouts, transport retries, image offload). The same options live in `$DSH_HOME/settings.yaml` and apply immediately, without a restart:
 
 ```yaml
