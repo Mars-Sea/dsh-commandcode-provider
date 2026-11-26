@@ -133,6 +133,14 @@ interface CommandCodeConnectionOptions {
    */
   offloadSeenImagesForCache?: boolean;
   /**
+   * Effort level session-title auxiliary calls ask for (default `off`; issue
+   * #88). `low` exists because the Messages wire has no `off`, and `inherit`
+   * hands the decision back to the caller. The level is still subject to
+   * {@link effortOnWire}, so a policy the route cannot express degrades to
+   * "omit the field" rather than to an invalid body.
+   */
+  titleEffort?: SessionTitleEffort;
+  /**
    * Whether the picker hides models above the account's subscription tier
    * (default true). The filter fails open: unknown plan, billing-endpoint
    * failure, a positive on-demand credit balance, or an unmapped model all
@@ -370,6 +378,16 @@ interface CommandCodeUsageReport {
    */
   blocked?: UsageBlockReason;
 }
+/**
+ * Effort level the session-title auxiliary call asks for.
+ *
+ * `off` (default) keeps #88's contract: 64 output tokens cannot survive a
+ * thinking stage, so a model that publishes `off` is asked to skip it.
+ * `low` asks for the cheapest level that every transport accepts (the Messages
+ * wire has no `off`), at the cost of some thinking tokens. `inherit` leaves the
+ * decision to the caller.
+ */
+type SessionTitleEffort = 'off' | 'low' | 'inherit';
 declare class CommandCodeAdapter<C extends CommandCodeConnectionOptions = CommandCodeConnectionOptions> extends LlmAdapter {
   private readonly deps;
   private readonly gatewayFacts;
@@ -2508,6 +2526,18 @@ interface Config {
    * 宿主显式传入的每次调用预算（如会话标题的 64）优先于此设置。
    */
   maxOutputTokens?: number;
+  /**
+   * Effort level session-title auxiliary calls ask for. `off` (default) keeps
+   * issue #88's contract: a 64-token title budget cannot survive a thinking
+   * stage, so a model that publishes `off` is asked to skip it. `low` asks for
+   * the cheapest level every transport accepts — the Messages wire has no
+   * `off`, and a body carrying it is refused with HTTP 400 `invalid_request`
+   * (measured 2026-11-25 on `deepseek/deepseek-v4.1-flash`, which the catalog
+   * now serves through `/provider/v1/messages`). `inherit` leaves the decision
+   * to the caller. Whatever the policy asks for is still gated per wire, so an
+   * inexpressible level omits the field instead of producing an invalid body.
+   */
+  titleEffort?: SessionTitleEffort;
   /**
    * Extra accounts for multi-account rotation. The top-level
    * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first
