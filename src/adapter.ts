@@ -2282,7 +2282,10 @@ async function buildOpenAIBody(
  *   outright. The model reasons on its own; this switch only admits it.
  * - Reasoning strength travels in `output_config.effort`, whose accepted
  *   values are `low | medium | high | xhigh | max` — there is no `none`, and
- *   `xhigh` is absent from DeepSeek's own type.
+ *   `xhigh` is absent from DeepSeek's own type. `off` is therefore never a
+ *   wire value here, even for a model whose `KNOWN_EFFORTS` publishes it: the
+ *   DeepSeek V4 line gained `off` for the two `reasoning_effort` transports,
+ *   and the catalog can route those same models to this endpoint.
  * - `stop_sequences` is a real field here, but this adapter still rejects
  *   `GenerateOptions.stop` in `stream()` because Command Code documents no
  *   equivalent for the other two transports.
@@ -2331,7 +2334,18 @@ async function buildMessagesBody(
       cache_control: EPHEMERAL_CACHE_CONTROL,
     }]
   }
-  if (facts.reasoningEffort) body.output_config = { effort: facts.reasoningEffort }
+  // `off` is a real level on the two `reasoning_effort` transports, so
+  // `stream()` keeps it in `reasoningEffort` for the DeepSeek V4 line rather
+  // than dropping it. This transport has no such value: its accepted set is
+  // `low | medium | high | xhigh | max`, and a body carrying `effort: 'off'`
+  // is refused with HTTP 400 `invalid_request_error` (measured 2026-11-25 on
+  // `deepseek/deepseek-v4.1-flash`, which the catalog now serves through
+  // `/provider/v1/messages`). Sending no `output_config` leaves the endpoint's
+  // own thinking behaviour, which is as close as this transport gets to "no
+  // reasoning strength requested".
+  if (facts.reasoningEffort !== undefined && facts.reasoningEffort !== 'off') {
+    body.output_config = { effort: facts.reasoningEffort }
+  }
   const tools: Record<string, unknown>[] = (options.tools ?? []).map((tool) => ({
     name: tool.name,
     description: tool.description,

@@ -4845,6 +4845,57 @@ test('Messages 标题调用不发送模型未声明的关闭思考值', async ()
   }
 })
 
+test('Messages 传输丢弃模型已声明的 off，而不是把 output_config.effort 写成 "off"', async () => {
+  // 真实故障（2026-11-25）：目录开始把 `deepseek/deepseek-v4.1-flash` 标成支持
+  // `/messages`，而该模型的快照声明了 `off`；标题调用（purpose 强制 off）因此把
+  // `output_config.effort:"off"` 发到了本端点，被上游以 HTTP 400
+  // `invalid_request_error` 拒绝。`off` 是两条 `reasoning_effort` 传输的真实档位，
+  // 本端点的取值集合里既没有 `off` 也没有 `none`。
+  const requested: { path: string; body: Record<string, unknown> }[] = []
+  const adapter = makeAdapter({
+    // 独立缓存文件：共用的 `/tmp/cc-models-cache.json` 可能先被并行用例写入别的目录。
+    options: MESSAGES_OPTIONS({ modelsCachePath: `/tmp/cc-models-cache-${process.pid}-messages-off.json` }),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/provider/v1/models')) {
+        return new Response(JSON.stringify({ object: 'list', data: [
+          { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek', context_length: 1_000_000, supported_endpoints: ['/messages'] },
+        ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      const path = new URL(url).pathname
+      // 账单与配额端点与本次断言无关，给一个合法 JSON 空对象即可。
+      if (!path.startsWith('/provider/v1/')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      requested.push({ path, body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+      return messagesStream('会话标题')
+    }) as unknown as typeof fetch,
+  })
+  // 目录先加载：传输由 `supportedEndpoints` 决定，而目录是懒加载的；首个请求之前
+  // 目录未就绪的话，`routesToMessages()` 只能回落到 Claude-only 名单，本用例会静默
+  // 变成 chat/completions 的对照实验。
+  await adapter.listModels('commandcode')
+  // 标题调用：关闭思考由 purpose 强制产生。
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', purpose: 'session-title', maxTokens: 4096,
+    messages: [userMessage('生成会话标题')],
+  }))
+  assert.equal(requested.length, 1)
+  assert.equal(requested[0]!.path, '/provider/v1/messages', '目录声明 /messages 时该模型必须走 Messages 传输')
+  assert.equal(requested[0]!.body.output_config, undefined, '`off` 不得作为 output_config.effort 发出')
+  assert.deepEqual(requested[0]!.body.thinking, { type: 'adaptive' }, 'thinking 开关与 effort 取值是两个决定')
+  // 普通调用：调用者手选「关闭」走同一条规则，否则聊天同样会 400。
+  requested.length = 0
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('off'),
+    messages: [userMessage('hi')],
+  }))
+  assert.equal(requested.length, 1)
+  assert.equal(requested[0]!.path, '/provider/v1/messages')
+  assert.equal(requested[0]!.body.output_config, undefined)
+  assert.deepEqual(requested[0]!.body.thinking, { type: 'adaptive' })
+})
+
 test('Messages drops an explicit temperature, which adaptive thinking constrains to 1', async () => {
   // Live failure, 2026-09-29: every request carrying the other transports' 0.3
   // default was refused with
