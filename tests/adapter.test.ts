@@ -4845,6 +4845,100 @@ test('Messages 标题调用不发送模型未声明的关闭思考值', async ()
   }
 })
 
+/**
+ * 目录把声明了 `off` 的 DeepSeek V4 模型标成支持 `/messages` 时的适配器。
+ *
+ * 传输由目录的 `supported_endpoints` 决定，而目录是懒加载的：首个请求之前必须
+ * 先 `listModels()`，否则 `routesToMessages()` 只能回落到 Claude-only 名单，
+ * 用例会静默变成 chat/completions 的对照实验。缓存文件按进程隔离，避免并行
+ * 用例写入的共享目录抢先。
+ */
+function deepseekMessagesAdapter(titleEffort?: 'off' | 'low' | 'inherit'): {
+  adapter: CommandCodeAdapter
+  sent: () => Record<string, unknown>[]
+  paths: () => string[]
+} {
+  const sent: Record<string, unknown>[] = []
+  const paths: string[] = []
+  const adapter = makeAdapter({
+    options: MESSAGES_OPTIONS({
+      modelsCachePath: `/tmp/cc-models-cache-${process.pid}-deepseek-messages-${titleEffort ?? 'default'}.json`,
+      ...(titleEffort === undefined ? {} : { titleEffort }),
+    }),
+    fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/provider/v1/models')) {
+        return new Response(JSON.stringify({ object: 'list', data: [
+          { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek', context_length: 1_000_000, supported_endpoints: ['/messages'] },
+        ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      const path = new URL(url).pathname
+      // 账单、配额等旁路端点与断言无关。
+      if (!path.startsWith('/provider/v1/')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      paths.push(path)
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return messagesStream('会话标题')
+    }) as unknown as typeof fetch,
+  })
+  return { adapter, sent: () => sent, paths: () => paths }
+}
+
+test('Messages 通道丢弃 off：标题调用与手选关闭都不发 output_config', async () => {
+  // 真实故障（2026-11-25）：目录把 deepseek/deepseek-v4.1-flash 标成支持
+  // `/messages`，该模型的快照又声明了 `off`，于是标题调用（purpose 强制 off）
+  // 把 `output_config.effort:"off"` 发到本端点，被上游以 HTTP 400
+  // `invalid_request_error` 拒绝。本端点的取值集合里既没有 `off` 也没有 `none`。
+  const { adapter, sent, paths } = deepseekMessagesAdapter()
+  await adapter.listModels('commandcode')
+  // 标题调用：off 由 purpose 强制产生。
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', purpose: 'session-title', maxTokens: 4096,
+    messages: [userMessage('生成会话标题')],
+  }))
+  assert.deepEqual(paths(), ['/provider/v1/messages'])
+  assert.equal(sent()[0]!.output_config, undefined, '`off` 不得作为 output_config.effort 发出')
+  assert.deepEqual(sent()[0]!.thinking, { type: 'adaptive' }, 'thinking 开关与 effort 取值是两个决定')
+  // 普通调用：调用者手选「关闭」走同一条规则，否则聊天同样会 400。
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('off'),
+    messages: [userMessage('hi')],
+  }))
+  assert.equal(sent()[1]!.output_config, undefined)
+  // 合法档位照旧发出，证明丢弃只针对该值而不是整条链路。
+  await collect(adapter.stream({
+    provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: ReasoningEffortId('high'),
+    messages: [userMessage('hi')],
+  }))
+  assert.deepEqual(sent()[2]!.output_config, { effort: 'high' })
+})
+
+test('titleEffort 决定标题调用的意图，取值仍受传输约束', async () => {
+  const titleCall = async (
+    titleEffort: 'off' | 'low' | 'inherit' | undefined,
+    extra: { reasoningEffort?: ReasoningEffortId } = {},
+  ) => {
+    const { adapter, sent } = deepseekMessagesAdapter(titleEffort)
+    await adapter.listModels('commandcode')
+    await collect(adapter.stream({
+      provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', purpose: 'session-title', maxTokens: 4096,
+      ...extra, messages: [userMessage('生成会话标题')],
+    }))
+    return sent()[0]!
+  }
+  // 默认（off）：意图 off，Messages 通道丢弃该值。
+  assert.equal((await titleCall(undefined)).output_config, undefined)
+  // low：三条传输都接受，标题因此拿到一个合法档位。
+  assert.deepEqual((await titleCall('low')).output_config, { effort: 'low' })
+  // inherit：跟随调用方；调用方没给档位就不发。
+  assert.equal((await titleCall('inherit')).output_config, undefined)
+  assert.deepEqual(
+    (await titleCall('inherit', { reasoningEffort: ReasoningEffortId('high') })).output_config,
+    { effort: 'high' },
+  )
+})
+
 test('Messages drops an explicit temperature, which adaptive thinking constrains to 1', async () => {
   // Live failure, 2026-09-29: every request carrying the other transports' 0.3
   // default was refused with

@@ -117,3 +117,16 @@ test('自定义模型名称走 volatile 配置，程序化构造另行清洗（i
   } as unknown as Config
   assert.deepEqual(resolveAdapterOptions(dirty).modelNames, { good: 'Name' })
 })
+
+test('标题档位只接受三个枚举值，程序化构造回落 off', () => {
+  // 默认 off 维持 #88 的契约；low 是 Messages 通道上最低的合法档；inherit 把
+  // 决定权交回调用方。三者之外的值既不该进 schema，也不该进连接。
+  assert.equal(unwrapVolatileConfig(Config({})).titleEffort, 'off')
+  for (const value of ['off', 'low', 'inherit'] as const) {
+    assert.equal(unwrapVolatileConfig(Config({ titleEffort: value })).titleEffort, value)
+    assert.equal(resolveAdapterOptions({ titleEffort: value }).titleEffort, value)
+  }
+  assert.throws(() => Config({ titleEffort: 'high' } as never))
+  assert.equal(resolveAdapterOptions({}).titleEffort, 'off')
+  assert.equal(resolveAdapterOptions({ titleEffort: 'max' as never }).titleEffort, 'off')
+})

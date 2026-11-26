@@ -45,7 +45,7 @@ import { CommandCodeAdapter, DEFAULT_API_BASE, resolveAuthFileApiKey, windowVerd
 import { assertUsableApiKey } from './api-key.ts'
 import { absorbTransientFailure, resetTransientFailures, transientBudgetMessage } from './transient-retry.ts'
 import { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
-import type { AccountRotationReason, CommandCodeConnectionOptions, CommandCodeUsageReport } from './adapter.ts'
+import type { AccountRotationReason, CommandCodeConnectionOptions, CommandCodeUsageReport, SessionTitleEffort } from './adapter.ts'
 import { CommandCodeAccountPool, accountUsable, captureAccountSelection, type CommandCodeAccountSelection } from './accounts.ts'
 import type { CommandCodeAccountConfig, CommandCodeAccountSlot, CommandCodeModelAccountRule } from './accounts.ts'
 import { applyCommands } from './commands.ts'
@@ -277,6 +277,18 @@ export interface Config {
    */
   maxOutputTokens?: number
   /**
+   * Effort level session-title auxiliary calls ask for. `off` (default) keeps
+   * issue #88's contract: a 64-token title budget cannot survive a thinking
+   * stage, so a model that publishes `off` is asked to skip it. `low` asks for
+   * the cheapest level every transport accepts — the Messages wire has no
+   * `off`, and a body carrying it is refused with HTTP 400 `invalid_request`
+   * (measured 2026-11-25 on `deepseek/deepseek-v4.1-flash`, which the catalog
+   * now serves through `/provider/v1/messages`). `inherit` leaves the decision
+   * to the caller. Whatever the policy asks for is still gated per wire, so an
+   * inexpressible level omits the field instead of producing an invalid body.
+   */
+  titleEffort?: SessionTitleEffort
+  /**
    * Extra accounts for multi-account rotation. The top-level
    * `apiKey`/`apiKeyEnv` (plus the CLI auth file) always form the first
    * (`default`) account; each entry here adds one more, and an entry with
@@ -389,6 +401,7 @@ export const Config: z<Config> = z.object(markVolatileFields({
   // 输出预算（issue #74）：0 是「不发送该字段」的省略哨兵，正数是最小值上限，
   // 两者都不得超过网关总上限——用户填得更大也只会被网关拒绝。
   maxOutputTokens: z.number().min(OMIT_OUTPUT_TOKENS).max(MAX_OUTPUT_TOKEN_LIMIT).step(1),
+  titleEffort: z.union(['off', 'low', 'inherit']).default('off'),
   webSearch: z.boolean().default(true),
   showSidebarQuota: z.boolean().default(false),
   accounts: z.array(z.object({
@@ -457,10 +470,18 @@ export function resolveAdapterOptions(config: Config): ResolvedCommandCodeOption
     // 输出预算（issue #74）：程序化构造可能绕过 schemastery，这里重新判定一次，
     // 越界或非整数回落到「未设置」，而不是让请求带上一个网关会拒绝的预算。
     maxOutputTokens: isValidMaxOutputTokens(config.maxOutputTokens) ? config.maxOutputTokens : undefined,
+    // 标题档位（issue #88 的补充）：枚举由 schema 收口，程序化构造可能绕过它，
+    // 未知值回落到 off，而不是把一个未经校验的字符串交给连接。
+    titleEffort: isSessionTitleEffort(config.titleEffort) ? config.titleEffort : 'off',
     // The connection carries the switch; the adapter enforces it on every
     // chat request rather than depending on a client-side coverage snapshot.
     zdr: config.zdr === true,
   }
+}
+
+/** Narrow a programmatic config value to the title-effort enum. */
+function isSessionTitleEffort(value: unknown): value is SessionTitleEffort {
+  return value === 'off' || value === 'low' || value === 'inherit'
 }
 
 /**

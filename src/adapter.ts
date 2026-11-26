@@ -1581,6 +1581,14 @@ export interface CommandCodeConnectionOptions {
    */
   offloadSeenImagesForCache?: boolean
   /**
+   * Effort level session-title auxiliary calls ask for (default `off`; issue
+   * #88). `low` exists because the Messages wire has no `off`, and `inherit`
+   * hands the decision back to the caller. The level is still subject to
+   * {@link effortOnWire}, so a policy the route cannot express degrades to
+   * "omit the field" rather than to an invalid body.
+   */
+  titleEffort?: SessionTitleEffort
+  /**
    * Whether the picker hides models above the account's subscription tier
    * (default true). The filter fails open: unknown plan, billing-endpoint
    * failure, a positive on-demand credit balance, or an unmapped model all
@@ -2062,8 +2070,15 @@ interface GenerateCallFacts {
    * `omitOutputTokens()`.
    */
   omitMaxTokens: boolean
-  /** Validated reasoning effort, or undefined when unset/unsupported. */
-  reasoningEffort: string | undefined
+  /**
+   * The effort level this call intends to send, or undefined for "unset".
+   *
+   * This is the INTENT, not the wire value: which levels a body may carry also
+   * depends on the transport, so each body builder resolves it through
+   * `effortOnWire()` with its own wire. Keep the distinction when adding a
+   * transport — an intent that is legal on one wire can be refused by another.
+   */
+  effortIntent: string | undefined
   /**
    * True when the model publishes selectable effort levels, i.e. when thinking
    * is a choice this route can express. A model that neither offers levels nor
@@ -2188,12 +2203,92 @@ function temperatureField(options: GenerateOptions): Record<string, number> {
   return { temperature: options.temperature ?? 0.3 }
 }
 
+/**
+ * Which wire a body is being built for. `chat` is
+ * `/provider/v1/chat/completions`, `cli` is `/alpha/generate`, `messages` is
+ * `/provider/v1/messages`.
+ */
+type EffortTransport = 'chat' | 'cli' | 'messages'
+
+/**
+ * Levels `/provider/v1/messages` accepts in `output_config.effort`. Measured
+ * 2026-09-29 on DeepSeek's Messages API: `low | medium | high | xhigh | max`,
+ * with no `none` and no `off` (see `buildMessagesBody`'s doc comment).
+ */
+const MESSAGES_WIRE_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * The effort level one body may actually carry.
+ *
+ * Two facts decide it, and neither substitutes for the other: the model
+ * snapshot (`KNOWN_EFFORTS`) says whether the level exists for this model at
+ * all, and the transport says whether its own field accepts that spelling.
+ * `off` is a real DeepSeek V4 level on the two `reasoning_effort` transports
+ * and is absent from `output_config.effort`, so one model can be served by a
+ * catalog that routes it to Messages while its snapshot still publishes
+ * `off` — the request that leaves with `off` on that wire is refused with
+ * HTTP 400 `invalid_request_error` (measured 2026-11-25 on
+ * `deepseek/deepseek-v4.1-flash`).
+ *
+ * @param intent - the level the call site asked for, or undefined for "unset".
+ * @param model - catalog model id, keyed into the snapshot.
+ * @param transport - wire the body is being built for.
+ * @returns the level to send, or undefined to omit the field entirely.
+ */
+function effortOnWire(intent: string | undefined, model: string, transport: EffortTransport): string | undefined {
+  if (intent === undefined) return undefined
+  if (!KNOWN_EFFORTS[model]?.includes(intent)) return undefined
+  if (transport !== 'messages') return intent
+  return MESSAGES_WIRE_EFFORTS.includes(intent) ? intent : undefined
+}
+
+/**
+ * Effort level the session-title auxiliary call asks for.
+ *
+ * `off` (default) keeps #88's contract: 64 output tokens cannot survive a
+ * thinking stage, so a model that publishes `off` is asked to skip it.
+ * `low` asks for the cheapest level that every transport accepts (the Messages
+ * wire has no `off`), at the cost of some thinking tokens. `inherit` leaves the
+ * decision to the caller.
+ */
+export type SessionTitleEffort = 'off' | 'low' | 'inherit'
+
+/**
+ * Resolve the title call's intent from the configured policy.
+ *
+ * `off` deliberately falls back to the caller's choice when the model does not
+ * publish the level: that is the pre-existing behavior, and replacing it with a
+ * silent drop would change what non-DeepSeek models send. `low` does not fall
+ * back — an explicit request for a level the model does not publish must not
+ * turn into some other level.
+ *
+ * @param policy - configured title policy; undefined reads as `off`.
+ * @param supported - the model's published levels, or undefined when unknown.
+ * @param requested - the caller's own effort, used by `inherit` and as the
+ *   `off` fallback.
+ * @returns the intent for the title call.
+ */
+function titleEffortIntent(
+  policy: SessionTitleEffort | undefined,
+  supported: readonly string[] | undefined,
+  requested: string | undefined,
+): string | undefined {
+  switch (policy ?? 'off') {
+    case 'inherit': return requested
+    case 'low': return supported?.includes('low') ? 'low' : undefined
+    case 'off': return supported?.includes('off') ? 'off' : requested
+    /* v8 ignore next -- closed union exhaustiveness guard */
+    default: return requested
+  }
+}
+
 /** Build the legacy CLI (`/alpha/generate`) request body for one call. */
 async function buildCliBody(
   options: GenerateOptions,
   connection: CommandCodeConnectionOptions,
-  facts: Pick<GenerateCallFacts, 'maxTokens' | 'omitMaxTokens' | 'reasoningEffort' | 'systemText' | 'readImage'>,
+  facts: Pick<GenerateCallFacts, 'maxTokens' | 'omitMaxTokens' | 'effortIntent' | 'systemText' | 'readImage'>,
 ): Promise<Record<string, unknown>> {
+  const effort = effortOnWire(facts.effortIntent, options.model, 'cli')
   return {
     config: {
       workingDir: connection.workingDir,
@@ -2235,7 +2330,7 @@ async function buildCliBody(
       ...(facts.omitMaxTokens ? {} : { max_tokens: facts.maxTokens }),
       ...temperatureField(options),
       stream: true,
-      ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
+      ...(effort === undefined ? {} : { reasoning_effort: effort }),
     },
     threadId: cliThreadId(options.sessionId),
   }
@@ -2244,8 +2339,9 @@ async function buildCliBody(
 /** Build the documented Provider Chat Completions request body for one call. */
 async function buildOpenAIBody(
   options: GenerateOptions,
-  facts: Pick<GenerateCallFacts, 'maxTokens' | 'omitMaxTokens' | 'reasoningEffort' | 'systemText' | 'readImage'>,
+  facts: Pick<GenerateCallFacts, 'maxTokens' | 'omitMaxTokens' | 'effortIntent' | 'systemText' | 'readImage'>,
 ): Promise<Record<string, unknown>> {
+  const effort = effortOnWire(facts.effortIntent, options.model, 'chat')
   const openAiMessages = [
     ...(facts.systemText ? [{ role: 'system', content: facts.systemText }] : []),
     ...(await messagesToOpenAI(options.messages, facts.readImage)),
@@ -2265,7 +2361,7 @@ async function buildOpenAIBody(
     ...(facts.omitMaxTokens ? {} : { max_tokens: facts.maxTokens }),
     ...temperatureField(options),
     stream: true,
-    ...(facts.reasoningEffort ? { reasoning_effort: facts.reasoningEffort } : {}),
+    ...(effort === undefined ? {} : { reasoning_effort: effort }),
   }
 }
 
@@ -2301,8 +2397,12 @@ async function buildOpenAIBody(
  */
 async function buildMessagesBody(
   options: GenerateOptions,
-  facts: Pick<GenerateCallFacts, 'maxTokens' | 'reasoningEffort' | 'selectableEffort' | 'systemText' | 'readImage'>,
+  facts: Pick<GenerateCallFacts, 'maxTokens' | 'effortIntent' | 'selectableEffort' | 'systemText' | 'readImage'>,
 ): Promise<Record<string, unknown>> {
+  // `off` is a real level on the two `reasoning_effort` transports and is
+  // absent from this endpoint's `output_config.effort`, so the same intent is
+  // legal in a chat body and refused here; see {@link effortOnWire.}
+  const effort = effortOnWire(facts.effortIntent, options.model, 'messages')
   const body: Record<string, unknown> = {
     model: options.model,
     // Always sent, even under `maxOutputTokens: 0` (issue #74): this endpoint
@@ -2331,7 +2431,7 @@ async function buildMessagesBody(
       cache_control: EPHEMERAL_CACHE_CONTROL,
     }]
   }
-  if (facts.reasoningEffort) body.output_config = { effort: facts.reasoningEffort }
+  if (effort !== undefined) body.output_config = { effort }
   const tools: Record<string, unknown>[] = (options.tools ?? []).map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -3617,22 +3717,15 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     const builtMaxTokens = maxTokens
 
     const supported = KNOWN_EFFORTS[options.model]
-    // 标题调用默认只有 64 个输出词元，先思考可能耗尽预算而没有正文（问题 #88）。
-    // 仅在模型明确声明支持关闭思考时覆盖本次选择；普通对话、压缩及其他模型沿用原策略。
-    const effort = options.purpose === 'session-title' && supported?.includes('off')
-      ? 'off' : options.reasoningEffort as string | undefined
-    // `off` carries two meanings, and only the snapshot tells them apart. The
-    // host passes it as "no reasoning strength requested" — the Messages
-    // transport's `output_config.effort` has no `none`, so it must send no
-    // `output_config` at all (measured, see docs/agent-reference/
-    // adapter-protocol.md). But since command-code@1.73.3 the DeepSeek V4 line
-    // publishes `off` as a real level, and the official CLI sends it verbatim
-    // as `reasoning_effort:"off"` (its body builder spreads the effort
-    // whenever it is a non-empty string) instead of dropping the field. So a
-    // model that LISTS `off` gets it on the wire; every other model keeps
-    // dropping it, which is what the unsupported-effort path relies on.
-    const declared = effort !== undefined && supported?.includes(effort) ? effort : undefined
-    const reasoningEffort = effort === 'off' && declared === undefined ? undefined : declared
+    // The intention for this call. Which level may actually travel is decided
+    // per body by {@link effortOnWire}, which pairs the snapshot with the wire
+    // the body is being built for. Keeping the steps apart is what lets `off`
+    // reach the two `reasoning_effort` transports — where it is a real DeepSeek
+    // V4 level and where #88 depends on it — and stay out of the Messages body,
+    // whose `output_config.effort` has no such value.
+    const effortIntent = options.purpose === 'session-title'
+      ? titleEffortIntent(connection.titleEffort, supported, options.reasoningEffort as string | undefined)
+      : options.reasoningEffort as string | undefined
 
     const systemText = [
       options.system ?? '',
@@ -3665,7 +3758,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
       const facts = {
         maxTokens,
         omitMaxTokens,
-        reasoningEffort,
+        effortIntent,
         // Reuse the lookup `stream()` already did: a model with no effort
         // levels offers nothing for the thinking switch to control.
         selectableEffort: supported !== undefined && supported.length > 0,
@@ -3750,6 +3843,10 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
     // miss can be correlated with the exact request shape that produced it.
     // The record contains hashes and counts only; see requestFingerprint().
     const trace = openStreamTrace(`${options.provider}/${options.model}`)
+    // 追踪记录这条线上实际发出的档位，而不是意图：在 Messages 通道上两者可能
+    // 不同（`off` 被丢弃），日志若只记意图就无法解释线上报文。
+    const traceEffort = effortOnWire(
+      effortIntent, options.model, protocol === 'messages' ? 'messages' : protocol === 'cli' ? 'cli' : 'chat')
 
     // Account rotation loop: the first attempt uses the pool's active key; a
     // pre-stream 429/401 rotates to the next account (at most one attempt per
@@ -3774,7 +3871,7 @@ export class CommandCodeAdapter<C extends CommandCodeConnectionOptions = Command
           attempt: attemptNumber,
           accountsTried: tried.size,
           maxTokens,
-          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+          ...(traceEffort === undefined ? {} : { reasoningEffort: traceEffort }),
           headers: responseMetadata.headers,
         })
       },
