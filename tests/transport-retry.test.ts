@@ -23,7 +23,12 @@ import {
 
 /** Minimally-shaped stand-ins for the harness's agent and waterfall contract. */
 interface FakeAgent { readonly id: string }
-type Decision = { kind: 'retry' } | undefined
+/**
+ * What the listener hands back to the waterfall. `retry` is not a decision the
+ * handler mints itself — it is `next()`, i.e. "the downstream retry executor
+ * decides". Verified separately in `hands a budgeted retry to dsh-llm-retry`.
+ */
+type Decision = 'downstream' | undefined
 
 /**
  * The plugin's listener, reduced to its decision logic. Kept structurally
@@ -34,7 +39,7 @@ function respond(agent: FakeAgent, code: string, signal: AbortSignal, maxRetries
   if (signal.aborted) return undefined
   const decision = absorbTransportFailure(agent, code, maxRetries)
   if (decision === 'ignored') return undefined
-  if (decision === 'retry') return { kind: 'retry' }
+  if (decision === 'retry') return 'downstream'
   throw new Error(transportBudgetMessage('Command Code API request failed: fetch failed', maxRetries))
 }
 
@@ -102,7 +107,7 @@ test('the listener retries within budget and throws once it is spent', () => {
   for (let attempt = 0; attempt < DEFAULT_TRANSPORT_MAX_RETRIES; attempt += 1) {
     decisions.push(respond(agent, TRANSPORT_FAILURE_CODE, signal, DEFAULT_TRANSPORT_MAX_RETRIES))
   }
-  assert.deepEqual(decisions, Array.from({ length: DEFAULT_TRANSPORT_MAX_RETRIES }, () => ({ kind: 'retry' })))
+  assert.deepEqual(decisions, Array.from({ length: DEFAULT_TRANSPORT_MAX_RETRIES }, () => 'downstream'))
   // Spent: throwing is the ONLY way to stop `dsh-llm-retry`, and it happens on
   // the next failure rather than after the 1000-attempt budget.
   assert.throws(
@@ -117,7 +122,40 @@ test('a cancelled turn is never retried and never spends the budget', () => {
   controller.abort()
   assert.equal(respond(agent, TRANSPORT_FAILURE_CODE, controller.signal, 1), undefined)
   // The cancellation did not consume the single slot.
-  assert.deepEqual(respond(agent, TRANSPORT_FAILURE_CODE, live(), 1), { kind: 'retry' })
+  assert.equal(respond(agent, TRANSPORT_FAILURE_CODE, live(), 1), 'downstream')
+})
+
+test('hands a budgeted retry to dsh-llm-retry instead of short-circuiting the waterfall', async () => {
+  // Regression (2026-11-28): answering with a bare `{ kind: 'retry' }` skipped
+  // the downstream retry executor, so the absorbed attempts ran back-to-back
+  // (six attempts in 140 ms on a real proxy outage) and could never outlast the
+  // multi-second blip the budget is meant to cover. The listener must call
+  // `next()` for an in-budget transport failure — exactly like the transient
+  // branch — so the host keeps owning the wait between attempts.
+  //
+  // Asserted against the source rather than by driving `apply()`: mounting the
+  // whole plugin needs a full Cordis context (llm/credentials/web/...), which
+  // would test the harness, not this decision. The behavior `next()` produces is
+  // already pinned above; what was wrong was which branch the listener took.
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+  const listener = source.slice(source.indexOf("ctx.on('agent/request-error'"))
+  assert.ok(listener.length > 0, 'the request-error listener must exist')
+
+  // The transport branch must hand downstream, not mint the retry itself.
+  assert.match(
+    listener,
+    /if \(decision === 'retry'\) return next\(\)/,
+    "an in-budget transport failure must return next() so dsh-llm-retry schedules the backoff",
+  )
+  assert.doesNotMatch(
+    listener,
+    /return \{ kind: 'retry' \}/,
+    'the listener must never short-circuit the waterfall with a bare retry decision',
+  )
+  // Exhaustion is still surfaced by throwing (the only way to stop the chain).
+  assert.match(listener, /if \(decision === 'retry'\) return next\(\)[\s\S]*throw new Error\(message\)/)
 })
 
 test('the Host schema bound is the ceiling the module exports', async () => {

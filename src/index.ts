@@ -31,7 +31,6 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { RequestErrorAction } from '@deepseek-ai/dsh-agent'
 // Type-only: pulls the `ctx.web` service merge into this program. The selection
 // itself is typed through `src/web-search.ts`.
 import type {} from '@deepseek-ai/dsh-web'
@@ -681,10 +680,9 @@ export function apply(ctx: Context, config: Config): void {
     return Math.min(Math.trunc(value), MAX_TRANSPORT_MAX_RETRIES)
   }
   // `async` is a type-level requirement, not a behavior change: the waterfall's
-  // listener contract is `=> Promise<RequestErrorAction>`, so a handler that
-  // returns `next()`'s promise on one path and a bare decision on another does
-  // not type-check (`Promise<RequestErrorAction> | { kind: 'retry' }` is not
-  // assignable, even though the runtime accepts both).
+  // listener contract is `=> Promise<RequestErrorAction>`, and only an `async`
+  // handler's `throw` is guaranteed to reject that promise (which is how an
+  // exhausted budget surfaces the failure instead of scheduling a retry).
   //
   // The session → agent map exists for the reset below: `session/event` carries
   // the session, and the agent is the natural budget key (it is what the
@@ -704,11 +702,20 @@ export function apply(ctx: Context, config: Config): void {
     if (transient === 'retry') return next()
     const decision = absorbTransportFailure(agent, failure.code, transportMaxRetries())
     if (decision === 'ignored') return next()
-    // The literal is spelled as the event's own decision type; the union this
-    // handler returns (`RequestErrorAction | Promise<RequestErrorAction>`) is
-    // what the waterfall accepts, and `{ kind: 'retry' }` alone widens to
-    // `string` and stops matching it.
-    if (decision === 'retry') return { kind: 'retry' } satisfies RequestErrorAction
+    // 只约束次数；仍由官方重试器决定退避和 Retry-After，避免即时重发。
+    //
+    // Answering with a bare `{ kind: 'retry' }` here short-circuits the
+    // waterfall: `dsh-llm-retry` sits AFTER this listener, so it never sees the
+    // failure and never schedules its backoff — the five absorbed transport
+    // attempts then run back-to-back. Measured on a real proxy outage (2026-11-28):
+    // six attempts in 140 ms, which cannot outlast the multi-second blip
+    // (a proxy reloading its subscription drops in-flight TLS handshakes) this
+    // budget exists to cover. `next()` hands the SAME failure to the retry
+    // executor, which waits 500 ms → 1 s → 2 s → 4 s → 8 s before re-issuing,
+    // so the budget keeps deciding HOW MANY attempts survive while the host
+    // keeps owning HOW LONG to wait. This mirrors the transient branch above,
+    // which has always returned `next()` for exactly this reason.
+    if (decision === 'retry') return next()
     const message = transportBudgetMessage(failure.message, transportMaxRetries())
     ctx.logger.warn(`llm-commandcode: transport retry budget exhausted for ${PROVIDER} (${TRANSPORT_FAILURE_CODE})`)
     throw new Error(message)
