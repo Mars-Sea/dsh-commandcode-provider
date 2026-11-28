@@ -702,8 +702,6 @@ export function apply(ctx: Context, config: Config): void {
     if (transient === 'retry') return next()
     const decision = absorbTransportFailure(agent, failure.code, transportMaxRetries())
     if (decision === 'ignored') return next()
-    // 只约束次数；仍由官方重试器决定退避和 Retry-After，避免即时重发。
-    //
     // Answering with a bare `{ kind: 'retry' }` here short-circuits the
     // waterfall: `dsh-llm-retry` sits AFTER this listener, so it never sees the
     // failure and never schedules its backoff — the five absorbed transport
